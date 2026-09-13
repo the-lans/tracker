@@ -19,40 +19,52 @@ AI-трекер задач — веб-приложение для управле
 Версии со звёздочкой (*) не зафиксированы техническим заданием напрямую и
 приняты как дефолт реализации; для backend/frontend они зафиксированы точно в
 `backend/pyproject.toml` / `frontend/package.json` — этот раздел лишь
-отражает их. При обновлении зависимостей обновляйте оба места.
+отражает их.
+
+**Обновление версий не ручное**: `.github/dependabot.yml` еженедельно
+проверяет pip- (backend/), npm- (frontend/), Docker- и GitHub Actions-
+зависимости и открывает PR при выходе новых релизов — конкретные версии в
+таблицах ниже актуализируются через слияние этих PR, а не точечным
+редактированием файла. Ручная сверка: `pip index versions <pkg>` (в
+`.venv`) / `npm view <pkg> version`; перед приёмом мажорного апдейта — `pip
+check` / `npm ls`, чтобы поймать конфликт версий до мержа.
 
 ### Backend (`backend/pyproject.toml`)
 | Компонент | Версия |
 |---|---|
 | Python | 3.12* |
-| FastAPI (async) | 0.115.6 |
-| Uvicorn[standard] | 0.34.0* (ASGI-сервер, не назван в ТЗ напрямую) |
-| SQLAlchemy (async) | 2.0.36 |
-| asyncpg | 0.30.0* (асинхронный драйвер Postgres для SQLAlchemy async) |
-| Alembic | 1.14.0 |
-| Celery | 5.4.0 |
-| redis-py | 5.2.1 |
-| structlog | 24.4.0 |
+| FastAPI (async) | 0.141.1 |
+| Uvicorn[standard] | 0.52.4* (ASGI-сервер, не назван в ТЗ напрямую) |
+| SQLAlchemy (async) | 2.0.52 |
+| asyncpg | 0.31.0* (асинхронный драйвер Postgres для SQLAlchemy async) |
+| Alembic | 1.20.0 |
+| Celery | 5.6.3 |
+| redis-py | 8.1.0 |
+| structlog | 26.1.0 |
 | PostgreSQL | 15+ |
-| pytest / pytest-asyncio | 8.3.4 / 0.25.0* |
-| ruff | 0.8.4 |
-| mypy | 1.14.1 |
+| pytest / pytest-asyncio | 9.1.1 / 1.4.0* |
+| ruff | 0.16.7 |
+| mypy | 2.3.1 |
 
 ### Frontend (`frontend/package.json`)
 | Компонент | Версия |
 |---|---|
-| Node.js | 20 LTS* |
-| React | 19.0.0 |
-| react-dom | 19.0.0* |
-| Vite | 6.0.7 |
-| @vitejs/plugin-react | 4.3.4* |
-| TanStack Query | 5.62.11 |
-| shadcn (CLI) | 2.1.8 |
-| Tailwind CSS / PostCSS / Autoprefixer | 3.4.17 / 8.4.49 / 10.4.20* (требуются shadcn/ui) |
-| TypeScript | 5.7.2 |
+| Node.js | 20 LTS* (протестировано также на 26) |
+| React | 19.3.0 |
+| react-dom | 19.3.0* |
+| Vite | 8.3.0 |
+| @vitejs/plugin-react | 6.1.1* |
+| TanStack Query | 5.102.8 |
+| shadcn (CLI) | 4.21.0 |
+| Tailwind CSS / PostCSS / Autoprefixer | 4.3.3 / 8.5.28 / 10.6.0* (требуются shadcn/ui) |
+| TypeScript | 6.0.3 |
+| ESLint / typescript-eslint | 10.10.0 / 8.70.0 |
 
-ESLint и Vitest в package.json пока не заведены (не были явно названы в
-разделе 2.2 ТЗ) — команды `npm run lint` / `npm test` появятся вместе с их
+TypeScript закреплён на 6.0.3, а не на новом мажоре 7.x: `typescript-eslint@8.70.0`
+пока требует `typescript < 6.1.0` (проверено `npm view typescript-eslint
+peerDependencies`) — апгрейд до TS 7 ждёт апгрейда этой цепочки, иначе
+`npm ls` покажет конфликт. Vitest в package.json пока не заведён (не был
+явно назван в разделе 2.2 ТЗ) — команда `npm test` появится вместе с его
 настройкой.
 
 ### Инфраструктура
@@ -121,21 +133,32 @@ cd frontend && npm run dev
 docker compose up -d
 ```
 
+### Единая проверка (лит + тайпчек + тесты, backend и frontend)
+```bash
+make check
+```
+Создаёт/актуализирует `backend/.venv` и `frontend/node_modules` при
+необходимости, затем последовательно: `ruff check .` → `mypy .` → `pytest`
+(backend), `eslint .` → `tsc --noEmit` (frontend). Падает с ненулевым кодом
+на первой же ошибке. `pytest` без единого теста в `backend/tests/` завершается
+кодом 5 — Makefile трактует это как норму, а не как сбой, до появления
+прикладного кода.
+
 ### Тесты
 ```bash
-cd backend && pytest
+cd backend && .venv/bin/pytest
 cd frontend && npm test   # появится вместе с настройкой Vitest
 ```
 
 ### Линт
 ```bash
-cd backend && ruff check .
-cd frontend && npm run lint   # появится вместе с настройкой ESLint
+cd backend && .venv/bin/ruff check .
+cd frontend && npm run lint
 ```
 
 ### Тайпчек
 ```bash
-cd backend && mypy .
+cd backend && .venv/bin/mypy .
 cd frontend && npm run typecheck   # tsc --noEmit
 ```
 

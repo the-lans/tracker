@@ -4,22 +4,22 @@ version = "0.1.0"
 description = "AI-трекер задач — backend API и оркестрация Celery-задач"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi==0.115.6",
-    "uvicorn[standard]==0.34.0",
-    "sqlalchemy[asyncio]==2.0.36",
-    "asyncpg==0.30.0",
-    "alembic==1.14.0",
-    "celery==5.4.0",
-    "redis==5.2.1",
-    "structlog==24.4.0",
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.52.4",
+    "sqlalchemy[asyncio]==2.0.52",
+    "asyncpg==0.31.0",
+    "alembic==1.20.0",
+    "celery==5.6.3",
+    "redis==8.1.0",
+    "structlog==26.1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest==8.3.4",
-    "pytest-asyncio==0.25.0",
-    "ruff==0.8.4",
-    "mypy==1.14.1",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.16.7",
+    "mypy==2.3.1",
 ]
 
 [build-system]
