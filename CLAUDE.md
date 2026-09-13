@@ -99,7 +99,11 @@ runners/
 alembic/
   env.py       — async env (target_metadata = db.base.Base.metadata)
   versions/    — миграции базы данных; первая (initial) — пустая, без таблиц
-docs/        — техническая документация, включая ТЗ
+scripts/
+  verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
+                приложения), запускать backend-venv'ом, см. раздел 4
+docs/        — техническая документация, включая ТЗ и
+              remote_control_findings.md (верификация допущения раздела 6.3)
 docker-compose.yml, docker-compose.prod.yml, .env.example — раздел 20.3 ТЗ
 ```
 
@@ -170,6 +174,23 @@ cd frontend && npm run typecheck   # tsc --noEmit
 cd backend && alembic revision --autogenerate -m "описание изменения"
 cd backend && alembic upgrade head
 ```
+
+### Проверка claude-agent-sdk
+```bash
+backend/.venv/bin/python scripts/verify_sdk.py
+```
+Требует рабочего логина Claude Code на машине (использует уже
+аутентифицированный CLI, отдельный API-ключ не нужен).
+
+### MCP-серверы для Claude Code (`.mcp.json`)
+
+`playwright`/`context7` работают без настройки. `postgres` (Postgres MCP Pro,
+`crystaldba/postgres-mcp` через `uvx`) требует переменную окружения
+`DATABASE_URI` в шелле перед запуском Claude Code (например,
+`postgresql://tracker:<пароль>@localhost:5433/tracker`, если поднять
+Postgres с проброшенным портом — см. `docker-compose.yml`); без нужного
+диапазона версий пакета зависает на несовместимой `mcp 2.x` — версия
+0.3.0 явно закреплена через `uvx --with "mcp<2"`, это учтено в конфиге.
 
 ## 5. Соглашения по именованию
 
