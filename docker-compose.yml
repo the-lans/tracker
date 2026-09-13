@@ -1,0 +1,124 @@
+# Базовое описание всех сервисов (раздел 20.3 ТЗ).
+# Заготовка: контейнеры собираются и поднимаются, но прикладной код (api/, services/,
+# db/, clients/, tasks/, ws/, logging/) ещё не написан — см. TODO у отдельных сервисов.
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment: &backend_env
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET}
+    volumes:
+      - task_repos:/data/repos
+      - user_files:/data/user-files
+      # Раздел 20.5: доступ Celery worker/backend к Docker-демону хоста для запуска
+      # script-нод и раннеров — задокументированный компромисс, без --privileged.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    # TODO: применение alembic-миграций в entrypoint (раздел 20.2, шаг 7) —
+    # появится вместе с alembic/env.py.
+
+  worker:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    # TODO: команда станет рабочей после появления backend/tasks/celery_app.py —
+    # сейчас tasks/ пуст (заготовка), контейнер соберётся, но не запустится.
+    command: ["celery", "-A", "tasks", "worker", "-l", "info"]
+    environment: *backend_env
+    volumes:
+      - task_repos:/data/repos
+      - user_files:/data/user-files
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    # TODO: то же самое — рабочая команда появится вместе с backend/tasks/celery_app.py.
+    command: ["celery", "-A", "tasks", "beat", "-l", "info"]
+    environment: *backend_env
+    volumes:
+      - task_repos:/data/repos
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  postgres_data:
+  redis_data:
+  # Раздел 20.4: репозитории задач (включая профили MCP-инструментов, раздел 10.3)
+  # и пользовательские файлы задач — именованные Docker-volumes, раздельный жизненный цикл.
+  task_repos:
+  user_files:
+  caddy_data:
+  caddy_config:
