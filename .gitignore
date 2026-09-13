@@ -222,3 +222,6 @@ node_modules/
 .pnpm-store/
 *.local
 
+# Playwright MCP snapshots
+.playwright-mcp/
+
