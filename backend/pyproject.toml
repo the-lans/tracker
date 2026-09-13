@@ -1,0 +1,51 @@
+[project]
+name = "tracker-backend"
+version = "0.1.0"
+description = "AI-трекер задач — backend API и оркестрация Celery-задач"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.52.4",
+    "sqlalchemy[asyncio]==2.0.52",
+    "asyncpg==0.31.0",
+    "alembic==1.20.0",
+    "celery==5.6.3",
+    "redis==8.1.0",
+    "structlog==26.1.0",
+    "claude-agent-sdk==0.2.152",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.16.7",
+    "mypy==2.3.1",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+# db/ уже содержит код (session.py, base.py), но пакет всё ещё не публикуется —
+# pyproject.toml используется только как манифест зависимостей, setuptools не
+# должен искать пакеты для сборки (api/, services/, clients/, tasks/, ws/,
+# logging/ пока пустые).
+[tool.setuptools]
+packages = []
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
