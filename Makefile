@@ -29,11 +29,16 @@ $(BACKEND_VENV_MARKER): $(BACKEND_DIR)/pyproject.toml
 	$(BACKEND_VENV)/bin/pip install -e "$(BACKEND_DIR)[dev]" -q
 	touch $(BACKEND_VENV_MARKER)
 
+# ../alembic/env.py — обычный код, проверяется вместе с backend/. Остальное
+# в alembic/ (versions/*.py) — сгенерированные Alembic миграции, их не линтим:
+# шаблон script.py.mako сам импортирует op/sa и Union, даже когда конкретная
+# миграция их не использует (как эта, пустая) — ruff закономерно ругался бы
+# на unused-import в каждой второй миграции.
 backend-lint: $(BACKEND_VENV_MARKER)
-	cd $(BACKEND_DIR) && .venv/bin/ruff check .
+	cd $(BACKEND_DIR) && .venv/bin/ruff check . ../alembic/env.py
 
 backend-typecheck: $(BACKEND_VENV_MARKER)
-	cd $(BACKEND_DIR) && .venv/bin/mypy .
+	cd $(BACKEND_DIR) && .venv/bin/mypy . ../alembic/env.py
 
 # pytest возвращает код 5, если не собрано ни одного теста — это ожидаемо,
 # пока backend/tests/ пуст (раздел с тестами появится вместе с прикладным

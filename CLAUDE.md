@@ -80,25 +80,28 @@ peerDependencies`) — апгрейд до TS 7 ждёт апгрейда это
 backend/
   api/       — HTTP-эндпоинты, валидация входных данных, сериализация ответов
   services/  — бизнес-логика: пайплайны, сессии, git-операции (min. 85% test coverage)
-  db/        — ORM-модели, миграции
+  db/        — ORM-модели (db/base.py — Base), асинхронное подключение
+              (db/session.py — engine/session из DATABASE_URL)
   clients/   — обёртки над Claude Agent SDK, GitLab API, MCP-серверами
   tasks/     — Celery-задачи (асинхронные и периодические)
   ws/        — WebSocket-обработчики real-time уведомлений
   logging/   — конфигурация structlog и запись в app_logs
+  alembic.ini — конфиг Alembic (async); script_location указывает на
+              корневой alembic/ (см. ниже), строку подключения задаёт
+              alembic/env.py из DATABASE_URL, а не сам alembic.ini
 frontend/    — React SPA (дашборд, страница задачи, админка)
 deploy/
   caddy/     — конфигурация reverse-proxy
+  install.sh — скелет установки по разделу 20.2 ТЗ
 runners/
   tracker-runner-python/ — Docker-образ раннера для script-нод (Python)
   tracker-runner-bash/   — Docker-образ раннера для script-нод (Bash)
 alembic/
-  versions/  — миграции базы данных
+  env.py       — async env (target_metadata = db.base.Base.metadata)
+  versions/    — миграции базы данных; первая (initial) — пустая, без таблиц
 docs/        — техническая документация, включая ТЗ
+docker-compose.yml, docker-compose.prod.yml, .env.example — раздел 20.3 ТЗ
 ```
-
-Файлы `docker-compose.yml`, `docker-compose.prod.yml`, `.env.example`,
-`deploy/install.sh` предусмотрены разделом 20.3 ТЗ, но ещё не созданы —
-появятся на этапе настройки инфраструктуры.
 
 ## 4. Команды
 
