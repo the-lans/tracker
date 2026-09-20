@@ -5,21 +5,21 @@ description = "AI-трекер задач — backend API и оркестрац�
 requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.141.1",
-    "uvicorn[standard]==0.52.4",
-    "sqlalchemy[asyncio]==2.0.52",
+    "uvicorn[standard]==0.53.0",
+    "sqlalchemy[asyncio]==2.0.54",
     "asyncpg==0.31.0",
     "alembic==1.20.0",
     "celery==5.6.3",
     "redis==8.1.0",
     "structlog==26.1.0",
-    "claude-agent-sdk==0.2.152",
+    "claude-agent-sdk==0.2.154",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
-    "ruff==0.16.7",
+    "ruff==0.16.8",
     "mypy==2.3.1",
 ]
 
