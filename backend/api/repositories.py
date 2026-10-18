@@ -1,0 +1,116 @@
+"""CRUD `repositories` (раздел 3.1 ТЗ) — доступно любому авторизованному
+пользователю (используется при настройке задачи, не относится к
+административной части раздела 15.5)."""
+
+from __future__ import annotations
+
+import uuid
+from typing import Annotated
+
+import sqlalchemy as sa
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api.dependencies import get_current_user
+from api.schemas import RepositoryCreateRequest, RepositoryResponse, RepositoryUpdateRequest
+from db.models.repositories import Repository
+from db.models.users import User
+from db.session import get_session
+from services.crypto import encrypt
+from services.errors import ConflictError, NotFoundError
+from services.integrity import ensure_repository_deletable
+
+router = APIRouter(prefix="/repositories", tags=["repositories"])
+
+
+async def _get_repository_or_404(db_session: AsyncSession, repository_id: uuid.UUID) -> Repository:
+    repository = await db_session.get(Repository, repository_id)
+    if repository is None:
+        raise NotFoundError(f"Репозиторий {repository_id} не найден")
+    return repository
+
+
+@router.post("", response_model=RepositoryResponse, status_code=201)
+async def create_repository(
+    body: RepositoryCreateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> Repository:
+    repository = Repository(
+        id=uuid.uuid4(),
+        name=body.name,
+        git_url=body.git_url,
+        default_template_id=body.default_template_id,
+        deploy_key_encrypted=encrypt(body.deploy_key),
+    )
+    db_session.add(repository)
+    await db_session.commit()
+    return repository
+
+
+@router.get("", response_model=list[RepositoryResponse])
+async def list_repositories(
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> list[Repository]:
+    stmt = sa.select(Repository).order_by(Repository.name)
+    return list((await db_session.execute(stmt)).scalars().all())
+
+
+@router.get("/{repository_id}", response_model=RepositoryResponse)
+async def get_repository(
+    repository_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> Repository:
+    return await _get_repository_or_404(db_session, repository_id)
+
+
+@router.patch("/{repository_id}", response_model=RepositoryResponse)
+async def update_repository(
+    repository_id: uuid.UUID,
+    body: RepositoryUpdateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> Repository:
+    repository = await _get_repository_or_404(db_session, repository_id)
+    if body.name is not None:
+        repository.name = body.name
+    if body.git_url is not None:
+        repository.git_url = body.git_url
+    if body.default_template_id is not None:
+        repository.default_template_id = body.default_template_id
+    if body.deploy_key is not None:
+        repository.deploy_key_encrypted = encrypt(body.deploy_key)
+    await db_session.commit()
+    await db_session.refresh(repository)
+    return repository
+
+
+@router.delete("/{repository_id}", status_code=204)
+async def delete_repository(
+    repository_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    """Правило 9 CLAUDE.md/раздел 3.2: репозиторий, привязанный к активной
+    задаче, удалить нельзя (см. `services/integrity.py`).
+
+    Даже когда guard пропускает (все связанные задачи — в терминальном
+    статусе), `task_repositories` — постоянная историческая запись (правило
+    5 CLAUDE.md касается только рабочей директории на диске, не строки в
+    БД) и не даёт `repository_id` без FK-ссылки: физическое удаление
+    репозитория, когда-либо привязанного хотя бы к одной задаче, всё равно
+    невозможно — это ловится здесь и превращается в понятный 409, а не в
+    падение с сырой `IntegrityError`."""
+    repository = await _get_repository_or_404(db_session, repository_id)
+    await ensure_repository_deletable(db_session, repository_id)
+    await db_session.delete(repository)
+    try:
+        await db_session.commit()
+    except sa.exc.IntegrityError as exc:
+        await db_session.rollback()
+        raise ConflictError(
+            "Репозиторий привязан хотя бы к одной задаче (историческая запись "
+            "task_repositories) — удаление невозможно",
+        ) from exc

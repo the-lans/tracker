@@ -1,0 +1,69 @@
+"""Предпросмотр рендеринга шаблонных переменных (раздел 5.1 ТЗ).
+
+"Функция предпросмотра рендеринга обязательна для всех трёх мест ввода"
+(конструктор пайплайна, библиотека промтов, свободный ввод) — один
+эндпоинт, различаемый `scope`, вместо трёх копий одной и той же логики.
+
+Полный рендер с реальными значениями возможен только в контексте
+существующей задачи (`{{task.*}}`/`{{env.*}}` резолвятся из строк БД) —
+без `task_id` эндпоинт лишь проверяет доступность переменных
+(`validate_template_variables`, та же проверка, что и при сохранении) и
+возвращает исходный текст без подстановки.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated
+
+import sqlalchemy as sa
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api.dependencies import get_current_user
+from api.schemas import TemplatePreviewRequest, TemplatePreviewResponse
+from db.models.enums import NodeLogTriggerType
+from db.models.logs import NodeLog
+from db.models.tasks import Task
+from db.models.users import User
+from db.session import get_session
+from services.errors import NotFoundError, ValidationError
+from services.template_context import render_for_task
+from services.templating import RenderScope, validate_template_variables
+
+router = APIRouter(prefix="/templates", tags=["templates"])
+
+_SCOPE_BY_VALUE = {scope.value: scope for scope in RenderScope}
+
+
+@router.post("/preview", response_model=TemplatePreviewResponse)
+async def preview_template(
+    body: TemplatePreviewRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> TemplatePreviewResponse:
+    scope = _SCOPE_BY_VALUE.get(body.scope)
+    if scope is None:
+        raise ValidationError(f"Неизвестный scope предпросмотра: {body.scope}")
+
+    if body.task_id is None:
+        validate_template_variables(body.text, scope=scope)
+        return TemplatePreviewResponse(rendered_text=body.text)
+
+    task = await db_session.get(Task, body.task_id)
+    if task is None:
+        raise NotFoundError(f"Задача {body.task_id} не найдена")
+
+    history: list[NodeLog] = []
+    if scope is RenderScope.PIPELINE:
+        stmt = (
+            sa.select(NodeLog)
+            .where(
+                NodeLog.task_id == task.id,
+                NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+            )
+            .order_by(NodeLog.started_at, NodeLog.id)
+        )
+        history = list((await db_session.execute(stmt)).scalars().all())
+
+    rendered_text = await render_for_task(db_session, task, body.text, history=history)
+    return TemplatePreviewResponse(rendered_text=rendered_text)
