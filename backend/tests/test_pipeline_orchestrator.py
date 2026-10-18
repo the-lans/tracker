@@ -1,0 +1,357 @@
+import uuid
+from pathlib import Path
+
+import sqlalchemy as sa
+from claude_agent_sdk import AssistantMessage, TextBlock
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from clients.claude_agent import ClaudeCodeSession
+from db.models.enums import NodeLogStatus, NodeType, ScriptLanguage, TaskStatus, UserRole
+from db.models.logs import NodeLog
+from db.models.pipelines import Node, Pipeline, TaskNode
+from db.models.tasks import Task
+from db.models.users import User
+from services.pipeline_orchestrator import (
+    compute_retry_delay_seconds,
+    run_pipeline,
+)
+from services.plan_mode import ActiveNodeContext
+from tests.fakes import FakeClaudeAgentClient, make_result_message
+
+_GENEROUS_TIMEOUT_SECONDS = 30
+
+
+async def _make_task_with_pipeline(db_session: AsyncSession) -> Task:
+    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
+    db_session.add(user)
+    await db_session.flush()
+    pipeline = Pipeline(name="p", is_archived=False)
+    db_session.add(pipeline)
+    await db_session.flush()
+    task = Task(
+        code=f"RR-{uuid.uuid4().hex[:5]}",
+        title="t",
+        description="d",
+        created_by=user.id,
+        pipeline_id=pipeline.id,
+        status=TaskStatus.IN_PROGRESS,
+    )
+    db_session.add(task)
+    await db_session.flush()
+    return task
+
+
+async def _add_node(
+    db_session: AsyncSession,
+    task: Task,
+    *,
+    order_index: int,
+    is_enabled: bool = True,
+    **node_kwargs: object,
+) -> Node:
+    defaults: dict[str, object] = {
+        "pipeline_id": task.pipeline_id,
+        "order_index": order_index,
+        "name": f"node-{order_index}",
+        "timeout_seconds": _GENEROUS_TIMEOUT_SECONDS,
+        "max_retries": 3,
+        "retry_base_delay_seconds": 0,
+        "is_skipped": False,
+        "is_library_item": False,
+        "is_archived": False,
+    }
+    defaults.update(node_kwargs)
+    node = Node(**defaults)
+    db_session.add(node)
+    await db_session.flush()
+    db_session.add(
+        TaskNode(task_id=task.id, node_id=node.id, order_index=order_index, is_enabled=is_enabled),
+    )
+    await db_session.flush()
+    return node
+
+
+async def _node_logs_for(db_session: AsyncSession, task_id: uuid.UUID) -> list[NodeLog]:
+    stmt = (
+        sa.select(NodeLog)
+        .where(NodeLog.task_id == task_id)
+        .order_by(NodeLog.started_at, NodeLog.id)
+    )
+    return list((await db_session.execute(stmt)).scalars().all())
+
+
+def test_compute_retry_delay_seconds_grows_exponentially() -> None:
+    assert compute_retry_delay_seconds(1, 5) == 5.0
+    assert compute_retry_delay_seconds(2, 5) == 10.0
+    assert compute_retry_delay_seconds(3, 5) == 20.0
+
+
+async def test_run_pipeline_executes_nodes_in_order_and_threads_output(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    task = await _make_task_with_pipeline(db_session)
+    await _add_node(
+        db_session,
+        task,
+        order_index=0,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="первый шаг",
+    )
+    await _add_node(
+        db_session,
+        task,
+        order_index=1,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="используем: {{node.llm_output}}",
+    )
+    # Первый узел должен вернуть непустой текст, чтобы второй мог на него сослаться.
+    fake = FakeClaudeAgentClient(
+        messages_per_query=[
+            [
+                AssistantMessage(
+                    content=[TextBlock(text="результат первого шага")],
+                    model="claude",
+                ),
+                make_result_message(),
+            ],
+            [make_result_message()],
+        ],
+    )
+    session = ClaudeCodeSession(fake)
+
+    outcome = await run_pipeline(db_session, task=task, claude_session=session, repos_path=tmp_path)
+
+    assert outcome.completed is True
+    logs = await _node_logs_for(db_session, task.id)
+    assert len(logs) == 2
+    assert logs[0].status is NodeLogStatus.SUCCESS
+    assert logs[1].rendered_prompt == "используем: результат первого шага"
+
+
+async def test_run_pipeline_skips_disabled_nodes_without_node_log(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    task = await _make_task_with_pipeline(db_session)
+    await _add_node(
+        db_session,
+        task,
+        order_index=0,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="шаг 1",
+    )
+    disabled_node = await _add_node(
+        db_session,
+        task,
+        order_index=1,
+        is_enabled=False,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="шаг 2 (отключён)",
+    )
+    await _add_node(
+        db_session,
+        task,
+        order_index=2,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="шаг 3",
+    )
+    fake = FakeClaudeAgentClient(
+        messages_per_query=[[make_result_message()], [make_result_message()]],
+    )
+    session = ClaudeCodeSession(fake)
+
+    outcome = await run_pipeline(db_session, task=task, claude_session=session, repos_path=tmp_path)
+
+    assert outcome.completed is True
+    logs = await _node_logs_for(db_session, task.id)
+    assert len(logs) == 2
+    assert all(log.node_id != disabled_node.id for log in logs)
+
+
+async def test_run_pipeline_retries_and_fails_after_exhausting_attempts(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    task = await _make_task_with_pipeline(db_session)
+    await _add_node(
+        db_session,
+        task,
+        order_index=0,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="ненадёжный шаг",
+        max_retries=2,
+        retry_base_delay_seconds=0,
+    )
+    await _add_node(
+        db_session,
+        task,
+        order_index=1,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="никогда не выполнится",
+    )
+    fake = FakeClaudeAgentClient(
+        messages_per_query=[
+            [make_result_message(is_error=True)],
+            [make_result_message(is_error=True)],
+        ],
+    )
+    session = ClaudeCodeSession(fake)
+
+    outcome = await run_pipeline(db_session, task=task, claude_session=session, repos_path=tmp_path)
+
+    assert outcome.completed is False
+    assert outcome.failed_order_index == 0
+    logs = await _node_logs_for(db_session, task.id)
+    assert len(logs) == 2
+    assert [log.attempt_number for log in logs] == [1, 2]
+    assert all(log.status is NodeLogStatus.FAILED for log in logs)
+    assert len(fake.queries) == 2
+
+
+async def test_run_pipeline_stops_at_clear_context_and_reports_order_index(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    task = await _make_task_with_pipeline(db_session)
+    await _add_node(
+        db_session,
+        task,
+        order_index=0,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="шаг 1",
+    )
+    await _add_node(db_session, task, order_index=1, node_type=NodeType.CLEAR_CONTEXT)
+    await _add_node(
+        db_session,
+        task,
+        order_index=2,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="после очистки",
+    )
+    task.session_id = "sess-to-be-cleared"
+    fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+    session = ClaudeCodeSession(fake)
+
+    outcome = await run_pipeline(db_session, task=task, claude_session=session, repos_path=tmp_path)
+
+    assert outcome.completed is False
+    assert outcome.context_cleared_at_order_index == 1
+    assert fake.disconnected is True
+    assert task.session_id is None
+    logs = await _node_logs_for(db_session, task.id)
+    assert len(logs) == 1  # только первый шаг — после clear_context пайплайн остановился
+
+
+async def test_run_pipeline_start_after_order_index_skips_earlier_nodes(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    task = await _make_task_with_pipeline(db_session)
+    await _add_node(
+        db_session,
+        task,
+        order_index=0,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="уже выполнено",
+    )
+    await _add_node(
+        db_session,
+        task,
+        order_index=1,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="продолжение",
+    )
+    fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+    session = ClaudeCodeSession(fake)
+
+    outcome = await run_pipeline(
+        db_session,
+        task=task,
+        claude_session=session,
+        repos_path=tmp_path,
+        start_after_order_index=0,
+    )
+
+    assert outcome.completed is True
+    logs = await _node_logs_for(db_session, task.id)
+    assert len(logs) == 1
+    assert logs[0].rendered_prompt == "продолжение"
+
+
+async def test_run_pipeline_executes_script_node_in_docker(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    task = await _make_task_with_pipeline(db_session)
+    await _add_node(
+        db_session,
+        task,
+        order_index=0,
+        node_type=NodeType.SCRIPT,
+        script_language=ScriptLanguage.PYTHON,
+        script_content="print('из оркестратора')",
+    )
+    session = ClaudeCodeSession(FakeClaudeAgentClient(messages_per_query=[]))
+
+    outcome = await run_pipeline(db_session, task=task, claude_session=session, repos_path=tmp_path)
+
+    assert outcome.completed is True
+    logs = await _node_logs_for(db_session, task.id)
+    assert logs[0].script_exit_code == 0
+    assert "из оркестратора" in (logs[0].script_stdout or "")
+
+
+async def test_run_pipeline_executes_plan_prompt_node_with_active_node_context(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    task = await _make_task_with_pipeline(db_session)
+    await _add_node(
+        db_session,
+        task,
+        order_index=0,
+        node_type=NodeType.PLAN_PROMPT,
+        prompt_template="составь план для {{task.code}}",
+    )
+    await _add_node(
+        db_session,
+        task,
+        order_index=1,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="используем план: {{node.plan_text}}",
+    )
+
+    node_logs_snapshot: list[NodeLog] = []
+
+    async def _accept_plan_for_current_node() -> None:
+        # Симулирует callback разрешений SDK (раздел 9.6): к моменту вызова
+        # query() оркестратор уже выставил context.node_log_id на ноду
+        # plan_prompt (см. active_node_context ниже).
+        node_log = await db_session.get(NodeLog, context.node_log_id)
+        assert node_log is not None
+        node_log.pending_plan_text = "1. Шаг раз\n2. Шаг два"
+        node_log.status = NodeLogStatus.SUCCESS
+        await db_session.commit()
+        node_logs_snapshot.append(node_log)
+
+    context = ActiveNodeContext()
+    fake = FakeClaudeAgentClient(
+        messages_per_query=[[make_result_message()], [make_result_message()]],
+        on_query=_accept_plan_for_current_node,
+    )
+    session = ClaudeCodeSession(fake)
+
+    outcome = await run_pipeline(
+        db_session,
+        task=task,
+        claude_session=session,
+        repos_path=tmp_path,
+        active_node_context=context,
+    )
+
+    assert outcome.completed is True
+    assert fake.permission_modes == ["plan"]
+    logs = await _node_logs_for(db_session, task.id)
+    assert logs[0].status is NodeLogStatus.SUCCESS
+    assert logs[1].rendered_prompt == "используем план: 1. Шаг раз\n2. Шаг два"
