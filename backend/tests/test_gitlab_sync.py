@@ -294,6 +294,7 @@ async def test_rebase_child_task_repositories_rebases_matching_children(
     _run("git", "checkout", "main", cwd=parent_pusher_dir)
     _run(
         "git",
+        *_GIT_AUTHOR_ARGS,
         "merge",
         "--no-ff",
         "feature/RR-parent",
@@ -381,6 +382,7 @@ async def test_rebase_child_task_repositories_marks_conflict_on_rebase_conflict(
     _run("git", "checkout", "main", cwd=parent_pusher_dir)
     _run(
         "git",
+        *_GIT_AUTHOR_ARGS,
         "merge",
         "--no-ff",
         "feature/RR-parent",
