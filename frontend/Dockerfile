@@ -9,7 +9,6 @@ RUN npm run build
 FROM nginx:1.29-alpine
 
 COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# TODO: заменить дефолтный nginx.conf на конфигурацию с SPA-фолбэком на index.html
-# (все не-файловые пути -> /index.html), когда появится клиентский роутинг.
 EXPOSE 80
