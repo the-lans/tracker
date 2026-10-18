@@ -20,6 +20,14 @@ updates:
       frontend-dependencies:
         patterns:
           - "*"
+    ignore:
+      # typescript-eslint требует typescript < 6.1.0 (см. CLAUDE.md раздел 2)
+      - dependency-name: "typescript"
+        versions: [">=6.1.0"]
+      # 6.1.2 тянет через optional peer @babel/core 8 и ломает разрешение
+      # зависимостей (ERESOLVE) — ждём совместимой цепочки
+      - dependency-name: "@vitejs/plugin-react"
+        versions: ["6.1.2"]
 
   - package-ecosystem: "docker"
     directories:
@@ -27,6 +35,14 @@ updates:
       - "/frontend"
     schedule:
       interval: "weekly"
+    ignore:
+      # Переход на новую версию Python — вручную и сразу везде (Dockerfile,
+      # CI, backend/.venv), иначе прод разойдётся с тем, что тестируется
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # Только LTS-ветки Node (чётные мажоры); нечётные живут полгода
+      - dependency-name: "node"
+        versions: ["21.x", "23.x", "25.x", "27.x"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
