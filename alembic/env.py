@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # prepend_sys_path = %(here)s), а также при запуске из корня репозитория.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
+import db.models  # noqa: E402,F401 — регистрирует все таблицы в Base.metadata
 from db.base import Base  # noqa: E402
 
 # this is the Alembic Config object, which provides

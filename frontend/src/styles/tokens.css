@@ -1,0 +1,88 @@
+/*
+ * Design tokens — единый источник правды для цветов/типографики фронтенда.
+ * Источник: docs/design/references/ (референсы, утверждённые пользователем).
+ * Тема переключается атрибутом data-theme="dark" на <html> (см. ThemeProvider).
+ *
+ * Статусные цвета — одна oklch-семья (общая светлота/насыщенность, разный тон),
+ * поэтому warning/success/danger/info visually cohere с акцентом, а не выглядят
+ * как независимо подобранные цвета. *-text — отдельные, более тёмные варианты
+ * ИМЕННО для текста на подложке-тинте (нужен контраст ≥4.5:1); *, без -text —
+ * для рамок/иконок/декоративных элементов (порог 3:1 для графических объектов).
+ */
+
+:root {
+  --bg: #fafafc;
+  --surface: #ffffff;
+  --surface-2: #f3f4f7;
+  --border: #e4e6ec;
+
+  --text: #181a24;
+  --text-2: #63667a;
+  --text-3: #6a6d81;
+
+  --accent: oklch(58% 0.19 265);
+  --accent-hov: oklch(50% 0.20 265);
+  --accent-tint: oklch(95% 0.035 265);
+  --accent-border: oklch(85% 0.08 265);
+
+  --success: oklch(58% 0.14 155);
+  --success-tint: oklch(95% 0.035 155);
+  --success-text: oklch(50% 0.14 155);
+
+  --warning: oklch(66% 0.14 78);
+  --warning-tint: oklch(95% 0.035 78);
+  --warning-border: oklch(85% 0.07 78);
+  --warning-text: oklch(52% 0.14 78);
+
+  --danger: oklch(58% 0.19 25);
+  --danger-tint: oklch(95% 0.035 25);
+  --danger-text: oklch(54% 0.19 25);
+
+  --info: oklch(58% 0.16 245);
+  --info-tint: oklch(95% 0.03 245);
+  --info-text: oklch(52% 0.16 245);
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+
+  --font-ui: 'Manrope', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+:root[data-theme='dark'] {
+  --bg: #111219;
+  --surface: #181a24;
+  --surface-2: #20222e;
+  --border: #2b2d3b;
+
+  --text: #edecf5;
+  --text-2: #9b9db3;
+  --text-3: #888bb0;
+
+  --accent: oklch(72% 0.17 265);
+  --accent-hov: oklch(78% 0.16 265);
+  --accent-tint: oklch(28% 0.05 265);
+  --accent-border: oklch(40% 0.09 265);
+
+  --success: oklch(72% 0.13 155);
+  --success-tint: oklch(26% 0.05 155);
+  --success-text: var(--success); /* уже ≥4.5:1 на surface в тёмной теме */
+
+  --warning: oklch(76% 0.13 78);
+  --warning-tint: oklch(28% 0.05 78);
+  --warning-border: oklch(40% 0.08 78);
+  --warning-text: var(--warning);
+
+  --danger: oklch(70% 0.17 25);
+  --danger-tint: oklch(28% 0.05 25);
+  --danger-text: var(--danger);
+
+  --info: oklch(72% 0.14 245);
+  --info-tint: oklch(26% 0.05 245);
+  --info-text: var(--info);
+}
+
+/* Фирменный знак: восходящие узлы пайплайна (доменная метафора трекера) —
+ * см. docs/design/references/*.html, .brand-mark. Воспроизвести как компонент
+ * <BrandMark /> при вёрстке сайдбара (раздел 15.1 ТЗ). */

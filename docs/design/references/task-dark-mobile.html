@@ -1,0 +1,130 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+  :root{
+    --bg:#111219; --surface:#181a24; --surface-2:#20222e; --border:#2b2d3b;
+    --text:#edecf5; --text-2:#9b9db3; --text-3:#888bb0;
+    --accent:oklch(72% 0.17 265); --accent-hov:oklch(78% 0.16 265); --accent-tint:oklch(28% 0.05 265); --accent-border:oklch(40% 0.09 265);
+    --warning:oklch(76% 0.13 78); --warning-tint:oklch(28% 0.05 78); --warning-border:oklch(40% 0.08 78);
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:'Manrope',system-ui,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;}
+  .mono{font-family:'JetBrains Mono',ui-monospace,monospace;}
+  .phone{width:390px;height:844px;display:flex;flex-direction:column;overflow:hidden;background:var(--bg);}
+
+  .header{padding:16px 16px 10px;background:var(--surface);border-bottom:1px solid var(--border);flex:none;}
+  .hrow{display:flex;align-items:center;gap:10px;}
+  .back{width:32px;height:32px;flex:none;color:var(--text-2);display:flex;align-items:center;justify-content:center;}
+  .back svg{width:19px;height:19px;}
+  .htitle{min-width:0;flex:1;}
+  .hcode{font-size:11px;font-weight:700;color:var(--text-3);}
+  .hname{font-size:14.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .reconnect{width:36px;height:36px;border-radius:10px;background:var(--warning-tint);border:1px solid var(--warning-border);color:var(--warning);display:flex;align-items:center;justify-content:center;flex:none;position:relative;}
+  .reconnect svg{width:16px;height:16px;}
+  .reconnect .rdot{position:absolute;top:6px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--warning);animation:blink 1.4s ease-in-out infinite;}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:.3;}}
+
+  .tabs{display:flex;gap:4px;margin-top:12px;background:var(--surface-2);padding:3px;border-radius:11px;}
+  .tab{flex:1;text-align:center;padding:8px 0;border-radius:8px;font-size:12.5px;font-weight:700;color:var(--text-2);}
+  .tab.active{background:var(--surface);color:var(--text);box-shadow:0 1px 3px rgba(20,20,40,.08);}
+
+  .feed{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:13px;}
+  .msg{display:flex;gap:8px;max-width:88%;}
+  .msg.user{align-self:flex-end;flex-direction:row-reverse;}
+  .avatar{width:24px;height:24px;border-radius:50%;background:var(--surface-2);flex:none;}
+  .msg.user .avatar{background:linear-gradient(135deg,#8b7bf0,var(--accent));}
+  .bubble{border-radius:13px;padding:10px 12px;font-size:13.5px;line-height:1.5;}
+  .bubble.llm{background:var(--surface);border:1px solid var(--border);border-top-left-radius:4px;}
+  .bubble.user{background:var(--accent);color:#fff;border-top-right-radius:4px;}
+
+  .plan-card{background:linear-gradient(180deg,var(--accent-tint),var(--surface));border:1px solid var(--accent-border);border-radius:14px;padding:14px 15px;}
+  .plan-head{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:800;color:var(--accent-hov);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;}
+  .plan-head svg{width:13px;height:13px;}
+  .plan-text{font-size:13px;line-height:1.55;}
+  .plan-text ol{margin:6px 0 0;padding-left:16px;}
+
+  .widget{display:flex;flex-direction:column;gap:8px;}
+  .widget-btn{text-align:left;padding:13px 14px;border-radius:12px;border:1.5px solid var(--border);background:var(--surface);font-family:inherit;font-size:13.5px;font-weight:700;min-height:44px;}
+  .widget-btn.primary{border-color:var(--accent);background:var(--accent-tint);color:var(--accent-hov);}
+  .widget-btn small{display:block;font-weight:500;color:var(--text-3);font-size:11px;margin-top:2px;}
+  .widget-btn.primary small{color:#7d84d8;}
+
+  .composer{border-top:1px solid var(--border);background:var(--surface);padding:10px 16px 16px;flex:none;}
+  .freeform{display:flex;align-items:center;gap:7px;padding:8px 10px;border-radius:9px;background:var(--surface-2);color:var(--text-3);font-size:11.5px;margin-bottom:8px;}
+  .freeform svg{width:13px;height:13px;flex:none;}
+  .decision-row{display:flex;gap:8px;align-items:center;}
+  .decision-input{flex:1;border:1px solid var(--border);border-radius:12px;padding:12px 13px;font-size:13px;color:var(--text-3);min-height:44px;display:flex;align-items:center;}
+  .send{width:44px;height:44px;border-radius:12px;background:var(--accent);border:none;color:#fff;display:flex;align-items:center;justify-content:center;flex:none;}
+  .send svg{width:17px;height:17px;}
+</style>
+</helmet>
+
+<div class="phone">
+  <div class="header">
+    <div class="hrow">
+      <div class="back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></div>
+      <div class="htitle">
+        <div class="hcode mono">RR-10229</div>
+        <div class="hname">Ребейз дочерних веток при мердже</div>
+      </div>
+      <div class="reconnect">
+        <span class="rdot"></span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l-3 3a3 3 0 01-4.2-4.2l3-3"/><path d="M15 9l3-3a3 3 0 014.2 4.2l-3 3"/><path d="M8 16l8-8"/></svg>
+      </div>
+    </div>
+    <div class="tabs">
+      <div class="tab">Обзор</div>
+      <div class="tab active">Выполнение</div>
+      <div class="tab">Логи</div>
+    </div>
+  </div>
+
+  <div class="feed">
+    <div class="msg">
+      <div class="avatar"></div>
+      <div class="bubble llm">Изучил текущую логику ребейза и сформировал план из трёх шагов.</div>
+    </div>
+
+    <div class="plan-card">
+      <div class="plan-head">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8c0 6 12 2 12 8"/></svg>
+        План сформирован
+      </div>
+      <div class="plan-text">
+        <ol>
+          <li>Периодическая задача rebase_child_branches_on_parent_merge</li>
+          <li>Безопасный ребейз с откатом при конфликте</li>
+          <li>Статус rebase_conflict при конфликте</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="widget">
+      <button class="widget-btn primary">Принять план и продолжить автоматически<small>Без подтверждений на следующих нодах</small></button>
+      <button class="widget-btn">Принять план, подтверждать каждое действие</button>
+      <button class="widget-btn">Доработать план</button>
+    </div>
+  </div>
+
+  <div class="composer">
+    <div class="freeform">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4Z"/></svg>
+      Свободный промт
+    </div>
+    <div class="decision-row">
+      <div class="decision-input">Комментарий к решению…</div>
+      <button class="send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3L3 10.5l7.5 3L14 21Z"/><path d="M10.5 13.5L21 3"/></svg></button>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

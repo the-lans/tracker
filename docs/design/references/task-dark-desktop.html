@@ -1,0 +1,311 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+  :root{
+    --bg:#111219; --surface:#181a24; --surface-2:#20222e; --border:#2b2d3b;
+    --text:#edecf5; --text-2:#9b9db3; --text-3:#888bb0;
+    --accent:oklch(72% 0.17 265); --accent-hov:oklch(78% 0.16 265); --accent-tint:oklch(28% 0.05 265); --accent-border:oklch(40% 0.09 265);
+    --success:oklch(72% 0.13 155); --success-tint:oklch(26% 0.05 155);
+    --warning:oklch(76% 0.13 78); --warning-tint:oklch(28% 0.05 78); --warning-border:oklch(40% 0.08 78);
+    --danger:oklch(70% 0.17 25); --danger-tint:oklch(28% 0.05 25);
+    --info:oklch(72% 0.14 245); --info-tint:oklch(26% 0.05 245);
+    --r-sm:8px; --r-md:12px; --r-lg:16px;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:'Manrope',system-ui,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;}
+  .mono{font-family:'JetBrains Mono',ui-monospace,monospace;}
+  a{color:var(--accent);text-decoration:none;} a:hover{color:var(--accent-hov);}
+  .page{width:1440px;height:1040px;display:flex;flex-direction:column;overflow:hidden;}
+
+  .header{display:flex;align-items:center;gap:14px;padding:16px 28px;background:var(--surface);border-bottom:1px solid var(--border);flex:none;}
+  .back{width:32px;height:32px;border-radius:9px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-2);flex:none;}
+  .back svg{width:16px;height:16px;}
+  .htitle{display:flex;flex-direction:column;gap:2px;}
+  .hcode{font-size:12px;font-weight:700;color:var(--text-3);}
+  .hname{font-size:17px;font-weight:800;letter-spacing:-.01em;}
+  .badge{font-size:11.5px;font-weight:700;padding:4px 11px;border-radius:20px;flex:none;}
+  .badge.wait{background:var(--warning-tint);color:var(--warning);}
+  .reconnect{margin-left:auto;display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;border:1px solid var(--warning-border);background:var(--warning-tint);color:var(--warning);font-weight:700;font-size:13px;}
+  .reconnect svg{width:15px;height:15px;}
+  .reconnect .rdot{width:7px;height:7px;border-radius:50%;background:var(--warning);animation:blink 1.4s ease-in-out infinite;}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:.35;}}
+  .more{width:36px;height:36px;border-radius:10px;border:1px solid var(--border);background:var(--surface);display:flex;align-items:center;justify-content:center;color:var(--text-2);}
+  .more svg{width:17px;height:17px;}
+
+  .body{flex:1;display:flex;min-height:0;}
+
+  /* -------- left: overview zone -------- */
+  .overview{width:420px;flex:none;border-right:1px solid var(--border);background:var(--surface);overflow:auto;padding:20px;display:flex;flex-direction:column;gap:16px;}
+  .zone-label{font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3);padding:0 2px;}
+  .card{border:1px solid var(--border);border-radius:var(--r-md);padding:15px 16px;background:var(--surface);}
+  .card-title{font-size:12.5px;font-weight:800;color:var(--text-2);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;}
+  .field-label{font-size:11.5px;font-weight:700;color:var(--text-3);margin-bottom:4px;}
+  .field-val{font-size:13.5px;color:var(--text);margin-bottom:10px;line-height:1.45;}
+  .desc{font-size:13px;color:var(--text-2);line-height:1.5;}
+  .guide-link{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;background:var(--info-tint);color:var(--info);padding:5px 10px;border-radius:8px;}
+  .guide-link svg{width:13px;height:13px;}
+
+  .repo-row{display:flex;align-items:center;gap:9px;padding:8px 0;border-top:1px solid var(--border);}
+  .repo-row:first-of-type{border-top:none;}
+  .repo-name{font-size:13px;font-weight:700;flex:1;}
+  .role-chip{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:12px;}
+  .role-chip.rw{background:var(--success-tint);color:var(--success);}
+  .role-chip.ro{background:var(--surface-2);color:var(--text-2);}
+  .branch{font-size:11.5px;color:var(--text-3);}
+
+  .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:4px 0;}
+  .toggle-name{font-size:13px;font-weight:700;}
+  .toggle-sub{font-size:11.5px;color:var(--text-3);margin-top:1px;}
+  .switch{width:36px;height:20px;border-radius:20px;background:var(--surface-2);border:1px solid var(--border);position:relative;flex:none;}
+  .switch.on{background:var(--accent);border-color:var(--accent);}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);}
+  .switch.on::after{left:18px;}
+  .disabled-input{margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--surface-2);color:var(--text-3);font-size:12.5px;border:1px dashed var(--border);}
+
+  .node-item{display:flex;align-items:center;gap:9px;padding:8px 0;border-top:1px solid var(--border);opacity:.55;}
+  .node-item:first-of-type{border-top:none;}
+  .node-item.current{opacity:1;background:var(--accent-tint);margin:0 -8px;padding:8px;border-radius:8px;border-top:none;}
+  .node-check{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--text-3);flex:none;}
+  .node-check.done{background:var(--success);border-color:var(--success);position:relative;}
+  .node-ic{width:15px;height:15px;color:var(--text-2);flex:none;}
+  .node-name{font-size:12.5px;font-weight:700;flex:1;}
+  .node-tag{font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.03em;}
+  .lock-note{font-size:11px;color:var(--text-3);margin-top:8px;display:flex;gap:6px;align-items:center;}
+  .lock-note svg{width:12px;height:12px;}
+
+  .prompt-tbl-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--border);}
+  .prompt-tbl-row:first-of-type{border-top:none;}
+  .prompt-tbl-name{font-size:12.5px;font-weight:700;flex:1;}
+  .mini-btn{width:24px;height:24px;border-radius:7px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-2);flex:none;}
+  .mini-btn svg{width:11px;height:11px;}
+  .status-pill{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:10px;background:var(--surface-2);color:var(--text-3);}
+
+  /* -------- right: execution zone -------- */
+  .exec{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);}
+  .exec-head{padding:14px 28px;border-bottom:1px solid var(--border);}
+  .feed{flex:1;overflow:auto;padding:22px 28px;display:flex;flex-direction:column;gap:16px;}
+
+  .msg{display:flex;gap:11px;max-width:640px;}
+  .msg.user{align-self:flex-end;flex-direction:row-reverse;}
+  .msg-avatar{width:28px;height:28px;border-radius:50%;flex:none;background:var(--surface-2);}
+  .msg.user .msg-avatar{background:linear-gradient(135deg,#8b7bf0,var(--accent));}
+  .bubble{border-radius:14px;padding:11px 14px;font-size:13.5px;line-height:1.5;}
+  .bubble.llm{background:var(--surface);border:1px solid var(--border);border-top-left-radius:4px;}
+  .bubble.user{background:var(--accent);color:#fff;border-top-right-radius:4px;}
+  .src-tag{font-size:10.5px;font-weight:700;color:var(--text-3);margin-bottom:5px;display:flex;align-items:center;gap:5px;}
+  .src-tag.remote{color:var(--info);}
+  .src-tag svg{width:11px;height:11px;}
+
+  .script-block{background:#0d0e14;color:#c9cbe0;border:1px solid var(--border);border-radius:12px;padding:12px 14px;font-size:12px;max-width:560px;}
+  .script-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:#8b8ea8;font-size:11px;font-weight:700;}
+  .script-out{white-space:pre-wrap;line-height:1.55;}
+  .expand-link{color:#a7acf5;font-size:11.5px;font-weight:700;margin-top:8px;display:inline-block;}
+
+  .plan-card{background:linear-gradient(180deg,var(--accent-tint),var(--surface));border:1px solid var(--accent-border);border-radius:14px;padding:16px 18px;max-width:640px;}
+  .plan-head{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:800;color:var(--accent-hov);text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px;}
+  .plan-head svg{width:14px;height:14px;}
+  .plan-text{font-size:13.5px;line-height:1.6;color:var(--text);}
+  .plan-text b{font-weight:700;}
+  .plan-text ol{margin:8px 0 0;padding-left:18px;}
+
+  .widget{max-width:640px;display:flex;flex-direction:column;gap:8px;}
+  .widget-btn{text-align:left;padding:12px 15px;border-radius:12px;border:1.5px solid var(--border);background:var(--surface);font-family:inherit;font-size:13.5px;font-weight:700;color:var(--text);display:flex;flex-direction:column;gap:2px;}
+  .widget-btn.primary{border-color:var(--accent);background:var(--accent-tint);color:var(--accent-hov);}
+  .widget-btn small{font-weight:500;color:var(--text-3);font-size:11.5px;}
+  .widget-btn.primary small{color:#7d84d8;}
+
+  .composer{border-top:1px solid var(--border);background:var(--surface);padding:14px 28px 18px;display:flex;flex-direction:column;gap:10px;}
+  .freeform-row{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:10px;background:var(--surface-2);color:var(--text-3);font-size:12.5px;}
+  .freeform-row svg{width:14px;height:14px;flex:none;}
+  .decision-row{display:flex;align-items:center;gap:10px;}
+  .decision-input{flex:1;border:1px solid var(--border);border-radius:12px;padding:12px 14px;font-size:13.5px;color:var(--text-3);background:var(--surface);}
+  .send-btn{width:42px;height:42px;border-radius:12px;background:var(--accent);border:none;display:flex;align-items:center;justify-content:center;color:#fff;flex:none;}
+  .send-btn svg{width:17px;height:17px;}
+</style>
+</helmet>
+
+<div class="page">
+  <div class="header">
+    <div class="back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></div>
+    <div class="htitle">
+      <div class="hcode mono">RR-10229 · Feature full-cycle</div>
+      <div class="hname">Ребейз дочерних веток при мердже родительской</div>
+    </div>
+    <div class="badge wait">Ревью плана</div>
+    <div class="reconnect">
+      <span class="rdot"></span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15l-3 3a3 3 0 01-4.2-4.2l3-3"/><path d="M15 9l3-3a3 3 0 014.2 4.2l-3 3"/><path d="M8 16l8-8"/></svg>
+      Переподключить сессию
+    </div>
+    <div class="more"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></div>
+  </div>
+
+  <div class="body">
+    <div class="overview">
+      <div class="zone-label">Обзор</div>
+
+      <div class="card">
+        <div class="field-label">Описание</div>
+        <div class="desc">При обнаружении смерджа родительской ветки автоматически ребейзить все дочерние ветки открытых задач и уведомлять о конфликтах.</div>
+        <div class="field-label" style="margin-top:10px">Гайд</div>
+        <a class="guide-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4L10 14"/><path d="M18 13v5a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h5"/></svg>Confluence · Git-flow трекера</a>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Репозитории</div>
+        <div class="repo-row">
+          <div class="repo-name">tracker-backend</div>
+          <span class="role-chip rw">read-write</span>
+        </div>
+        <div class="branch mono">feature/RR-10229 ← develop</div>
+        <div class="repo-row" style="margin-top:6px">
+          <div class="repo-name">tracker-infra</div>
+          <span class="role-chip ro">read-only</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-name">Автозапуск</div>
+            <div class="toggle-sub">Дата и время старта</div>
+          </div>
+          <div class="switch"></div>
+        </div>
+        <div class="disabled-input">Выключено — поле даты неактивно</div>
+      </div>
+
+      <div class="card">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-name">Принять план автоматически</div>
+            <div class="toggle-sub">auto_accept_plan</div>
+          </div>
+          <div class="switch"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Ноды пайплайна <span>4 / 6</span></div>
+        <div class="node-item">
+          <div class="node-check done"></div>
+          <svg class="node-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4Z"/></svg>
+          <div class="node-name">Проверить актуальность гайда</div>
+          <div class="node-tag">prompt</div>
+        </div>
+        <div class="node-item">
+          <div class="node-check done"></div>
+          <svg class="node-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+          <div class="node-name">Прогнать текущие тесты</div>
+          <div class="node-tag">script</div>
+        </div>
+        <div class="node-item current">
+          <div class="node-check"></div>
+          <svg class="node-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8c0 6 12 2 12 8"/></svg>
+          <div class="node-name">Спланировать реализацию</div>
+          <div class="node-tag">plan</div>
+        </div>
+        <div class="node-item">
+          <div class="node-check"></div>
+          <svg class="node-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4Z"/></svg>
+          <div class="node-name">Реализовать по плану</div>
+          <div class="node-tag">prompt</div>
+        </div>
+        <div class="node-item">
+          <div class="node-check"></div>
+          <svg class="node-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4L8 20"/></svg>
+          <div class="node-name">/code-review ultra</div>
+          <div class="node-tag">slash</div>
+        </div>
+        <div class="node-item">
+          <div class="node-check"></div>
+          <svg class="node-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+          <div class="node-name">Прогнать make check</div>
+          <div class="node-tag">script</div>
+        </div>
+        <div class="lock-note">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="9" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg>
+          Состав нод заблокирован — задача уже выполняется
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Системные промты задачи</div>
+        <div class="prompt-tbl-row">
+          <div class="mini-btn"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13l11-6.5Z"/></svg></div>
+          <div class="prompt-tbl-name">Собрать саммари сессии</div>
+          <span class="status-pill">не запускался</span>
+        </div>
+        <div class="prompt-tbl-row">
+          <div class="mini-btn"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.5v13l11-6.5Z"/></svg></div>
+          <div class="prompt-tbl-name">Проверить покрытие тестами</div>
+          <span class="status-pill">успех · 09:14</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="exec">
+      <div class="exec-head zone-label">Выполнение</div>
+      <div class="feed">
+
+        <div class="msg">
+          <div class="msg-avatar"></div>
+          <div>
+            <div class="bubble llm">Начинаю ноду «Спланировать реализацию» — перевожу сессию в режим планирования, изучаю текущую логику ребейза в <span class="mono">services/git_ops.py</span>.</div>
+          </div>
+        </div>
+
+        <div class="script-block">
+          <div class="script-head"><span>ПРЕДЫДУЩАЯ НОДА · make check</span><span>exit 0</span></div>
+          <div class="script-out">ruff check .        All checks passed!
+mypy .              Success: no issues found
+pytest              12 passed in 4.2s</div>
+          <a class="expand-link">Показать полностью →</a>
+        </div>
+
+        <div class="plan-card">
+          <div class="plan-head">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8c0 6 12 2 12 8"/></svg>
+            План сформирован
+          </div>
+          <div class="plan-text">
+            <b>Ребейз дочерних веток при мердже родительской</b>
+            <ol>
+              <li>Добавить периодическую задачу <span class="mono">rebase_child_branches_on_parent_merge</span></li>
+              <li>Расширить <span class="mono">git_ops.py</span> методом безопасного ребейза с откатом при конфликте</li>
+              <li>Перевести задачу в <span class="mono">rebase_conflict</span> при обнаружении конфликта</li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="widget">
+          <button class="widget-btn primary">Принять план и продолжить автоматически<small>Дальнейшие ноды выполняются без подтверждений</small></button>
+          <button class="widget-btn">Принять план, подтверждать каждое действие<small>Режим по умолчанию — запрос на рискованные операции</small></button>
+          <button class="widget-btn">Доработать план<small>Оставить комментарий и вернуть на доработку</small></button>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="freeform-row">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4Z"/></svg>
+          Свободный промт — задать вопрос сессии в любой момент
+        </div>
+        <div class="decision-row">
+          <div class="decision-input">Комментарий к решению (необязательно)…</div>
+          <button class="send-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3L3 10.5l7.5 3L14 21Z"/><path d="M10.5 13.5L21 3"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
