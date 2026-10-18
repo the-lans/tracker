@@ -172,6 +172,50 @@ async def test_rebase_onto_base_branch_succeeds_without_conflict(tmp_path: Path)
     assert (target_dir / "unrelated_file.txt").exists()
 
 
+async def test_rebase_rewrites_commits_without_global_git_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Как в контейнере воркера: глобального git-конфига нет, угадывать
+    # идентичность по имени хоста git не должен (macOS делает это молча).
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.useConfigOnly")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
+    origin = _init_bare_origin(tmp_path)
+    repository = _make_repository(git_url=str(origin))
+    task_repository = _make_task_repository(role=RepositoryRole.READ_WRITE)
+    target_dir = await clone_task_repository(
+        repository=repository,
+        task_repository=task_repository,
+        task_code="RR-00001",
+        repos_root=tmp_path / "repos",
+    )
+    # Свой коммит в ветке задачи: без него ребейз — fast-forward и
+    # committer-идентичность не нужна.
+    (target_dir / "task_file.txt").write_text("работа задачи\n")
+    _run("git", "add", "task_file.txt", cwd=target_dir)
+    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "правка в задаче", cwd=target_dir)
+
+    updater_dir = tmp_path / "updater"
+    _run("git", "clone", str(origin), str(updater_dir), cwd=tmp_path)
+    (updater_dir / "unrelated_file.txt").write_text("не конфликтует\n")
+    _run("git", "add", "unrelated_file.txt", cwd=updater_dir)
+    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "апдейт базовой ветки", cwd=updater_dir)
+    _run("git", "push", "origin", "main", cwd=updater_dir)
+
+    await rebase_onto_base_branch(
+        repository=repository,
+        task_repository=task_repository,
+        repo_dir=target_dir,
+    )
+
+    assert (target_dir / "unrelated_file.txt").exists()
+    identities = _run("git", "log", "-1", "--format=%ae %ce", cwd=target_dir).split()
+    assert identities == ["test@example.com", "tracker@localhost"]
+
+
 async def test_rebase_onto_base_branch_raises_and_aborts_on_conflict(tmp_path: Path) -> None:
     origin = _init_bare_origin(tmp_path)
     repository = _make_repository(git_url=str(origin))
