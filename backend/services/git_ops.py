@@ -14,6 +14,7 @@ Deploy-ключ репозитория хранится в БД зашифров
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -29,6 +30,13 @@ from services.errors import ExternalServiceError
 logger = get_logger("git_ops")
 
 _KEY_FILE_MODE = 0o600
+
+# Ребейз переписывает коммиты и требует committer-идентичность; в контейнере
+# воркера глобального git-конфига нет. Автор коммитов при ребейзе сохраняется.
+_DEFAULT_GIT_IDENTITY = {
+    "GIT_COMMITTER_NAME": "AI Tracker",
+    "GIT_COMMITTER_EMAIL": "tracker@localhost",
+}
 
 
 class RebaseConflictError(Exception):
@@ -46,7 +54,10 @@ async def _deploy_key_env(repository: Repository) -> AsyncIterator[dict[str, str
         key_path = Path(key_file.name)
     key_path.chmod(_KEY_FILE_MODE)
     try:
+        # Окружение процесса наследуется (PATH, HOME), а не заменяется целиком.
         yield {
+            **_DEFAULT_GIT_IDENTITY,
+            **os.environ,
             "GIT_SSH_COMMAND": (
                 f"ssh -i {key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
             ),
