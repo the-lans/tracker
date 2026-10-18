@@ -33,7 +33,7 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | Компонент | Версия |
 |---|---|
 | Python | 3.12* |
-| FastAPI (async) | 0.143.0 |
+| FastAPI (async) | 0.143.2 |
 | Uvicorn[standard] | 0.54.0* (ASGI-сервер, не назван в ТЗ напрямую) |
 | SQLAlchemy (async) | 2.1.4 |
 | asyncpg | 0.32.0* (асинхронный драйвер Postgres для SQLAlchemy async) |
@@ -43,13 +43,13 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | structlog | 26.1.0 |
 | PostgreSQL | 15+ |
 | pytest / pytest-asyncio | 9.1.1 / 1.4.0* |
-| ruff | 0.16.10 |
+| ruff | 0.17.1 |
 | mypy | 2.4.0 |
 
 ### Frontend (`frontend/package.json`)
 | Компонент | Версия |
 |---|---|
-| Node.js | 20 LTS* (протестировано также на 26) |
+| Node.js | 26* (образ сборки `frontend/Dockerfile`; CI — 22) |
 | React | 19.3.1 |
 | react-dom | 19.3.1* |
 | Vite | 8.3.4 |
