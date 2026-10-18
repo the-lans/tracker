@@ -1,6 +1,12 @@
 {$DOMAIN} {
-	# TODO: уточнить реальные пути backend API, когда появятся эндпоинты в api/
-	reverse_proxy /api/* backend:8000
+	# `handle_path` (не `reverse_proxy /api/*` напрямую) срезает совпавший
+	# префикс `/api` перед проксированием — backend-роуты в `backend/main.py`
+	# смонтированы БЕЗ префикса `/api` (`/tasks`, `/auth/google`, ...), см.
+	# `frontend/src/lib/apiClient.ts`. `/ws/*` префикс не срезается — backend
+	# монтирует WebSocket-канал буквально по пути `/ws/tasks/{id}/status`.
+	handle_path /api/* {
+		reverse_proxy backend:8000
+	}
 	reverse_proxy /ws/* backend:8000
 
 	reverse_proxy frontend:80

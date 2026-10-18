@@ -1,6 +1,4 @@
-# Базовое описание всех сервисов (раздел 20.3 ТЗ).
-# Заготовка: контейнеры собираются и поднимаются, но прикладной код (api/, services/,
-# db/, clients/, tasks/, ws/, logging/) ещё не написан — см. TODO у отдельных сервисов.
+# Полное описание всех сервисов (раздел 20.3 ТЗ).
 
 services:
   postgres:
@@ -32,14 +30,25 @@ services:
 
   backend:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     environment: &backend_env
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY}
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY}
       GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID}
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
+      VAPID_CLAIMS_EMAIL: ${VAPID_CLAIMS_EMAIL}
+      # Раздел 20.4: репозитории задач обязаны жить на именованном volume
+      # (task_repos ниже), а не в writable-слое контейнера — без этой
+      # переменной services/git_ops.py использует относительный дефолт
+      # "tracker/repos" от текущей рабочей директории процесса, никак не
+      # связанный с примонтированным /data/repos.
+      TRACKER_REPOS_ROOT: /data/repos
     volumes:
       - task_repos:/data/repos
       - user_files:/data/user-files
@@ -53,16 +62,19 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
-    # TODO: применение alembic-миграций в entrypoint (раздел 20.2, шаг 7) —
-    # появится вместе с alembic/env.py.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   worker:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
-    # TODO: команда станет рабочей после появления backend/tasks/celery_app.py —
-    # сейчас tasks/ пуст (заготовка), контейнер соберётся, но не запустится.
-    command: ["celery", "-A", "tasks", "worker", "-l", "info"]
+    command: ["celery", "-A", "tasks.celery_app", "worker", "-l", "info"]
     environment: *backend_env
     volumes:
       - task_repos:/data/repos
@@ -73,13 +85,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Дожидается, пока backend впервые применит миграции (см.
+      # backend/docker-entrypoint.sh) — worker не должен упереться в
+      # ещё-не-созданную схему БД при холодном старте стека.
+      backend:
+        condition: service_healthy
 
   beat:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
-    # TODO: то же самое — рабочая команда появится вместе с backend/tasks/celery_app.py.
-    command: ["celery", "-A", "tasks", "beat", "-l", "info"]
+    command: ["celery", "-A", "tasks.celery_app", "beat", "-l", "info"]
     environment: *backend_env
     volumes:
       - task_repos:/data/repos
@@ -87,6 +104,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      backend:
         condition: service_healthy
 
   frontend:
@@ -113,6 +132,26 @@ services:
       - backend
       - frontend
 
+  # Раздел 20.4: встроенный сервис резервного копирования PostgreSQL по
+  # расписанию, настраиваемый через .env (POSTGRES_BACKUP_CRON,
+  # POSTGRES_BACKUP_RETENTION_DAYS) — не отдельная ручная процедура.
+  backup:
+    build:
+      context: ./deploy/backup
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      POSTGRES_BACKUP_CRON: ${POSTGRES_BACKUP_CRON}
+      POSTGRES_BACKUP_RETENTION_DAYS: ${POSTGRES_BACKUP_RETENTION_DAYS}
+    volumes:
+      - postgres_backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:
@@ -122,3 +161,4 @@ volumes:
   user_files:
   caddy_data:
   caddy_config:
+  postgres_backups:

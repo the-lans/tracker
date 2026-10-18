@@ -221,3 +221,9 @@ node_modules/
 # Playwright MCP snapshots
 .playwright-mcp/
 
+
+# Python-шаблон выше игнорирует lib/ — фронтенду нужен свой src/lib
+!frontend/src/lib/
+
+# macOS
+.DS_Store
