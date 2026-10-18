@@ -37,3 +37,8 @@ jobs:
         env:
           PYTHON: python
         run: make check
+
+      # Продовый образ фронтенда: сборка на версии Node из Dockerfile и
+      # SPA-маршруты nginx (make check собирает фронтенд только на Node из CI).
+      - name: Smoke test frontend image
+        run: scripts/smoke_frontend_image.sh
