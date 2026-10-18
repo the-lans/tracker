@@ -1,42 +1,46 @@
-Проверь соответствует ли написанный код правилам ниже. Ты в режиме Агента, поэтому после того, как составишь список исправлений кода, реализуй их сразу!
-Придерживайся следующих правил при написании кода:
+Check whether the written code follows the rules below. You are in Agent mode: after listing the needed fixes, apply them immediately!
+Follow these rules when writing code:
 
-=== Бэкенд ===
-1. Используй лучшие практики профессиональной разработки и тестирования, state of the art.
-2. Импорты пиши в самом начале модуля (файла), а не в каждой функции, если нет циклических импортов.
-3. При написании SQL запросов не используй синонимы таблиц, только их собственные имена.
-4. Соблюдай типизацию переменных и функций. В новом коде добавляй типы везде, где это возможно и разумно.
-5. Декомпозируй код на небольшие функции и методы (Single Responsibility Principle).
-6. Не используй «магические числа/строки» — выноси их в константы или конфигурацию. Такая магия допустима только в тестах.
-7. Не используй except Exception: без необходимости, перехватывай конкретные типы исключений. Но, если возможности узнать конкретные типы исключений нет, используй Exception.
-8. Учитывай транзакции: либо используй явные транзакционные блоки, либо единообразный подход (unit of work).
-9. Не оптимизируй без измерений. Сначала профилируй и найди узкое место, затем оптимизируй.
-10. Используй pytest и фикстуры для настройки окружения и тестовых данных. Смотри обязательно какие фикстуры уже есть.
-11. Покрывай тестами как happy-path, так и основные негативные сценарии и пограничные случаи.
-12. Если затрагивается API, генерируй и поддерживай спецификацию. При изменении сигнатуры эндпоинта — обновляй спецификацию в том же коммите.
-13. Следи за валидацией входных данных: проверяй типы, диапазоны, форматы (особенно в API).
-14. Соблюдай структуру проекта: разделяй слой представления (API), бизнес-логику, доступ к данным и утилиты. Общий функционал выноси в либу.
-15. Поддерживай единый стиль кода через: pre-commit run --all-files, т.е. ruff check --fix для линтинга, mypy для проверки типов.
-16. Важно. По возможности те тесты, у которых проверяется несколько однотипных сценариев или похожая логика, делай параметризированными.
-17. Если у функции или метода больше пяти аргументов, запрещено использовать позиционные аргументы при вызове. Определяй такие функции так, чтобы все «настоящие» аргументы были keyword-only. Во всех вызовах таких функций/методов указывай аргументы по имени.
-18. В файл/папку models кладём только модели, функции по работе с БД выносим в отдельный слой - db.
-19. Используй "висячие" запятые там, где это улучшает читаемость: много аргументов / элементов, аргументы / элементы длинные или сложные по структуре, конструкция уже многострочная. Не добавляй висячую запятую в короткие однострочные конструкции.
-20. Пиши только осмысленные комментарии.
-21. В SQL миграциях используй IF NOT EXISTS / IF EXISTS для CREATE, ALTER, DROP — чтобы повторный прогон не ронял сервис.
-22. Длинные docstring/комментарии в """ """ оформляй с текстом на отдельной строке, а не на одной строке с кавычками.
-   Неправильно: """Длинный текст"""
-   Правильно:
+=== Backend ===
+1. Follow professional, state-of-the-art development and testing practices.
+2. Put imports at the top of the module, not inside functions, unless there are circular imports.
+3. In SQL queries do not use table aliases — only real table names.
+4. Type variables and functions. In new code add types wherever possible and reasonable.
+5. Decompose code into small functions/methods (Single Responsibility Principle).
+6. No magic numbers/strings — move them to constants or config. Allowed only in tests.
+7. Avoid `except Exception:` unless necessary; catch specific exception types. If specific types cannot be determined, Exception is acceptable.
+8. Handle transactions: either explicit transaction blocks or a consistent approach (unit of work).
+9. Do not optimize without measurement. Profile and find the bottleneck first, then optimize.
+10. Use pytest and fixtures for environment and test data setup. Always check which fixtures already exist.
+11. Cover happy path, main negative scenarios and edge cases with tests.
+12. If the API is affected, generate and maintain the spec. When an endpoint signature changes, update the spec in the same commit.
+13. Validate input data: types, ranges, formats (especially in APIs).
+14. Follow project structure: separate presentation (API), business logic, data access and utilities. Move shared functionality into a library.
+15. Keep a consistent code style via `pre-commit run --all-files`, i.e. `ruff check --fix` for linting and `mypy` for type checking.
+16. Important: where tests check several same-shape scenarios or similar logic, parametrize them.
+17. Test names must be short and meaningful. No overly long function names in general.
+18. Group new tests into test classes (e.g. `class TestSomeFeature:`) per scenario/feature, not top-level module functions.
+19. If a function/method has more than five arguments, positional arguments at call sites are forbidden. Define such functions so all "real" arguments are keyword-only, and pass arguments by name at every call site.
+20. The models file/folder contains only models; DB access functions go to a separate layer — db.
+21. Use trailing commas where they improve readability: many arguments/elements, long or complex elements, already multi-line constructs. No trailing comma in short one-line constructs.
+22. Write only meaningful comments.
+23. In SQL migrations use IF NOT EXISTS / IF EXISTS for CREATE, ALTER, DROP so a repeated run doesn't crash the service.
+24. Long docstrings/comments in """ """ must have the text on its own line, not on the same line as the quotes.
+   Wrong: """Long text"""
+   Right:
    """
-   Длинный текст
+   Long text
    """
 
-=== Фронтенд ===
-22. Придерживайся конфигурации ESLint и Prettier, которая уже есть в проекте. Не генерируй код, нарушающий эти правила. Если конфига нет — создай базовый eslint.config.js с правилами для используемого фреймворка.
-23. Используй TypeScript везде. Запрещено использовать тип any без явного обоснования в комментарии. Для сложных структур данных описывай интерфейсы и типы в отдельных *.types.ts файлах.
-24. Держи компоненты маленькими и сфокусированными (Single Responsibility). Если компонент разрастается — декомпозируй на дочерние компоненты или выноси логику в хуки / composables / утилиты.
-25. Не обращайся к DOM напрямую через document.querySelector и аналоги там, где это решается средствами фреймворка (React ref, Vue ref и т.п.).
-26. Если в проекте есть i18n — не хардкодь строки мимо него. Если i18n нет, но проект планирует локализацию — выноси UI-текст в отдельный объект-словарь.
-27. Асинхронные операции (fetch, axios и т.п.) всегда оборачивай в обработку ошибок. Не оставляй «голых» промисов без .catch() или блока try/catch.
-28. Придерживайся единого подхода к управлению состоянием в рамках проекта (например, только React Query + Context или только Pinia). Не смешивай несколько стратегий без обоснования.
-29. Покрывай компоненты тестами через Vitest + Testing Library. Тестируй поведение (что видит и делает пользователь), а не детали реализации (внутренние методы, стейт).
-30. Используй динамические импорты (import()) для тяжёлых зависимостей и роутов. Не добавляй в бандл библиотеку ради одной функции — ищи tree-shaking-friendly альтернативу или пиши утилиту самостоятельно.
+=== Frontend ===
+25. Follow the ESLint and Prettier config already in the project. Do not generate code that violates these rules. If there is no config, create a basic eslint.config.js with rules for the framework in use.
+26. Use TypeScript everywhere. The `any` type is forbidden without an explicit justification in a comment. Describe interfaces and types for complex data structures in separate *.types.ts files.
+27. Keep components small and focused (Single Responsibility). If a component grows, decompose it into child components or move logic into hooks / composables / utilities.
+28. Do not access the DOM directly via document.querySelector and the like where the framework solves it (React ref, Vue ref, etc.).
+29. If the project has i18n, don't hardcode strings around it. If there is no i18n but localization is planned, move UI text into a separate dictionary object.
+30. Always wrap async operations (fetch, axios, etc.) in error handling. No "bare" promises without .catch() or try/catch.
+31. Use one state-management approach across the project (e.g. only React Query + Context, or only Pinia). Do not mix strategies without justification.
+32. Cover components with tests via Vitest + Testing Library. Test behavior (what the user sees and does), not implementation details (internal methods, state).
+33. Use dynamic imports (import()) for heavy dependencies and routes. Do not add a library to the bundle for one function — find a tree-shaking-friendly alternative or write the utility yourself.
+
+IMPORTANT: all output for the user must be in Russian (answers, reports, questions, plans, summaries and any generated texts), even though this prompt is in English.
