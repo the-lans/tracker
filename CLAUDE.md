@@ -79,30 +79,51 @@ peerDependencies`) — апгрейд до TS 7 ждёт апгрейда это
 ```
 backend/
   api/       — HTTP-эндпоинты, валидация входных данных, сериализация ответов
+              (auth, tasks, repositories, templates, preview, llm_accounts,
+              env_variables, mcp_servers, pipelines, nodes, users,
+              periodic_tasks, monitoring, push)
   services/  — бизнес-логика: пайплайны, сессии, git-операции (min. 85% test coverage)
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
               (db/session.py — engine/session из DATABASE_URL)
   clients/   — обёртки над Claude Agent SDK, GitLab API, MCP-серверами
-  tasks/     — Celery-задачи (асинхронные и периодические)
-  ws/        — WebSocket-обработчики real-time уведомлений
-  logging/   — конфигурация structlog и запись в app_logs
+  tasks/     — Celery-задачи (асинхронные и периодические), docker-entrypoint.sh
+              (применяет alembic-миграции перед стартом backend/worker/beat)
+  ws/        — WebSocket-обработчики real-time уведомлений (tasks.py —
+              `/ws/tasks/{task_id}/status`, раздел 18.1)
+  app_logging/ — конфигурация structlog и запись в app_logs (не "logging" —
+              так называется модуль stdlib, вложенный пакет с этим именем
+              внутри backend/ его перекрывает)
   alembic.ini — конфиг Alembic (async); script_location указывает на
               корневой alembic/ (см. ниже), строку подключения задаёт
               alembic/env.py из DATABASE_URL, а не сам alembic.ini
-frontend/    — React SPA (дашборд, страница задачи, админка)
+frontend/    — React SPA: дашборд, страница задачи (обзор + диалог),
+              конструктор пайплайна/библиотека, CRUD-страницы
+              (репозитории/шаблоны/LLM-аккаунты/переменные окружения),
+              админка (раздел 15.5), Web Push (public/service-worker.js,
+              src/lib/push.ts, раздел 18.1)
 deploy/
-  caddy/     — конфигурация reverse-proxy
-  install.sh — скелет установки по разделу 20.2 ТЗ
+  caddy/     — конфигурация reverse-proxy (handle_path /api/* — срезает
+              префикс перед проксированием на backend)
+  backup/    — встроенный сервис резервного копирования PostgreSQL по
+              расписанию (раздел 20.4): Dockerfile, entrypoint.sh (crond),
+              backup.sh (pg_dump + ротация по POSTGRES_BACKUP_RETENTION_DAYS)
+  install.sh — единственный скрипт установки по разделу 20.2 ТЗ
 runners/
   tracker-runner-python/ — Docker-образ раннера для script-нод (Python)
   tracker-runner-bash/   — Docker-образ раннера для script-нод (Bash)
 alembic/
   env.py       — async env (target_metadata = db.base.Base.metadata)
-  versions/    — миграции базы данных; первая (initial) — пустая, без таблиц
+  versions/    — миграции базы данных (полная схема раздела 3.1 + push_subscriptions)
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
                 приложения), запускать backend-venv'ом, см. раздел 4
-docs/        — техническая документация, включая ТЗ и
+  seed_admin_allowlist.py — заполняет `allowed_emails` email'ом первого
+                администратора (запускается install.sh ДО первого входа —
+                без этого войти в систему не может никто, раздел 19.1)
+  seed_periodic_tasks.py  — заполняет `periodic_tasks` (раздел 16.2);
+                требует уже существующего admin, запускается после первого входа
+docs/        — техническая документация: ТЗ, migration.md (раздел 20.4 —
+              процедура переноса на новый сервер) и
               remote_control_findings.md (верификация допущения раздела 6.3)
 docker-compose.yml, docker-compose.prod.yml, .env.example — раздел 20.3 ТЗ
 ```
@@ -110,9 +131,7 @@ docker-compose.yml, docker-compose.prod.yml, .env.example — раздел 20.3 
 ## 4. Команды
 
 Backend требует Python **3.12+** (создайте venv явно нужной версией, если
-системный `python3` старее). Прикладного кода пока нет — `backend/main.py` и
-`frontend/src/main.tsx` это пустые точки входа ровно для того, чтобы
-установка и дев-сервер были проверяемы уже сейчас.
+системный `python3` старее).
 
 ### Установка зависимостей
 ```bash
@@ -129,9 +148,9 @@ cd frontend && npm install
 # backend (FastAPI, автоперезагрузка)
 cd backend && uvicorn main:app --reload
 
-# Celery worker / beat (появятся вместе с tasks/)
-cd backend && celery -A tasks worker -l info
-cd backend && celery -A tasks beat -l info
+# Celery worker / beat
+cd backend && celery -A tasks.celery_app worker -l info
+cd backend && celery -A tasks.celery_app beat -l info
 
 # frontend (Vite)
 cd frontend && npm run dev
@@ -147,9 +166,7 @@ make check
 Создаёт/актуализирует `backend/.venv` и `frontend/node_modules` при
 необходимости, затем последовательно: `ruff check .` → `mypy .` → `pytest`
 (backend), `eslint .` → `tsc --noEmit` (frontend). Падает с ненулевым кодом
-на первой же ошибке. `pytest` без единого теста в `backend/tests/` завершается
-кодом 5 — Makefile трактует это как норму, а не как сбой, до появления
-прикладного кода.
+на первой же ошибке.
 
 ### Тесты
 ```bash
