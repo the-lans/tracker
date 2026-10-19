@@ -240,7 +240,11 @@ async def test_run_pipeline_stops_at_clear_context_and_reports_order_index(
     assert fake.disconnected is True
     assert task.session_id is None
     logs = await _node_logs_for(db_session, task.id)
-    assert len(logs) == 1  # только первый шаг — после clear_context пайплайн остановился
+    # Первый шаг и сама clear_context (успешная запись нужна инварианту done);
+    # шаг после очистки не выполнялся — пайплайн остановился.
+    assert len(logs) == 2
+    assert {log.status for log in logs} == {NodeLogStatus.SUCCESS}
+    assert all(log.rendered_prompt != "после очистки" for log in logs)
 
 
 async def test_run_pipeline_start_after_order_index_skips_earlier_nodes(
@@ -355,3 +359,32 @@ async def test_run_pipeline_executes_plan_prompt_node_with_active_node_context(
     logs = await _node_logs_for(db_session, task.id)
     assert logs[0].status is NodeLogStatus.SUCCESS
     assert logs[1].rendered_prompt == "используем план: 1. Шаг раз\n2. Шаг два"
+
+
+async def test_run_pipeline_saves_session_id_after_first_turn(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    task = await _make_task_with_pipeline(db_session)
+    await _add_node(
+        db_session,
+        task,
+        order_index=0,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="шаг",
+    )
+    assert task.session_id is None
+    fake = FakeClaudeAgentClient(
+        messages_per_query=[[make_result_message(session_id="sess-new")]],
+    )
+
+    await run_pipeline(
+        db_session,
+        task=task,
+        claude_session=ClaudeCodeSession(fake),
+        repos_path=tmp_path,
+    )
+
+    # Раздел 6.1: без сохранённого session_id перезапуск не смог бы продолжить сессию.
+    await db_session.refresh(task)
+    assert task.session_id == "sess-new"

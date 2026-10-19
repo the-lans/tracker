@@ -12,6 +12,7 @@ from db.models.tasks import Task
 from db.models.users import User
 from services.autostart import find_tasks_due_for_autostart, run_scheduled_autostart_check
 from services.errors import ConflictError
+from tasks import periodic, session_worker
 
 
 async def _make_task(
@@ -155,3 +156,25 @@ async def test_run_scheduled_autostart_check_one_failure_does_not_block_others(
     logs = (await db_session.execute(logs_stmt)).scalars().all()
     assert len(logs) == 1
     assert logs[0].source == "autostart"
+
+
+async def test_periodic_autostart_enqueues_session_worker_for_started_tasks(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Раздел 12.2: после `new -> queued` задача реально запускается —
+    иначе она навсегда осталась бы в `queued`."""
+    due_task = await _make_task(
+        db_session,
+        scheduled_start_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    captured_bodies: list[object] = []
+    enqueued_task_ids: list[str] = []
+    monkeypatch.setattr(periodic, "_run_periodic", lambda _name, body: captured_bodies.append(body))
+    monkeypatch.setattr(session_worker.run_task_session, "delay", enqueued_task_ids.append)
+
+    periodic.check_scheduled_tasks_for_autostart()
+    [body] = captured_bodies
+    await body(db_session)  # type: ignore[operator]
+
+    assert enqueued_task_ids == [str(due_task.id)]

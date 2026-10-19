@@ -16,6 +16,7 @@ from db.models.enums import (
     ManualRequestStatus,
     McpAuthType,
     McpIsolationMode,
+    MergeStatus,
     NodeLogStatus,
     NodeLogTriggerType,
     NodeType,
@@ -23,6 +24,7 @@ from db.models.enums import (
     PeriodicScheduleType,
     PermissionMode,
     RemoteControlStatus,
+    RepositoryRole,
     ScriptLanguage,
     TaskStatus,
     UserRole,
@@ -35,6 +37,14 @@ class AwaitingDecisionCountResponse(BaseModel):
     count: int
 
 
+class TaskRepositoryAttachRequest(BaseModel):
+    """Раздел 1.2 (сценарий 1): репозиторий задачи и его роль."""
+
+    repository_id: uuid.UUID
+    role: RepositoryRole
+    base_branch: str = "main"
+
+
 class TaskCreateRequest(BaseModel):
     code: str
     title: str
@@ -42,6 +52,36 @@ class TaskCreateRequest(BaseModel):
     guide_url: str | None = None
     parent_task_id: uuid.UUID | None = None
     use_parent_summary: bool = False
+    llm_account_id: uuid.UUID | None = None
+    repositories: list[TaskRepositoryAttachRequest] = []
+
+
+class TaskUpdateRequest(BaseModel):
+    """Поля задачи, редактируемые после создания (раздел 12.1, 14.2).
+
+    ``auto_accept_plan`` меняется в любой момент до `done` (раздел 15.2);
+    остальные — только пока задача в статусе `new`.
+    """
+
+    title: str | None = None
+    description: str | None = None
+    guide_url: str | None = None
+    llm_account_id: uuid.UUID | None = None
+    auto_start_enabled: bool | None = None
+    scheduled_start_at: datetime | None = None
+    auto_accept_plan: bool | None = None
+
+
+class TaskRepositoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    repository_id: uuid.UUID
+    role: RepositoryRole
+    branch_name: str
+    base_branch: str
+    pushed_at: datetime | None
+    merge_status: MergeStatus
 
 
 class TaskResponse(BaseModel):

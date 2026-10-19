@@ -43,6 +43,7 @@ from services.periodic_tasks import record_periodic_task_run
 from services.remote_control import decide_remote_control_bridge_action
 from services.template_context import resolve_global_env_value
 from tasks.celery_app import celery_app
+from tasks.session_worker import run_task_session
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -100,7 +101,11 @@ def _run_periodic(name: str, body: Callable[[AsyncSession], Awaitable[None]]) ->
 @celery_app.task(name="check_scheduled_tasks_for_autostart")
 def check_scheduled_tasks_for_autostart() -> None:
     async def body(db_session: AsyncSession) -> None:
-        await run_scheduled_autostart_check(db_session, now=datetime.now(UTC))
+        result = await run_scheduled_autostart_check(db_session, now=datetime.now(UTC))
+        # Раздел 12.2 (п. 2): «тот же процесс запуска, что и кнопка
+        # «Выполнить»» — после `new -> queued` таск сессии ставится в очередь.
+        for task_id in result.started_task_ids:
+            run_task_session.delay(str(task_id))
 
     _run_periodic("check_scheduled_tasks_for_autostart", body)
 
