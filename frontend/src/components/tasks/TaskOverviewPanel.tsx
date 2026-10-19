@@ -1,8 +1,14 @@
 import { useState } from "react";
 import { ExternalLink, Lock, Plus } from "lucide-react";
+import { toast } from "sonner";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useUpdateTask } from "@/hooks/useTasks";
+import { ApiError } from "@/lib/apiClient";
+import type { TaskUpdateRequest } from "@/lib/types";
+import { TaskRepositoriesCard } from "@/components/tasks/TaskRepositoriesCard";
 import { usePipelineNodes } from "@/hooks/usePipelines";
 import { useNodes } from "@/hooks/useNodes";
 import { formatDateTime } from "@/lib/utils";
@@ -11,7 +17,25 @@ import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { TaskLibraryPromptsCard } from "@/components/tasks/TaskLibraryPromptsCard";
 import { PipelinePickerDialog } from "@/components/tasks/PipelinePickerDialog";
 
+/** ISO-время ↔ значение `<input type="datetime-local">` в локальной зоне. */
+function toLocalInputValue(iso: string | null): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
 export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: NodeLog[] }) {
+  const updateTask = useUpdateTask(task.id);
+  const isNew = task.status === TaskStatus.NEW;
+
+  function update(body: TaskUpdateRequest) {
+    updateTask.mutate(body, {
+      onError: (error) => {
+        toast.error(error instanceof ApiError ? error.message : "Не удалось сохранить изменения");
+      },
+    });
+  }
   const { data: pipelineNodes } = usePipelineNodes(task.pipeline_id ?? undefined);
   const { data: libraryNodes } = useNodes({ libraryOnly: true });
   const [pipelinePickerOpen, setPipelinePickerOpen] = useState(false);
@@ -48,11 +72,7 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
         )}
       </Card>
 
-      {/* Репозитории задачи: backend пока не отдаёт `task_repositories` ни
-       * одним GET-эндпоинтом (только `services/git_ops.py`/`gitlab_sync.py`
-       * используют их внутри оркестратора) — карточка временно не рендерится,
-       * чтобы не показывать заведомо пустые/неверные данные. См. отчёт по
-       * итогам Этапа 13. */}
+      <TaskRepositoriesCard taskId={task.id} />
 
       <Card>
         <div className="flex items-center justify-between py-1">
@@ -62,16 +82,28 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
               {task.scheduled_start_at ? formatDateTime(task.scheduled_start_at) : "Дата и время старта"}
             </div>
           </div>
-          <Switch checked={task.auto_start_enabled} disabled />
+          <Switch
+            checked={task.auto_start_enabled}
+            disabled={!isNew || updateTask.isPending}
+            onCheckedChange={(checked) => update({ auto_start_enabled: checked })}
+          />
         </div>
-        {!task.auto_start_enabled && (
-          <div className="mt-2 rounded-lg border border-dashed border-border bg-surface-2 px-2.5 py-2 text-[12.5px] text-text-3">
-            Выключено — поле даты неактивно
-          </div>
+        {/* Раздел 12.1: пока переключатель выключен, поле даты неактивно. */}
+        <Input
+          type="datetime-local"
+          aria-label="Дата и время автозапуска"
+          className="mt-2"
+          value={toLocalInputValue(task.scheduled_start_at)}
+          disabled={!isNew || !task.auto_start_enabled || updateTask.isPending}
+          onChange={(event) =>
+            update({
+              scheduled_start_at: event.target.value ? new Date(event.target.value).toISOString() : null,
+            })
+          }
+        />
+        {!isNew && (
+          <div className="mt-2 text-[11px] text-text-3">Автозапуск настраивается только до запуска задачи</div>
         )}
-        <div className="mt-2 text-[11px] text-text-3">
-          Редактирование автозапуска пока не поддержано API (нет PATCH /tasks/&#123;id&#125;).
-        </div>
       </Card>
 
       <Card>
@@ -80,7 +112,11 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
             <div className="text-[13px] font-bold">Принять план автоматически</div>
             <div className="mt-0.5 text-[11.5px] text-text-3">auto_accept_plan</div>
           </div>
-          <Switch checked={task.auto_accept_plan} disabled />
+          <Switch
+            checked={task.auto_accept_plan}
+            disabled={task.status === TaskStatus.DONE || updateTask.isPending}
+            onCheckedChange={(checked) => update({ auto_accept_plan: checked })}
+          />
         </div>
       </Card>
 

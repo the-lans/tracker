@@ -5,8 +5,12 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TaskRepositoryPicker } from "@/components/tasks/TaskRepositoryPicker";
+import { useLlmAccounts } from "@/hooks/useLlmAccounts";
 import { useCreateTask } from "@/hooks/useTasks";
 import { ApiError } from "@/lib/apiClient";
+import type { TaskRepositoryAttach } from "@/lib/types";
 
 export function CreateTaskDialog({
   open,
@@ -21,18 +25,30 @@ export function CreateTaskDialog({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [guideUrl, setGuideUrl] = useState("");
+  const [llmAccountId, setLlmAccountId] = useState("");
+  const [repositories, setRepositories] = useState<TaskRepositoryAttach[]>([]);
+  const { data: llmAccounts } = useLlmAccounts();
 
   function reset() {
     setCode("");
     setTitle("");
     setDescription("");
     setGuideUrl("");
+    setLlmAccountId("");
+    setRepositories([]);
   }
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     createTask.mutate(
-      { code, title, description, guide_url: guideUrl || null },
+      {
+        code,
+        title,
+        description,
+        guide_url: guideUrl || null,
+        llm_account_id: llmAccountId || null,
+        repositories,
+      },
       {
         onSuccess: (task) => {
           reset();
@@ -89,6 +105,25 @@ export function CreateTaskDialog({
               value={guideUrl}
               onChange={(event) => setGuideUrl(event.target.value)}
             />
+          </div>
+          <div>
+            <Label>LLM-аккаунт</Label>
+            <Select value={llmAccountId} onValueChange={setLlmAccountId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Выберите аккаунт" />
+              </SelectTrigger>
+              <SelectContent>
+                {(llmAccounts ?? []).map((account) => (
+                  <SelectItem key={account.id} value={account.id}>
+                    {account.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>Репозитории</Label>
+            <TaskRepositoryPicker value={repositories} onChange={setRepositories} />
           </div>
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>

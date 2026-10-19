@@ -7,6 +7,8 @@ import type {
   Task,
   TaskCreateRequest,
   TaskLibraryPrompt,
+  TaskRepository,
+  TaskUpdateRequest,
 } from "@/lib/types";
 
 const taskKeys = {
@@ -14,6 +16,7 @@ const taskKeys = {
   list: (statusFilter?: string) => ["tasks", "list", statusFilter ?? "all"] as const,
   detail: (id: string) => ["tasks", "detail", id] as const,
   nodeLogs: (id: string) => ["tasks", id, "node-logs"] as const,
+  repositories: (id: string) => ["tasks", id, "repositories"] as const,
 };
 
 export function useTasks(statusFilter?: string) {
@@ -56,6 +59,36 @@ export function useCreateTask() {
   return useMutation({
     mutationFn: (body: TaskCreateRequest) => api.post<Task>("/tasks", body),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
+}
+
+export function useTaskRepositories(taskId: string) {
+  return useQuery({
+    queryKey: taskKeys.repositories(taskId),
+    queryFn: () => api.get<TaskRepository[]>(`/tasks/${taskId}/repositories`),
+  });
+}
+
+export function useUpdateTask(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: TaskUpdateRequest) => api.patch<Task>(`/tasks/${taskId}`, body),
+    onSuccess: (task) => {
+      queryClient.setQueryData(taskKeys.detail(taskId), task);
+      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
+}
+
+/** Раздел 14.2: «Перезапустить с текущей ноды» — упавшая нода выполняется заново. */
+export function useRestartTask(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<Task>(`/tasks/${taskId}/restart`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
       void queryClient.invalidateQueries({ queryKey: taskKeys.all });
     },
   });
