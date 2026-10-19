@@ -13,7 +13,7 @@ type FilterKey = "all" | "in_progress" | "awaiting" | "done" | "failed";
 
 const FILTERS: { key: FilterKey; label: string; statuses: TaskStatus[] | null }[] = [
   { key: "all", label: "Все", statuses: null },
-  { key: "in_progress", label: "В работе", statuses: [TaskStatus.IN_PROGRESS] },
+  { key: "in_progress", label: "В работе", statuses: [TaskStatus.IN_PROGRESS, TaskStatus.PAUSED] },
   {
     key: "awaiting",
     label: "Ждут решения",

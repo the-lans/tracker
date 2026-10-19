@@ -3,12 +3,9 @@ import { cn } from "@/lib/utils";
 import { CollapsibleText } from "@/components/tasks/CollapsibleText";
 
 /**
- * `sourceLabel` (например, "claude.ai/code") — раздел 15.2: "Сообщения,
- * отправленные через claude.ai/code, помечены соответствующей меткой
- * источника". `node_logs` не хранит канал, которым было получено решение
- * (кнопка трекера/текст трекера/claude.ai/code неразличимы в текущей
- * схеме) — вызывающий код пока не может передать `sourceLabel` осмысленно;
- * проп оставлен для использования, когда это поле появится в API.
+ * `sourceLabel` — метка источника реплики (раздел 8.2: «отправлено
+ * вручную»; раздел 15.2: сообщения из claude.ai/code). Канал claude.ai/code
+ * `node_logs` пока не хранит — эта метка появится вместе с полем в API.
  */
 
 export function MessageBubble({

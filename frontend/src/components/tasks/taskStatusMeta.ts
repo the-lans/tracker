@@ -11,6 +11,7 @@ export const TASK_STATUS_META: Record<TaskStatus, StatusMeta> = {
   [TaskStatus.NEW]: { label: "Новая", tone: "neutral", borderVar: "var(--border)" },
   [TaskStatus.QUEUED]: { label: "В очереди", tone: "info", borderVar: "var(--info)" },
   [TaskStatus.IN_PROGRESS]: { label: "В работе", tone: "accent", borderVar: "var(--accent)" },
+  [TaskStatus.PAUSED]: { label: "На паузе", tone: "warning", borderVar: "var(--warning)" },
   [TaskStatus.PLAN_REVIEW]: { label: "Ревью плана", tone: "warning", borderVar: "var(--warning)" },
   [TaskStatus.AWAITING_INPUT]: {
     label: "Ждёт ответа",
@@ -29,4 +30,13 @@ export const TASK_STATUS_META: Record<TaskStatus, StatusMeta> = {
 export const AWAITING_DECISION_STATUSES: TaskStatus[] = [
   TaskStatus.AWAITING_INPUT,
   TaskStatus.PLAN_REVIEW,
+];
+
+/** Раздел 8.2: ручные промты принимаются, пока сессия задачи активна. */
+export const SESSION_ACTIVE_STATUSES: TaskStatus[] = [
+  TaskStatus.IN_PROGRESS,
+  TaskStatus.PAUSED,
+  TaskStatus.PLAN_REVIEW,
+  TaskStatus.AWAITING_INPUT,
+  TaskStatus.REBASE_CONFLICT,
 ];

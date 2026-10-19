@@ -7,6 +7,8 @@ import type {
   Task,
   TaskCreateRequest,
   TaskLibraryPrompt,
+  TaskLibraryPromptItem,
+  TaskNodeItem,
   TaskRepository,
   TaskUpdateRequest,
 } from "@/lib/types";
@@ -17,6 +19,9 @@ const taskKeys = {
   detail: (id: string) => ["tasks", "detail", id] as const,
   nodeLogs: (id: string) => ["tasks", id, "node-logs"] as const,
   repositories: (id: string) => ["tasks", id, "repositories"] as const,
+  nodes: (id: string) => ["tasks", id, "nodes"] as const,
+  libraryPrompts: (id: string) => ["tasks", id, "library-prompts"] as const,
+  manualQueue: (id: string) => ["tasks", id, "manual-queue"] as const,
 };
 
 export function useTasks(statusFilter?: string) {
@@ -135,6 +140,7 @@ export function useSubmitFreeformPrompt(taskId: string) {
       api.post<ManualRequest>(`/tasks/${taskId}/freeform`, { raw_prompt_text: rawPromptText }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: taskKeys.nodeLogs(taskId) });
+      void queryClient.invalidateQueries({ queryKey: taskKeys.manualQueue(taskId) });
     },
   });
 }
@@ -145,7 +151,7 @@ export function useAddLibraryPrompt(taskId: string) {
     mutationFn: (nodeId: string) =>
       api.post<TaskLibraryPrompt>(`/tasks/${taskId}/library-prompts`, { node_id: nodeId }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "library-prompts"] });
+      void queryClient.invalidateQueries({ queryKey: taskKeys.libraryPrompts(taskId) });
     },
   });
 }
@@ -157,6 +163,8 @@ export function useRunLibraryPrompt(taskId: string) {
       api.post<ManualRequest>(`/tasks/${taskId}/library-prompts/${taskLibraryPromptId}/run`),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: taskKeys.nodeLogs(taskId) });
+      void queryClient.invalidateQueries({ queryKey: taskKeys.libraryPrompts(taskId) });
+      void queryClient.invalidateQueries({ queryKey: taskKeys.manualQueue(taskId) });
     },
   });
 }
@@ -167,6 +175,93 @@ export function useCancelManualRequest(taskId: string) {
     mutationFn: (requestId: string) => api.delete(`/tasks/${taskId}/manual-queue/${requestId}`),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: taskKeys.nodeLogs(taskId) });
+      void queryClient.invalidateQueries({ queryKey: taskKeys.manualQueue(taskId) });
+    },
+  });
+}
+
+/** Раздел 7.3: кнопка ■ — отмена из очереди или прерывание выполняющегося запроса. */
+export function useStopManualRequest(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (requestId: string) =>
+      api.post<void>(`/tasks/${taskId}/manual-queue/${requestId}/stop`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.manualQueue(taskId) });
+      void queryClient.invalidateQueries({ queryKey: taskKeys.libraryPrompts(taskId) });
+    },
+  });
+}
+
+/** Раздел 15.2: индикатор «В очереди» — запросы, ещё не завершённые воркером. */
+export function useManualQueue(taskId: string) {
+  return useQuery({
+    queryKey: taskKeys.manualQueue(taskId),
+    queryFn: () => api.get<ManualRequest[]>(`/tasks/${taskId}/manual-queue`),
+    refetchInterval: 4_000,
+  });
+}
+
+export function useTaskLibraryPrompts(taskId: string) {
+  return useQuery({
+    queryKey: taskKeys.libraryPrompts(taskId),
+    queryFn: () => api.get<TaskLibraryPromptItem[]>(`/tasks/${taskId}/library-prompts`),
+    refetchInterval: 4_000,
+  });
+}
+
+export function useTaskNodes(taskId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: taskKeys.nodes(taskId),
+    queryFn: () => api.get<TaskNodeItem[]>(`/tasks/${taskId}/nodes`),
+    enabled,
+  });
+}
+
+/** Раздел 13.1, 13.2: включение/отключение ноды задачи. */
+export function useSetTaskNodeEnabled(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskNodeId, isEnabled }: { taskNodeId: string; isEnabled: boolean }) =>
+      api.patch<TaskNodeItem>(`/tasks/${taskId}/nodes/${taskNodeId}`, { is_enabled: isEnabled }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.nodes(taskId) });
+    },
+  });
+}
+
+/** Раздел 14.2: пауза/продолжение/остановка исполняет воркер — статус
+ * обновится с его переходом, поэтому здесь только инвалидация. */
+function useTaskControl(taskId: string, action: "pause" | "resume" | "stop") {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<void>(`/tasks/${taskId}/${action}`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
+    },
+  });
+}
+
+export function usePauseTask(taskId: string) {
+  return useTaskControl(taskId, "pause");
+}
+
+export function useResumeTask(taskId: string) {
+  return useTaskControl(taskId, "resume");
+}
+
+export function useStopTask(taskId: string) {
+  return useTaskControl(taskId, "stop");
+}
+
+/** Раздел 14.2: «Отменить постановку» — `queued -> new`, автозапуск выключается. */
+export function useCancelQueuedTask(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<Task>(`/tasks/${taskId}/cancel`),
+    onSuccess: (task) => {
+      queryClient.setQueryData(taskKeys.detail(taskId), task);
+      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
     },
   });
 }

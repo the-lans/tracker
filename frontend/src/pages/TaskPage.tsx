@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowLeft, RefreshCw, RotateCcw } from "lucide-react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { TaskOverviewPanel } from "@/components/tasks/TaskOverviewPanel";
 import { TaskChatFeed } from "@/components/tasks/TaskChatFeed";
-import { useRestartTask, useTask, useTaskNodeLogs } from "@/hooks/useTasks";
+import { TaskControlButtons } from "@/components/tasks/TaskControlButtons";
+import { useTask, useTaskNodeLogs } from "@/hooks/useTasks";
 import { useTaskStatusSocket } from "@/hooks/useTaskStatusSocket";
-import { ApiError } from "@/lib/apiClient";
-import { RemoteControlStatus, TaskStatus } from "@/lib/types";
+import { RemoteControlStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function TaskPage() {
@@ -16,7 +16,6 @@ export function TaskPage() {
   const { data: task, isLoading } = useTask(taskId);
   const { data: nodeLogs } = useTaskNodeLogs(taskId);
   const [mobileTab, setMobileTab] = useState<"overview" | "dialogue">("dialogue");
-  const restartTask = useRestartTask(taskId ?? "");
   useTaskStatusSocket(taskId);
 
   if (isLoading || !task) {
@@ -43,23 +42,7 @@ export function TaskPage() {
           <div className="truncate text-[16px] font-extrabold tracking-tight">{task.title}</div>
         </div>
         <TaskStatusBadge status={task.status} />
-        {task.status === TaskStatus.FAILED && (
-          <button
-            type="button"
-            disabled={restartTask.isPending}
-            onClick={() =>
-              restartTask.mutate(undefined, {
-                onSuccess: () => toast.success("Задача перезапускается с упавшей ноды"),
-                onError: (error) =>
-                  toast.error(error instanceof ApiError ? error.message : "Не удалось перезапустить"),
-              })
-            }
-            className="ml-auto flex touch-target items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-[13px] font-bold text-text-2 disabled:opacity-50"
-          >
-            <RotateCcw className="size-3.5" />
-            <span className="hidden sm:inline">Перезапустить с текущей ноды</span>
-          </button>
-        )}
+        <TaskControlButtons task={task} />
         <button
           type="button"
           onClick={() =>
@@ -69,7 +52,6 @@ export function TaskPage() {
           }
           className={cn(
             "hidden items-center gap-2 rounded-md border px-3 py-2 text-[13px] font-bold sm:flex",
-            task.status !== TaskStatus.FAILED && "ml-auto",
             remoteControlDisconnected
               ? "border-warning-border bg-warning-tint text-warning-text"
               : "border-border bg-surface text-text-2",
@@ -113,7 +95,7 @@ export function TaskPage() {
           <TaskOverviewPanel task={task} nodeLogs={nodeLogs ?? []} />
         </div>
         <div className={cn("min-h-0 min-w-0 flex-1 xl:flex", mobileTab === "dialogue" ? "flex" : "hidden")}>
-          <TaskChatFeed taskId={task.id} nodeLogs={nodeLogs ?? []} />
+          <TaskChatFeed taskId={task.id} taskStatus={task.status} nodeLogs={nodeLogs ?? []} />
         </div>
       </div>
     </div>
