@@ -26,6 +26,7 @@ from services.errors import ExternalServiceError
 from services.git_ops import (
     RebaseConflictError,
     clone_task_repository,
+    is_rebased_onto_base,
     push_task_repository,
     rebase_onto_base_branch,
 )
@@ -260,3 +261,53 @@ async def test_run_git_failure_raises_external_service_error(tmp_path: Path) -> 
             task_code="RR-00001",
             repos_root=tmp_path / "repos",
         )
+
+
+def _push_conflicting_base_update(tmp_path: Path, origin: Path) -> None:
+    updater_dir = tmp_path / "updater"
+    _run("git", "clone", str(origin), str(updater_dir), cwd=tmp_path)
+    (updater_dir / "README.md").write_text("конфликтующее изменение базовой ветки\n")
+    _run("git", "add", "README.md", cwd=updater_dir)
+    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "конфликтующий апдейт", cwd=updater_dir)
+    _run("git", "push", "origin", "main", cwd=updater_dir)
+
+
+async def test_is_rebased_onto_base_tracks_rebase_progress(tmp_path: Path) -> None:
+    origin = _init_bare_origin(tmp_path)
+    repository = _make_repository(git_url=str(origin))
+    task_repository = _make_task_repository(role=RepositoryRole.READ_WRITE)
+    target_dir = await clone_task_repository(
+        repository=repository,
+        task_repository=task_repository,
+        task_code="RR-00001",
+        repos_root=tmp_path / "repos",
+    )
+    (target_dir / "README.md").write_text("изменение из рабочей ветки задачи\n")
+    _run("git", "add", "README.md", cwd=target_dir)
+    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "правка в задаче", cwd=target_dir)
+
+    async def check() -> bool:
+        return await is_rebased_onto_base(
+            repository=repository,
+            task_repository=task_repository,
+            repo_dir=target_dir,
+        )
+
+    assert await check() is True
+    _push_conflicting_base_update(tmp_path, origin)
+    assert await check() is False, "ветка отстала от обновлённой базы"
+
+    rebase = subprocess.run(
+        ["git", *_GIT_AUTHOR_ARGS, "rebase", "origin/main"],
+        cwd=target_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rebase.returncode != 0
+    assert await check() is False, "ребейз остановился на конфликте"
+
+    (target_dir / "README.md").write_text("разрешённый конфликт\n")
+    _run("git", "add", "README.md", cwd=target_dir)
+    _run("git", *_GIT_AUTHOR_ARGS, "-c", "core.editor=true", "rebase", "--continue", cwd=target_dir)
+    assert await check() is True

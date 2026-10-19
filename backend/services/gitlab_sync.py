@@ -74,6 +74,10 @@ async def sync_task_repository_merge_status(
     return new_status
 
 
+# Задачи с живой сессией: только у них конфликт разрешит агент (раздел 14).
+_REBASABLE_STATUSES = frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED})
+
+
 async def rebase_child_task_repositories_on_parent_merge(
     db_session: AsyncSession,
     *,
@@ -110,6 +114,16 @@ async def rebase_child_task_repositories_on_parent_merge(
     for child_task_repository, repository, child_task in rows:
         child_task_repository.base_branch = parent_task_repository.base_branch
         await db_session.commit()
+        if child_task.status not in _REBASABLE_STATUSES:
+            # Решение 2026-10-19: завершённые задачи не ребейзятся (их ветка
+            # уже запушена), а ещё не начатые склонируют свежую базу сами.
+            logger.info(
+                "child_task_rebase_skipped",
+                task_id=str(child_task.id),
+                repository_id=str(repository.id),
+                status=child_task.status,
+            )
+            continue
         repo_dir = repos_root / child_task.code / repository.name
         try:
             await rebase_onto_base_branch(

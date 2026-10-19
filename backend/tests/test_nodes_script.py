@@ -10,9 +10,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import subprocess
 from pathlib import Path
 
+import pytest
+
 from db.models.enums import ScriptLanguage
+from services.nodes import script as script_module
 from services.nodes.script import run_script_node
 
 _GENEROUS_TIMEOUT_SECONDS = 30
@@ -122,3 +127,41 @@ async def test_temporary_script_file_is_cleaned_up(tmp_path: Path) -> None:
 
     scripts_dir = tmp_path / ".tracker-scripts"
     assert list(scripts_dir.iterdir()) == []
+
+
+async def test_cancelled_script_stops_its_container(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Кнопка «Остановить» отменяет корутину ноды — контейнер не должен жить дальше."""
+    stopped: list[str] = []
+    original_stop = script_module._force_stop_container
+
+    async def spy_stop(container_name: str) -> None:
+        stopped.append(container_name)
+        await original_stop(container_name)
+
+    monkeypatch.setattr(script_module, "_force_stop_container", spy_stop)
+    run = asyncio.ensure_future(
+        run_script_node(
+            script_content="import time\ntime.sleep(60)\n",
+            script_language=ScriptLanguage.PYTHON,
+            docker_image=None,
+            repos_path=tmp_path,
+            timeout_seconds=120,
+        ),
+    )
+    await asyncio.sleep(2)
+
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    assert len(stopped) == 1
+    running = subprocess.run(
+        ["docker", "ps", "-q", "--filter", f"name={stopped[0]}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert running.stdout.strip() == ""

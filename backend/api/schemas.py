@@ -14,6 +14,7 @@ from db.models.enums import (
     LibraryPromptRunStatus,
     LlmAccountStatus,
     ManualRequestStatus,
+    ManualRequestType,
     McpAuthType,
     McpIsolationMode,
     MergeStatus,
@@ -161,12 +162,40 @@ class TaskLibraryPromptResponse(BaseModel):
     last_run_at: datetime | None
 
 
+class TaskLibraryPromptListItem(TaskLibraryPromptResponse):
+    """Строка таблицы «Системные промты задачи» (раздел 15.2): кнопка ■
+    останавливает ``active_request_id`` — запрос в очереди или в работе."""
+
+    name: str
+    node_type: NodeType
+    active_request_id: uuid.UUID | None
+
+
 class ManualRequestResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    request_type: ManualRequestType
+    node_id: uuid.UUID | None
+    raw_prompt_text: str | None
     status: ManualRequestStatus
     requested_at: datetime
+
+
+class TaskNodeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    node_id: uuid.UUID
+    order_index: int
+    is_enabled: bool
+    name: str
+    node_type: NodeType
+    editable: bool
+
+
+class TaskNodeUpdateRequest(BaseModel):
+    is_enabled: bool
 
 
 # --- Репозитории и шаблоны (раздел 3.1) --------------------------------

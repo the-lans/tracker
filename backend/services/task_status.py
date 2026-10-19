@@ -49,19 +49,26 @@ _NOTIFICATION_EVENTS_BY_STATUS: dict[TaskStatus, NotificationEvent] = {
 
 ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.NEW: frozenset({TaskStatus.QUEUED}),
-    TaskStatus.QUEUED: frozenset({TaskStatus.IN_PROGRESS}),
+    # `queued -> new` — «Отменить постановку» (раздел 14.2).
+    TaskStatus.QUEUED: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.NEW}),
     TaskStatus.IN_PROGRESS: frozenset(
         {
             TaskStatus.DONE,
+            TaskStatus.PAUSED,
             TaskStatus.PLAN_REVIEW,
             TaskStatus.AWAITING_INPUT,
             TaskStatus.REBASE_CONFLICT,
             TaskStatus.FAILED,
         },
     ),
+    # «Приостановить» (раздел 14.2): продолжить, остановить или поймать
+    # конфликт ребейза, пока задача стоит на паузе.
+    TaskStatus.PAUSED: frozenset(
+        {TaskStatus.IN_PROGRESS, TaskStatus.FAILED, TaskStatus.REBASE_CONFLICT},
+    ),
     TaskStatus.PLAN_REVIEW: frozenset({TaskStatus.IN_PROGRESS}),
     TaskStatus.AWAITING_INPUT: frozenset({TaskStatus.IN_PROGRESS}),
-    TaskStatus.REBASE_CONFLICT: frozenset({TaskStatus.IN_PROGRESS}),
+    TaskStatus.REBASE_CONFLICT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.FAILED}),
     TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS}),
     TaskStatus.DONE: frozenset(),
 }
@@ -100,13 +107,15 @@ async def transition_task_status(
     from_status: TaskStatus,
     to_status: TaskStatus,
     failed_order_index: int | None = None,
+    extra_values: dict[str, object] | None = None,
 ) -> Task:
     """Compare-and-swap переход `tasks.status` (раздел 17.4).
 
     ``failed_order_index`` обязателен при переходе в `failed` (раздел
     17.5: "обязан сохранять точный order_index сбоя в
     tasks.last_failed_order_index") и игнорируется для любого другого
-    перехода.
+    перехода. ``extra_values`` — поля, меняемые в том же UPDATE, что и
+    статус (отмена постановки заодно выключает автозапуск).
     """
     allowed = ALLOWED_TRANSITIONS.get(from_status, frozenset())
     if to_status not in allowed:
@@ -115,7 +124,7 @@ async def transition_task_status(
     if to_status is TaskStatus.DONE:
         await _ensure_done_invariant(db_session, task_id)
 
-    values: dict[str, object] = {"status": to_status}
+    values: dict[str, object] = {**(extra_values or {}), "status": to_status}
     if to_status is TaskStatus.FAILED:
         if failed_order_index is None:
             raise ValidationError("Переход в failed требует failed_order_index (раздел 17.5)")
@@ -153,6 +162,8 @@ _UNFINISHED_NODE_LOG_STATUSES = (
     NodeLogStatus.AWAITING_DECISION,
 )
 _AWAITING_STATUSES = (TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW)
+# Статусы, из которых `failed` достижим напрямую (раздел 14.1).
+FAILABLE_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT)
 
 
 async def first_unfinished_order_index(db_session: AsyncSession, task_id: uuid.UUID) -> int:
@@ -219,14 +230,16 @@ async def fail_task_after_error(
     task = await db_session.get(Task, task_id, populate_existing=True)
     if task is None:
         return
-    if task.status in _AWAITING_STATUSES:
+    from_status = task.status
+    if from_status in _AWAITING_STATUSES:
         await transition_task_status(
             db_session,
             task_id=task_id,
-            from_status=task.status,
+            from_status=from_status,
             to_status=TaskStatus.IN_PROGRESS,
         )
-    elif task.status is not TaskStatus.IN_PROGRESS:
+        from_status = TaskStatus.IN_PROGRESS
+    elif from_status not in FAILABLE_STATUSES:
         logger.warning(
             "task_not_failed_unexpected_status",
             task_id=str(task_id),
@@ -236,7 +249,7 @@ async def fail_task_after_error(
     await transition_task_status(
         db_session,
         task_id=task_id,
-        from_status=TaskStatus.IN_PROGRESS,
+        from_status=from_status,
         to_status=TaskStatus.FAILED,
         failed_order_index=await first_unfinished_order_index(db_session, task_id),
     )

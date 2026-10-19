@@ -68,6 +68,10 @@ async def _add_enabled_node(db_session: AsyncSession, task: Task, *, order_index
     [
         (TaskStatus.NEW, TaskStatus.QUEUED),
         (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS),
+        (TaskStatus.QUEUED, TaskStatus.NEW),
+        (TaskStatus.IN_PROGRESS, TaskStatus.PAUSED),
+        (TaskStatus.PAUSED, TaskStatus.IN_PROGRESS),
+        (TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT),
         (TaskStatus.IN_PROGRESS, TaskStatus.PLAN_REVIEW),
         (TaskStatus.IN_PROGRESS, TaskStatus.AWAITING_INPUT),
         (TaskStatus.IN_PROGRESS, TaskStatus.REBASE_CONFLICT),
@@ -101,6 +105,9 @@ async def test_allowed_transitions_succeed(
         (TaskStatus.DONE, TaskStatus.IN_PROGRESS),
         (TaskStatus.IN_PROGRESS, TaskStatus.NEW),
         (TaskStatus.QUEUED, TaskStatus.DONE),
+        (TaskStatus.PAUSED, TaskStatus.DONE),
+        (TaskStatus.NEW, TaskStatus.PAUSED),
+        (TaskStatus.REBASE_CONFLICT, TaskStatus.DONE),
     ],
 )
 async def test_disallowed_transitions_are_rejected(
@@ -117,6 +124,42 @@ async def test_disallowed_transitions_are_rejected(
             from_status=from_status,
             to_status=to_status,
         )
+
+
+async def test_extra_values_are_written_in_the_same_update(db_session: AsyncSession) -> None:
+    task = await _make_task(db_session, status=TaskStatus.QUEUED)
+    task.auto_start_enabled = True
+    await db_session.flush()
+
+    updated = await transition_task_status(
+        db_session,
+        task_id=task.id,
+        from_status=TaskStatus.QUEUED,
+        to_status=TaskStatus.NEW,
+        extra_values={"auto_start_enabled": False},
+    )
+
+    assert updated.status is TaskStatus.NEW
+    assert updated.auto_start_enabled is False
+
+
+@pytest.mark.parametrize("from_status", [TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT])
+async def test_failed_reachable_from_paused_and_rebase_conflict(
+    db_session: AsyncSession,
+    from_status: TaskStatus,
+) -> None:
+    task = await _make_task(db_session, status=from_status)
+
+    updated = await transition_task_status(
+        db_session,
+        task_id=task.id,
+        from_status=from_status,
+        to_status=TaskStatus.FAILED,
+        failed_order_index=1,
+    )
+
+    assert updated.status is TaskStatus.FAILED
+    assert updated.last_failed_order_index == 1
 
 
 async def test_compare_and_swap_rejects_stale_from_status(db_session: AsyncSession) -> None:
@@ -266,7 +309,15 @@ async def test_first_unfinished_order_index_is_past_last_node_when_all_succeeded
     assert await first_unfinished_order_index(db_session, task.id) == 4
 
 
-@pytest.mark.parametrize("status", [TaskStatus.IN_PROGRESS, TaskStatus.AWAITING_INPUT])
+@pytest.mark.parametrize(
+    "status",
+    [
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.AWAITING_INPUT,
+        TaskStatus.PAUSED,
+        TaskStatus.REBASE_CONFLICT,
+    ],
+)
 async def test_fail_task_after_error_fails_task_and_closes_running_logs(
     db_session: AsyncSession,
     status: TaskStatus,

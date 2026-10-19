@@ -1,0 +1,96 @@
+"""Состав включённых нод конкретной задачи (раздел 13.1, 13.2 ТЗ).
+
+`task_nodes` — снимок нод пайплайна на момент привязки; отключение ноды
+здесь не меняет сам пайплайн-шаблон и не создаёт записи в `node_logs`
+(раздел 22).
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+import sqlalchemy as sa
+
+from app_logging.config import get_logger
+from db.models.enums import NodeType, TaskStatus
+from db.models.pipelines import Node, TaskNode
+from services.errors import ConflictError, NotFoundError
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from db.models.tasks import Task
+
+logger = get_logger("task_nodes")
+
+
+@dataclass(frozen=True, slots=True)
+class TaskNodeView:
+    id: uuid.UUID
+    node_id: uuid.UUID
+    order_index: int
+    is_enabled: bool
+    name: str
+    node_type: NodeType
+    editable: bool
+
+
+def is_task_node_editable(task: Task, task_node: TaskNode) -> bool:
+    """Правило 11 CLAUDE.md: в `new` — любая нода; в `failed` — только ещё
+    не начинавшие выполнение (`order_index > last_failed_order_index`);
+    после запуска в остальных статусах — никакая."""
+    if task.status is TaskStatus.NEW:
+        return True
+    if task.status is TaskStatus.FAILED and task.last_failed_order_index is not None:
+        return task_node.order_index > task.last_failed_order_index
+    return False
+
+
+async def list_task_nodes(db_session: AsyncSession, task: Task) -> list[TaskNodeView]:
+    stmt = (
+        sa.select(TaskNode, Node)
+        .join(Node, Node.id == TaskNode.node_id)
+        .where(TaskNode.task_id == task.id)
+        .order_by(TaskNode.order_index)
+    )
+    return [
+        TaskNodeView(
+            id=task_node.id,
+            node_id=node.id,
+            order_index=task_node.order_index,
+            is_enabled=task_node.is_enabled,
+            name=node.name,
+            node_type=node.node_type,
+            editable=is_task_node_editable(task, task_node),
+        )
+        for task_node, node in (await db_session.execute(stmt)).all()
+    ]
+
+
+async def set_task_node_enabled(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    task_node_id: uuid.UUID,
+    is_enabled: bool,
+) -> TaskNode:
+    task_node = await db_session.get(TaskNode, task_node_id)
+    if task_node is None or task_node.task_id != task.id:
+        raise NotFoundError(f"Нода {task_node_id} не найдена у этой задачи")
+    if not is_task_node_editable(task, task_node):
+        if task.status is TaskStatus.FAILED:
+            message = "Нода уже выполнялась в этом прогоне — менять её нельзя (раздел 13.2)"
+        else:
+            message = "Состав нод можно менять только до запуска или после сбоя (раздел 13.2)"
+        raise ConflictError(message)
+    task_node.is_enabled = is_enabled
+    await db_session.commit()
+    logger.info(
+        "task_node_toggled",
+        task_id=str(task.id),
+        task_node_id=str(task_node_id),
+        is_enabled=is_enabled,
+    )
+    return task_node

@@ -113,6 +113,9 @@ class SessionTurnResult:
         return self.result.session_id
 
 
+_ABORT_DRAIN_TIMEOUT_SECONDS = 10.0
+
+
 class ClaudeCodeSession:
     """Владелец единственного клиента активной сессии задачи (раздел 6.1, 6.2)."""
 
@@ -140,6 +143,33 @@ class ClaudeCodeSession:
         async with self._lock:
             await self._client.interrupt()
             logger.info("session_interrupted")
+
+    async def abort_turn(
+        self,
+        *,
+        drain_timeout_seconds: float = _ABORT_DRAIN_TIMEOUT_SECONDS,
+    ) -> None:
+        """Прерывает ход, чей `send_and_collect_text` уже отменён снаружи
+        (таймаут ноды, кнопка «Остановить»).
+
+        После `interrupt()` CLI дописывает в поток итоговый `ResultMessage`
+        прерванного хода — если его не вычитать, следующий запрос получит
+        чужой ответ вместо своего. Ожидание хвоста ограничено по времени:
+        прерывание не должно подвешивать воркер.
+        """
+        async with self._lock:
+            await self._client.interrupt()
+
+            async def drain() -> None:
+                async for message in self._client.receive_response():
+                    if isinstance(message, ResultMessage):
+                        return
+
+            try:
+                await asyncio.wait_for(drain(), timeout=drain_timeout_seconds)
+            except TimeoutError:
+                logger.warning("session_abort_drain_timed_out")
+            logger.info("session_turn_aborted")
 
     async def set_permission_mode(self, mode: SdkPermissionMode) -> None:
         """Раздел 9.1/9.4: переключение режима разрешений посреди сессии

@@ -7,6 +7,7 @@ Origin репозитория — локальный bare-репозиторий
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import uuid
 from pathlib import Path
@@ -31,6 +32,9 @@ from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from services.crypto import encrypt
+from services.manual_queue import enqueue_freeform_prompt_run
+from services.task_control import TaskControlCommand, read_task_control, request_task_control
+from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name
 from tasks import session_worker
 from tests.fakes import FakeClaudeAgentClient, make_result_message
@@ -311,3 +315,262 @@ async def test_restart_after_failure_reruns_failed_node_only(
     await db_session.refresh(task)
     assert task.status is TaskStatus.DONE
     assert worker_env.client.queries == ["шаг 1"]
+
+
+async def _enqueue_freeform(db_session: AsyncSession, task: Task, text: str) -> None:
+    await enqueue_freeform_prompt_run(
+        db_session,
+        task_id=task.id,
+        raw_prompt_text=text,
+        requested_by=task.created_by,
+    )
+
+
+async def test_manual_request_runs_before_next_pipeline_node(
+    db_session: AsyncSession,
+    worker_env: SimpleNamespace,
+) -> None:
+    """Раздел 7.3: очередь FIFO обрабатывается «прежде, чем переходить к
+    следующей ноде пайплайна»."""
+    task = await _make_task(db_session, status=TaskStatus.QUEUED)
+    await _add_node(db_session, task, order_index=0)
+    await _add_node(db_session, task, order_index=1)
+
+    async def user_sends_prompts_during_first_node() -> None:
+        if len(worker_env.client.queries) == 1:
+            await _enqueue_freeform(db_session, task, "первый вопрос")
+            await _enqueue_freeform(db_session, task, "второй вопрос")
+
+    worker_env.client = FakeClaudeAgentClient(
+        messages_per_query=_results(4),
+        on_query=user_sends_prompts_during_first_node,
+    )
+
+    await _run_worker(task)
+
+    assert worker_env.client.queries == ["шаг 0", "первый вопрос", "второй вопрос", "шаг 1"]
+    await db_session.refresh(task)
+    assert task.status is TaskStatus.DONE
+
+
+async def test_manual_request_queued_during_last_node_runs_before_done(
+    db_session: AsyncSession,
+    worker_env: SimpleNamespace,
+) -> None:
+    task = await _make_task(db_session, status=TaskStatus.QUEUED)
+    await _add_node(db_session, task, order_index=0)
+
+    async def user_sends_prompt() -> None:
+        if len(worker_env.client.queries) == 1:
+            await _enqueue_freeform(db_session, task, "вопрос напоследок")
+
+    worker_env.client = FakeClaudeAgentClient(
+        messages_per_query=_results(2),
+        on_query=user_sends_prompt,
+    )
+
+    await _run_worker(task)
+
+    assert worker_env.client.queries == ["шаг 0", "вопрос напоследок"]
+    await db_session.refresh(task)
+    assert task.status is TaskStatus.DONE
+
+
+def _patch_pause_wait(
+    monkeypatch: pytest.MonkeyPatch,
+    on_wait: Any,
+) -> list[TaskStatus]:
+    """Пока воркер стоит на паузе, он ждёт сигнала и не трогает БД — здесь
+    и выполняются действия «пользователя»."""
+    observed: list[TaskStatus] = []
+
+    async def fake_wait(_redis: Any, _task_id: uuid.UUID, *, timeout: float | None) -> bool:
+        await on_wait(observed)
+        return True
+
+    monkeypatch.setattr(session_worker, "wait_for_task_signal", fake_wait)
+    return observed
+
+
+async def test_pause_holds_session_runs_manual_prompts_and_resumes(
+    db_session: AsyncSession,
+    worker_env: SimpleNamespace,
+    redis_client: Redis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = await _make_task(db_session, status=TaskStatus.QUEUED)
+    await _add_node(db_session, task, order_index=0)
+    await _add_node(db_session, task, order_index=1)
+
+    async def user_presses_pause() -> None:
+        if len(worker_env.client.queries) == 1:
+            await request_task_control(redis_client, task.id, TaskControlCommand.PAUSE)
+
+    async def while_paused(observed: list[TaskStatus]) -> None:
+        await db_session.refresh(task)
+        observed.append(task.status)
+        await _enqueue_freeform(db_session, task, "вопрос на паузе")
+        await request_task_control(redis_client, task.id, TaskControlCommand.RESUME)
+
+    observed = _patch_pause_wait(monkeypatch, while_paused)
+    worker_env.client = FakeClaudeAgentClient(
+        messages_per_query=_results(3),
+        on_query=user_presses_pause,
+    )
+
+    await _run_worker(task)
+
+    assert observed == [TaskStatus.PAUSED]
+    assert worker_env.client.queries == ["шаг 0", "вопрос на паузе", "шаг 1"]
+    await db_session.refresh(task)
+    assert task.status is TaskStatus.DONE
+    assert await read_task_control(redis_client, task.id) is None
+
+
+async def test_stop_while_paused_fails_task_at_next_node(
+    db_session: AsyncSession,
+    worker_env: SimpleNamespace,
+    redis_client: Redis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = await _make_task(db_session, status=TaskStatus.QUEUED)
+    await _add_node(db_session, task, order_index=0)
+    await _add_node(db_session, task, order_index=1)
+
+    async def user_presses_pause() -> None:
+        await request_task_control(redis_client, task.id, TaskControlCommand.PAUSE)
+
+    async def while_paused(_observed: list[TaskStatus]) -> None:
+        await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+
+    _patch_pause_wait(monkeypatch, while_paused)
+    worker_env.client = FakeClaudeAgentClient(
+        messages_per_query=_results(1),
+        on_query=user_presses_pause,
+    )
+
+    await _run_worker(task)
+
+    await db_session.refresh(task)
+    assert task.status is TaskStatus.FAILED
+    # «Перезапустить с текущей ноды» продолжит с ещё не выполненной ноды.
+    assert task.last_failed_order_index == 1
+    assert worker_env.client.queries == ["шаг 0"]
+
+
+async def test_stop_during_node_interrupts_session_and_fails_task(
+    db_session: AsyncSession,
+    worker_env: SimpleNamespace,
+    redis_client: Redis,
+) -> None:
+    task = await _make_task(db_session, status=TaskStatus.QUEUED)
+    await _add_node(db_session, task, order_index=0)
+    await _add_node(db_session, task, order_index=1)
+    pending: list[asyncio.Future[None]] = []
+
+    async def press_stop_soon() -> None:
+        await asyncio.sleep(0.3)
+        await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+        worker_env.client.message_delay_seconds = 0
+
+    async def long_running_node() -> None:
+        worker_env.client.message_delay_seconds = 30
+        pending.append(asyncio.ensure_future(press_stop_soon()))
+
+    worker_env.client = FakeClaudeAgentClient(
+        messages_per_query=_results(1),
+        on_query=long_running_node,
+    )
+
+    await asyncio.wait_for(_run_worker(task), timeout=15)
+    await asyncio.gather(*pending)
+
+    await db_session.refresh(task)
+    assert task.status is TaskStatus.FAILED
+    assert task.last_failed_order_index == 0
+    assert worker_env.client.interrupted is True
+    statuses = (
+        (await db_session.execute(sa.select(NodeLog.status).where(NodeLog.task_id == task.id)))
+        .scalars()
+        .all()
+    )
+    assert statuses == [NodeLogStatus.STOPPED]
+
+
+def _push_conflicting_base_update(tmp_path: Path, origin: Path) -> None:
+    updater_dir = tmp_path / "updater"
+    _run("git", "clone", str(origin), str(updater_dir), cwd=tmp_path)
+    (updater_dir / "README.md").write_text("изменение родительской задачи\n")
+    _run("git", "add", "README.md", cwd=updater_dir)
+    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "смерджен родитель", cwd=updater_dir)
+    _run("git", "push", "origin", "main", cwd=updater_dir)
+
+
+@pytest.mark.parametrize("agent_resolves", [True, False])
+async def test_rebase_conflict_is_resolved_by_agent_before_next_node(
+    db_session: AsyncSession,
+    worker_env: SimpleNamespace,
+    tmp_path: Path,
+    agent_resolves: bool,
+) -> None:
+    """Раздел 14.1: `rebase_conflict -> in_progress (после автообработки)`,
+    иначе `-> failed`."""
+    origin = _init_bare_origin(tmp_path)
+    task = await _make_task(db_session, status=TaskStatus.QUEUED, origin=origin)
+    await _add_node(db_session, task, order_index=0)
+    await _add_node(db_session, task, order_index=1)
+    repo_dir = worker_env.repos_root / task.code / _REPOSITORY_NAME
+
+    async def agent_and_periodic_task() -> None:
+        call = len(worker_env.client.queries)
+        if call == 1:
+            # Нода 0: агент коммитит, а тем временем родителя смерджили и
+            # периодическая задача поймала конфликт ребейза.
+            (repo_dir / "README.md").write_text("изменение дочерней задачи\n")
+            _run("git", "add", "README.md", cwd=repo_dir)
+            _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
+            _push_conflicting_base_update(tmp_path, origin)
+            await transition_task_status(
+                db_session,
+                task_id=task.id,
+                from_status=TaskStatus.IN_PROGRESS,
+                to_status=TaskStatus.REBASE_CONFLICT,
+            )
+        elif call == 2 and agent_resolves:
+            _run("git", "fetch", "origin", "main", cwd=repo_dir)
+            subprocess.run(
+                ["git", *_GIT_AUTHOR_ARGS, "rebase", "origin/main"],
+                cwd=repo_dir,
+                capture_output=True,
+                check=False,
+            )
+            (repo_dir / "README.md").write_text("обе правки объединены\n")
+            _run("git", "add", "README.md", cwd=repo_dir)
+            _run(
+                "git",
+                *_GIT_AUTHOR_ARGS,
+                "-c",
+                "core.editor=true",
+                "rebase",
+                "--continue",
+                cwd=repo_dir,
+            )
+
+    worker_env.client = FakeClaudeAgentClient(
+        messages_per_query=_results(3),
+        on_query=agent_and_periodic_task,
+    )
+
+    await _run_worker(task)
+
+    await db_session.refresh(task)
+    if agent_resolves:
+        assert task.status is TaskStatus.DONE
+        assert worker_env.client.queries[2] == "шаг 1"
+        branch = build_branch_name(task.code)
+        tree = _run("git", "show", f"{branch}:README.md", cwd=origin)
+        assert tree == "обе правки объединены\n"
+    else:
+        assert task.status is TaskStatus.FAILED
+        assert task.last_failed_order_index == 1
+        assert len(worker_env.client.queries) == 2

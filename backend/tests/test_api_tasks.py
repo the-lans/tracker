@@ -27,6 +27,7 @@ from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
 from services.plan_mode import PlanDecisionOption, encode_decision
+from services.task_control import TaskControlCommand, is_manual_stop_requested, read_task_control
 from services.task_signal import wait_for_task_signal
 
 if TYPE_CHECKING:
@@ -319,11 +320,24 @@ async def test_submit_decision_rejects_node_log_from_another_task(
     assert response.status_code == 404
 
 
+async def _create_task_in_status(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    status: TaskStatus,
+) -> dict[str, Any]:
+    body = await _create_task(client)
+    task = await db_session.get(Task, uuid.UUID(body["id"]))
+    assert task is not None
+    task.status = status
+    await db_session.flush()
+    return body
+
+
 async def test_submit_freeform_prompt_enqueues_manual_request(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    task_body = await _create_task(authed_client)
+    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
 
     response = await authed_client.post(
         f"/tasks/{task_body['id']}/freeform",
@@ -342,7 +356,7 @@ async def test_add_and_run_library_prompt(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    task_body = await _create_task(authed_client)
+    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
     node = Node(
         name="Библиотечный промт",
         node_type=NodeType.PLAIN_PROMPT,
@@ -377,7 +391,7 @@ async def test_cancel_manual_queue_request(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    task_body = await _create_task(authed_client)
+    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
     response = await authed_client.post(
         f"/tasks/{task_body['id']}/freeform",
         json={"raw_prompt_text": "Отменяемый запрос"},
@@ -398,7 +412,7 @@ async def test_cancel_manual_queue_request_rejects_already_processed(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    task_body = await _create_task(authed_client)
+    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
     response = await authed_client.post(
         f"/tasks/{task_body['id']}/freeform",
         json={"raw_prompt_text": "Уже обработанный запрос"},
@@ -556,3 +570,305 @@ async def test_restart_task_rejects_task_not_failed(
     response = await authed_client.post(f"/tasks/{task_body['id']}/restart")
 
     assert response.status_code == 422
+
+
+# --- Управление задачей: пауза, продолжение, остановка, отмена (раздел 14.2) ---
+
+
+@pytest.mark.parametrize(
+    ("action", "status", "command"),
+    [
+        ("pause", TaskStatus.IN_PROGRESS, TaskControlCommand.PAUSE),
+        ("resume", TaskStatus.PAUSED, TaskControlCommand.RESUME),
+        ("stop", TaskStatus.IN_PROGRESS, TaskControlCommand.STOP),
+        ("stop", TaskStatus.PAUSED, TaskControlCommand.STOP),
+    ],
+)
+async def test_task_control_actions_hand_command_to_worker(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    redis_client: Redis,
+    action: str,
+    status: TaskStatus,
+    command: TaskControlCommand,
+) -> None:
+    task_body = await _create_task_in_status(authed_client, db_session, status)
+    task_id = uuid.UUID(task_body["id"])
+    waiter = asyncio.ensure_future(wait_for_task_signal(redis_client, task_id, timeout=5))
+    await asyncio.sleep(0.1)
+
+    response = await authed_client.post(f"/tasks/{task_id}/{action}")
+
+    assert response.status_code == 202, response.text
+    assert await waiter is True
+    assert await read_task_control(redis_client, task_id) is command
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    # Статус меняет только воркер, владеющий сессией.
+    assert task.status is status
+
+
+@pytest.mark.parametrize(
+    ("action", "status"),
+    [
+        ("pause", TaskStatus.NEW),
+        ("pause", TaskStatus.PAUSED),
+        ("resume", TaskStatus.IN_PROGRESS),
+        ("stop", TaskStatus.QUEUED),
+        ("stop", TaskStatus.DONE),
+    ],
+)
+async def test_task_control_actions_reject_wrong_status(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    redis_client: Redis,
+    action: str,
+    status: TaskStatus,
+) -> None:
+    task_body = await _create_task_in_status(authed_client, db_session, status)
+
+    response = await authed_client.post(f"/tasks/{task_body['id']}/{action}")
+
+    assert response.status_code == 409
+    assert await read_task_control(redis_client, uuid.UUID(task_body["id"])) is None
+
+
+async def test_cancel_queued_task_returns_it_to_new_and_disables_autostart(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.QUEUED)
+    task = await db_session.get(Task, uuid.UUID(task_body["id"]))
+    assert task is not None
+    task.auto_start_enabled = True
+    await db_session.flush()
+
+    response = await authed_client.post(f"/tasks/{task_body['id']}/cancel")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == TaskStatus.NEW.value
+    assert response.json()["auto_start_enabled"] is False
+
+
+async def test_cancel_rejects_task_already_running(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
+
+    response = await authed_client.post(f"/tasks/{task_body['id']}/cancel")
+
+    assert response.status_code == 409
+
+
+# --- Ноды задачи (раздел 13.1, 13.2) ---
+
+
+async def _bind_pipeline_with_nodes(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    task_body: dict[str, Any],
+    count: int,
+) -> list[dict[str, Any]]:
+    pipeline = Pipeline(name=f"p-{uuid.uuid4().hex[:6]}", is_archived=False)
+    db_session.add(pipeline)
+    await db_session.flush()
+    for order_index in range(count):
+        db_session.add(
+            Node(
+                pipeline_id=pipeline.id,
+                order_index=order_index,
+                name=f"node-{order_index}",
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template="x",
+                is_skipped=False,
+                is_library_item=False,
+                is_archived=False,
+            ),
+        )
+    await db_session.flush()
+    response = await client.post(
+        f"/tasks/{task_body['id']}/pipeline",
+        json={"pipeline_id": str(pipeline.id)},
+    )
+    assert response.status_code == 200, response.text
+    nodes_response = await client.get(f"/tasks/{task_body['id']}/nodes")
+    assert nodes_response.status_code == 200
+    nodes: list[dict[str, Any]] = nodes_response.json()
+    return nodes
+
+
+async def test_task_nodes_can_be_toggled_while_new(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    task_body = await _create_task(authed_client)
+    nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 2)
+    assert [(node["name"], node["is_enabled"], node["editable"]) for node in nodes] == [
+        ("node-0", True, True),
+        ("node-1", True, True),
+    ]
+
+    response = await authed_client.patch(
+        f"/tasks/{task_body['id']}/nodes/{nodes[1]['id']}",
+        json={"is_enabled": False},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["is_enabled"] is False
+
+
+async def test_failed_task_locks_nodes_up_to_failure_point(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    task_body = await _create_task(authed_client)
+    nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 3)
+    task = await db_session.get(Task, uuid.UUID(task_body["id"]))
+    assert task is not None
+    task.status = TaskStatus.FAILED
+    task.last_failed_order_index = 1
+    await db_session.flush()
+
+    locked = await authed_client.patch(
+        f"/tasks/{task_body['id']}/nodes/{nodes[1]['id']}",
+        json={"is_enabled": False},
+    )
+    allowed = await authed_client.patch(
+        f"/tasks/{task_body['id']}/nodes/{nodes[2]['id']}",
+        json={"is_enabled": False},
+    )
+    listed = (await authed_client.get(f"/tasks/{task_body['id']}/nodes")).json()
+
+    assert locked.status_code == 409
+    assert allowed.status_code == 200
+    assert [node["editable"] for node in listed] == [False, False, True]
+
+
+# --- Ручные запросы: активная сессия, список, кнопка ■ (раздел 7.3, 8.2) ---
+
+
+@pytest.mark.parametrize(
+    "status",
+    [TaskStatus.NEW, TaskStatus.QUEUED, TaskStatus.FAILED, TaskStatus.DONE],
+)
+async def test_manual_prompts_require_active_session(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    status: TaskStatus,
+) -> None:
+    task_body = await _create_task_in_status(authed_client, db_session, status)
+
+    response = await authed_client.post(
+        f"/tasks/{task_body['id']}/freeform",
+        json={"raw_prompt_text": "Проверь тесты"},
+    )
+
+    assert response.status_code == 409
+
+
+async def _add_library_prompt(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    task_body: dict[str, Any],
+) -> str:
+    node = Node(
+        name="Ревью кода",
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="Сделай ревью",
+        is_library_item=True,
+    )
+    db_session.add(node)
+    await db_session.flush()
+    response = await client.post(
+        f"/tasks/{task_body['id']}/library-prompts",
+        json={"node_id": str(node.id)},
+    )
+    assert response.status_code == 201
+    task_library_prompt_id: str = response.json()["id"]
+    return task_library_prompt_id
+
+
+async def test_library_prompts_list_exposes_active_request_for_stop_button(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
+    task_library_prompt_id = await _add_library_prompt(authed_client, db_session, task_body)
+
+    before = (await authed_client.get(f"/tasks/{task_body['id']}/library-prompts")).json()
+    run = await authed_client.post(
+        f"/tasks/{task_body['id']}/library-prompts/{task_library_prompt_id}/run",
+    )
+    after = (await authed_client.get(f"/tasks/{task_body['id']}/library-prompts")).json()
+    queue = (await authed_client.get(f"/tasks/{task_body['id']}/manual-queue")).json()
+
+    assert before == [
+        {
+            "id": task_library_prompt_id,
+            "node_id": before[0]["node_id"],
+            "last_run_status": LibraryPromptRunStatus.NEVER_RUN.value,
+            "last_run_at": None,
+            "name": "Ревью кода",
+            "node_type": NodeType.PLAIN_PROMPT.value,
+            "active_request_id": None,
+        },
+    ]
+    assert after[0]["last_run_status"] == LibraryPromptRunStatus.QUEUED.value
+    assert after[0]["active_request_id"] == run.json()["id"]
+    assert [request["id"] for request in queue] == [run.json()["id"]]
+
+
+async def test_stop_button_cancels_queued_request(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
+    request_id = (
+        await authed_client.post(
+            f"/tasks/{task_body['id']}/freeform",
+            json={"raw_prompt_text": "Отменить"},
+        )
+    ).json()["id"]
+
+    response = await authed_client.post(
+        f"/tasks/{task_body['id']}/manual-queue/{request_id}/stop",
+    )
+
+    assert response.status_code == 202
+    request = await db_session.get(TaskManualRequestQueue, uuid.UUID(request_id))
+    assert request is not None
+    assert request.status is ManualRequestStatus.CANCELLED
+    queue = (await authed_client.get(f"/tasks/{task_body['id']}/manual-queue")).json()
+    assert queue == []
+
+
+async def test_stop_button_interrupts_processing_request(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    redis_client: Redis,
+) -> None:
+    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
+    task_id = uuid.UUID(task_body["id"])
+    request_id = uuid.UUID(
+        (
+            await authed_client.post(
+                f"/tasks/{task_id}/freeform",
+                json={"raw_prompt_text": "Долгий запрос"},
+            )
+        ).json()["id"],
+    )
+    request = await db_session.get(TaskManualRequestQueue, request_id)
+    assert request is not None
+    request.status = ManualRequestStatus.PROCESSING
+    await db_session.flush()
+
+    response = await authed_client.post(f"/tasks/{task_id}/manual-queue/{request_id}/stop")
+    finished_request = request
+    finished_request.status = ManualRequestStatus.DONE
+    await db_session.flush()
+    late = await authed_client.post(f"/tasks/{task_id}/manual-queue/{request_id}/stop")
+
+    assert response.status_code == 202
+    assert await is_manual_stop_requested(redis_client, task_id, request_id)
+    assert late.status_code == 409

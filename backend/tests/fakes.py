@@ -47,6 +47,8 @@ class FakeClaudeAgentClient:
         self.concurrent_calls = 0
         self.max_observed_concurrency = 0
         self.permission_modes: list[str] = []
+        self.message_delay_seconds = 0.01
+        self._stream: list[Message] = []
 
     async def connect(self) -> None:
         self.connected = True
@@ -62,16 +64,27 @@ class FakeClaudeAgentClient:
 
     async def query(self, prompt: str) -> None:
         self.queries.append(prompt)
+        index = len(self.queries) - 1
+        if index < len(self._messages_per_query):
+            self._stream.extend(self._messages_per_query[index])
         if self._on_query is not None:
             await self._on_query()
 
     async def receive_response(self) -> AsyncIterator[Message]:
+        """Как в SDK: читает общий поток сообщений до первого `ResultMessage`.
+
+        Недочитанный хвост прерванного хода остаётся в потоке и достанется
+        следующему чтению — ровно та ситуация, ради которой существует
+        `ClaudeCodeSession.abort_turn`.
+        """
         self.concurrent_calls += 1
         self.max_observed_concurrency = max(self.max_observed_concurrency, self.concurrent_calls)
         try:
-            messages = self._messages_per_query[len(self.queries) - 1]
-            for message in messages:
-                await asyncio.sleep(0.01)
+            while self._stream:
+                await asyncio.sleep(self.message_delay_seconds)
+                message = self._stream.pop(0)
                 yield message
+                if isinstance(message, ResultMessage):
+                    return
         finally:
             self.concurrent_calls -= 1

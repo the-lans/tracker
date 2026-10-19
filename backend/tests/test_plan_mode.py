@@ -276,6 +276,38 @@ async def test_callback_passes_revise_feedback_text_to_denial_message(
     assert result.message == "добавь обработку ошибок"
 
 
+async def test_unrelated_task_signal_does_not_reject_pending_plan(
+    db_session: AsyncSession,
+    redis_client: Redis,
+) -> None:
+    """Свободный промт, поставленный в очередь во время ревью плана, будит
+    тот же канал задачи — план от этого не должен отклоняться."""
+    task, node_log = await _make_task_with_running_node_log(db_session)
+    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
+    callback = build_can_use_tool_callback(
+        context=context,
+        session_factory=_non_closing_session_factory(db_session),
+        redis_client=redis_client,
+        decision_wait_timeout_seconds=5.0,
+    )
+
+    async def _queue_prompt_then_decide() -> None:
+        await asyncio.sleep(0.1)
+        await publish_task_signal(redis_client, task.id)
+        await asyncio.sleep(0.2)
+        node_log.user_input_text = PlanDecisionOption.ACCEPT_DEFAULT
+        await db_session.commit()
+        await publish_task_signal(redis_client, task.id)
+
+    resolver = asyncio.create_task(_queue_prompt_then_decide())
+    try:
+        result = await callback("ExitPlanMode", {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
+    finally:
+        await resolver
+
+    assert result.behavior == "allow"
+
+
 async def test_callback_denies_on_timeout_without_resolution(
     db_session: AsyncSession,
     redis_client: Redis,

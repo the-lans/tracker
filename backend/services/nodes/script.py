@@ -98,6 +98,12 @@ async def run_script_node(
             timed_out = True
             await _force_stop_container(container_name)
             stdout, stderr = await process.communicate()
+        except asyncio.CancelledError:
+            # Кнопка «Остановить» (раздел 7.3, 14.2) отменяет корутину ноды —
+            # контейнер при этом не должен продолжать работу в фоне.
+            await asyncio.shield(_force_stop_container(container_name))
+            logger.info("script_node_stopped", image=image)
+            raise
         exit_code = process.returncode if process.returncode is not None else -1
     finally:
         script_path.unlink(missing_ok=True)

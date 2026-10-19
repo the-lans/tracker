@@ -14,6 +14,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -23,11 +24,18 @@ from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, TaskNode
 from services.nodes.clear_context import ensure_clear_context_allowed
-from services.nodes.dispatch import execute_node, resolve_node_prompt_or_none
+from services.nodes.dispatch import (
+    NodeExecutionOutcome,
+    execute_node,
+    resolve_node_prompt_or_none,
+)
+from services.task_control import TaskControlCommand, read_task_control, run_stoppable
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from pathlib import Path
 
+    from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from clients.claude_agent import ClaudeCodeSession
@@ -64,6 +72,60 @@ def _remember_session_id(task: Task, claude_session: ClaudeCodeSession) -> None:
 class NodeRunOutcome:
     node_log: NodeLog
     success: bool
+    # Кнопка «Остановить» (раздел 14.2) — не сбой ноды: ретрая нет.
+    stopped: bool = False
+
+
+class CheckpointDecision(StrEnum):
+    CONTINUE = "continue"
+    STOP = "stop"
+
+
+# Вызывается перед каждой включённой нодой с её `order_index`: здесь
+# владелец сессии обрабатывает очередь ручных запросов (раздел 7.3),
+# паузу и остановку (раздел 14.2), конфликт ребейза (раздел 14).
+type Checkpoint = Callable[[int], Awaitable[CheckpointDecision]]
+
+
+@dataclass(frozen=True, slots=True)
+class StopGuard:
+    """Позволяет прервать идущую ноду командой `stop` (раздел 14.2)."""
+
+    redis_client: Redis
+    task_id: uuid.UUID
+
+    async def is_stop_requested(self) -> bool:
+        command = await read_task_control(self.redis_client, self.task_id)
+        return command is TaskControlCommand.STOP
+
+
+async def run_node_execution(
+    execution: Awaitable[NodeExecutionOutcome],
+    *,
+    node_type: NodeType | None,
+    claude_session: ClaudeCodeSession,
+    stop_guard: StopGuard | None,
+    is_stop_requested: Callable[[], Awaitable[bool]] | None = None,
+) -> NodeExecutionOutcome | None:
+    """`None` — выполнение остановлено пользователем.
+
+    Для LLM-нод прерывается ход сессии; script-ноде достаточно отмены
+    корутины — контейнер останавливает `run_script_node`.
+    """
+    if stop_guard is None:
+        return await execution
+
+    async def abort() -> None:
+        if node_type is not NodeType.SCRIPT:
+            await claude_session.abort_turn()
+
+    return await run_stoppable(
+        execution,
+        redis_client=stop_guard.redis_client,
+        task_id=stop_guard.task_id,
+        is_stop_requested=is_stop_requested or stop_guard.is_stop_requested,
+        on_stop=abort,
+    )
 
 
 async def run_pipeline_node_with_retry(
@@ -74,6 +136,7 @@ async def run_pipeline_node_with_retry(
     claude_session: ClaudeCodeSession,
     repos_path: Path,
     active_node_context: ActiveNodeContext | None = None,
+    stop_guard: StopGuard | None = None,
 ) -> NodeRunOutcome:
     """Одна нода пайплайна, с retry (раздел 11.7).
 
@@ -115,18 +178,28 @@ async def run_pipeline_node_with_retry(
             active_node_context.task_id = task.id
             active_node_context.auto_accept_plan = task.auto_accept_plan
 
-        outcome = await execute_node(
-            node,
-            prompt=prompt,
+        outcome = await run_node_execution(
+            execute_node(
+                node,
+                prompt=prompt,
+                claude_session=claude_session,
+                repos_path=repos_path,
+                timeout_seconds=node.timeout_seconds,
+                db_session=db_session,
+                node_log_id=node_log.id,
+            ),
+            node_type=node.node_type,
             claude_session=claude_session,
-            repos_path=repos_path,
-            timeout_seconds=node.timeout_seconds,
-            db_session=db_session,
-            node_log_id=node_log.id,
+            stop_guard=stop_guard,
         )
 
         _remember_session_id(task, claude_session)
         node_log.finished_at = datetime.now(UTC)
+        if outcome is None:
+            node_log.status = NodeLogStatus.STOPPED
+            await db_session.commit()
+            logger.info("node_stopped_by_user", node_id=str(node.id), attempt=attempt)
+            return NodeRunOutcome(node_log=node_log, success=False, stopped=True)
         node_log.llm_output_text = outcome.llm_output_text
         node_log.script_stdout = outcome.script_stdout
         node_log.script_exit_code = outcome.script_exit_code
@@ -145,6 +218,10 @@ async def run_pipeline_node_with_retry(
                 error=outcome.error_message,
             )
             return NodeRunOutcome(node_log=node_log, success=False)
+
+        if stop_guard is not None and await stop_guard.is_stop_requested():
+            # Остановка, пришедшая вместе со сбоем, — повторять ноду незачем.
+            return NodeRunOutcome(node_log=node_log, success=False, stopped=True)
 
         delay = compute_retry_delay_seconds(attempt, node.retry_base_delay_seconds)
         logger.warning(
@@ -168,6 +245,9 @@ class PipelineRunOutcome:
     # Вызывающий код обязан переподключиться и вызвать run_pipeline снова
     # с ``start_after_order_index=context_cleared_at_order_index``.
     context_cleared_at_order_index: int | None = None
+    # Остановка пользователем (раздел 14.2): ``failed_order_index`` —
+    # нода, с которой продолжит «Перезапустить с текущей ноды».
+    stopped: bool = False
 
 
 async def run_pipeline(
@@ -178,6 +258,8 @@ async def run_pipeline(
     repos_path: Path,
     start_after_order_index: int | None = None,
     active_node_context: ActiveNodeContext | None = None,
+    checkpoint: Checkpoint | None = None,
+    stop_guard: StopGuard | None = None,
 ) -> PipelineRunOutcome:
     """Итерирует `task_nodes` в порядке `order_index` (раздел 13.3).
 
@@ -186,7 +268,9 @@ async def run_pipeline(
     `clear_context` или перезапуска с точки сбоя ("Перезапустить с текущей
     ноды", раздел 14.2): ноды с ``order_index <= start_after_order_index``
     уже имеют зафиксированную историю и повторно не выполняются.
-    ``active_node_context`` — см. `run_pipeline_node_with_retry`.
+    ``active_node_context``/``stop_guard`` — см. `run_pipeline_node_with_retry`.
+    ``checkpoint`` вызывается перед каждой включённой нодой; `STOP`
+    завершает прогон до её выполнения.
     """
     stmt = (
         sa.select(TaskNode, Node)
@@ -206,6 +290,16 @@ async def run_pipeline(
                 order_index=task_node.order_index,
             )
             continue
+
+        if checkpoint is not None:
+            decision = await checkpoint(task_node.order_index)
+            if decision is CheckpointDecision.STOP:
+                logger.info("pipeline_stopped_at_checkpoint", order_index=task_node.order_index)
+                return PipelineRunOutcome(
+                    completed=False,
+                    failed_order_index=task_node.order_index,
+                    stopped=True,
+                )
 
         if node.node_type is NodeType.CLEAR_CONTEXT:
             await ensure_clear_context_allowed(db_session, task.id)
@@ -238,8 +332,13 @@ async def run_pipeline(
             claude_session=claude_session,
             repos_path=repos_path,
             active_node_context=active_node_context,
+            stop_guard=stop_guard,
         )
         if not outcome.success:
-            return PipelineRunOutcome(completed=False, failed_order_index=task_node.order_index)
+            return PipelineRunOutcome(
+                completed=False,
+                failed_order_index=task_node.order_index,
+                stopped=outcome.stopped,
+            )
 
     return PipelineRunOutcome(completed=True)

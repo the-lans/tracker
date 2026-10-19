@@ -86,7 +86,12 @@ async def find_tasks_awaiting_input_beyond_threshold(
 
 async def find_tasks_requiring_remote_control_check(db_session: AsyncSession) -> list[Task]:
     """Раздел 6.6: `check_remote_control_bridges` — активные задачи."""
-    active_statuses = (TaskStatus.IN_PROGRESS, TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW)
+    active_statuses = (
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.PAUSED,
+        TaskStatus.AWAITING_INPUT,
+        TaskStatus.PLAN_REVIEW,
+    )
     stmt = sa.select(Task).where(Task.status.in_(active_statuses))
     return list((await db_session.execute(stmt)).scalars().all())
 
