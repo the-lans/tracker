@@ -23,9 +23,12 @@ AI-трекер задач — веб-приложение для управле
 
 **Обновление версий не ручное**: `.github/dependabot.yml` еженедельно
 проверяет pip- (backend/), npm- (frontend/), Docker- и GitHub Actions-
-зависимости и открывает PR при выходе новых релизов — конкретные версии в
-таблицах ниже актуализируются через слияние этих PR, а не точечным
-редактированием файла. Ручная сверка: `pip index versions <pkg>` (в
+зависимости и открывает PR при выходе новых релизов. Сам CLAUDE.md
+dependabot не трогает — после слияния таких PR таблицы ниже нужно
+синхронизировать с `backend/pyproject.toml` / `frontend/package.json`
+вручную. Несовместимые обновления исключены через `ignore` в
+`dependabot.yml` (TypeScript ≥ 6.1, `@vitejs/plugin-react` 6.1.2, смена
+minor/major Python в Docker, нечётные не-LTS версии Node). Ручная сверка: `pip index versions <pkg>` (в
 `.venv`) / `npm view <pkg> version`; перед приёмом мажорного апдейта — `pip
 check` / `npm ls`, чтобы поймать конфликт версий до мержа.
 
@@ -41,6 +44,7 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | Celery | 5.6.3 |
 | redis-py | 8.1.0 |
 | structlog | 26.1.0 |
+| claude-agent-sdk | 0.2.168 |
 | PostgreSQL | 15+ |
 | pytest / pytest-asyncio | 9.1.1 / 1.4.0* |
 | ruff | 0.17.1 |
@@ -63,7 +67,9 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 TypeScript закреплён на 6.0.3, а не на новом мажоре 7.x: `typescript-eslint@8.71.2`
 пока требует `typescript < 6.1.0` (проверено `npm view typescript-eslint
 peerDependencies`) — апгрейд до TS 7 ждёт апгрейда этой цепочки, иначе
-`npm ls` покажет конфликт. Vitest в package.json пока не заведён (не был
+`npm ls` покажет конфликт. `@vitejs/plugin-react` закреплён на 6.1.1:
+6.1.2 через optional peer-зависимости тянет `@babel/core@8` и ломает
+разрешение зависимостей (ERESOLVE). Vitest в package.json пока не заведён (не был
 явно назван в разделе 2.2 ТЗ) — команда `npm test` появится вместе с его
 настройкой.
 
@@ -72,7 +78,7 @@ peerDependencies`) — апгрейд до TS 7 ждёт апгрейда это
 |---|---|
 | Docker / Docker Compose | latest* |
 | Caddy (reverse proxy) | 2.x* |
-| Claude Agent SDK (Python) | `claude-agent-sdk`, latest* |
+| Claude Agent SDK (Python) | `claude-agent-sdk`, версия — в таблице Backend |
 
 ## 3. Структура репозитория
 
@@ -86,8 +92,10 @@ backend/
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
               (db/session.py — engine/session из DATABASE_URL)
   clients/   — обёртки над Claude Agent SDK, GitLab API, MCP-серверами
-  tasks/     — Celery-задачи (асинхронные и периодические), docker-entrypoint.sh
-              (применяет alembic-миграции перед стартом backend/worker/beat)
+  tasks/     — Celery-приложение и задачи: celery_app.py, session_worker.py
+              (долгоживущая сессия задачи), periodic.py / periodic_scheduler.py
+  docker-entrypoint.sh — применяет alembic-миграции перед стартом
+              backend/worker/beat
   ws/        — WebSocket-обработчики real-time уведомлений (tasks.py —
               `/ws/tasks/{task_id}/status`, раздел 18.1)
   app_logging/ — конфигурация structlog и запись в app_logs (не "logging" —
@@ -96,11 +104,15 @@ backend/
   alembic.ini — конфиг Alembic (async); script_location указывает на
               корневой alembic/ (см. ниже), строку подключения задаёт
               alembic/env.py из DATABASE_URL, а не сам alembic.ini
+  tests/     — pytest (test_*.py, плоско; conftest.py поднимает Postgres и
+              Redis в Docker, fakes.py — фейки Claude Agent SDK)
 frontend/    — React SPA: дашборд, страница задачи (обзор + диалог),
               конструктор пайплайна/библиотека, CRUD-страницы
               (репозитории/шаблоны/LLM-аккаунты/переменные окружения),
               админка (раздел 15.5), Web Push (public/service-worker.js,
-              src/lib/push.ts, раздел 18.1)
+              src/lib/push.ts, раздел 18.1); Dockerfile + nginx.conf —
+              продовый образ (сборка на Node, раздача nginx с SPA-фолбэком
+              на index.html для клиентских маршрутов)
 deploy/
   caddy/     — конфигурация reverse-proxy (handle_path /api/* — срезает
               префикс перед проксированием на backend)
@@ -113,7 +125,8 @@ runners/
   tracker-runner-bash/   — Docker-образ раннера для script-нод (Bash)
 alembic/
   env.py       — async env (target_metadata = db.base.Base.metadata)
-  versions/    — миграции базы данных (полная схема раздела 3.1 + push_subscriptions)
+  versions/    — миграции базы данных (полная схема раздела 3.1,
+                 push_subscriptions, nodes.llm_output_last_n)
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
                 приложения), запускать backend-venv'ом, см. раздел 4
@@ -124,9 +137,13 @@ scripts/
                 требует уже существующего admin, запускается после первого входа
   smoke_frontend_image.sh — собирает продовый образ фронтенда и проверяет
                 SPA-фолбэк nginx (запускается в CI после make check)
-docs/        — техническая документация: ТЗ, migration.md (раздел 20.4 —
-              процедура переноса на новый сервер) и
-              remote_control_findings.md (верификация допущения раздела 6.3)
+docs/        — техническая документация: ТЗ, implementation_plan.md (план
+              реализации по этапам), migration.md (раздел 20.4 — процедура
+              переноса на новый сервер), remote_control_findings.md
+              (верификация допущения раздела 6.3), design/ (HTML-референсы
+              дашборда и страницы задачи)
+.github/     — workflows/ci.yml (сборка образов раннеров → make check →
+              smoke-тест образа фронтенда) и dependabot.yml
 docker-compose.yml, docker-compose.prod.yml, .env.example — раздел 20.3 ТЗ
 ```
 
@@ -168,12 +185,23 @@ make check
 Создаёт/актуализирует `backend/.venv` и `frontend/node_modules` при
 необходимости, затем последовательно: `ruff check .` → `mypy .` → `pytest`
 (backend), `eslint .` → `tsc --noEmit` (frontend). Падает с ненулевым кодом
-на первой же ошибке.
+на первой же ошибке. CI (`.github/workflows/ci.yml`) дополнительно перед
+ней собирает образы раннеров, а после — запускает
+`scripts/smoke_frontend_image.sh`.
 
 ### Тесты
 ```bash
 cd backend && .venv/bin/pytest
 cd frontend && npm test   # появится вместе с настройкой Vitest
+scripts/smoke_frontend_image.sh   # продовый образ фронтенда + SPA-маршруты
+```
+Backend-тестам нужен запущенный Docker: `conftest.py` сам поднимает
+тестовые Postgres (порт 55432) и Redis (55379) в контейнерах, а тесты
+script-нод запускают образы раннеров — их нужно собрать заранее (и
+пересобирать после правок `runners/`):
+```bash
+docker build -t tracker-runner-python:latest runners/tracker-runner-python/
+docker build -t tracker-runner-bash:latest runners/tracker-runner-bash/
 ```
 
 ### Линт
@@ -272,5 +300,8 @@ Postgres с проброшенным портом — см. `docker-compose.yml`
 13. **Покрытие тестами `backend/services/`** — не ниже 85%.
 14. **Переход в `done`** невозможен, пока хотя бы одна включённая нода
     пайплайна не имеет записи `node_logs` со статусом `success`.
+    Переход в `failed` обязан зафиксировать `tasks.last_failed_order_index`
+    (`order_index` упавшей ноды); все статусные переходы — через
+    compare-and-swap текущего статуса в транзакции БД.
 15. **Backend не обращается к содержимому Confluence-страниц** из поля
     `guide_url` — это ответственность LLM через MCP, не backend.
