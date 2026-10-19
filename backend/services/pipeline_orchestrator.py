@@ -51,6 +51,15 @@ async def _load_node_log_history(db_session: AsyncSession, task_id: uuid.UUID) -
     return list((await db_session.execute(stmt)).scalars().all())
 
 
+def _remember_session_id(task: Task, claude_session: ClaudeCodeSession) -> None:
+    """Раздел 6.1: `session_id` сохраняется сразу после создания сессии —
+    по нему перезапуск после `failed` продолжает ту же сессию (resume).
+    Коммитится вместе с итогом ноды."""
+    if claude_session.session_id is not None and task.session_id != claude_session.session_id:
+        task.session_id = claude_session.session_id
+        logger.info("session_id_saved", task_id=str(task.id), session_id=task.session_id)
+
+
 @dataclass(frozen=True, slots=True)
 class NodeRunOutcome:
     node_log: NodeLog
@@ -116,6 +125,7 @@ async def run_pipeline_node_with_retry(
             node_log_id=node_log.id,
         )
 
+        _remember_session_id(task, claude_session)
         node_log.finished_at = datetime.now(UTC)
         node_log.llm_output_text = outcome.llm_output_text
         node_log.script_stdout = outcome.script_stdout
@@ -201,6 +211,19 @@ async def run_pipeline(
             await ensure_clear_context_allowed(db_session, task.id)
             await claude_session.disconnect()
             task.session_id = None
+            now = datetime.now(UTC)
+            # Успешная запись нужна инварианту перехода в `done` (раздел 17.5):
+            # без неё пайплайн с clear_context никогда бы не завершился.
+            db_session.add(
+                NodeLog(
+                    task_id=task.id,
+                    node_id=node.id,
+                    trigger_type=NodeLogTriggerType.PIPELINE,
+                    status=NodeLogStatus.SUCCESS,
+                    started_at=now,
+                    finished_at=now,
+                ),
+            )
             await db_session.commit()
             logger.info("session_context_cleared", order_index=task_node.order_index)
             return PipelineRunOutcome(

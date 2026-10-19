@@ -26,13 +26,17 @@ from api.schemas import (
     NodeLogResponse,
     TaskCreateRequest,
     TaskLibraryPromptResponse,
+    TaskRepositoryResponse,
     TaskResponse,
+    TaskUpdateRequest,
 )
 from db.models.enums import NodeLogStatus, TaskStatus
+from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
-from db.models.tasks import Task
+from db.models.repositories import Repository
+from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from db.session import get_session
 from services.errors import NotFoundError, ValidationError
@@ -44,6 +48,7 @@ from services.manual_queue import (
 from services.plan_mode import encode_decision
 from services.task_signal import publish_task_signal
 from services.task_status import transition_task_status
+from services.task_workspace import build_branch_name, load_task_repositories
 from tasks.session_worker import run_task_session
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -60,12 +65,34 @@ async def _get_task_or_404(db_session: AsyncSession, task_id: uuid.UUID) -> Task
     return task
 
 
+async def _ensure_exists(
+    db_session: AsyncSession,
+    model: type[LlmAccount] | type[Repository],
+    entity_id: uuid.UUID,
+    label: str,
+) -> None:
+    if await db_session.get(model, entity_id) is None:
+        raise NotFoundError(f"{label} {entity_id} не найден")
+
+
 @router.post("", response_model=TaskResponse, status_code=201)
 async def create_task(
     body: TaskCreateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
+    """Раздел 1.2 (сценарий 1): задача сразу с репозиториями и LLM-аккаунтом.
+
+    Рабочая ветка каждого репозитория — ``feature/{code}`` (раздел 3.1).
+    """
+    repository_ids = [attached.repository_id for attached in body.repositories]
+    if len(set(repository_ids)) != len(repository_ids):
+        raise ValidationError("Репозиторий указан у задачи больше одного раза")
+    for repository_id in repository_ids:
+        await _ensure_exists(db_session, Repository, repository_id, "Репозиторий")
+    if body.llm_account_id is not None:
+        await _ensure_exists(db_session, LlmAccount, body.llm_account_id, "LLM-аккаунт")
+
     task = Task(
         id=uuid.uuid4(),
         code=body.code,
@@ -74,11 +101,61 @@ async def create_task(
         guide_url=body.guide_url,
         parent_task_id=body.parent_task_id,
         use_parent_summary=body.use_parent_summary,
+        llm_account_id=body.llm_account_id,
         created_by=current_user.id,
     )
     db_session.add(task)
+    for attached in body.repositories:
+        db_session.add(
+            TaskRepository(
+                task_id=task.id,
+                repository_id=attached.repository_id,
+                role=attached.role,
+                branch_name=build_branch_name(body.code),
+                base_branch=attached.base_branch,
+            ),
+        )
     await db_session.commit()
     return task
+
+
+@router.patch("/{task_id}", response_model=TaskResponse)
+async def update_task(
+    task_id: uuid.UUID,
+    body: TaskUpdateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """Раздел 12.1, 15.2: автозапуск и поля задачи — пока задача `new`;
+    ``auto_accept_plan`` — в любой момент до `done`."""
+    task = await _get_task_or_404(db_session, task_id)
+    changes = body.model_dump(exclude_unset=True)
+    auto_accept_plan = changes.pop("auto_accept_plan", None)
+    if changes and task.status is not TaskStatus.NEW:
+        raise ValidationError("Поля задачи можно менять только в статусе new")
+    if auto_accept_plan is not None and task.status is TaskStatus.DONE:
+        raise ValidationError("Задача уже завершена")
+    if changes.get("llm_account_id") is not None:
+        await _ensure_exists(db_session, LlmAccount, changes["llm_account_id"], "LLM-аккаунт")
+
+    for field, value in changes.items():
+        setattr(task, field, value)
+    if auto_accept_plan is not None:
+        task.auto_accept_plan = auto_accept_plan
+    await db_session.commit()
+    await db_session.refresh(task)
+    return task
+
+
+@router.get("/{task_id}/repositories", response_model=list[TaskRepositoryResponse])
+async def list_task_repositories(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> list[TaskRepository]:
+    await _get_task_or_404(db_session, task_id)
+    pairs = await load_task_repositories(db_session, task_id)
+    return [task_repository for task_repository, _ in pairs]
 
 
 @router.get("", response_model=list[TaskResponse])
@@ -171,6 +248,26 @@ async def start_task(
 
     run_task_session.delay(str(task_id))
     return updated
+
+
+@router.post("/{task_id}/restart", response_model=TaskResponse)
+async def restart_task(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """Раздел 14.2: «Перезапустить с текущей ноды» — упавшая нода выполняется
+    заново, предшествующие ей — нет. Сессия продолжается по сохранённому
+    `session_id` (раздел 6.1)."""
+    task = await _get_task_or_404(db_session, task_id)
+    if task.status is not TaskStatus.FAILED or task.last_failed_order_index is None:
+        raise ValidationError("Перезапуск доступен только для задачи в статусе failed")
+    run_task_session.delay(
+        str(task_id),
+        start_after_order_index=task.last_failed_order_index - 1,
+    )
+    await db_session.refresh(task)
+    return task
 
 
 @router.get("/{task_id}/node-logs", response_model=list[NodeLogResponse])

@@ -18,13 +18,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 
 from app_logging.config import get_logger
-from db.models.enums import NodeLogStatus, TaskStatus
-from db.models.logs import NodeLog
+from db.models.enums import AppLogLevel, NodeLogStatus, NodeLogTriggerType, TaskStatus
+from db.models.logs import AppLog, NodeLog
 from db.models.pipelines import TaskNode
 from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
@@ -144,3 +145,98 @@ async def transition_task_status(
     if event is not None:
         await notify_task_event(db_session, event=event, task=task)
     return task
+
+
+_UNFINISHED_NODE_LOG_STATUSES = (
+    NodeLogStatus.PENDING,
+    NodeLogStatus.RUNNING,
+    NodeLogStatus.AWAITING_DECISION,
+)
+_AWAITING_STATUSES = (TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW)
+
+
+async def first_unfinished_order_index(db_session: AsyncSession, task_id: uuid.UUID) -> int:
+    """`order_index` первой включённой ноды без успешного выполнения в пайплайне.
+
+    Если все включённые ноды уже успешны (сбой случился после них — например,
+    при пуше), возвращает индекс за последней нодой: перезапуск с этой точки
+    не повторяет ни одной ноды и сразу переходит к завершению задачи.
+    """
+    succeeded_node_ids = (
+        sa.select(NodeLog.node_id)
+        .where(
+            NodeLog.task_id == task_id,
+            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+            NodeLog.status == NodeLogStatus.SUCCESS,
+            # NOT IN с NULL в подзапросе отбросил бы все строки.
+            NodeLog.node_id.is_not(None),
+        )
+        .scalar_subquery()
+    )
+    unfinished_stmt = sa.select(sa.func.min(TaskNode.order_index)).where(
+        TaskNode.task_id == task_id,
+        TaskNode.is_enabled == True,  # noqa: E712 — sa.Boolean-колонка, не Python bool
+        TaskNode.node_id.not_in(succeeded_node_ids),
+    )
+    unfinished = (await db_session.execute(unfinished_stmt)).scalar_one_or_none()
+    if unfinished is not None:
+        return int(unfinished)
+    last_stmt = sa.select(sa.func.max(TaskNode.order_index)).where(TaskNode.task_id == task_id)
+    last = (await db_session.execute(last_stmt)).scalar_one_or_none()
+    return 0 if last is None else int(last) + 1
+
+
+async def fail_task_after_error(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    error: BaseException,
+) -> None:
+    """Раздел 17.3: падение Celery-задачи сессии не оставляет `running`.
+
+    Незавершённые записи `node_logs` закрываются как `failed`, задача
+    переводится в `failed` с точкой перезапуска (раздел 17.5), ошибка
+    пишется в `app_logs`.
+    """
+    await db_session.rollback()
+    now = datetime.now(UTC)
+    await db_session.execute(
+        sa.update(NodeLog)
+        .where(NodeLog.task_id == task_id, NodeLog.status.in_(_UNFINISHED_NODE_LOG_STATUSES))
+        .values(status=NodeLogStatus.FAILED, finished_at=now),
+    )
+    db_session.add(
+        AppLog(
+            level=AppLogLevel.ERROR,
+            source="session_worker",
+            message=f"Сессия задачи завершилась с ошибкой: {error}",
+            context={"task_id": str(task_id), "error_type": type(error).__name__},
+            task_id=task_id,
+        ),
+    )
+    await db_session.commit()
+
+    task = await db_session.get(Task, task_id, populate_existing=True)
+    if task is None:
+        return
+    if task.status in _AWAITING_STATUSES:
+        await transition_task_status(
+            db_session,
+            task_id=task_id,
+            from_status=task.status,
+            to_status=TaskStatus.IN_PROGRESS,
+        )
+    elif task.status is not TaskStatus.IN_PROGRESS:
+        logger.warning(
+            "task_not_failed_unexpected_status",
+            task_id=str(task_id),
+            status=task.status,
+        )
+        return
+    await transition_task_status(
+        db_session,
+        task_id=task_id,
+        from_status=TaskStatus.IN_PROGRESS,
+        to_status=TaskStatus.FAILED,
+        failed_order_index=await first_unfinished_order_index(db_session, task_id),
+    )

@@ -1,15 +1,20 @@
 import uuid
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType, TaskStatus, UserRole
-from db.models.logs import NodeLog
+from db.models.logs import AppLog, NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
 from db.models.users import User
 from services.errors import ConflictError, ValidationError
-from services.task_status import transition_task_status
+from services.task_status import (
+    fail_task_after_error,
+    first_unfinished_order_index,
+    transition_task_status,
+)
 
 
 async def _make_task(db_session: AsyncSession, *, status: TaskStatus = TaskStatus.NEW) -> Task:
@@ -224,3 +229,79 @@ async def test_done_transition_succeeds_trivially_with_no_enabled_nodes(
     )
 
     assert updated.status is TaskStatus.DONE
+
+
+async def _log_success(db_session: AsyncSession, task: Task, node: Node) -> None:
+    db_session.add(
+        NodeLog(
+            task_id=task.id,
+            node_id=node.id,
+            trigger_type=NodeLogTriggerType.PIPELINE,
+            status=NodeLogStatus.SUCCESS,
+        ),
+    )
+    await db_session.flush()
+
+
+async def test_first_unfinished_order_index_points_to_first_node_without_success(
+    db_session: AsyncSession,
+) -> None:
+    task = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
+    first = await _add_enabled_node(db_session, task, order_index=0)
+    await _add_enabled_node(db_session, task, order_index=1)
+    await _log_success(db_session, task, first)
+
+    assert await first_unfinished_order_index(db_session, task.id) == 1
+
+
+async def test_first_unfinished_order_index_is_past_last_node_when_all_succeeded(
+    db_session: AsyncSession,
+) -> None:
+    task = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
+    for order_index in (0, 3):
+        node = await _add_enabled_node(db_session, task, order_index=order_index)
+        await _log_success(db_session, task, node)
+
+    # Сбой после всех нод (например, при пуше): перезапуск нод не повторяет.
+    assert await first_unfinished_order_index(db_session, task.id) == 4
+
+
+@pytest.mark.parametrize("status", [TaskStatus.IN_PROGRESS, TaskStatus.AWAITING_INPUT])
+async def test_fail_task_after_error_fails_task_and_closes_running_logs(
+    db_session: AsyncSession,
+    status: TaskStatus,
+) -> None:
+    task = await _make_task(db_session, status=status)
+    node = await _add_enabled_node(db_session, task, order_index=2)
+    running_log = NodeLog(
+        task_id=task.id,
+        node_id=node.id,
+        trigger_type=NodeLogTriggerType.PIPELINE,
+        status=NodeLogStatus.RUNNING,
+    )
+    db_session.add(running_log)
+    await db_session.commit()
+
+    await fail_task_after_error(db_session, task_id=task.id, error=RuntimeError("SDK упал"))
+
+    await db_session.refresh(task)
+    await db_session.refresh(running_log)
+    assert task.status is TaskStatus.FAILED
+    assert task.last_failed_order_index == 2
+    assert running_log.status is NodeLogStatus.FAILED
+    app_logs = (
+        await db_session.execute(sa.select(AppLog).where(AppLog.task_id == task.id))
+    ).scalars().all()
+    assert ["SDK упал" in log.message for log in app_logs] == [True]
+
+
+async def test_fail_task_after_error_leaves_terminal_task_untouched(
+    db_session: AsyncSession,
+) -> None:
+    task = await _make_task(db_session, status=TaskStatus.DONE)
+    await db_session.commit()
+
+    await fail_task_after_error(db_session, task_id=task.id, error=RuntimeError("поздно"))
+
+    await db_session.refresh(task)
+    assert task.status is TaskStatus.DONE

@@ -119,6 +119,12 @@ class ClaudeCodeSession:
     def __init__(self, client: ClaudeAgentClientProtocol) -> None:
         self._client = client
         self._lock = asyncio.Lock()
+        self._session_id: str | None = None
+
+    @property
+    def session_id(self) -> str | None:
+        """`session_id` из последнего `ResultMessage` — None до первого ответа."""
+        return self._session_id
 
     async def connect(self) -> None:
         async with self._lock:
@@ -165,6 +171,7 @@ class ClaudeCodeSession:
             if result is None:
                 error_message = "Сессия завершила приём сообщений без ResultMessage"
                 raise RuntimeError(error_message)
+            self._session_id = result.session_id
             logger.info(
                 "session_query_finished",
                 is_error=result.is_error,

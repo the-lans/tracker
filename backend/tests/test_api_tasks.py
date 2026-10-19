@@ -16,11 +16,14 @@ from db.models.enums import (
     NodeLogStatus,
     NodeLogTriggerType,
     NodeType,
+    RepositoryRole,
     TaskStatus,
 )
+from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
+from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
 from services.plan_mode import PlanDecisionOption, encode_decision
@@ -411,3 +414,145 @@ async def test_cancel_manual_queue_request_rejects_already_processed(
     )
 
     assert cancel_response.status_code == 409
+
+
+async def _make_repository(db_session: AsyncSession, name: str = "backend") -> Repository:
+    repository = Repository(name=name, git_url="git@example.com:x.git", deploy_key_encrypted="k")
+    db_session.add(repository)
+    await db_session.flush()
+    return repository
+
+
+async def test_create_task_attaches_repositories_and_llm_account(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    repository = await _make_repository(db_session)
+    llm_account = LlmAccount(label="main", claude_config_dir="/home/svc/.claude")
+    db_session.add(llm_account)
+    await db_session.flush()
+
+    response = await authed_client.post(
+        "/tasks",
+        json={
+            "code": "RR-10001",
+            "title": "t",
+            "description": "d",
+            "llm_account_id": str(llm_account.id),
+            "repositories": [{"repository_id": str(repository.id), "role": "read_write"}],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["llm_account_id"] == str(llm_account.id)
+    repositories = await authed_client.get(f"/tasks/{response.json()['id']}/repositories")
+    assert repositories.status_code == 200
+    [attached] = repositories.json()
+    assert attached["repository_id"] == str(repository.id)
+    assert attached["role"] == RepositoryRole.READ_WRITE.value
+    assert attached["branch_name"] == "feature/RR-10001"
+    assert attached["base_branch"] == "main"
+
+
+async def test_create_task_rejects_unknown_repository(authed_client: AsyncClient) -> None:
+    response = await authed_client.post(
+        "/tasks",
+        json={
+            "code": "RR-10002",
+            "title": "t",
+            "description": "d",
+            "repositories": [{"repository_id": str(uuid.uuid4()), "role": "read_only"}],
+        },
+    )
+
+    assert response.status_code == 404
+
+
+async def test_create_task_rejects_duplicate_repository(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    repository = await _make_repository(db_session)
+    attached = {"repository_id": str(repository.id), "role": "read_only"}
+
+    response = await authed_client.post(
+        "/tasks",
+        json={"code": "RR-10003", "title": "t", "description": "d", "repositories": [attached] * 2},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_update_task_sets_autostart_while_new(authed_client: AsyncClient) -> None:
+    task_body = await _create_task(authed_client)
+
+    response = await authed_client.patch(
+        f"/tasks/{task_body['id']}",
+        json={"auto_start_enabled": True, "scheduled_start_at": "2030-01-01T09:00:00Z"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["auto_start_enabled"] is True
+    assert response.json()["scheduled_start_at"].startswith("2030-01-01T09:00:00")
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "expected_code"),
+    [
+        (TaskStatus.IN_PROGRESS, {"title": "новое"}, 422),
+        (TaskStatus.IN_PROGRESS, {"auto_accept_plan": True}, 200),
+        (TaskStatus.DONE, {"auto_accept_plan": True}, 422),
+    ],
+)
+async def test_update_task_enforces_status_rules(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    status: TaskStatus,
+    payload: dict[str, Any],
+    expected_code: int,
+) -> None:
+    task_body = await _create_task(authed_client)
+    task = await db_session.get(Task, uuid.UUID(task_body["id"]))
+    assert task is not None
+    task.status = status
+    await db_session.flush()
+
+    response = await authed_client.patch(f"/tasks/{task_body['id']}", json=payload)
+
+    assert response.status_code == expected_code, response.text
+
+
+async def test_restart_task_reruns_failed_node(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_body = await _create_task(authed_client)
+    task = await db_session.get(Task, uuid.UUID(task_body["id"]))
+    assert task is not None
+    task.status = TaskStatus.FAILED
+    task.last_failed_order_index = 3
+    await db_session.flush()
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    monkeypatch.setattr(
+        "api.tasks.run_task_session",
+        SimpleNamespace(delay=lambda *args, **kwargs: calls.append((args, kwargs))),
+    )
+
+    response = await authed_client.post(f"/tasks/{task_body['id']}/restart")
+
+    assert response.status_code == 200, response.text
+    # Ноды с order_index <= 2 пропускаются — упавшая нода 3 выполняется заново.
+    assert calls == [((task_body["id"],), {"start_after_order_index": 2})]
+
+
+async def test_restart_task_rejects_task_not_failed(
+    authed_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_body = await _create_task(authed_client)
+    monkeypatch.setattr("api.tasks.run_task_session", SimpleNamespace(delay=None))
+
+    response = await authed_client.post(f"/tasks/{task_body['id']}/restart")
+
+    assert response.status_code == 422

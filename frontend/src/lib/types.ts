@@ -33,6 +33,17 @@ export const RemoteControlStatus = {
 } as const;
 export type RemoteControlStatus = (typeof RemoteControlStatus)[keyof typeof RemoteControlStatus];
 
+export const RepositoryRole = { READ_ONLY: "read_only", READ_WRITE: "read_write" } as const;
+export type RepositoryRole = (typeof RepositoryRole)[keyof typeof RepositoryRole];
+
+export const MergeStatus = {
+  NOT_PUSHED: "not_pushed",
+  PUSHED: "pushed",
+  MERGED: "merged",
+  CONFLICT: "conflict",
+} as const;
+export type MergeStatus = (typeof MergeStatus)[keyof typeof MergeStatus];
+
 export const NodeType = {
   PLAIN_PROMPT: "plain_prompt",
   SLASH_COMMAND: "slash_command",
@@ -182,6 +193,12 @@ export interface Task {
   updated_at: string;
 }
 
+export interface TaskRepositoryAttach {
+  repository_id: string;
+  role: RepositoryRole;
+  base_branch: string;
+}
+
 export interface TaskCreateRequest {
   code: string;
   title: string;
@@ -189,6 +206,29 @@ export interface TaskCreateRequest {
   guide_url?: string | null;
   parent_task_id?: string | null;
   use_parent_summary?: boolean;
+  llm_account_id?: string | null;
+  repositories?: TaskRepositoryAttach[];
+}
+
+/** PATCH /tasks/{id}: auto_accept_plan — до `done`, остальное — только в `new`. */
+export interface TaskUpdateRequest {
+  title?: string;
+  description?: string;
+  guide_url?: string | null;
+  llm_account_id?: string | null;
+  auto_start_enabled?: boolean;
+  scheduled_start_at?: string | null;
+  auto_accept_plan?: boolean;
+}
+
+export interface TaskRepository {
+  id: string;
+  repository_id: string;
+  role: RepositoryRole;
+  branch_name: string;
+  base_branch: string;
+  pushed_at: string | null;
+  merge_status: MergeStatus;
 }
 
 export interface PendingOption {
