@@ -33,7 +33,12 @@ from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from services.crypto import encrypt
 from services.manual_queue import enqueue_freeform_prompt_run
-from services.task_control import TaskControlCommand, read_task_control, request_task_control
+from services.task_control import (
+    TaskControlCommand,
+    consume_task_control,
+    read_task_control,
+    request_task_control,
+)
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name
 from tasks import session_worker
@@ -574,3 +579,144 @@ async def test_rebase_conflict_is_resolved_by_agent_before_next_node(
         assert task.status is TaskStatus.FAILED
         assert task.last_failed_order_index == 1
         assert len(worker_env.client.queries) == 2
+
+
+async def _refreshed_status(db_session: AsyncSession, task: Task) -> TaskStatus:
+    await db_session.refresh(task)
+    return task.status
+
+
+async def test_unresolved_conflict_is_retried_on_restart_before_any_node(
+    db_session: AsyncSession,
+    worker_env: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """После неудачной автообработки и «Перезапустить» статус уже не
+    `rebase_conflict`, но ветка не перебазирована — её нельзя пушить как есть."""
+    origin = _init_bare_origin(tmp_path)
+    task = await _make_task(db_session, status=TaskStatus.QUEUED, origin=origin)
+    await _add_node(db_session, task, order_index=0)
+    await _add_node(db_session, task, order_index=1)
+    repo_dir = worker_env.repos_root / task.code / _REPOSITORY_NAME
+
+    async def conflict_appears_and_agent_gives_up() -> None:
+        if len(worker_env.client.queries) != 1:
+            return
+        (repo_dir / "README.md").write_text("изменение дочерней задачи\n")
+        _run("git", "add", "README.md", cwd=repo_dir)
+        _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
+        _push_conflicting_base_update(tmp_path, origin)
+        # Как `gitlab_sync.rebase_child_task_repositories_on_parent_merge`.
+        await db_session.execute(
+            sa.update(TaskRepository)
+            .where(TaskRepository.task_id == task.id)
+            .values(merge_status=MergeStatus.CONFLICT),
+        )
+        await transition_task_status(
+            db_session,
+            task_id=task.id,
+            from_status=TaskStatus.IN_PROGRESS,
+            to_status=TaskStatus.REBASE_CONFLICT,
+        )
+
+    worker_env.client = FakeClaudeAgentClient(
+        messages_per_query=_results(2),
+        on_query=conflict_appears_and_agent_gives_up,
+    )
+    await _run_worker(task)
+    assert await _refreshed_status(db_session, task) is TaskStatus.FAILED
+    assert task.last_failed_order_index == 1
+
+    async def agent_resolves_on_first_query() -> None:
+        if len(worker_env.client.queries) != 1:
+            return
+        _run("git", "fetch", "origin", "main", cwd=repo_dir)
+        subprocess.run(
+            ["git", *_GIT_AUTHOR_ARGS, "rebase", "origin/main"],
+            cwd=repo_dir,
+            capture_output=True,
+            check=False,
+        )
+        (repo_dir / "README.md").write_text("обе правки объединены\n")
+        _run("git", "add", "README.md", cwd=repo_dir)
+        _run(
+            "git",
+            *_GIT_AUTHOR_ARGS,
+            "-c",
+            "core.editor=true",
+            "rebase",
+            "--continue",
+            cwd=repo_dir,
+        )
+
+    worker_env.client = FakeClaudeAgentClient(
+        messages_per_query=_results(2),
+        on_query=agent_resolves_on_first_query,
+    )
+    await _run_worker(task, start_after_order_index=0)
+
+    assert await _refreshed_status(db_session, task) is TaskStatus.DONE
+    assert "rebase" in worker_env.client.queries[0]
+    assert worker_env.client.queries[1] == "шаг 1"
+    branch = build_branch_name(task.code)
+    assert _run("git", "show", f"{branch}:README.md", cwd=origin) == "обе правки объединены\n"
+
+
+async def test_pause_and_resume_survive_concurrent_rebase_conflict(
+    db_session: AsyncSession,
+    worker_env: SimpleNamespace,
+    redis_client: Redis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Периодическая задача меняет статус параллельно с воркером: проигранный
+    compare-and-swap паузы/продолжения не должен валить задачу в `failed`."""
+    task = await _make_task(db_session, status=TaskStatus.QUEUED)
+    await _add_node(db_session, task, order_index=0)
+    await _add_node(db_session, task, order_index=1)
+    raced: list[TaskStatus] = []
+
+    async def periodic_task_marks_conflict(from_status: TaskStatus) -> None:
+        raced.append(from_status)
+        await transition_task_status(
+            db_session,
+            task_id=task.id,
+            from_status=from_status,
+            to_status=TaskStatus.REBASE_CONFLICT,
+        )
+
+    real_consume = consume_task_control
+    real_read = read_task_control
+
+    async def racing_consume(redis: Any, task_id: uuid.UUID, command: TaskControlCommand) -> bool:
+        if command is TaskControlCommand.PAUSE and not raced:
+            await periodic_task_marks_conflict(TaskStatus.IN_PROGRESS)
+        return await real_consume(redis, task_id, command)
+
+    async def racing_read(redis: Any, task_id: uuid.UUID) -> TaskControlCommand | None:
+        command = await real_read(redis, task_id)
+        if command is TaskControlCommand.RESUME and len(raced) == 1:
+            await periodic_task_marks_conflict(TaskStatus.PAUSED)
+        return command
+
+    monkeypatch.setattr(session_worker, "consume_task_control", racing_consume)
+    monkeypatch.setattr(session_worker, "read_task_control", racing_read)
+
+    async def user_presses_pause() -> None:
+        if len(worker_env.client.queries) == 1:
+            await request_task_control(redis_client, task.id, TaskControlCommand.PAUSE)
+
+    async def while_paused(_observed: list[TaskStatus]) -> None:
+        await request_task_control(redis_client, task.id, TaskControlCommand.RESUME)
+
+    _patch_pause_wait(monkeypatch, while_paused)
+    worker_env.client = FakeClaudeAgentClient(
+        messages_per_query=_results(2),
+        on_query=user_presses_pause,
+    )
+
+    await _run_worker(task)
+
+    assert raced == [TaskStatus.IN_PROGRESS, TaskStatus.PAUSED]
+    await db_session.refresh(task)
+    assert task.status is TaskStatus.DONE
+    assert worker_env.client.queries == ["шаг 0", "шаг 1"]

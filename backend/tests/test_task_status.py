@@ -1,12 +1,23 @@
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType, TaskStatus, UserRole
+from db.models.enums import (
+    LibraryPromptRunStatus,
+    ManualRequestStatus,
+    ManualRequestType,
+    NodeLogStatus,
+    NodeLogTriggerType,
+    NodeType,
+    TaskStatus,
+    UserRole,
+)
 from db.models.logs import AppLog, NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
+from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from db.models.users import User
 from services.errors import ConflictError, ValidationError
@@ -356,3 +367,37 @@ async def test_fail_task_after_error_leaves_terminal_task_untouched(
 
     await db_session.refresh(task)
     assert task.status is TaskStatus.DONE
+
+
+async def test_fail_task_after_error_closes_manual_request_it_was_running(
+    db_session: AsyncSession,
+) -> None:
+    """Иначе `processing`-запрос и «выполняется» у промта библиотеки висели
+    бы вечно: очередь берёт только `queued`."""
+    task = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
+    node = await _add_enabled_node(db_session, task, order_index=0)
+    request = TaskManualRequestQueue(
+        task_id=task.id,
+        request_type=ManualRequestType.LIBRARY_PROMPT,
+        node_id=node.id,
+        requested_by=task.created_by,
+        status=ManualRequestStatus.PROCESSING,
+        requested_at=datetime.now(UTC),
+    )
+    library_prompt = TaskLibraryPrompt(
+        task_id=task.id,
+        node_id=node.id,
+        added_by=task.created_by,
+        last_run_status=LibraryPromptRunStatus.RUNNING,
+    )
+    db_session.add_all([request, library_prompt])
+    await db_session.commit()
+
+    await fail_task_after_error(db_session, task_id=task.id, error=RuntimeError("SDK упал"))
+
+    await db_session.refresh(request)
+    await db_session.refresh(library_prompt)
+    assert request.status is ManualRequestStatus.DONE
+    assert request.processed_at is not None
+    assert library_prompt.last_run_status is LibraryPromptRunStatus.FAILED
+    assert library_prompt.last_run_at is not None

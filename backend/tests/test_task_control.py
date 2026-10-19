@@ -149,3 +149,32 @@ async def test_run_stoppable_propagates_execution_error(redis_client: Redis) -> 
             is_stop_requested=never,
             on_stop=on_stop,
         )
+
+
+async def test_run_stoppable_does_not_start_when_stop_already_requested(
+    redis_client: Redis,
+) -> None:
+    started: list[str] = []
+    stops: list[str] = []
+
+    async def execution() -> str:
+        started.append("start")
+        return "не должно выполниться"
+
+    async def always() -> bool:
+        return True
+
+    async def on_stop() -> None:
+        stops.append("stop")
+
+    result = await run_stoppable(
+        execution(),
+        redis_client=redis_client,
+        task_id=uuid.uuid4(),
+        is_stop_requested=always,
+        on_stop=on_stop,
+    )
+
+    assert result is None
+    assert started == []
+    assert stops == [], "прерывать нечего — ход не начинался"

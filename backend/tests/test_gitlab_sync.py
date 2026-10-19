@@ -424,7 +424,10 @@ async def test_rebase_child_task_repositories_marks_conflict_on_rebase_conflict(
 
     assert rebased == []
     await db_session.refresh(child_task)
+    await db_session.refresh(child_task_repository)
     assert child_task.status is TaskStatus.REBASE_CONFLICT
+    # Признак переживает уход задачи в `failed` (services/rebase_resolution.py).
+    assert child_task_repository.merge_status is MergeStatus.CONFLICT
 
 
 @pytest.mark.parametrize(

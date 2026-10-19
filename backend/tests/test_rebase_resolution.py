@@ -14,13 +14,19 @@ from typing import TYPE_CHECKING
 import sqlalchemy as sa
 
 from clients.claude_agent import ClaudeCodeSession
-from db.models.enums import NodeLogStatus, NodeLogTriggerType, RepositoryRole, UserRole
+from db.models.enums import (
+    MergeStatus,
+    NodeLogStatus,
+    NodeLogTriggerType,
+    RepositoryRole,
+    UserRole,
+)
 from db.models.logs import NodeLog
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from services.crypto import encrypt
-from services.rebase_resolution import resolve_rebase_conflict
+from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
 from services.task_workspace import build_branch_name, prepare_task_workspace
 from tests.fakes import FakeClaudeAgentClient, make_result_message
 
@@ -82,6 +88,7 @@ async def _make_task_with_conflicting_branch(
             role=RepositoryRole.READ_WRITE,
             branch_name=build_branch_name(task.code),
             base_branch="main",
+            merge_status=MergeStatus.CONFLICT if conflict else MergeStatus.NOT_PUSHED,
         ),
     )
     await db_session.flush()
@@ -97,6 +104,11 @@ async def _make_task_with_conflicting_branch(
 
 async def _logs(db_session: AsyncSession, task: Task) -> list[NodeLog]:
     stmt = sa.select(NodeLog).where(NodeLog.task_id == task.id)
+    return list((await db_session.execute(stmt)).scalars().all())
+
+
+async def _merge_statuses(db_session: AsyncSession, task: Task) -> list[MergeStatus]:
+    stmt = sa.select(TaskRepository.merge_status).where(TaskRepository.task_id == task.id)
     return list((await db_session.execute(stmt)).scalars().all())
 
 
@@ -127,6 +139,8 @@ async def test_agent_resolving_conflict_unblocks_task(
     )
 
     assert resolved is True
+    assert not await has_unresolved_rebase_conflict(db_session, task)
+    assert await _merge_statuses(db_session, task) == [MergeStatus.NOT_PUSHED]
     assert "backend/" in fake.queries[0]
     assert f"feature/{task.code}" in fake.queries[0]
     [log] = await _logs(db_session, task)
@@ -150,6 +164,7 @@ async def test_unresolved_conflict_reports_failure(
     )
 
     assert resolved is False
+    assert await has_unresolved_rebase_conflict(db_session, task)
     [log] = await _logs(db_session, task)
     assert log.status is NodeLogStatus.FAILED
 
@@ -171,3 +186,27 @@ async def test_branch_already_on_base_needs_no_agent(
     assert resolved is True
     assert fake.queries == []
     assert await _logs(db_session, task) == []
+
+
+async def test_conflict_mark_of_pushed_branch_returns_to_pushed(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    """Ветку, запушенную до конфликта, разрешение возвращает в `pushed`."""
+    task, workspace = await _make_task_with_conflicting_branch(db_session, tmp_path, conflict=False)
+    await db_session.execute(
+        sa.update(TaskRepository)
+        .where(TaskRepository.task_id == task.id)
+        .values(merge_status=MergeStatus.CONFLICT, pushed_at=sa.func.now()),
+    )
+    await db_session.commit()
+
+    resolved = await resolve_rebase_conflict(
+        db_session,
+        task=task,
+        claude_session=ClaudeCodeSession(FakeClaudeAgentClient(messages_per_query=[])),
+        workspace=workspace,
+    )
+
+    assert resolved is True
+    assert await _merge_statuses(db_session, task) == [MergeStatus.PUSHED]

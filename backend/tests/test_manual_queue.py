@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
+from claude_agent_sdk import Message
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -547,3 +548,42 @@ async def test_stop_button_interrupts_running_freeform_prompt(
 
     logs = await _node_logs_for(db_session, task.id)
     assert [log.status for log in logs] == [NodeLogStatus.STOPPED]
+
+
+async def test_task_stop_leaves_remaining_requests_queued_without_sending_them(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    redis_client: Redis,
+) -> None:
+    """«Остановить» задачу не должно отправлять агенту каждый оставшийся
+    запрос только затем, чтобы тут же его прервать."""
+    task, user_id = await _make_task(db_session)
+    requests = [
+        await enqueue_freeform_prompt_run(
+            db_session,
+            task_id=task.id,
+            raw_prompt_text=f"q{index}",
+            requested_by=user_id,
+        )
+        for index in range(3)
+    ]
+    await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+    fake = FakeClaudeAgentClient(messages_per_query=_results_for(3))
+
+    processed = await process_manual_queue_once(
+        db_session,
+        task=task,
+        claude_session=ClaudeCodeSession(fake),
+        repos_path=tmp_path,
+        redis_client=redis_client,
+    )
+
+    assert processed == 0
+    assert fake.queries == []
+    assert fake.interrupted is False
+    assert [request.status for request in requests] == [ManualRequestStatus.QUEUED] * 3
+    assert await _node_logs_for(db_session, task.id) == []
+
+
+def _results_for(count: int) -> list[list[Message]]:
+    return [[make_result_message()] for _ in range(count)]

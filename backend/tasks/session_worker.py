@@ -33,7 +33,7 @@ from services.manual_queue import process_manual_queue_once
 from services.mcp_config import build_mcp_server_config
 from services.pipeline_orchestrator import CheckpointDecision, StopGuard, run_pipeline
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
-from services.rebase_resolution import resolve_rebase_conflict
+from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
 from services.session_lifecycle import plan_session_start
 from services.task_control import (
     TaskControlCommand,
@@ -158,9 +158,18 @@ class _SessionControl:
         )
 
     async def resolve_rebase_conflict_if_any(self, *, resume_status: TaskStatus) -> bool:
-        """`False` — агент не справился, задачу надо переводить в `failed`."""
+        """`False` — агент не справился, задачу надо переводить в `failed`.
+
+        Конфликт узнаётся и по статусу, и по признаку в `task_repositories`:
+        после неудачной автообработки и перезапуска из `failed` статус уже
+        `in_progress`, а ветка всё ещё не перебазирована.
+        """
         await self.db_session.refresh(self.task)
-        if self.task.status is not TaskStatus.REBASE_CONFLICT:
+        in_conflict_status = self.task.status is TaskStatus.REBASE_CONFLICT
+        if not in_conflict_status and not await has_unresolved_rebase_conflict(
+            self.db_session,
+            self.task,
+        ):
             return True
         logger.info("rebase_conflict_resolution_started", task_id=str(self.task.id))
         if not await resolve_rebase_conflict(
@@ -170,6 +179,8 @@ class _SessionControl:
             workspace=self.workspace,
         ):
             return False
+        if not in_conflict_status:
+            return True
         await transition_task_status(
             self.db_session,
             task_id=self.task.id,
@@ -203,13 +214,15 @@ class _SessionControl:
 
     async def _stay_paused(self) -> CheckpointDecision:
         """Раздел 14.2 «Приостановить»: сессия удерживается, ручные запросы
-        выполняются, пайплайн ждёт «Продолжить» или «Остановить»."""
-        await transition_task_status(
-            self.db_session,
-            task_id=self.task.id,
-            from_status=TaskStatus.IN_PROGRESS,
-            to_status=TaskStatus.PAUSED,
-        )
+        выполняются, пайплайн ждёт «Продолжить» или «Остановить».
+
+        Периодическая задача может параллельно перевести задачу в
+        `rebase_conflict` — тогда compare-and-swap перехода проигрывает, и
+        цикл сначала разбирает конфликт, а затем повторяет переход.
+        """
+        while not await self._try_transition(TaskStatus.IN_PROGRESS, TaskStatus.PAUSED):
+            if not await self.resolve_rebase_conflict_if_any(resume_status=TaskStatus.IN_PROGRESS):
+                return CheckpointDecision.STOP
         logger.info("task_paused", task_id=str(self.task.id))
         while True:
             if not await self.resolve_rebase_conflict_if_any(resume_status=TaskStatus.PAUSED):
@@ -218,21 +231,39 @@ class _SessionControl:
             command = await read_task_control(self.redis_client, self.task.id)
             if command is TaskControlCommand.STOP:
                 return CheckpointDecision.STOP
-            if command is TaskControlCommand.RESUME and await consume_task_control(
-                self.redis_client,
-                self.task.id,
-                TaskControlCommand.RESUME,
-            ):
-                await transition_task_status(
-                    self.db_session,
-                    task_id=self.task.id,
-                    from_status=TaskStatus.PAUSED,
-                    to_status=TaskStatus.IN_PROGRESS,
+            if command is TaskControlCommand.RESUME:
+                # Команда забирается только после перехода: проигранный
+                # переход не должен терять «Продолжить».
+                if not await self._try_transition(TaskStatus.PAUSED, TaskStatus.IN_PROGRESS):
+                    continue
+                # Если «Продолжить» уже заменил `stop`, consume его не тронет,
+                # и следующая нода остановится, не начавшись (`run_stoppable`).
+                await consume_task_control(
+                    self.redis_client,
+                    self.task.id,
+                    TaskControlCommand.RESUME,
                 )
-                await self.db_session.refresh(self.task)
                 logger.info("task_resumed", task_id=str(self.task.id))
                 return CheckpointDecision.CONTINUE
             await wait_for_task_signal(self.redis_client, self.task.id, timeout=_PAUSE_POLL_SECONDS)
+
+    async def _try_transition(self, from_status: TaskStatus, to_status: TaskStatus) -> bool:
+        try:
+            await transition_task_status(
+                self.db_session,
+                task_id=self.task.id,
+                from_status=from_status,
+                to_status=to_status,
+            )
+        except ConflictError:
+            logger.info(
+                "task_status_changed_concurrently",
+                task_id=str(self.task.id),
+                expected_status=from_status,
+            )
+            return False
+        await self.db_session.refresh(self.task)
+        return True
 
 
 async def _fail_task(db_session: AsyncSession, task: Task, *, failed_order_index: int) -> None:
@@ -338,21 +369,29 @@ async def _run_claimed_task(
         redis_client=redis_client,
     )
     await session.connect()
-    rebase_resolved = True
+    outcome = None
     try:
-        outcome = await run_pipeline(
-            db_session,
-            task=task,
-            claude_session=session,
-            repos_path=workspace,
-            start_after_order_index=start_after_order_index,
-            active_node_context=active_node_context,
-            checkpoint=control.checkpoint,
-            stop_guard=StopGuard(redis_client=redis_client, task_id=task.id),
+        # Конфликт, оставшийся от прошлого прогона (перезапуск из `failed`,
+        # продолжение после `clear_context`), — до первой же ноды.
+        rebase_resolved = await control.resolve_rebase_conflict_if_any(
+            resume_status=TaskStatus.IN_PROGRESS,
         )
-        if outcome.completed:
+        if rebase_resolved:
+            outcome = await run_pipeline(
+                db_session,
+                task=task,
+                claude_session=session,
+                repos_path=workspace,
+                start_after_order_index=start_after_order_index,
+                active_node_context=active_node_context,
+                checkpoint=control.checkpoint,
+                stop_guard=StopGuard(redis_client=redis_client, task_id=task.id),
+            )
+        if outcome is not None and outcome.completed:
             # Пайплайн пройден, но сессия ещё жива: конфликт ребейза и
             # запросы, поставленные во время последней ноды, — до пуша.
+            # Пауза/остановка после последней ноды уже ни к чему не относятся.
+            await clear_task_control(redis_client, task.id)
             rebase_resolved = await control.resolve_rebase_conflict_if_any(
                 resume_status=TaskStatus.IN_PROGRESS,
             )
@@ -362,7 +401,7 @@ async def _run_claimed_task(
         await _disconnect_quietly(session)
         raise
 
-    if outcome.context_cleared_at_order_index is not None:
+    if outcome is not None and outcome.context_cleared_at_order_index is not None:
         # Раздел 11.5: оркестратор уже оборвал сессию. Следующий таск начнёт
         # со свежей сессией с этой точки — без повторного захвата статуса.
         run_task_session.apply_async(
@@ -376,15 +415,13 @@ async def _run_claimed_task(
         return
     await session.disconnect()
 
-    if outcome.completed and not rebase_resolved:
+    if outcome is None or (outcome.completed and not rebase_resolved):
         await _fail_task(
             db_session,
             task,
             failed_order_index=await first_unfinished_order_index(db_session, task.id),
         )
     elif outcome.completed:
-        # Пауза/остановка после последней ноды уже ни к чему не относятся.
-        await clear_task_control(redis_client, task.id)
         await push_task_workspace(
             db_session,
             task=task,

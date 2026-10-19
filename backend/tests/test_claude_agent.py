@@ -144,9 +144,27 @@ async def test_abort_turn_drains_tail_so_next_query_gets_its_own_answer() -> Non
 
 
 async def test_abort_turn_gives_up_when_no_tail_arrives() -> None:
-    fake = FakeClaudeAgentClient(messages_per_query=[])
+    async def hang() -> None:
+        await asyncio.sleep(3600)
+
+    fake = FakeClaudeAgentClient(messages_per_query=[], on_query=hang)
     session = ClaudeCodeSession(fake)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(session.send_and_collect_text("зависший"), timeout=0.05)
 
     await session.abort_turn(drain_timeout_seconds=0.05)
 
     assert fake.interrupted is True
+
+
+async def test_abort_turn_without_open_turn_does_not_interrupt() -> None:
+    """Остановка до отправки запроса или после его завершения: `interrupt()`
+    простаивающему CLI только подвесил бы воркер на ожидании хвоста."""
+    fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+    session = ClaudeCodeSession(fake)
+
+    await session.abort_turn(drain_timeout_seconds=5)
+    await session.send_and_collect_text("завершённый ход")
+    await session.abort_turn(drain_timeout_seconds=5)
+
+    assert fake.interrupted is False

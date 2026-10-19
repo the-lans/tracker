@@ -24,9 +24,17 @@ from typing import TYPE_CHECKING
 import sqlalchemy as sa
 
 from app_logging.config import get_logger
-from db.models.enums import AppLogLevel, NodeLogStatus, NodeLogTriggerType, TaskStatus
+from db.models.enums import (
+    AppLogLevel,
+    LibraryPromptRunStatus,
+    ManualRequestStatus,
+    NodeLogStatus,
+    NodeLogTriggerType,
+    TaskStatus,
+)
 from db.models.logs import AppLog, NodeLog
 from db.models.pipelines import TaskNode
+from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
 from services.notifications import NotificationEvent, notify_task_event
@@ -207,7 +215,9 @@ async def fail_task_after_error(
 
     Незавершённые записи `node_logs` закрываются как `failed`, задача
     переводится в `failed` с точкой перезапуска (раздел 17.5), ошибка
-    пишется в `app_logs`.
+    пишется в `app_logs`. Ручной запрос, на котором упала сессия, тоже
+    закрывается: очередь берёт только `queued`, и `processing`-запрос
+    (а с ним «выполняется» у промта библиотеки) иначе завис бы навсегда.
     """
     await db_session.rollback()
     now = datetime.now(UTC)
@@ -215,6 +225,22 @@ async def fail_task_after_error(
         sa.update(NodeLog)
         .where(NodeLog.task_id == task_id, NodeLog.status.in_(_UNFINISHED_NODE_LOG_STATUSES))
         .values(status=NodeLogStatus.FAILED, finished_at=now),
+    )
+    await db_session.execute(
+        sa.update(TaskManualRequestQueue)
+        .where(
+            TaskManualRequestQueue.task_id == task_id,
+            TaskManualRequestQueue.status == ManualRequestStatus.PROCESSING,
+        )
+        .values(status=ManualRequestStatus.DONE, processed_at=now),
+    )
+    await db_session.execute(
+        sa.update(TaskLibraryPrompt)
+        .where(
+            TaskLibraryPrompt.task_id == task_id,
+            TaskLibraryPrompt.last_run_status == LibraryPromptRunStatus.RUNNING,
+        )
+        .values(last_run_status=LibraryPromptRunStatus.FAILED, last_run_at=now),
     )
     db_session.add(
         AppLog(

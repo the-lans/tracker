@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Coroutine
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -143,7 +144,14 @@ async def run_stoppable[T](
     ``None`` — выполнение остановлено: корутина отменена, затем вызван
     ``on_stop`` (прерывание хода сессии — после отмены, потому что
     `ClaudeCodeSession` держит мьютекс до конца хода, раздел 6.2).
+    Если остановка запрошена ещё до старта, выполнение не начинается вовсе
+    и ``on_stop`` не вызывается — прерывать нечего.
     """
+    if await is_stop_requested():
+        if isinstance(execution, Coroutine):
+            execution.close()
+        logger.info("execution_skipped_stop_requested", task_id=str(task_id))
+        return None
     execution_task = asyncio.ensure_future(execution)
 
     async def watch() -> None:

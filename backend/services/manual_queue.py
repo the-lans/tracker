@@ -369,7 +369,13 @@ async def process_manual_queue_once(
     останавливается без ошибки (раздел 17.4: идемпотентность).
     """
     processed = 0
+    stop_guard = StopGuard(redis_client=redis_client, task_id=task.id)
     while True:
+        # «Остановить» задачу (раздел 14.2) — оставшиеся запросы ждут
+        # перезапуска в `queued`, а не начинаются, чтобы тут же прерваться.
+        if await stop_guard.is_stop_requested():
+            logger.info("manual_queue_processing_stopped", task_id=str(task.id))
+            return processed
         stmt = (
             sa.select(TaskManualRequestQueue)
             .where(

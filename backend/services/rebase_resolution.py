@@ -5,6 +5,12 @@
 воркер (архитектурное решение А плана реализации). Здесь — один такой
 проход: какие репозитории отстали от базовой ветки, промт агенту и
 проверка результата. Статус задачи меняет вызывающий воркер.
+
+Признак неразрешённого конфликта — `task_repositories.merge_status =
+conflict`, который ставит периодическая задача. Статус `rebase_conflict`
+его не заменяет: после неудачной автообработки задача уходит в `failed`, а
+перезапуск переводит её в `in_progress` — без признака в БД конфликт был бы
+забыт, и ветка ушла бы в пуш неперебазированной.
 """
 
 from __future__ import annotations
@@ -13,9 +19,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+import sqlalchemy as sa
+
 from app_logging.config import get_logger
-from db.models.enums import NodeLogStatus, NodeLogTriggerType, RepositoryRole
+from db.models.enums import MergeStatus, NodeLogStatus, NodeLogTriggerType, RepositoryRole
 from db.models.logs import NodeLog
+from db.models.tasks import TaskRepository
 from services.git_ops import is_rebased_onto_base
 from services.manual_queue import DEFAULT_FREEFORM_TIMEOUT_SECONDS
 from services.nodes.dispatch import execute_llm_node_with_timeout
@@ -28,9 +37,42 @@ if TYPE_CHECKING:
 
     from clients.claude_agent import ClaudeCodeSession
     from db.models.repositories import Repository
-    from db.models.tasks import Task, TaskRepository
+    from db.models.tasks import Task
 
 logger = get_logger("rebase_resolution")
+
+
+async def has_unresolved_rebase_conflict(db_session: AsyncSession, task: Task) -> bool:
+    stmt = sa.select(
+        sa.exists().where(
+            TaskRepository.task_id == task.id,
+            TaskRepository.merge_status == MergeStatus.CONFLICT,
+        ),
+    )
+    return bool(await db_session.scalar(stmt))
+
+
+def _merge_status_literal(status: MergeStatus) -> sa.ColumnElement[MergeStatus]:
+    return sa.literal(status, type_=TaskRepository.__table__.c.merge_status.type)
+
+
+async def _clear_conflict_marks(db_session: AsyncSession, task: Task) -> None:
+    """Возвращает `merge_status`, который был до конфликта: ветку либо уже
+    пушили, либо ещё нет."""
+    await db_session.execute(
+        sa.update(TaskRepository)
+        .where(
+            TaskRepository.task_id == task.id,
+            TaskRepository.merge_status == MergeStatus.CONFLICT,
+        )
+        .values(
+            merge_status=sa.case(
+                (TaskRepository.pushed_at.is_(None), _merge_status_literal(MergeStatus.NOT_PUSHED)),
+                else_=_merge_status_literal(MergeStatus.PUSHED),
+            ),
+        ),
+    )
+    await db_session.commit()
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +137,7 @@ async def resolve_rebase_conflict(
     """
     outdated = await find_outdated_repositories(db_session, task=task, workspace=workspace)
     if not outdated:
+        await _clear_conflict_marks(db_session, task)
         logger.info("rebase_conflict_already_resolved", task_id=str(task.id))
         return True
 
@@ -121,6 +164,8 @@ async def resolve_rebase_conflict(
     node_log.llm_output_text = outcome.llm_output_text
     node_log.status = NodeLogStatus.SUCCESS if resolved else NodeLogStatus.FAILED
     await db_session.commit()
+    if resolved:
+        await _clear_conflict_marks(db_session, task)
     logger.info(
         "rebase_conflict_resolution_finished",
         task_id=str(task.id),
