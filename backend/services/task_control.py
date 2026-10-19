@@ -139,7 +139,8 @@ async def run_stoppable[T](
     is_stop_requested: Callable[[], Awaitable[bool]],
     on_stop: Callable[[], Awaitable[None]],
 ) -> T | None:
-    """Выполняет ``execution``, пока не запрошена остановка.
+    """
+    Выполняет ``execution``, пока не запрошена остановка.
 
     ``None`` — выполнение остановлено: корутина отменена, затем вызван
     ``on_stop`` (прерывание хода сессии — после отмены, потому что

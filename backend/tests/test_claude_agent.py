@@ -157,14 +157,19 @@ async def test_abort_turn_gives_up_when_no_tail_arrives() -> None:
     assert fake.interrupted is True
 
 
-async def test_abort_turn_without_open_turn_does_not_interrupt() -> None:
-    """Остановка до отправки запроса или после его завершения: `interrupt()`
-    простаивающему CLI только подвесил бы воркер на ожидании хвоста."""
-    fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
-    session = ClaudeCodeSession(fake)
+class TestAbortTurnWithoutOpenTurn:
+    """
+    Остановка до отправки запроса или после его завершения: `interrupt()`
+    простаивающему CLI только подвесил бы воркер на ожидании хвоста.
+    """
 
-    await session.abort_turn(drain_timeout_seconds=5)
-    await session.send_and_collect_text("завершённый ход")
-    await session.abort_turn(drain_timeout_seconds=5)
+    @pytest.mark.parametrize("finish_turn_first", [False, True], ids=["before", "after"])
+    async def test_does_not_interrupt(self, finish_turn_first: bool) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        session = ClaudeCodeSession(fake)
+        if finish_turn_first:
+            await session.send_and_collect_text("завершённый ход")
 
-    assert fake.interrupted is False
+        await session.abort_turn(drain_timeout_seconds=5)
+
+        assert fake.interrupted is False

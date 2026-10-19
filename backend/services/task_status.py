@@ -211,7 +211,8 @@ async def fail_task_after_error(
     task_id: uuid.UUID,
     error: BaseException,
 ) -> None:
-    """Раздел 17.3: падение Celery-задачи сессии не оставляет `running`.
+    """
+    Раздел 17.3: падение Celery-задачи сессии не оставляет `running`.
 
     Незавершённые записи `node_logs` закрываются как `failed`, задача
     переводится в `failed` с точкой перезапуска (раздел 17.5), ошибка

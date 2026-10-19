@@ -152,7 +152,8 @@ class ClaudeCodeSession:
         *,
         drain_timeout_seconds: float = _ABORT_DRAIN_TIMEOUT_SECONDS,
     ) -> None:
-        """Прерывает ход, чей `send_and_collect_text` уже отменён снаружи
+        """
+        Прерывает ход, чей `send_and_collect_text` уже отменён снаружи
         (таймаут ноды, кнопка «Остановить»).
 
         После `interrupt()` CLI дописывает в поток итоговый `ResultMessage`

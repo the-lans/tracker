@@ -1,4 +1,5 @@
-"""Автообработка статуса `rebase_conflict` (раздел 14.1, 14.2 ТЗ).
+"""
+Автообработка статуса `rebase_conflict` (раздел 14.1, 14.2 ТЗ).
 
 Конфликт обнаруживает периодическая задача (`services/gitlab_sync.py`), но
 разрешить его может только агент — в той же сессии задачи, которой владеет
@@ -57,8 +58,10 @@ def _merge_status_literal(status: MergeStatus) -> sa.ColumnElement[MergeStatus]:
 
 
 async def _clear_conflict_marks(db_session: AsyncSession, task: Task) -> None:
-    """Возвращает `merge_status`, который был до конфликта: ветку либо уже
-    пушили, либо ещё нет."""
+    """
+    Возвращает `merge_status`, который был до конфликта: ветку либо уже
+    пушили, либо ещё нет.
+    """
     await db_session.execute(
         sa.update(TaskRepository)
         .where(
@@ -129,7 +132,8 @@ async def resolve_rebase_conflict(
     claude_session: ClaudeCodeSession,
     workspace: Path,
 ) -> bool:
-    """`True` — все ветки снова на актуальной базе, задача может продолжать.
+    """
+    `True` — все ветки снова на актуальной базе, задача может продолжать.
 
     Обращение к агенту пишется в `node_logs` (раздел 14.2: «отображение
     прогресса») как пайплайновое без ноды: ни ретраев, ни участия в

@@ -158,7 +158,8 @@ class _SessionControl:
         )
 
     async def resolve_rebase_conflict_if_any(self, *, resume_status: TaskStatus) -> bool:
-        """`False` — агент не справился, задачу надо переводить в `failed`.
+        """
+        `False` — агент не справился, задачу надо переводить в `failed`.
 
         Конфликт узнаётся и по статусу, и по признаку в `task_repositories`:
         после неудачной автообработки и перезапуска из `failed` статус уже
@@ -213,7 +214,8 @@ class _SessionControl:
         return CheckpointDecision.CONTINUE
 
     async def _stay_paused(self) -> CheckpointDecision:
-        """Раздел 14.2 «Приостановить»: сессия удерживается, ручные запросы
+        """
+        Раздел 14.2 «Приостановить»: сессия удерживается, ручные запросы
         выполняются, пайплайн ждёт «Продолжить» или «Остановить».
 
         Периодическая задача может параллельно перевести задачу в

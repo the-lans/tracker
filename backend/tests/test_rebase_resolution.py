@@ -188,25 +188,31 @@ async def test_branch_already_on_base_needs_no_agent(
     assert await _logs(db_session, task) == []
 
 
-async def test_conflict_mark_of_pushed_branch_returns_to_pushed(
-    db_session: AsyncSession,
-    tmp_path: Path,
-) -> None:
-    """Ветку, запушенную до конфликта, разрешение возвращает в `pushed`."""
-    task, workspace = await _make_task_with_conflicting_branch(db_session, tmp_path, conflict=False)
-    await db_session.execute(
-        sa.update(TaskRepository)
-        .where(TaskRepository.task_id == task.id)
-        .values(merge_status=MergeStatus.CONFLICT, pushed_at=sa.func.now()),
-    )
-    await db_session.commit()
+class TestConflictMarks:
+    async def test_pushed_branch_back_to_pushed(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        """Ветку, запушенную до конфликта, разрешение возвращает в `pushed`."""
+        task, workspace = await _make_task_with_conflicting_branch(
+            db_session,
+            tmp_path,
+            conflict=False,
+        )
+        await db_session.execute(
+            sa.update(TaskRepository)
+            .where(TaskRepository.task_id == task.id)
+            .values(merge_status=MergeStatus.CONFLICT, pushed_at=sa.func.now()),
+        )
+        await db_session.commit()
 
-    resolved = await resolve_rebase_conflict(
-        db_session,
-        task=task,
-        claude_session=ClaudeCodeSession(FakeClaudeAgentClient(messages_per_query=[])),
-        workspace=workspace,
-    )
+        resolved = await resolve_rebase_conflict(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(FakeClaudeAgentClient(messages_per_query=[])),
+            workspace=workspace,
+        )
 
-    assert resolved is True
-    assert await _merge_statuses(db_session, task) == [MergeStatus.PUSHED]
+        assert resolved is True
+        assert await _merge_statuses(db_session, task) == [MergeStatus.PUSHED]
