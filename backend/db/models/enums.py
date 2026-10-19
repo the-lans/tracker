@@ -20,6 +20,9 @@ class TaskStatus(StrEnum):
     NEW = "new"
     QUEUED = "queued"
     IN_PROGRESS = "in_progress"
+    # Решение 2026-10-19 (отклонение от раздела 3.1): «Приостановить» из
+    # раздела 14.2 — отдельный статус, сессия при этом удерживается.
+    PAUSED = "paused"
     PLAN_REVIEW = "plan_review"
     AWAITING_INPUT = "awaiting_input"
     REBASE_CONFLICT = "rebase_conflict"

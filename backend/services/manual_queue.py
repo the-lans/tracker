@@ -44,6 +44,8 @@ from services.nodes.dispatch import (
     resolve_node_prompt_or_none,
 )
 from services.notifications import NotificationEvent, notify_task_event
+from services.pipeline_orchestrator import StopGuard, run_node_execution
+from services.task_control import clear_manual_stop, is_manual_stop_requested
 from services.templating import RenderScope, validate_template_variables
 
 if TYPE_CHECKING:
@@ -145,6 +147,17 @@ async def _load_node_log_history(db_session: AsyncSession, task_id: uuid.UUID) -
     return list((await db_session.execute(stmt)).scalars().all())
 
 
+def _manual_stop_guard(redis_client: Redis, request: TaskManualRequestQueue) -> StopGuard:
+    return StopGuard(redis_client=redis_client, task_id=request.task_id)
+
+
+async def _manual_stop_requested(guard: StopGuard, request: TaskManualRequestQueue) -> bool:
+    """Кнопка ■ этого запроса (раздел 7.3) или «Остановить» всей задачи (14.2)."""
+    if await is_manual_stop_requested(guard.redis_client, guard.task_id, request.id):
+        return True
+    return await guard.is_stop_requested()
+
+
 async def _run_library_prompt(
     db_session: AsyncSession,
     *,
@@ -152,12 +165,21 @@ async def _run_library_prompt(
     request: TaskManualRequestQueue,
     claude_session: ClaudeCodeSession,
     repos_path: Path,
+    redis_client: Redis,
 ) -> None:
     assert request.node_id is not None
     node = await db_session.get(Node, request.node_id)
     if node is None:
         message = f"Нода библиотечного промта {request.node_id} не найдена"
         raise ValueError(message)
+
+    task_library_prompt_stmt = sa.select(TaskLibraryPrompt).where(
+        TaskLibraryPrompt.task_id == task.id,
+        TaskLibraryPrompt.node_id == node.id,
+    )
+    task_library_prompt = await db_session.scalar(task_library_prompt_stmt)
+    if task_library_prompt is not None:
+        task_library_prompt.last_run_status = LibraryPromptRunStatus.RUNNING
 
     history = await _load_node_log_history(db_session, task.id)
     prompt = await resolve_node_prompt_or_none(db_session, node=node, task=task, history=history)
@@ -173,25 +195,40 @@ async def _run_library_prompt(
     db_session.add(node_log)
     await db_session.commit()
 
-    outcome = await execute_node(
-        node,
-        prompt=prompt,
+    guard = _manual_stop_guard(redis_client, request)
+
+    async def stop_requested() -> bool:
+        return await _manual_stop_requested(guard, request)
+
+    outcome = await run_node_execution(
+        execute_node(
+            node,
+            prompt=prompt,
+            claude_session=claude_session,
+            repos_path=repos_path,
+            timeout_seconds=node.timeout_seconds,
+        ),
+        node_type=node.node_type,
         claude_session=claude_session,
-        repos_path=repos_path,
-        timeout_seconds=node.timeout_seconds,
+        stop_guard=guard,
+        is_stop_requested=stop_requested,
     )
 
     node_log.finished_at = datetime.now(UTC)
+    if outcome is None:
+        node_log.status = NodeLogStatus.STOPPED
+        if task_library_prompt is not None:
+            task_library_prompt.last_run_status = LibraryPromptRunStatus.STOPPED
+            task_library_prompt.last_run_at = node_log.finished_at
+        await db_session.commit()
+        logger.info("library_prompt_run_stopped", node_id=str(node.id))
+        return
+
     node_log.llm_output_text = outcome.llm_output_text
     node_log.script_stdout = outcome.script_stdout
     node_log.script_exit_code = outcome.script_exit_code
     node_log.status = NodeLogStatus.SUCCESS if outcome.success else NodeLogStatus.FAILED
 
-    task_library_prompt_stmt = sa.select(TaskLibraryPrompt).where(
-        TaskLibraryPrompt.task_id == task.id,
-        TaskLibraryPrompt.node_id == node.id,
-    )
-    task_library_prompt = await db_session.scalar(task_library_prompt_stmt)
     if task_library_prompt is not None:
         task_library_prompt.last_run_status = (
             LibraryPromptRunStatus.SUCCESS if outcome.success else LibraryPromptRunStatus.FAILED
@@ -220,6 +257,7 @@ async def _run_freeform_prompt(
     task: Task,
     request: TaskManualRequestQueue,
     claude_session: ClaudeCodeSession,
+    redis_client: Redis,
 ) -> None:
     assert request.raw_prompt_text is not None
     node_log = NodeLog(
@@ -237,13 +275,29 @@ async def _run_freeform_prompt(
     # без понятия node_type: `execute_node` здесь не подходит (ему нужен
     # реальный Node для диспетчеризации script/LLM), вызывается LLM-ветка
     # напрямую.
-    outcome = await execute_llm_node_with_timeout(
-        claude_session,
-        request.raw_prompt_text,
-        timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
+    guard = _manual_stop_guard(redis_client, request)
+
+    async def stop_requested() -> bool:
+        return await _manual_stop_requested(guard, request)
+
+    outcome = await run_node_execution(
+        execute_llm_node_with_timeout(
+            claude_session,
+            request.raw_prompt_text,
+            timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
+        ),
+        node_type=None,
+        claude_session=claude_session,
+        stop_guard=guard,
+        is_stop_requested=stop_requested,
     )
 
     node_log.finished_at = datetime.now(UTC)
+    if outcome is None:
+        node_log.status = NodeLogStatus.STOPPED
+        await db_session.commit()
+        logger.info("freeform_prompt_run_stopped")
+        return
     node_log.llm_output_text = outcome.llm_output_text
     node_log.status = NodeLogStatus.SUCCESS if outcome.success else NodeLogStatus.FAILED
     await db_session.commit()
@@ -261,6 +315,7 @@ async def _process_single_request(
     request: TaskManualRequestQueue,
     claude_session: ClaudeCodeSession,
     repos_path: Path,
+    redis_client: Redis,
 ) -> None:
     request.status = ManualRequestStatus.PROCESSING
     await db_session.commit()
@@ -272,6 +327,7 @@ async def _process_single_request(
             request=request,
             claude_session=claude_session,
             repos_path=repos_path,
+            redis_client=redis_client,
         )
     else:
         await _run_freeform_prompt(
@@ -279,7 +335,9 @@ async def _process_single_request(
             task=task,
             request=request,
             claude_session=claude_session,
+            redis_client=redis_client,
         )
+    await clear_manual_stop(redis_client, task.id, request.id)
 
     request.status = ManualRequestStatus.DONE
     request.processed_at = datetime.now(UTC)
@@ -311,7 +369,13 @@ async def process_manual_queue_once(
     останавливается без ошибки (раздел 17.4: идемпотентность).
     """
     processed = 0
+    stop_guard = StopGuard(redis_client=redis_client, task_id=task.id)
     while True:
+        # «Остановить» задачу (раздел 14.2) — оставшиеся запросы ждут
+        # перезапуска в `queued`, а не начинаются, чтобы тут же прерваться.
+        if await stop_guard.is_stop_requested():
+            logger.info("manual_queue_processing_stopped", task_id=str(task.id))
+            return processed
         stmt = (
             sa.select(TaskManualRequestQueue)
             .where(
@@ -337,6 +401,7 @@ async def process_manual_queue_once(
                     request=request,
                     claude_session=claude_session,
                     repos_path=repos_path,
+                    redis_client=redis_client,
                 )
         except LockNotAcquiredError:
             logger.info("manual_queue_processing_already_in_progress", task_id=str(task.id))

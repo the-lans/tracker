@@ -21,6 +21,7 @@ from clients.gitlab import project_path_from_git_url
 from db.models.enums import MergeStatus, TaskStatus
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
+from services.errors import ConflictError
 from services.git_ops import RebaseConflictError, rebase_onto_base_branch
 from services.task_status import transition_task_status
 
@@ -74,6 +75,10 @@ async def sync_task_repository_merge_status(
     return new_status
 
 
+# Задачи с живой сессией: только у них конфликт разрешит агент (раздел 14).
+_REBASABLE_STATUSES = frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED})
+
+
 async def rebase_child_task_repositories_on_parent_merge(
     db_session: AsyncSession,
     *,
@@ -110,6 +115,16 @@ async def rebase_child_task_repositories_on_parent_merge(
     for child_task_repository, repository, child_task in rows:
         child_task_repository.base_branch = parent_task_repository.base_branch
         await db_session.commit()
+        if child_task.status not in _REBASABLE_STATUSES:
+            # Решение 2026-10-19: завершённые задачи не ребейзятся (их ветка
+            # уже запушена), а ещё не начатые склонируют свежую базу сами.
+            logger.info(
+                "child_task_rebase_skipped",
+                task_id=str(child_task.id),
+                repository_id=str(repository.id),
+                status=child_task.status,
+            )
+            continue
         repo_dir = repos_root / child_task.code / repository.name
         try:
             await rebase_onto_base_branch(
@@ -124,12 +139,21 @@ async def rebase_child_task_repositories_on_parent_merge(
                 repository_id=str(repository.id),
             )
         except RebaseConflictError:
-            await transition_task_status(
-                db_session,
-                task_id=child_task.id,
-                from_status=child_task.status,
-                to_status=TaskStatus.REBASE_CONFLICT,
-            )
+            # Признак в БД переживает и смену статуса воркером, и уход
+            # задачи в `failed` — его проверяет `services/rebase_resolution.py`.
+            child_task_repository.merge_status = MergeStatus.CONFLICT
+            await db_session.commit()
+            try:
+                await transition_task_status(
+                    db_session,
+                    task_id=child_task.id,
+                    from_status=child_task.status,
+                    to_status=TaskStatus.REBASE_CONFLICT,
+                )
+            except ConflictError:
+                # Воркер успел сменить статус (пауза, продолжение) — конфликт
+                # он разберёт по признаку в ближайшей точке проверки.
+                logger.info("child_task_rebase_conflict_status_changed", task_id=str(child_task.id))
             logger.warning(
                 "child_task_rebase_conflict",
                 task_id=str(child_task.id),

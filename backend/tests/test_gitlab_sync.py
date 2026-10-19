@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 import httpx
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.gitlab import GitlabClient
@@ -64,13 +65,14 @@ async def _make_task(
     *,
     created_by: uuid.UUID,
     parent_task_id: uuid.UUID | None = None,
+    status: TaskStatus = TaskStatus.IN_PROGRESS,
 ) -> Task:
     task = Task(
         code=f"RR-{uuid.uuid4().hex[:5]}",
         title="t",
         description="d",
         created_by=created_by,
-        status=TaskStatus.IN_PROGRESS,
+        status=status,
         parent_task_id=parent_task_id,
     )
     db_session.add(task)
@@ -316,9 +318,11 @@ async def test_rebase_child_task_repositories_rebases_matching_children(
     assert (child_repo_dir / "from_child.txt").exists()
 
 
+@pytest.mark.parametrize("child_status", [TaskStatus.IN_PROGRESS, TaskStatus.PAUSED])
 async def test_rebase_child_task_repositories_marks_conflict_on_rebase_conflict(
     db_session: AsyncSession,
     tmp_path: Path,
+    child_status: TaskStatus,
 ) -> None:
     origin = _init_bare_origin(tmp_path)
 
@@ -347,7 +351,12 @@ async def test_rebase_child_task_repositories_marks_conflict_on_rebase_conflict(
     db_session.add(parent_task_repository)
     await db_session.flush()
 
-    child_task = await _make_task(db_session, created_by=user.id, parent_task_id=parent_task.id)
+    child_task = await _make_task(
+        db_session,
+        created_by=user.id,
+        parent_task_id=parent_task.id,
+        status=child_status,
+    )
     child_task_repository = TaskRepository(
         task_id=child_task.id,
         repository_id=repository.id,
@@ -415,4 +424,59 @@ async def test_rebase_child_task_repositories_marks_conflict_on_rebase_conflict(
 
     assert rebased == []
     await db_session.refresh(child_task)
+    await db_session.refresh(child_task_repository)
     assert child_task.status is TaskStatus.REBASE_CONFLICT
+    # Признак переживает уход задачи в `failed` (services/rebase_resolution.py).
+    assert child_task_repository.merge_status is MergeStatus.CONFLICT
+
+
+@pytest.mark.parametrize(
+    "child_status",
+    [TaskStatus.NEW, TaskStatus.QUEUED, TaskStatus.DONE, TaskStatus.FAILED],
+)
+async def test_rebase_skips_children_without_live_session(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    child_status: TaskStatus,
+) -> None:
+    """Решение 2026-10-19: done/failed не ребейзятся; new/queued склонируют
+    свежую базу при старте. Базовая ветка переключается всё равно."""
+    user = await _make_user(db_session)
+    repository = _make_repository(git_url=str(tmp_path / "нет-такого-origin.git"))
+    db_session.add(repository)
+    await db_session.flush()
+    parent_task = await _make_task(db_session, created_by=user.id)
+    parent_task_repository = TaskRepository(
+        task_id=parent_task.id,
+        repository_id=repository.id,
+        role=RepositoryRole.READ_WRITE,
+        branch_name="feature/RR-parent",
+        base_branch="main",
+        merge_status=MergeStatus.MERGED,
+    )
+    child_task = await _make_task(
+        db_session,
+        created_by=user.id,
+        parent_task_id=parent_task.id,
+        status=child_status,
+    )
+    child_task_repository = TaskRepository(
+        task_id=child_task.id,
+        repository_id=repository.id,
+        role=RepositoryRole.READ_WRITE,
+        branch_name="feature/RR-child",
+        base_branch="feature/RR-parent",
+    )
+    db_session.add_all([parent_task_repository, child_task_repository])
+    await db_session.flush()
+
+    rebased = await rebase_child_task_repositories_on_parent_merge(
+        db_session,
+        parent_task_repository=parent_task_repository,
+        repos_root=tmp_path / "repos",
+    )
+
+    assert rebased == []
+    assert child_task_repository.base_branch == "main"
+    await db_session.refresh(child_task)
+    assert child_task.status is child_status

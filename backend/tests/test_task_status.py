@@ -1,12 +1,23 @@
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType, TaskStatus, UserRole
+from db.models.enums import (
+    LibraryPromptRunStatus,
+    ManualRequestStatus,
+    ManualRequestType,
+    NodeLogStatus,
+    NodeLogTriggerType,
+    NodeType,
+    TaskStatus,
+    UserRole,
+)
 from db.models.logs import AppLog, NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
+from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from db.models.users import User
 from services.errors import ConflictError, ValidationError
@@ -68,6 +79,10 @@ async def _add_enabled_node(db_session: AsyncSession, task: Task, *, order_index
     [
         (TaskStatus.NEW, TaskStatus.QUEUED),
         (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS),
+        (TaskStatus.QUEUED, TaskStatus.NEW),
+        (TaskStatus.IN_PROGRESS, TaskStatus.PAUSED),
+        (TaskStatus.PAUSED, TaskStatus.IN_PROGRESS),
+        (TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT),
         (TaskStatus.IN_PROGRESS, TaskStatus.PLAN_REVIEW),
         (TaskStatus.IN_PROGRESS, TaskStatus.AWAITING_INPUT),
         (TaskStatus.IN_PROGRESS, TaskStatus.REBASE_CONFLICT),
@@ -101,6 +116,9 @@ async def test_allowed_transitions_succeed(
         (TaskStatus.DONE, TaskStatus.IN_PROGRESS),
         (TaskStatus.IN_PROGRESS, TaskStatus.NEW),
         (TaskStatus.QUEUED, TaskStatus.DONE),
+        (TaskStatus.PAUSED, TaskStatus.DONE),
+        (TaskStatus.NEW, TaskStatus.PAUSED),
+        (TaskStatus.REBASE_CONFLICT, TaskStatus.DONE),
     ],
 )
 async def test_disallowed_transitions_are_rejected(
@@ -117,6 +135,42 @@ async def test_disallowed_transitions_are_rejected(
             from_status=from_status,
             to_status=to_status,
         )
+
+
+async def test_extra_values_are_written_in_the_same_update(db_session: AsyncSession) -> None:
+    task = await _make_task(db_session, status=TaskStatus.QUEUED)
+    task.auto_start_enabled = True
+    await db_session.flush()
+
+    updated = await transition_task_status(
+        db_session,
+        task_id=task.id,
+        from_status=TaskStatus.QUEUED,
+        to_status=TaskStatus.NEW,
+        extra_values={"auto_start_enabled": False},
+    )
+
+    assert updated.status is TaskStatus.NEW
+    assert updated.auto_start_enabled is False
+
+
+@pytest.mark.parametrize("from_status", [TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT])
+async def test_failed_reachable_from_paused_and_rebase_conflict(
+    db_session: AsyncSession,
+    from_status: TaskStatus,
+) -> None:
+    task = await _make_task(db_session, status=from_status)
+
+    updated = await transition_task_status(
+        db_session,
+        task_id=task.id,
+        from_status=from_status,
+        to_status=TaskStatus.FAILED,
+        failed_order_index=1,
+    )
+
+    assert updated.status is TaskStatus.FAILED
+    assert updated.last_failed_order_index == 1
 
 
 async def test_compare_and_swap_rejects_stale_from_status(db_session: AsyncSession) -> None:
@@ -266,7 +320,15 @@ async def test_first_unfinished_order_index_is_past_last_node_when_all_succeeded
     assert await first_unfinished_order_index(db_session, task.id) == 4
 
 
-@pytest.mark.parametrize("status", [TaskStatus.IN_PROGRESS, TaskStatus.AWAITING_INPUT])
+@pytest.mark.parametrize(
+    "status",
+    [
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.AWAITING_INPUT,
+        TaskStatus.PAUSED,
+        TaskStatus.REBASE_CONFLICT,
+    ],
+)
 async def test_fail_task_after_error_fails_task_and_closes_running_logs(
     db_session: AsyncSession,
     status: TaskStatus,
@@ -305,3 +367,41 @@ async def test_fail_task_after_error_leaves_terminal_task_untouched(
 
     await db_session.refresh(task)
     assert task.status is TaskStatus.DONE
+
+
+class TestFailTaskClosesManualRun:
+    async def test_closes_request_and_prompt(
+        self,
+        db_session: AsyncSession,
+    ) -> None:
+        """
+        Иначе `processing`-запрос и «выполняется» у промта библиотеки висели
+        бы вечно: очередь берёт только `queued`.
+        """
+        task = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
+        node = await _add_enabled_node(db_session, task, order_index=0)
+        request = TaskManualRequestQueue(
+            task_id=task.id,
+            request_type=ManualRequestType.LIBRARY_PROMPT,
+            node_id=node.id,
+            requested_by=task.created_by,
+            status=ManualRequestStatus.PROCESSING,
+            requested_at=datetime.now(UTC),
+        )
+        library_prompt = TaskLibraryPrompt(
+            task_id=task.id,
+            node_id=node.id,
+            added_by=task.created_by,
+            last_run_status=LibraryPromptRunStatus.RUNNING,
+        )
+        db_session.add_all([request, library_prompt])
+        await db_session.commit()
+
+        await fail_task_after_error(db_session, task_id=task.id, error=RuntimeError("SDK упал"))
+
+        await db_session.refresh(request)
+        await db_session.refresh(library_prompt)
+        assert request.status is ManualRequestStatus.DONE
+        assert request.processed_at is not None
+        assert library_prompt.last_run_status is LibraryPromptRunStatus.FAILED
+        assert library_prompt.last_run_at is not None

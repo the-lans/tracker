@@ -10,6 +10,7 @@ export const TaskStatus = {
   NEW: "new",
   QUEUED: "queued",
   IN_PROGRESS: "in_progress",
+  PAUSED: "paused",
   PLAN_REVIEW: "plan_review",
   AWAITING_INPUT: "awaiting_input",
   REBASE_CONFLICT: "rebase_conflict",
@@ -66,6 +67,12 @@ export const LibraryPromptRunStatus = {
 } as const;
 export type LibraryPromptRunStatus =
   (typeof LibraryPromptRunStatus)[keyof typeof LibraryPromptRunStatus];
+
+export const ManualRequestType = {
+  LIBRARY_PROMPT: "library_prompt",
+  FREEFORM_PROMPT: "freeform_prompt",
+} as const;
+export type ManualRequestType = (typeof ManualRequestType)[keyof typeof ManualRequestType];
 
 export const ManualRequestStatus = {
   QUEUED: "queued",
@@ -262,6 +269,9 @@ export interface DecisionRequest {
 
 export interface ManualRequest {
   id: string;
+  request_type: ManualRequestType;
+  node_id: string | null;
+  raw_prompt_text: string | null;
   status: ManualRequestStatus;
   requested_at: string;
 }
@@ -271,6 +281,24 @@ export interface TaskLibraryPrompt {
   node_id: string;
   last_run_status: LibraryPromptRunStatus;
   last_run_at: string | null;
+}
+
+/** Строка таблицы «Системные промты задачи»: ■ останавливает `active_request_id`. */
+export interface TaskLibraryPromptItem extends TaskLibraryPrompt {
+  name: string;
+  node_type: NodeType;
+  active_request_id: string | null;
+}
+
+/** Снимок ноды пайплайна в задаче (`task_nodes`, раздел 13.1). */
+export interface TaskNodeItem {
+  id: string;
+  node_id: string;
+  order_index: number;
+  is_enabled: boolean;
+  name: string;
+  node_type: NodeType;
+  editable: boolean;
 }
 
 export interface TaskStatusEvent {

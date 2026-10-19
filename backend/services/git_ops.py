@@ -204,3 +204,32 @@ async def rebase_onto_base_branch(
         branch_name=task_repository.branch_name,
         base_branch=task_repository.base_branch,
     )
+
+
+_REBASE_STATE_DIRS = ("rebase-merge", "rebase-apply")
+
+
+async def is_rebased_onto_base(
+    *,
+    repository: Repository,
+    task_repository: TaskRepository,
+    repo_dir: Path,
+) -> bool:
+    """Проверка результата автообработки `rebase_conflict` (раздел 14):
+    ребейз завершён и рабочая ветка уже содержит актуальную ``base_branch``.
+    """
+    git_dir = repo_dir / ".git"
+    if any((git_dir / state_dir).exists() for state_dir in _REBASE_STATE_DIRS):
+        return False
+    async with _deploy_key_env(repository) as env:
+        await _run_git("fetch", "origin", task_repository.base_branch, cwd=repo_dir, env=env)
+        returncode, _stdout, _stderr = await _run_git(
+            "merge-base",
+            "--is-ancestor",
+            f"origin/{task_repository.base_branch}",
+            "HEAD",
+            cwd=repo_dir,
+            env=env,
+            check=False,
+        )
+    return returncode == 0

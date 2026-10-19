@@ -113,6 +113,9 @@ class SessionTurnResult:
         return self.result.session_id
 
 
+_ABORT_DRAIN_TIMEOUT_SECONDS = 10.0
+
+
 class ClaudeCodeSession:
     """Владелец единственного клиента активной сессии задачи (раздел 6.1, 6.2)."""
 
@@ -120,6 +123,9 @@ class ClaudeCodeSession:
         self._client = client
         self._lock = asyncio.Lock()
         self._session_id: str | None = None
+        # Ход начат (`query()` отправлен), а его `ResultMessage` ещё не
+        # прочитан — только такой ход есть смысл прерывать.
+        self._turn_open = False
 
     @property
     def session_id(self) -> str | None:
@@ -141,6 +147,42 @@ class ClaudeCodeSession:
             await self._client.interrupt()
             logger.info("session_interrupted")
 
+    async def abort_turn(
+        self,
+        *,
+        drain_timeout_seconds: float = _ABORT_DRAIN_TIMEOUT_SECONDS,
+    ) -> None:
+        """
+        Прерывает ход, чей `send_and_collect_text` уже отменён снаружи
+        (таймаут ноды, кнопка «Остановить»).
+
+        После `interrupt()` CLI дописывает в поток итоговый `ResultMessage`
+        прерванного хода — если его не вычитать, следующий запрос получит
+        чужой ответ вместо своего. Ожидание хвоста ограничено по времени:
+        прерывание не должно подвешивать воркер.
+
+        Если хода нет (остановка пришла до отправки запроса или после его
+        завершения), прерывать нечего: `interrupt()` простаивающему CLI
+        лишь подвесил бы воркер на ожидании хвоста, которого не будет.
+        """
+        async with self._lock:
+            if not self._turn_open:
+                logger.info("session_abort_skipped_no_open_turn")
+                return
+            await self._client.interrupt()
+
+            async def drain() -> None:
+                async for message in self._client.receive_response():
+                    if isinstance(message, ResultMessage):
+                        return
+
+            try:
+                await asyncio.wait_for(drain(), timeout=drain_timeout_seconds)
+            except TimeoutError:
+                logger.warning("session_abort_drain_timed_out")
+            self._turn_open = False
+            logger.info("session_turn_aborted")
+
     async def set_permission_mode(self, mode: SdkPermissionMode) -> None:
         """Раздел 9.1/9.4: переключение режима разрешений посреди сессии
         (`plan_prompt` включает ``plan`` перед отправкой промта; после
@@ -158,6 +200,7 @@ class ClaudeCodeSession:
         """
         async with self._lock:
             logger.info("session_query_started", prompt_length=len(prompt))
+            self._turn_open = True
             await self._client.query(prompt)
             text_parts: list[str] = []
             result: ResultMessage | None = None
@@ -168,6 +211,7 @@ class ClaudeCodeSession:
                             text_parts.append(block.text)
                 if isinstance(message, ResultMessage):
                     result = message
+            self._turn_open = False
             if result is None:
                 error_message = "Сессия завершила приём сообщений без ResultMessage"
                 raise RuntimeError(error_message)

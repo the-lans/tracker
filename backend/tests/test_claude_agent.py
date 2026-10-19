@@ -114,3 +114,62 @@ async def test_concurrent_calls_are_serialized_by_the_session_lock() -> None:
     )
 
     assert fake.max_observed_concurrency == 1
+
+
+async def test_abort_turn_drains_tail_so_next_query_gets_its_own_answer() -> None:
+    fake = FakeClaudeAgentClient(
+        messages_per_query=[
+            [
+                AssistantMessage(content=[TextBlock(text="прерванный ответ")], model="claude"),
+                make_result_message(session_id="sess-old"),
+            ],
+            [
+                AssistantMessage(content=[TextBlock(text="свежий ответ")], model="claude"),
+                make_result_message(session_id="sess-new"),
+            ],
+        ],
+    )
+    fake.message_delay_seconds = 0.2
+    session = ClaudeCodeSession(fake)
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(session.send_and_collect_text("первый"), timeout=0.05)
+    await session.abort_turn()
+    fake.message_delay_seconds = 0.0
+    turn = await session.send_and_collect_text("второй")
+
+    assert fake.interrupted is True
+    assert turn.text == "свежий ответ"
+    assert turn.session_id == "sess-new"
+
+
+async def test_abort_turn_gives_up_when_no_tail_arrives() -> None:
+    async def hang() -> None:
+        await asyncio.sleep(3600)
+
+    fake = FakeClaudeAgentClient(messages_per_query=[], on_query=hang)
+    session = ClaudeCodeSession(fake)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(session.send_and_collect_text("зависший"), timeout=0.05)
+
+    await session.abort_turn(drain_timeout_seconds=0.05)
+
+    assert fake.interrupted is True
+
+
+class TestAbortTurnWithoutOpenTurn:
+    """
+    Остановка до отправки запроса или после его завершения: `interrupt()`
+    простаивающему CLI только подвесил бы воркер на ожидании хвоста.
+    """
+
+    @pytest.mark.parametrize("finish_turn_first", [False, True], ids=["before", "after"])
+    async def test_does_not_interrupt(self, finish_turn_first: bool) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        session = ClaudeCodeSession(fake)
+        if finish_turn_first:
+            await session.send_and_collect_text("завершённый ход")
+
+        await session.abort_turn(drain_timeout_seconds=5)
+
+        assert fake.interrupted is False

@@ -1,17 +1,17 @@
 import { useState } from "react";
-import { ExternalLink, Lock, Plus } from "lucide-react";
+import { Check, ExternalLink, Lock, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useUpdateTask } from "@/hooks/useTasks";
+import { Checkbox } from "@/components/ui/checkbox";
+import { useSetTaskNodeEnabled, useTaskNodes, useUpdateTask } from "@/hooks/useTasks";
 import { ApiError } from "@/lib/apiClient";
 import type { TaskUpdateRequest } from "@/lib/types";
 import { TaskRepositoriesCard } from "@/components/tasks/TaskRepositoriesCard";
-import { usePipelineNodes } from "@/hooks/usePipelines";
 import { useNodes } from "@/hooks/useNodes";
-import { formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import { TaskStatus, type NodeLog, type Task } from "@/lib/types";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { TaskLibraryPromptsCard } from "@/components/tasks/TaskLibraryPromptsCard";
@@ -25,6 +25,15 @@ function toLocalInputValue(iso: string | null): string {
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 }
 
+/** Раздел 13.2, 15.2: пояснение к блокировке чекбоксов нод. */
+function nodesHint(status: TaskStatus): string {
+  if (status === TaskStatus.NEW) return "Снимите галочку, чтобы пропустить ноду в этой задаче";
+  if (status === TaskStatus.FAILED) {
+    return "Пройденные и упавшая ноды уже выполнены — менять можно только ноды после точки сбоя";
+  }
+  return "Состав нод заблокирован — задача уже запущена";
+}
+
 export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: NodeLog[] }) {
   const updateTask = useUpdateTask(task.id);
   const isNew = task.status === TaskStatus.NEW;
@@ -36,7 +45,19 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
       },
     });
   }
-  const { data: pipelineNodes } = usePipelineNodes(task.pipeline_id ?? undefined);
+  const { data: taskNodes } = useTaskNodes(task.id, Boolean(task.pipeline_id));
+  const setTaskNodeEnabled = useSetTaskNodeEnabled(task.id);
+
+  function toggleNode(taskNodeId: string, isEnabled: boolean) {
+    setTaskNodeEnabled.mutate(
+      { taskNodeId, isEnabled },
+      {
+        onError: (error) => {
+          toast.error(error instanceof ApiError ? error.message : "Не удалось изменить состав нод");
+        },
+      },
+    );
+  }
   const { data: libraryNodes } = useNodes({ libraryOnly: true });
   const [pipelinePickerOpen, setPipelinePickerOpen] = useState(false);
 
@@ -124,45 +145,47 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
         <Card>
           <CardTitle>
             <span>Ноды пайплайна</span>
-            {pipelineNodes && (
+            {taskNodes && (
               <span>
-                {successfulPipelineNodeIds.size} / {pipelineNodes.length}
+                {successfulPipelineNodeIds.size} / {taskNodes.filter((node) => node.is_enabled).length}
               </span>
             )}
           </CardTitle>
           <div className="flex flex-col">
-            {(pipelineNodes ?? []).map((node) => {
-              const done = successfulPipelineNodeIds.has(node.id);
-              const isCurrent = node.id === currentNodeId;
+            {(taskNodes ?? []).map((taskNode) => {
+              const done = successfulPipelineNodeIds.has(taskNode.node_id);
+              const isCurrent = taskNode.node_id === currentNodeId;
               return (
-                <div
-                  key={node.id}
-                  className={
-                    "flex items-center gap-2.5 border-t border-border py-2 first:border-t-0" +
-                    (isCurrent ? " -mx-2 rounded-lg border-t-0 bg-accent-tint px-2" : " opacity-60") +
-                    (done ? " opacity-100" : "")
-                  }
+                <label
+                  key={taskNode.id}
+                  className={cn(
+                    "flex items-center gap-2.5 border-t border-border py-2 first:border-t-0",
+                    isCurrent && "-mx-2 rounded-lg border-t-0 bg-accent-tint px-2",
+                    !taskNode.is_enabled && "opacity-50",
+                  )}
                 >
-                  <div
-                    className={
-                      "size-4 shrink-0 rounded-[5px] border-[1.5px] " +
-                      (done ? "border-success bg-success" : "border-text-3")
-                    }
+                  <Checkbox
+                    checked={taskNode.is_enabled}
+                    disabled={!taskNode.editable || setTaskNodeEnabled.isPending}
+                    aria-label={`Включить ноду ${taskNode.name}`}
+                    onCheckedChange={(checked) => toggleNode(taskNode.id, checked === true)}
                   />
-                  <NodeTypeIcon type={node.node_type} className="size-[15px] shrink-0 text-text-2" />
-                  <div className="flex-1 truncate text-[12.5px] font-bold">{node.name}</div>
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-text-3">
-                    {node.node_type}
-                  </div>
-                </div>
+                  <NodeTypeIcon type={taskNode.node_type} className="size-[15px] shrink-0 text-text-2" />
+                  <div className="flex-1 truncate text-[12.5px] font-bold">{taskNode.name}</div>
+                  {done ? (
+                    <Check className="size-3.5 shrink-0 text-success" aria-label="выполнено" />
+                  ) : (
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-text-3">
+                      {taskNode.node_type}
+                    </div>
+                  )}
+                </label>
               );
             })}
           </div>
           <div className="mt-2 flex items-center gap-1.5 text-[11px] text-text-3">
             <Lock className="size-3" />
-            {task.status === TaskStatus.NEW
-              ? "Состав нод редактируется до запуска (требуется API редактирования task_nodes)"
-              : "Состав нод заблокирован — задача уже выполняется"}
+            {nodesHint(task.status)}
           </div>
         </Card>
       ) : (

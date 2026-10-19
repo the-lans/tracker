@@ -126,7 +126,7 @@ runners/
 alembic/
   env.py       — async env (target_metadata = db.base.Base.metadata)
   versions/    — миграции базы данных (полная схема раздела 3.1,
-                 push_subscriptions, nodes.llm_output_last_n)
+                 push_subscriptions, nodes.llm_output_last_n, статус paused)
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
                 приложения), запускать backend-venv'ом, см. раздел 4
@@ -292,7 +292,8 @@ Postgres с проброшенным портом — см. `docker-compose.yml`
     транзакции вместе с `tasks.pipeline_id`; частичный снимок недопустим.
 11. **Редактирование состава нод задачи** разрешено свободно только в
     статусе `new`; в `failed` — только для нод с `order_index >
-    tasks.last_failed_order_index`.
+    tasks.last_failed_order_index` (`services/task_nodes.py`,
+    `PATCH /tasks/{id}/nodes/{task_node_id}`).
 12. **Celery-задачи обязаны быть идемпотентными**: проверка текущего
     состояния перед изменением, распределённая блокировка Redis (`SET NX` +
     TTL) для критичных операций (пуш в Git, push-уведомления, обработка
@@ -305,3 +306,10 @@ Postgres с проброшенным портом — см. `docker-compose.yml`
     compare-and-swap текущего статуса в транзакции БД.
 15. **Backend не обращается к содержимому Confluence-страниц** из поля
     `guide_url` — это ответственность LLM через MCP, не backend.
+16. **Сессией задачи управляет только её воркер** (`tasks/session_worker.py`).
+    API не трогает сессию и не меняет статусы `in_progress`/`paused`
+    напрямую: ручные промты кладёт в очередь, команды pause/resume/stop —
+    в Redis (`services/task_control.py`), и будит воркер сигналом. Воркер
+    перед каждой нодой обрабатывает конфликт ребейза, затем очередь ручных
+    запросов FIFO, затем команды; статус `paused` — решение пользователя,
+    см. `docs/implementation_plan.md`, п. 6.

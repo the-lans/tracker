@@ -101,7 +101,8 @@ async def execute_llm_node_with_timeout(
     """Раздел 3.1: `timeout_seconds` применяется одинаково к нодам пайплайна
     и к запускам из библиотеки, для ЛЮБОГО типа ноды — включая LLM-ноды, не
     только `script`. При истечении таймаута сессия прерывается
-    (`interrupt()`), чтобы не оставлять зависший запрос в SDK.
+    (`abort_turn()`), чтобы не оставлять зависший запрос в SDK и не отдать
+    хвост прерванного хода следующему запросу.
     """
     try:
         return await asyncio.wait_for(
@@ -109,7 +110,7 @@ async def execute_llm_node_with_timeout(
             timeout=timeout_seconds,
         )
     except TimeoutError:
-        await claude_session.interrupt()
+        await claude_session.abort_turn()
         return NodeExecutionOutcome(success=False, error_message="Превышен таймаут выполнения")
 
 

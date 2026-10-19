@@ -24,9 +24,17 @@ from typing import TYPE_CHECKING
 import sqlalchemy as sa
 
 from app_logging.config import get_logger
-from db.models.enums import AppLogLevel, NodeLogStatus, NodeLogTriggerType, TaskStatus
+from db.models.enums import (
+    AppLogLevel,
+    LibraryPromptRunStatus,
+    ManualRequestStatus,
+    NodeLogStatus,
+    NodeLogTriggerType,
+    TaskStatus,
+)
 from db.models.logs import AppLog, NodeLog
 from db.models.pipelines import TaskNode
+from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
 from services.notifications import NotificationEvent, notify_task_event
@@ -49,19 +57,26 @@ _NOTIFICATION_EVENTS_BY_STATUS: dict[TaskStatus, NotificationEvent] = {
 
 ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.NEW: frozenset({TaskStatus.QUEUED}),
-    TaskStatus.QUEUED: frozenset({TaskStatus.IN_PROGRESS}),
+    # `queued -> new` — «Отменить постановку» (раздел 14.2).
+    TaskStatus.QUEUED: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.NEW}),
     TaskStatus.IN_PROGRESS: frozenset(
         {
             TaskStatus.DONE,
+            TaskStatus.PAUSED,
             TaskStatus.PLAN_REVIEW,
             TaskStatus.AWAITING_INPUT,
             TaskStatus.REBASE_CONFLICT,
             TaskStatus.FAILED,
         },
     ),
+    # «Приостановить» (раздел 14.2): продолжить, остановить или поймать
+    # конфликт ребейза, пока задача стоит на паузе.
+    TaskStatus.PAUSED: frozenset(
+        {TaskStatus.IN_PROGRESS, TaskStatus.FAILED, TaskStatus.REBASE_CONFLICT},
+    ),
     TaskStatus.PLAN_REVIEW: frozenset({TaskStatus.IN_PROGRESS}),
     TaskStatus.AWAITING_INPUT: frozenset({TaskStatus.IN_PROGRESS}),
-    TaskStatus.REBASE_CONFLICT: frozenset({TaskStatus.IN_PROGRESS}),
+    TaskStatus.REBASE_CONFLICT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.FAILED}),
     TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS}),
     TaskStatus.DONE: frozenset(),
 }
@@ -100,13 +115,15 @@ async def transition_task_status(
     from_status: TaskStatus,
     to_status: TaskStatus,
     failed_order_index: int | None = None,
+    extra_values: dict[str, object] | None = None,
 ) -> Task:
     """Compare-and-swap переход `tasks.status` (раздел 17.4).
 
     ``failed_order_index`` обязателен при переходе в `failed` (раздел
     17.5: "обязан сохранять точный order_index сбоя в
     tasks.last_failed_order_index") и игнорируется для любого другого
-    перехода.
+    перехода. ``extra_values`` — поля, меняемые в том же UPDATE, что и
+    статус (отмена постановки заодно выключает автозапуск).
     """
     allowed = ALLOWED_TRANSITIONS.get(from_status, frozenset())
     if to_status not in allowed:
@@ -115,7 +132,7 @@ async def transition_task_status(
     if to_status is TaskStatus.DONE:
         await _ensure_done_invariant(db_session, task_id)
 
-    values: dict[str, object] = {"status": to_status}
+    values: dict[str, object] = {**(extra_values or {}), "status": to_status}
     if to_status is TaskStatus.FAILED:
         if failed_order_index is None:
             raise ValidationError("Переход в failed требует failed_order_index (раздел 17.5)")
@@ -153,6 +170,8 @@ _UNFINISHED_NODE_LOG_STATUSES = (
     NodeLogStatus.AWAITING_DECISION,
 )
 _AWAITING_STATUSES = (TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW)
+# Статусы, из которых `failed` достижим напрямую (раздел 14.1).
+FAILABLE_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT)
 
 
 async def first_unfinished_order_index(db_session: AsyncSession, task_id: uuid.UUID) -> int:
@@ -192,11 +211,14 @@ async def fail_task_after_error(
     task_id: uuid.UUID,
     error: BaseException,
 ) -> None:
-    """Раздел 17.3: падение Celery-задачи сессии не оставляет `running`.
+    """
+    Раздел 17.3: падение Celery-задачи сессии не оставляет `running`.
 
     Незавершённые записи `node_logs` закрываются как `failed`, задача
     переводится в `failed` с точкой перезапуска (раздел 17.5), ошибка
-    пишется в `app_logs`.
+    пишется в `app_logs`. Ручной запрос, на котором упала сессия, тоже
+    закрывается: очередь берёт только `queued`, и `processing`-запрос
+    (а с ним «выполняется» у промта библиотеки) иначе завис бы навсегда.
     """
     await db_session.rollback()
     now = datetime.now(UTC)
@@ -204,6 +226,22 @@ async def fail_task_after_error(
         sa.update(NodeLog)
         .where(NodeLog.task_id == task_id, NodeLog.status.in_(_UNFINISHED_NODE_LOG_STATUSES))
         .values(status=NodeLogStatus.FAILED, finished_at=now),
+    )
+    await db_session.execute(
+        sa.update(TaskManualRequestQueue)
+        .where(
+            TaskManualRequestQueue.task_id == task_id,
+            TaskManualRequestQueue.status == ManualRequestStatus.PROCESSING,
+        )
+        .values(status=ManualRequestStatus.DONE, processed_at=now),
+    )
+    await db_session.execute(
+        sa.update(TaskLibraryPrompt)
+        .where(
+            TaskLibraryPrompt.task_id == task_id,
+            TaskLibraryPrompt.last_run_status == LibraryPromptRunStatus.RUNNING,
+        )
+        .values(last_run_status=LibraryPromptRunStatus.FAILED, last_run_at=now),
     )
     db_session.add(
         AppLog(
@@ -219,14 +257,16 @@ async def fail_task_after_error(
     task = await db_session.get(Task, task_id, populate_existing=True)
     if task is None:
         return
-    if task.status in _AWAITING_STATUSES:
+    from_status = task.status
+    if from_status in _AWAITING_STATUSES:
         await transition_task_status(
             db_session,
             task_id=task_id,
-            from_status=task.status,
+            from_status=from_status,
             to_status=TaskStatus.IN_PROGRESS,
         )
-    elif task.status is not TaskStatus.IN_PROGRESS:
+        from_status = TaskStatus.IN_PROGRESS
+    elif from_status not in FAILABLE_STATUSES:
         logger.warning(
             "task_not_failed_unexpected_status",
             task_id=str(task_id),
@@ -236,7 +276,7 @@ async def fail_task_after_error(
     await transition_task_status(
         db_session,
         task_id=task_id,
-        from_status=TaskStatus.IN_PROGRESS,
+        from_status=from_status,
         to_status=TaskStatus.FAILED,
         failed_order_index=await first_unfinished_order_index(db_session, task_id),
     )

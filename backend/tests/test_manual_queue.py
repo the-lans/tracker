@@ -1,9 +1,11 @@
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
+from claude_agent_sdk import Message
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +35,12 @@ from services.manual_queue import (
     enqueue_library_prompt_run,
     expire_stale_manual_queue_requests,
     process_manual_queue_once,
+)
+from services.task_control import (
+    TaskControlCommand,
+    is_manual_stop_requested,
+    request_manual_stop,
+    request_task_control,
 )
 from tests.fakes import FakeClaudeAgentClient, make_result_message
 
@@ -415,3 +423,171 @@ async def test_expire_stale_manual_queue_requests_ignores_non_queued(
     )
 
     assert expired_ids == []
+
+
+async def _enqueue_library_run(
+    db_session: AsyncSession,
+) -> tuple[Task, TaskLibraryPrompt, TaskManualRequestQueue]:
+    task, user_id = await _make_task(db_session)
+    node = await _make_library_node(db_session)
+    task_library_prompt = TaskLibraryPrompt(task_id=task.id, node_id=node.id, added_by=user_id)
+    db_session.add(task_library_prompt)
+    await db_session.flush()
+    request = await enqueue_library_prompt_run(
+        db_session,
+        task_library_prompt=task_library_prompt,
+        node=node,
+        requested_by=user_id,
+    )
+    return task, task_library_prompt, request
+
+
+async def test_library_prompt_is_marked_running_while_executing(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    redis_client: Redis,
+) -> None:
+    task, task_library_prompt, _request = await _enqueue_library_run(db_session)
+    seen: list[LibraryPromptRunStatus] = []
+
+    async def record_status() -> None:
+        seen.append(task_library_prompt.last_run_status)
+
+    fake = FakeClaudeAgentClient(
+        messages_per_query=[[make_result_message()]],
+        on_query=record_status,
+    )
+
+    await process_manual_queue_once(
+        db_session,
+        task=task,
+        claude_session=ClaudeCodeSession(fake),
+        repos_path=tmp_path,
+        redis_client=redis_client,
+    )
+
+    assert seen == [LibraryPromptRunStatus.RUNNING]
+    assert task_library_prompt.last_run_status is LibraryPromptRunStatus.SUCCESS
+
+
+@pytest.mark.parametrize("stop_whole_task", [False, True])
+async def test_stop_button_interrupts_running_library_prompt(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    redis_client: Redis,
+    stop_whole_task: bool,
+) -> None:
+    """Раздел 7.3: ■ для running-промта; раздел 14.2: «Остановить» задачу
+    прерывает и выполняющийся ручной запрос."""
+    task, task_library_prompt, request = await _enqueue_library_run(db_session)
+    fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+    fake.message_delay_seconds = 30
+
+    async def press_stop() -> None:
+        await asyncio.sleep(0.3)
+        if stop_whole_task:
+            await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+        else:
+            await request_manual_stop(redis_client, task.id, request.id)
+        fake.message_delay_seconds = 0
+
+    presser = asyncio.ensure_future(press_stop())
+    processed = await asyncio.wait_for(
+        process_manual_queue_once(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            redis_client=redis_client,
+        ),
+        timeout=10,
+    )
+    await presser
+
+    assert processed == 1
+    assert fake.interrupted is True
+    assert task_library_prompt.last_run_status is LibraryPromptRunStatus.STOPPED
+    assert request.status is ManualRequestStatus.DONE
+    logs = await _node_logs_for(db_session, task.id)
+    assert [log.status for log in logs] == [NodeLogStatus.STOPPED]
+    assert not await is_manual_stop_requested(redis_client, task.id, request.id)
+
+
+async def test_stop_button_interrupts_running_freeform_prompt(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    redis_client: Redis,
+) -> None:
+    task, user_id = await _make_task(db_session)
+    request = await enqueue_freeform_prompt_run(
+        db_session,
+        task_id=task.id,
+        raw_prompt_text="долгий вопрос",
+        requested_by=user_id,
+    )
+    fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+    fake.message_delay_seconds = 30
+
+    async def press_stop() -> None:
+        await asyncio.sleep(0.3)
+        await request_manual_stop(redis_client, task.id, request.id)
+        fake.message_delay_seconds = 0
+
+    presser = asyncio.ensure_future(press_stop())
+    await asyncio.wait_for(
+        process_manual_queue_once(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            redis_client=redis_client,
+        ),
+        timeout=10,
+    )
+    await presser
+
+    logs = await _node_logs_for(db_session, task.id)
+    assert [log.status for log in logs] == [NodeLogStatus.STOPPED]
+
+
+class TestQueueAfterTaskStop:
+    async def test_keeps_rest_queued(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        redis_client: Redis,
+    ) -> None:
+        """
+        «Остановить» задачу не должно отправлять агенту каждый оставшийся
+        запрос только затем, чтобы тут же его прервать.
+        """
+        task, user_id = await _make_task(db_session)
+        requests = [
+            await enqueue_freeform_prompt_run(
+                db_session,
+                task_id=task.id,
+                raw_prompt_text=f"q{index}",
+                requested_by=user_id,
+            )
+            for index in range(3)
+        ]
+        await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+        fake = FakeClaudeAgentClient(messages_per_query=_results_for(3))
+
+        processed = await process_manual_queue_once(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            redis_client=redis_client,
+        )
+
+        assert processed == 0
+        assert fake.queries == []
+        assert fake.interrupted is False
+        assert [request.status for request in requests] == [ManualRequestStatus.QUEUED] * 3
+        assert await _node_logs_for(db_session, task.id) == []
+
+
+def _results_for(count: int) -> list[list[Message]]:
+    return [[make_result_message()] for _ in range(count)]

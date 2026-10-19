@@ -25,12 +25,15 @@ from api.schemas import (
     ManualRequestResponse,
     NodeLogResponse,
     TaskCreateRequest,
+    TaskLibraryPromptListItem,
     TaskLibraryPromptResponse,
+    TaskNodeResponse,
+    TaskNodeUpdateRequest,
     TaskRepositoryResponse,
     TaskResponse,
     TaskUpdateRequest,
 )
-from db.models.enums import NodeLogStatus, TaskStatus
+from db.models.enums import ManualRequestStatus, NodeLogStatus, TaskStatus
 from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, TaskNode
@@ -39,13 +42,15 @@ from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from db.session import get_session
-from services.errors import NotFoundError, ValidationError
+from services.errors import ConflictError, NotFoundError, ValidationError
 from services.manual_queue import (
     cancel_manual_request,
     enqueue_freeform_prompt_run,
     enqueue_library_prompt_run,
 )
 from services.plan_mode import encode_decision
+from services.task_control import TaskControlCommand, request_manual_stop, request_task_control
+from services.task_nodes import list_task_nodes, set_task_node_enabled
 from services.task_signal import publish_task_signal
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name, load_task_repositories
@@ -63,6 +68,25 @@ async def _get_task_or_404(db_session: AsyncSession, task_id: uuid.UUID) -> Task
     if task is None:
         raise NotFoundError(f"Задача {task_id} не найдена")
     return task
+
+
+# Раздел 8.2: ручные промты — «пока сессия активна»; воркер, владеющий
+# сессией, существует ровно в этих статусах.
+_SESSION_ACTIVE_STATUSES = frozenset(
+    {
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.PAUSED,
+        TaskStatus.PLAN_REVIEW,
+        TaskStatus.AWAITING_INPUT,
+        TaskStatus.REBASE_CONFLICT,
+    },
+)
+_ACTIVE_REQUEST_STATUSES = (ManualRequestStatus.QUEUED, ManualRequestStatus.PROCESSING)
+
+
+def _require_status(task: Task, allowed: frozenset[TaskStatus], message: str) -> None:
+    if task.status not in allowed:
+        raise ConflictError(message)
 
 
 async def _ensure_exists(
@@ -270,6 +294,116 @@ async def restart_task(
     return task
 
 
+async def _send_task_control(task_id: uuid.UUID, command: TaskControlCommand) -> None:
+    redis_client = _get_redis_client()
+    try:
+        await request_task_control(redis_client, task_id, command)
+    finally:
+        await redis_client.aclose()
+
+
+@router.post("/{task_id}/pause", status_code=202)
+async def pause_task(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    """Раздел 14.2 «Приостановить»: текущая нода дорабатывает, следующая
+    не начинается — статус `paused` выставит воркер, владеющий сессией."""
+    task = await _get_task_or_404(db_session, task_id)
+    _require_status(
+        task,
+        frozenset({TaskStatus.IN_PROGRESS}),
+        "Приостановить можно только выполняющуюся задачу",
+    )
+    await _send_task_control(task_id, TaskControlCommand.PAUSE)
+
+
+@router.post("/{task_id}/resume", status_code=202)
+async def resume_task(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    task = await _get_task_or_404(db_session, task_id)
+    _require_status(task, frozenset({TaskStatus.PAUSED}), "Задача не на паузе")
+    await _send_task_control(task_id, TaskControlCommand.RESUME)
+
+
+@router.post("/{task_id}/stop", status_code=202)
+async def stop_task(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    """Раздел 14.2 «Остановить»: текущее обращение к сессии прерывается,
+    задача переходит в `failed` и перезапускается штатной кнопкой."""
+    task = await _get_task_or_404(db_session, task_id)
+    _require_status(
+        task,
+        frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
+        "Остановить можно только выполняющуюся или приостановленную задачу",
+    )
+    await _send_task_control(task_id, TaskControlCommand.STOP)
+
+
+@router.post("/{task_id}/cancel", response_model=TaskResponse)
+async def cancel_queued_task(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """Раздел 14.2 «Отменить постановку»: `queued -> new`. Celery-таск,
+    уже стоящий в очереди, проиграет compare-and-swap захвата и ничего не
+    сделает. Автозапуск выключается — иначе ближайшая проверка расписания
+    (раздел 12.2) поставила бы задачу в очередь снова."""
+    await _get_task_or_404(db_session, task_id)
+    try:
+        updated = await transition_task_status(
+            db_session,
+            task_id=task_id,
+            from_status=TaskStatus.QUEUED,
+            to_status=TaskStatus.NEW,
+            extra_values={"auto_start_enabled": False},
+        )
+    except ConflictError as exc:
+        raise ConflictError("Задача уже не в очереди — сессия запущена или отменена") from exc
+    await db_session.refresh(updated)
+    return updated
+
+
+@router.get("/{task_id}/nodes", response_model=list[TaskNodeResponse])
+async def list_nodes_of_task(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> list[TaskNodeResponse]:
+    task = await _get_task_or_404(db_session, task_id)
+    return [
+        TaskNodeResponse.model_validate(view) for view in await list_task_nodes(db_session, task)
+    ]
+
+
+@router.patch("/{task_id}/nodes/{task_node_id}", response_model=TaskNodeResponse)
+async def update_task_node(
+    task_id: uuid.UUID,
+    task_node_id: uuid.UUID,
+    body: TaskNodeUpdateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> TaskNodeResponse:
+    """Раздел 13.1, 13.2 (правило 11 CLAUDE.md)."""
+    task = await _get_task_or_404(db_session, task_id)
+    await set_task_node_enabled(
+        db_session,
+        task=task,
+        task_node_id=task_node_id,
+        is_enabled=body.is_enabled,
+    )
+    views = await list_task_nodes(db_session, task)
+    return TaskNodeResponse.model_validate(next(v for v in views if v.id == task_node_id))
+
+
 @router.get("/{task_id}/node-logs", response_model=list[NodeLogResponse])
 async def list_node_logs(
     task_id: uuid.UUID,
@@ -320,7 +454,8 @@ async def submit_freeform_prompt(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> ManualRequestResponse:
-    await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id)
+    _require_status(task, _SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
     request = await enqueue_freeform_prompt_run(
         db_session,
         task_id=task_id,
@@ -368,7 +503,8 @@ async def run_library_prompt(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> ManualRequestResponse:
-    await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id)
+    _require_status(task, _SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
     task_library_prompt = await db_session.get(TaskLibraryPrompt, task_library_prompt_id)
     if task_library_prompt is None or task_library_prompt.task_id != task_id:
         raise NotFoundError(f"Промт {task_library_prompt_id} не найден у этой задачи")
@@ -384,6 +520,94 @@ async def run_library_prompt(
     )
     await _publish_signal(task_id)
     return ManualRequestResponse.model_validate(request)
+
+
+@router.get("/{task_id}/library-prompts", response_model=list[TaskLibraryPromptListItem])
+async def list_library_prompts_of_task(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> list[TaskLibraryPromptListItem]:
+    """Раздел 7.3, 15.2: таблица системных промтов задачи."""
+    await _get_task_or_404(db_session, task_id)
+    stmt = (
+        sa.select(TaskLibraryPrompt, Node)
+        .join(Node, Node.id == TaskLibraryPrompt.node_id)
+        .where(TaskLibraryPrompt.task_id == task_id)
+        .order_by(TaskLibraryPrompt.added_at)
+    )
+    rows = (await db_session.execute(stmt)).all()
+    active_stmt = (
+        sa.select(TaskManualRequestQueue.node_id, TaskManualRequestQueue.id)
+        .where(
+            TaskManualRequestQueue.task_id == task_id,
+            TaskManualRequestQueue.node_id.is_not(None),
+            TaskManualRequestQueue.status.in_(_ACTIVE_REQUEST_STATUSES),
+        )
+        .order_by(TaskManualRequestQueue.requested_at)
+    )
+    # Самый старый активный запрос промта — тот, что выполнится (или
+    # выполняется) первым: его и останавливает кнопка ■.
+    active_by_node: dict[uuid.UUID, uuid.UUID] = {}
+    for node_id, request_id in (await db_session.execute(active_stmt)).all():
+        if node_id is not None:
+            active_by_node.setdefault(node_id, request_id)
+    return [
+        TaskLibraryPromptListItem(
+            id=task_library_prompt.id,
+            node_id=node.id,
+            last_run_status=task_library_prompt.last_run_status,
+            last_run_at=task_library_prompt.last_run_at,
+            name=node.name,
+            node_type=node.node_type,
+            active_request_id=active_by_node.get(node.id),
+        )
+        for task_library_prompt, node in rows
+    ]
+
+
+@router.get("/{task_id}/manual-queue", response_model=list[ManualRequestResponse])
+async def list_active_manual_requests(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> list[TaskManualRequestQueue]:
+    """Раздел 15.2: индикатор «В очереди» — запросы, ещё не завершённые."""
+    await _get_task_or_404(db_session, task_id)
+    stmt = (
+        sa.select(TaskManualRequestQueue)
+        .where(
+            TaskManualRequestQueue.task_id == task_id,
+            TaskManualRequestQueue.status.in_(_ACTIVE_REQUEST_STATUSES),
+        )
+        .order_by(TaskManualRequestQueue.requested_at)
+    )
+    return list((await db_session.execute(stmt)).scalars().all())
+
+
+@router.post("/{task_id}/manual-queue/{request_id}/stop", status_code=202)
+async def stop_manual_request(
+    task_id: uuid.UUID,
+    request_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    """Кнопка ■ (раздел 7.3): для `queued` — отмена из очереди, для
+    выполняющегося запроса — прерывание силами воркера."""
+    await _get_task_or_404(db_session, task_id)
+    request = await db_session.get(TaskManualRequestQueue, request_id)
+    if request is None or request.task_id != task_id:
+        raise NotFoundError(f"Запрос {request_id} не найден у этой задачи")
+    if request.status is ManualRequestStatus.QUEUED:
+        await cancel_manual_request(db_session, request)
+        return
+    if request.status is not ManualRequestStatus.PROCESSING:
+        raise ConflictError("Запрос уже завершён — останавливать нечего")
+    redis_client = _get_redis_client()
+    try:
+        await request_manual_stop(redis_client, task_id, request_id)
+    finally:
+        await redis_client.aclose()
 
 
 @router.delete("/{task_id}/manual-queue/{request_id}", status_code=204)

@@ -21,6 +21,7 @@ API-эндпоинт (этап 12 плана), который АТОМАРНО �
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -176,6 +177,39 @@ async def _read_resolution(db_session: AsyncSession, *, node_log_id: uuid.UUID) 
     return node_log.user_input_text
 
 
+async def _wait_for_resolution(
+    *,
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+    redis_client: Redis,
+    task_id: uuid.UUID,
+    node_log_id: uuid.UUID,
+    timeout: float | None,
+) -> str | None:
+    """Ждёт записанного решения; `None` — истёк ``timeout``.
+
+    Канал сигналов у задачи один на всё (раздел 7.3: постановка ручного
+    запроса, команды управления тоже будят его) — сигнал сам по себе не
+    означает решения, поэтому после каждого пробуждения решение
+    перечитывается, а ожидание продолжается до дедлайна. Читать решение
+    ДО первого сигнала нельзя: после «Доработать план» в записи остаётся
+    прошлое решение, и следующий `ExitPlanMode` той же ноды принял бы его
+    за новое.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = None if timeout is None else loop.time() + timeout
+    while True:
+        remaining = None if deadline is None else deadline - loop.time()
+        if remaining is not None and remaining <= 0:
+            return None
+        if not await wait_for_task_signal(redis_client, task_id, timeout=remaining):
+            return None
+        async with session_factory() as db_session:
+            resolution = await _read_resolution(db_session, node_log_id=node_log_id)
+        if resolution is not None:
+            return resolution
+        logger.info("decision_wait_woken_without_resolution", node_log_id=str(node_log_id))
+
+
 async def _record_plan_auto_accept(
     db_session: AsyncSession,
     *,
@@ -264,15 +298,13 @@ def build_can_use_tool_callback(
             tool_name=tool_name,
         )
 
-        received = await wait_for_task_signal(
-            redis_client,
-            context.task_id,
+        resolution = await _wait_for_resolution(
+            session_factory=session_factory,
+            redis_client=redis_client,
+            task_id=context.task_id,
+            node_log_id=context.node_log_id,
             timeout=decision_wait_timeout_seconds,
         )
-        resolution: str | None = None
-        if received:
-            async with session_factory() as db_session:
-                resolution = await _read_resolution(db_session, node_log_id=context.node_log_id)
         if resolution is None:
             return PermissionResultDeny(message="Истекло время ожидания решения пользователя")
 

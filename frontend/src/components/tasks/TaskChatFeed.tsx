@@ -4,9 +4,17 @@ import { NodeLogEntry } from "@/components/tasks/NodeLogEntry";
 import { Composer } from "@/components/tasks/Composer";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { NodeLog } from "@/lib/types";
+import type { NodeLog, TaskStatus } from "@/lib/types";
 
-export function TaskChatFeed({ taskId, nodeLogs }: { taskId: string; nodeLogs: NodeLog[] }) {
+export function TaskChatFeed({
+  taskId,
+  taskStatus,
+  nodeLogs,
+}: {
+  taskId: string;
+  taskStatus: TaskStatus;
+  nodeLogs: NodeLog[];
+}) {
   const [fullscreen, setFullscreen] = useState(false);
   const feedRef = useRef<HTMLDivElement>(null);
   const previousLength = useRef(0);
@@ -45,7 +53,7 @@ export function TaskChatFeed({ taskId, nodeLogs }: { taskId: string; nodeLogs: N
         ))}
       </div>
 
-      <Composer taskId={taskId} />
+      <Composer taskId={taskId} taskStatus={taskStatus} />
     </div>
   );
 }

@@ -1,8 +1,10 @@
+import asyncio
 import uuid
 from pathlib import Path
 
 import sqlalchemy as sa
 from claude_agent_sdk import AssistantMessage, TextBlock
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.claude_agent import ClaudeCodeSession
@@ -12,10 +14,13 @@ from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
 from db.models.users import User
 from services.pipeline_orchestrator import (
+    CheckpointDecision,
+    StopGuard,
     compute_retry_delay_seconds,
     run_pipeline,
 )
 from services.plan_mode import ActiveNodeContext
+from services.task_control import TaskControlCommand, request_task_control
 from tests.fakes import FakeClaudeAgentClient, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
@@ -388,3 +393,95 @@ async def test_run_pipeline_saves_session_id_after_first_turn(
     # Раздел 6.1: без сохранённого session_id перезапуск не смог бы продолжить сессию.
     await db_session.refresh(task)
     assert task.session_id == "sess-new"
+
+
+async def test_checkpoint_runs_before_each_enabled_node_and_can_stop(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    task = await _make_task_with_pipeline(db_session)
+    await _add_node(
+        db_session, task, order_index=0, node_type=NodeType.PLAIN_PROMPT, prompt_template="шаг 0"
+    )
+    await _add_node(
+        db_session,
+        task,
+        order_index=1,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="отключён",
+        is_enabled=False,
+    )
+    await _add_node(
+        db_session, task, order_index=2, node_type=NodeType.PLAIN_PROMPT, prompt_template="шаг 2"
+    )
+    fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+    seen: list[int] = []
+
+    async def checkpoint(order_index: int) -> CheckpointDecision:
+        seen.append(order_index)
+        return CheckpointDecision.STOP if order_index == 2 else CheckpointDecision.CONTINUE
+
+    outcome = await run_pipeline(
+        db_session,
+        task=task,
+        claude_session=ClaudeCodeSession(fake),
+        repos_path=tmp_path,
+        checkpoint=checkpoint,
+    )
+
+    assert seen == [0, 2]
+    assert fake.queries == ["шаг 0"]
+    assert outcome.stopped is True
+    assert outcome.completed is False
+    assert outcome.failed_order_index == 2
+
+
+async def test_stop_during_node_marks_it_stopped_without_retry(
+    db_session: AsyncSession,
+    redis_client: Redis,
+    tmp_path: Path,
+) -> None:
+    task = await _make_task_with_pipeline(db_session)
+    await _add_node(
+        db_session,
+        task,
+        order_index=0,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="долгий шаг",
+        max_retries=3,
+    )
+    await _add_node(
+        db_session,
+        task,
+        order_index=1,
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="не дойдёт",
+    )
+    fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+    fake.message_delay_seconds = 30
+
+    async def press_stop() -> None:
+        await asyncio.sleep(0.3)
+        await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+        # Хвост прерванного хода CLI присылает сразу после interrupt().
+        fake.message_delay_seconds = 0
+
+    presser = asyncio.ensure_future(press_stop())
+    outcome = await asyncio.wait_for(
+        run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            stop_guard=StopGuard(redis_client=redis_client, task_id=task.id),
+        ),
+        timeout=10,
+    )
+    await presser
+
+    assert outcome.stopped is True
+    assert outcome.failed_order_index == 0
+    assert fake.queries == ["долгий шаг"]
+    assert fake.interrupted is True
+    logs = await _node_logs_for(db_session, task.id)
+    assert [log.status for log in logs] == [NodeLogStatus.STOPPED]
