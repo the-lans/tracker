@@ -1,43 +1,38 @@
 import { useState } from "react";
-import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
+import { Braces, Eye, EyeOff, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  useCreateEnvVariable,
-  useDeleteEnvVariable,
-  useEnvVariables,
-  useRevealEnvVariable,
-} from "@/hooks/useEnvVariables";
-import { useRepositories } from "@/hooks/useRepositories";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { EnvVariableForm } from "@/components/envVariables/EnvVariableForm";
+import { useDeleteEnvVariable, useEnvVariables, useRevealEnvVariable } from "@/hooks/useEnvVariables";
 import { ApiError } from "@/lib/apiClient";
-import { EnvVariableScope } from "@/lib/types";
+import { EnvVariableScope, type EnvVariable } from "@/lib/types";
+import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
+import { EditButton } from "@/components/common/actions/EditButton";
+import { ENV_SCOPE_LABEL } from "@/lib/labels";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
 
 function RevealValue({ envVariableId }: { envVariableId: string }) {
   const [value, setValue] = useState<string | null>(null);
   const reveal = useRevealEnvVariable();
 
   if (value !== null) {
-    return <span className="font-mono text-[12px]">{value}</span>;
+    return (
+      <span className="min-w-0 max-w-[45%] truncate font-mono text-small" title={value}>
+        {value}
+      </span>
+    );
   }
 
   return (
     <button
       type="button"
-      className="inline-flex items-center gap-1 text-[12px] font-bold text-accent"
+      className="touch-target inline-flex shrink-0 items-center gap-1 text-small font-bold text-accent"
       onClick={() =>
         reveal.mutate(envVariableId, {
           onSuccess: (data) => setValue(data.value),
@@ -53,161 +48,84 @@ function RevealValue({ envVariableId }: { envVariableId: string }) {
 
 export function EnvVariablesPage() {
   const { data: envVariables, isLoading } = useEnvVariables();
-  const { data: repositories } = useRepositories();
-  const createEnvVariable = useCreateEnvVariable();
   const deleteEnvVariable = useDeleteEnvVariable();
-  const [open, setOpen] = useState(false);
-  const [key, setKey] = useState("");
-  const [value, setValue] = useState("");
-  const [isSecret, setIsSecret] = useState(true);
-  const [scope, setScope] = useState<EnvVariableScope>(EnvVariableScope.GLOBAL);
-  const [repositoryId, setRepositoryId] = useState<string>("");
-
-  function handleCreate() {
-    createEnvVariable.mutate(
-      {
-        key,
-        value,
-        is_secret: isSecret,
-        scope,
-        repository_id: scope === EnvVariableScope.REPOSITORY ? repositoryId : undefined,
-      },
-      {
-        onSuccess: () => {
-          setOpen(false);
-          setKey("");
-          setValue("");
-        },
-        onError: (error) => {
-          toast.error(error instanceof ApiError ? error.message : "Не удалось создать переменную");
-        },
-      },
-    );
-  }
+  const [dialogVariable, setDialogVariable] = useState<EnvVariable | "new" | null>(null);
+  // Раскрытое значение после правки устарело бы — сохранение сбрасывает все раскрытые.
+  const [savedCount, setSavedCount] = useState(0);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className={PAGE_ROOT}>
       <PageHeader
         title="Переменные окружения"
         actions={
-          <Button onClick={() => setOpen(true)}>
+          <Button onClick={() => setDialogVariable("new")}>
             <Plus className="size-4" /> Переменная
           </Button>
         }
       />
-      <div className="min-h-0 flex-1 overflow-auto px-5 pb-8 lg:px-8">
-        {isLoading && <div className="text-text-3">Загрузка…</div>}
+      <div className={PAGE_BODY}>
+        {isLoading && <LoadingState />}
+        {!isLoading && (envVariables ?? []).length === 0 && (
+          <EmptyState
+            icon={Braces}
+            title="Переменных окружения пока нет"
+            hint="Нажмите «+ Переменная» вверху справа. Глобальная переменная доступна во всех задачах, переменная репозитория — в задачах с этим репозиторием. В промтах она подставляется как {{env.ИМЯ}}."
+          />
+        )}
         <div className="flex flex-col gap-2">
           {(envVariables ?? []).map((envVariable) => (
             <Card key={envVariable.id} className="flex items-center gap-3">
               <div className="min-w-0 flex-1">
-                <div className="font-mono text-[13px] font-bold">{envVariable.key}</div>
-                <div className="mt-0.5 flex items-center gap-2">
+                <div className="truncate font-mono text-body font-bold" title={envVariable.key}>
+                  {envVariable.key}
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                   <Badge tone={envVariable.scope === EnvVariableScope.GLOBAL ? "info" : "neutral"}>
-                    {envVariable.scope}
+                    {ENV_SCOPE_LABEL[envVariable.scope]}
                   </Badge>
                   {envVariable.is_secret && (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-text-3">
+                    <span className="inline-flex items-center gap-1 text-caption text-text-3">
                       <EyeOff className="size-3" /> секрет
                     </span>
                   )}
                 </div>
               </div>
-              <RevealValue envVariableId={envVariable.id} />
-              <button
-                type="button"
-                onClick={() =>
+              <RevealValue key={`${envVariable.id}-${savedCount}`} envVariableId={envVariable.id} />
+              <EditButton name={envVariable.key} onClick={() => setDialogVariable(envVariable)} />
+              <ConfirmDeleteButton
+                kind="переменную окружения"
+                name={envVariable.key}
+                pending={deleteEnvVariable.isPending}
+                onConfirm={() =>
                   deleteEnvVariable.mutate(envVariable.id, {
                     onError: (error) =>
                       toast.error(
                         error instanceof ApiError ? error.message : "Не удалось удалить",
                       ),
-                  })
-                }
-                className="touch-target flex items-center justify-center text-text-3 hover:text-danger"
-                aria-label="Удалить"
-              >
-                <Trash2 className="size-4" />
-              </button>
+                  })}
+              />
             </Card>
           ))}
         </div>
       </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={dialogVariable !== null} onOpenChange={(open) => !open && setDialogVariable(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Новая переменная окружения</DialogTitle>
+            <DialogTitle>
+              {dialogVariable === "new" ? "Новая переменная окружения" : "Редактировать переменную"}
+            </DialogTitle>
           </DialogHeader>
-          <div className="flex flex-col gap-3">
-            <div>
-              <Label htmlFor="env-key">Ключ</Label>
-              <Input
-                id="env-key"
-                placeholder="GITLAB_API_TOKEN"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label htmlFor="env-value">Значение</Label>
-              <Input
-                id="env-value"
-                type="password"
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label>Область видимости</Label>
-              <Select value={scope} onValueChange={(v) => setScope(v as EnvVariableScope)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={EnvVariableScope.GLOBAL}>global</SelectItem>
-                  <SelectItem value={EnvVariableScope.REPOSITORY}>repository</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {scope === EnvVariableScope.REPOSITORY && (
-              <div>
-                <Label>Репозиторий</Label>
-                <Select value={repositoryId} onValueChange={setRepositoryId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Выберите репозиторий" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(repositories ?? []).map((repository) => (
-                      <SelectItem key={repository.id} value={repository.id}>
-                        {repository.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            <label className="flex items-center gap-2 text-[13px] font-semibold">
-              <Checkbox checked={isSecret} onCheckedChange={(v) => setIsSecret(v === true)} />
-              Секретное значение
-            </label>
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setOpen(false)}>
-              Отмена
-            </Button>
-            <Button
-              onClick={handleCreate}
-              disabled={
-                !key ||
-                !value ||
-                (scope === EnvVariableScope.REPOSITORY && !repositoryId) ||
-                createEnvVariable.isPending
-              }
-            >
-              Создать
-            </Button>
-          </DialogFooter>
+          {dialogVariable !== null && (
+            <EnvVariableForm
+              envVariable={dialogVariable === "new" ? undefined : dialogVariable}
+              onSaved={() => {
+                setDialogVariable(null);
+                setSavedCount((count) => count + 1);
+              }}
+              onCancel={() => setDialogVariable(null)}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

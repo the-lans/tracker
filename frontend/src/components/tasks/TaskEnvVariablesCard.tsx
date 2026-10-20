@@ -8,6 +8,7 @@ import { TaskEnvVariableRow } from "@/components/tasks/TaskEnvVariableRow";
 import { useCreateTaskEnvVariable, useTaskEnvVariables } from "@/hooks/useTaskEnvVariables";
 import { ApiError } from "@/lib/apiClient";
 import { TaskStatus, type Task } from "@/lib/types";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
 
 /** Раздел 5, 15.2: переменные уровня задачи — приоритет над репозиторием и
  * глобальными; подставляются в момент отправки, поэтому меняются и во время
@@ -52,9 +53,11 @@ export function TaskEnvVariablesCard({ task }: { task: Task }) {
           ))}
         </div>
       ) : (
-        <div className="text-[12.5px] text-text-3">
-          Не заданы — {"{{env.*}}"} берётся из репозиториев и глобальных переменных
-        </div>
+        <EmptyState
+          compact
+          title="Переменных задачи нет"
+          hint="Добавьте ключ и значение ниже — переменная задачи заменит одноимённую переменную репозитория или глобальную. В промтах она подставляется как {{env.ИМЯ}}."
+        />
       )}
       {!readOnly && (
         <form onSubmit={handleAdd} className="mt-2 flex flex-col gap-2">

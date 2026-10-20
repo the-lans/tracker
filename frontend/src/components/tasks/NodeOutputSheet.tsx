@@ -2,30 +2,37 @@ import { Copy, Download } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { STATUS_LABEL, STATUS_TONE, TRIGGER_LABEL } from "@/components/tasks/nodeLogLabels";
+import { NODE_LOG_STATUS_LABEL, NODE_LOG_STATUS_TONE, NODE_LOG_TRIGGER_LABEL } from "@/lib/labels";
 import { copyText, downloadText } from "@/lib/textExport";
-import { formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
+import { ScriptOutputText } from "@/components/tasks/ScriptOutputText";
+import { AgentMessageText } from "@/components/tasks/AgentMessageText";
+import { describeUserInput } from "@/lib/userInput";
 import type { NodeLog } from "@/lib/types";
+
+type SectionView = "plain" | "agent" | "script";
 
 interface OutputSection {
   title: string;
   text: string;
+  view: SectionView;
 }
 
 function sectionsOf(log: NodeLog): OutputSection[] {
-  const sections: Array<[string, string | null]> = [
-    ["Промт", log.rendered_prompt],
-    ["План", log.pending_plan_text],
-    ["Ответ LLM", log.llm_output_text],
+  const sections: Array<[string, string | null, SectionView]> = [
+    ["Промт", log.rendered_prompt, "plain"],
+    ["План", log.pending_plan_text, "agent"],
+    ["Ответ LLM", log.llm_output_text, "agent"],
     [
       log.script_exit_code === null ? "Вывод скрипта" : `Вывод скрипта (код ${log.script_exit_code})`,
       log.script_stdout,
+      "script",
     ],
-    ["Ввод пользователя", log.user_input_text],
+    ["Ввод пользователя", log.user_input_text ? describeUserInput(log).text : null, "plain"],
   ];
   return sections
-    .filter((section): section is [string, string] => Boolean(section[1]))
-    .map(([title, text]) => ({ title, text }));
+    .filter((section): section is [string, string, SectionView] => Boolean(section[1]))
+    .map(([title, text, view]) => ({ title, text, view }));
 }
 
 /** Раздел 15.2, 15.3: полный вывод одной записи — боковая панель на
@@ -46,11 +53,11 @@ export function NodeOutputSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="md:inset-y-0 md:left-auto md:right-0 md:top-0 md:h-dvh md:max-h-none md:w-[560px] md:rounded-none md:border-l md:border-t-0">
-        <SheetTitle className="pr-10 text-[15px] font-extrabold">{title}</SheetTitle>
-        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11.5px] text-text-3">
-          <Badge tone={STATUS_TONE[log.status]}>{STATUS_LABEL[log.status]}</Badge>
-          <span>{TRIGGER_LABEL[log.trigger_type]}</span>
+      <SheetContent className="md:[&>[data-sheet-handle]]:hidden md:inset-y-0 md:left-auto md:right-0 md:top-0 md:h-dvh md:max-h-none md:w-[560px] md:rounded-none md:border-l md:border-t-0">
+        <SheetTitle className="pr-10 text-subtitle font-extrabold">{title}</SheetTitle>
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-meta text-text-3">
+          <Badge tone={NODE_LOG_STATUS_TONE[log.status]}>{NODE_LOG_STATUS_LABEL[log.status]}</Badge>
+          <span>{NODE_LOG_TRIGGER_LABEL[log.trigger_type]}</span>
           <span>попытка {log.attempt_number}</span>
           <span>{formatDateTime(log.started_at)}</span>
         </div>
@@ -68,14 +75,23 @@ export function NodeOutputSheet({
           </Button>
         </div>
         <div className="mt-4 flex flex-col gap-4">
-          {sections.length === 0 && <div className="text-[12.5px] text-text-3">Вывода нет</div>}
+          {sections.length === 0 && <div className="text-note text-text-3">Вывода нет</div>}
           {sections.map((section) => (
             <section key={section.title}>
-              <div className="mb-1 text-[11px] font-extrabold uppercase tracking-wider text-text-3">
+              <div className="mb-1 text-caption font-extrabold uppercase tracking-wider text-text-3">
                 {section.title}
               </div>
-              <div className="whitespace-pre-wrap rounded-lg bg-surface-2 p-3 font-mono text-[12px] leading-relaxed">
-                {section.text}
+              <div
+                className={cn(
+                  "whitespace-pre-wrap rounded-lg p-3 leading-relaxed [overflow-wrap:anywhere]",
+                  section.view === "agent" ? "bg-surface-2 text-body" : "font-mono text-small",
+                  section.view === "script" && "border border-term-border bg-term-bg text-term-fg",
+                  section.view === "plain" && "bg-surface-2",
+                )}
+              >
+                {section.view === "script" && <ScriptOutputText text={section.text} />}
+                {section.view === "agent" && <AgentMessageText text={section.text} />}
+                {section.view === "plain" && section.text}
               </div>
             </section>
           ))}

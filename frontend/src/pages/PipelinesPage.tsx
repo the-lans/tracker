@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Archive, ArchiveRestore, Plus, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, Plus, Workflow } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,6 +24,10 @@ import {
 } from "@/hooks/usePipelines";
 import { ApiError } from "@/lib/apiClient";
 import type { Pipeline } from "@/lib/types";
+import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
 
 function PipelineArchiveToggle({ pipeline }: { pipeline: Pipeline }) {
   const updatePipeline = useUpdatePipeline(pipeline.id);
@@ -79,16 +84,15 @@ export function PipelinesPage() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className={PAGE_ROOT}>
       <PageHeader
         title="Пайплайны"
         actions={
           <>
-            <label className="flex items-center gap-1.5 text-[12.5px] text-text-2">
-              <input
-                type="checkbox"
+            <label className="flex min-h-11 items-center gap-2.5 text-note text-text-2">
+              <Checkbox
                 checked={includeArchived}
-                onChange={(e) => setIncludeArchived(e.target.checked)}
+                onCheckedChange={(checked) => setIncludeArchived(checked === true)}
               />
               Показать архивные
             </label>
@@ -98,13 +102,20 @@ export function PipelinesPage() {
           </>
         }
       />
-      <div className="min-h-0 flex-1 overflow-auto px-5 pb-8 lg:px-8">
-        {isLoading && <div className="text-text-3">Загрузка…</div>}
+      <div className={PAGE_BODY}>
+        {isLoading && <LoadingState />}
+        {!isLoading && (pipelines ?? []).length === 0 && (
+          <EmptyState
+            icon={Workflow}
+            title={includeArchived ? "Пайплайнов пока нет" : "Активных пайплайнов нет"}
+            hint="Пайплайн — цепочка шагов (нод), которую агент выполняет в задаче. Нажмите «+ Пайплайн» вверху справа, задайте название, затем добавьте ноды: промт, слэш-команду, скрипт, режим планирования или очистку контекста."
+          />
+        )}
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {(pipelines ?? []).map((pipeline) => (
             <Card key={pipeline.id} className="flex items-center gap-2">
-              <Link to={`/pipelines/${pipeline.id}`} className="min-w-0 flex-1">
-                <div className="truncate font-bold">{pipeline.name}</div>
+              <Link to={`/pipelines/${pipeline.id}`} className="flex min-h-11 min-w-0 flex-1 flex-col justify-center">
+                <div className="truncate font-bold" title={pipeline.name}>{pipeline.name}</div>
                 {pipeline.is_archived && (
                   <Badge tone="neutral" className="mt-1">
                     архивирован
@@ -112,14 +123,12 @@ export function PipelinesPage() {
                 )}
               </Link>
               <PipelineArchiveToggle pipeline={pipeline} />
-              <button
-                type="button"
-                onClick={() => handleDelete(pipeline.id)}
-                className="touch-target flex items-center justify-center text-text-3 hover:text-danger"
-                aria-label="Удалить"
-              >
-                <Trash2 className="size-4" />
-              </button>
+              <ConfirmDeleteButton
+                kind="пайплайн"
+                name={pipeline.name}
+                pending={deletePipeline.isPending}
+                onConfirm={() => handleDelete(pipeline.id)}
+              />
             </Card>
           ))}
         </div>

@@ -244,17 +244,6 @@ export function useRunLibraryPrompt(taskId: string) {
   });
 }
 
-export function useCancelManualRequest(taskId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (requestId: string) => api.delete(`/tasks/${taskId}/manual-queue/${requestId}`),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: taskKeys.nodeLogs(taskId) });
-      void queryClient.invalidateQueries({ queryKey: taskKeys.manualQueue(taskId) });
-    },
-  });
-}
-
 /** Раздел 7.3: кнопка ■ — отмена из очереди или прерывание выполняющегося запроса. */
 export function useStopManualRequest(taskId: string) {
   const queryClient = useQueryClient();

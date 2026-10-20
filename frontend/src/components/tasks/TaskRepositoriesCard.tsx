@@ -3,7 +3,9 @@ import { Card, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useRepositories } from "@/hooks/useRepositories";
 import { useTaskRepositories } from "@/hooks/useTasks";
-import { MergeStatus, RepositoryRole } from "@/lib/types";
+import { MergeStatus } from "@/lib/types";
+import { REPOSITORY_ROLE_LABEL } from "@/lib/labels";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
 
 const MERGE_STATUS_LABELS: Record<MergeStatus, string> = {
   [MergeStatus.NOT_PUSHED]: "не запушено",
@@ -30,11 +32,14 @@ export function TaskRepositoriesCard({ taskId }: { taskId: string }) {
               key={taskRepository.id}
               className="flex flex-wrap items-center gap-2 border-t border-border py-2 first:border-t-0"
             >
-              <div className="flex-1 truncate text-[12.5px] font-bold">
+              <div
+                className="min-w-0 flex-1 truncate text-note font-bold"
+                title={namesById.get(taskRepository.repository_id) ?? taskRepository.repository_id}
+              >
                 {namesById.get(taskRepository.repository_id) ?? taskRepository.repository_id}
               </div>
-              <Badge>{taskRepository.role === RepositoryRole.READ_WRITE ? "read-write" : "read-only"}</Badge>
-              <div className="flex w-full items-center gap-1.5 font-mono text-[11.5px] text-text-3">
+              <Badge>{REPOSITORY_ROLE_LABEL[taskRepository.role]}</Badge>
+              <div className="flex w-full items-center gap-1.5 font-mono text-meta text-text-3">
                 <GitBranch className="size-3" />
                 {taskRepository.branch_name} ← {taskRepository.base_branch}
                 <span className="ml-auto font-sans">
@@ -45,7 +50,11 @@ export function TaskRepositoriesCard({ taskId }: { taskId: string }) {
           ))}
         </div>
       ) : (
-        <div className="text-[12.5px] text-text-3">Репозитории не привязаны</div>
+        <EmptyState
+          compact
+          title="Репозитории не привязаны"
+          hint="Репозитории выбираются при создании задачи. Чтобы работать с другим набором, создайте задачу заново или продублируйте эту."
+        />
       )}
     </Card>
   );

@@ -1,6 +1,27 @@
 @import "tailwindcss";
 @import "./styles/tokens.css";
 
+/* Низкий экран (телефон в альбомной ориентации): страница прокручивается
+   целиком, а не делится на закреплённые по высоте панели. */
+@custom-variant short (@media (max-height: 540px));
+
+/* Типографическая шкала: размеры шрифта интерфейса. Только размер —
+   межстрочный интервал наследуется, как у прежних text-[Npx]. */
+@theme {
+  --text-caption: 11px;
+  --text-meta: 11.5px;
+  --text-small: 12px;
+  --text-note: 12.5px;
+  --text-body: 13px;
+  --text-body-lg: 13.5px;
+  --text-lead: 14px;
+  --text-card-title: 14.5px;
+  --text-subtitle: 15px;
+  --text-title: 16px;
+  --text-heading: 17px;
+  --text-display: 22px;
+}
+
 @theme inline {
   --color-bg: var(--bg);
   --color-surface: var(--surface);
@@ -15,6 +36,10 @@
   --color-accent-hov: var(--accent-hov);
   --color-accent-tint: var(--accent-tint);
   --color-accent-border: var(--accent-border);
+  --color-on-accent: var(--on-accent);
+  --color-on-danger: var(--on-danger);
+  --color-avatar-from: var(--avatar-from);
+  --color-avatar-to: var(--avatar-to);
 
   --color-success: var(--success);
   --color-success-tint: var(--success-tint);
@@ -32,6 +57,19 @@
   --color-info: var(--info);
   --color-info-tint: var(--info-tint);
   --color-info-text: var(--info-text);
+
+  --color-term-bg: var(--term-bg);
+  --color-term-border: var(--term-border);
+  --color-term-fg: var(--term-fg);
+  --color-term-muted: var(--term-muted);
+  --color-term-path: var(--term-path);
+  --color-term-number: var(--term-number);
+  --color-term-string: var(--term-string);
+  --color-term-keyword: var(--term-keyword);
+  --color-term-comment: var(--term-comment);
+  --color-term-error: var(--term-error);
+  --color-term-warning: var(--term-warning);
+  --color-term-success: var(--term-success);
 
   --radius-sm: var(--r-sm);
   --radius-md: var(--r-md);
@@ -68,7 +106,34 @@
     min-width: 44px;
   }
 
-  .scrollbar-thin {
-    scrollbar-width: thin;
+  /* Телефон в альбомной ориентации: экономим высоту — зона нажатия 36px
+     (выше минимума WCAG 2.5.8 в 24px). */
+  @media (max-height: 540px) {
+    .touch-target {
+      min-height: 36px;
+      min-width: 36px;
+    }
+  }
+
+  /* Раздел 15.3: зона нажатия не меньше 44×44 для мелких текстовых кнопок,
+     не меняя их размер в вёрстке. */
+  .touch-hit {
+    position: relative;
+  }
+  .touch-hit::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+
+  @media (max-height: 540px) {
+    .touch-hit::after {
+      width: max(100%, 36px);
+      height: max(100%, 36px);
+    }
   }
 }

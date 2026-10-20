@@ -1,11 +1,14 @@
 import { useState, type ReactNode } from "react";
+import { ScrollText } from "lucide-react";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { NodeOutputSheet } from "@/components/tasks/NodeOutputSheet";
-import { STATUS_LABEL, STATUS_TONE, TRIGGER_LABEL } from "@/components/tasks/nodeLogLabels";
+import { NODE_LOG_STATUS_LABEL, NODE_LOG_STATUS_TONE, NODE_LOG_TRIGGER_LABEL } from "@/lib/labels";
 import { useFilteredNodeLogs, useTaskNodes } from "@/hooks/useTasks";
 import { formatDateTime } from "@/lib/utils";
 import { NodeLogStatus, NodeLogTriggerType, type NodeLog } from "@/lib/types";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
 
 const ALL = "all";
 
@@ -22,7 +25,12 @@ function FilterSelect({
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="w-44" aria-label={label}>
+      <SelectTrigger
+        aria-label={label}
+        title={label}
+        // На телефоне — компактная ячейка в строке из трёх фильтров.
+        className="h-9 w-full min-w-0 px-2 text-note sm:h-10 sm:w-44 sm:px-3 sm:text-sm [&>span]:truncate"
+      >
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -49,16 +57,17 @@ export function TaskLogsPanel({ taskId, header }: { taskId: string; header: Reac
     status: status === ALL ? undefined : (status as NodeLogStatus),
     triggerType: triggerType === ALL ? undefined : (triggerType as NodeLogTriggerType),
   });
+  const filtersActive = nodeId !== ALL || status !== ALL || triggerType !== ALL;
   const nodeNames = new Map((taskNodes ?? []).map((node) => [node.node_id, node.name]));
   const titleOf = (log: NodeLog) =>
-    (log.node_id && nodeNames.get(log.node_id)) || TRIGGER_LABEL[log.trigger_type];
+    (log.node_id && nodeNames.get(log.node_id)) || NODE_LOG_TRIGGER_LABEL[log.trigger_type];
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col bg-[#fdfdfe]">
-      <div className="flex items-center justify-between border-b border-border px-6 py-3.5">
+    <div className="flex min-w-0 flex-1 flex-col bg-surface">
+      <div className="hidden items-center justify-between border-b border-border px-6 py-3.5 xl:flex">
         {header}
       </div>
-      <div className="flex flex-wrap gap-2 border-b border-border px-6 py-3">
+      <div className="grid grid-cols-3 gap-1.5 border-b border-border px-3 py-2 sm:flex sm:flex-wrap sm:gap-2 sm:px-6 sm:py-3">
         <FilterSelect
           label="Нода"
           value={nodeId}
@@ -69,7 +78,7 @@ export function TaskLogsPanel({ taskId, header }: { taskId: string; header: Reac
           label="Статус"
           value={status}
           onChange={setStatus}
-          options={Object.values(NodeLogStatus).map((value) => ({ value, label: STATUS_LABEL[value] }))}
+          options={Object.values(NodeLogStatus).map((value) => ({ value, label: NODE_LOG_STATUS_LABEL[value] }))}
         />
         <FilterSelect
           label="Источник"
@@ -77,14 +86,22 @@ export function TaskLogsPanel({ taskId, header }: { taskId: string; header: Reac
           onChange={setTriggerType}
           options={Object.values(NodeLogTriggerType).map((value) => ({
             value,
-            label: TRIGGER_LABEL[value],
+            label: NODE_LOG_TRIGGER_LABEL[value],
           }))}
         />
       </div>
-      <div className="min-h-0 flex-1 overflow-auto px-6 py-3">
-        {isLoading && <div className="text-text-3">Загрузка…</div>}
+      <div className="min-h-0 flex-1 overflow-auto px-6 py-3 short:flex-none short:overflow-visible">
+        {isLoading && <LoadingState />}
         {!isLoading && (logs ?? []).length === 0 && (
-          <div className="py-6 text-center text-[13px] text-text-3">Записей нет</div>
+          <EmptyState
+            icon={ScrollText}
+            title={filtersActive ? "По этим фильтрам записей нет" : "Записей пока нет"}
+            hint={
+              filtersActive
+                ? "Верните «все» в фильтрах ноды, статуса или источника."
+                : "Здесь появится каждый запуск ноды, промта из библиотеки и свободного промта — с итоговым статусом и номером попытки."
+            }
+          />
         )}
         <div className="flex flex-col">
           {(logs ?? []).map((log) => (
@@ -94,11 +111,11 @@ export function TaskLogsPanel({ taskId, header }: { taskId: string; header: Reac
               onClick={() => setSelected(log)}
               className="flex touch-target items-center gap-3 border-t border-border py-2 text-left first:border-t-0 hover:bg-surface-2"
             >
-              <Badge tone={STATUS_TONE[log.status]}>{STATUS_LABEL[log.status]}</Badge>
+              <Badge tone={NODE_LOG_STATUS_TONE[log.status]}>{NODE_LOG_STATUS_LABEL[log.status]}</Badge>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[12.5px] font-bold">{titleOf(log)}</div>
-                <div className="text-[11px] text-text-3">
-                  {TRIGGER_LABEL[log.trigger_type]} · попытка {log.attempt_number} ·{" "}
+                <div className="truncate text-note font-bold" title={titleOf(log)}>{titleOf(log)}</div>
+                <div className="text-caption text-text-3">
+                  {NODE_LOG_TRIGGER_LABEL[log.trigger_type]} · попытка {log.attempt_number} ·{" "}
                   {formatDateTime(log.started_at)}
                 </div>
               </div>

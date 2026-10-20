@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Copy, Download } from "lucide-react";
 import { copyText, downloadText } from "@/lib/textExport";
 
@@ -12,11 +12,14 @@ export function CollapsibleText({
   filename,
   className,
   monospace,
+  renderText,
 }: {
   text: string;
   filename?: string;
   className?: string;
   monospace?: boolean;
+  /** Своё оформление видимой части текста (например, раскраска вывода скрипта). */
+  renderText?: (text: string) => ReactNode;
 }) {
   const [expanded, setExpanded] = useState(text.length <= PREVIEW_LENGTH);
   const isTruncatable = text.length > PREVIEW_LENGTH;
@@ -24,15 +27,21 @@ export function CollapsibleText({
 
   return (
     <div className={className}>
-      <div className={monospace ? "whitespace-pre-wrap font-mono text-[12px] leading-relaxed" : "whitespace-pre-wrap"}>
-        {shown}
+      <div
+        className={
+          monospace
+            ? "whitespace-pre-wrap font-mono text-small leading-relaxed [overflow-wrap:anywhere]"
+            : "whitespace-pre-wrap [overflow-wrap:anywhere]"
+        }
+      >
+        {renderText ? renderText(shown) : shown}
       </div>
-      <div className="mt-2 flex items-center gap-3">
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
         {isTruncatable && (
           <button
             type="button"
             onClick={() => setExpanded((prev) => !prev)}
-            className="text-[11.5px] font-bold text-accent"
+            className="touch-hit whitespace-nowrap text-meta font-bold text-accent"
           >
             {expanded ? "Свернуть" : "Показать полностью →"}
           </button>
@@ -40,14 +49,14 @@ export function CollapsibleText({
         <button
           type="button"
           onClick={() => copyText(text)}
-          className="inline-flex items-center gap-1 text-[11px] font-semibold text-text-3 hover:text-text-2"
+          className="touch-hit inline-flex items-center gap-1 text-caption font-semibold text-text-3 hover:text-text-2"
         >
           <Copy className="size-3" /> Копировать
         </button>
         <button
           type="button"
           onClick={() => downloadText(text, filename ?? "output.txt")}
-          className="inline-flex items-center gap-1 text-[11px] font-semibold text-text-3 hover:text-text-2"
+          className="touch-hit inline-flex items-center gap-1 text-caption font-semibold text-text-3 hover:text-text-2"
         >
           <Download className="size-3" /> Скачать
         </button>

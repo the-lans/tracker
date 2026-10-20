@@ -1,197 +1,90 @@
 import { useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { FileStack, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
-import { Card, CardTitle } from "@/components/ui/card";
-import { Input, Textarea } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { useCreateTemplate, useDeleteTemplate, useTemplates } from "@/hooks/useTemplates";
-import { useMcpServers } from "@/hooks/useMcpServers";
-import { useAuth } from "@/stores/authStore";
+import { Card } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { TemplateForm } from "@/components/templates/TemplateForm";
+import { useDeleteTemplate, useTemplates } from "@/hooks/useTemplates";
 import { ApiError } from "@/lib/apiClient";
-import { UserRole } from "@/lib/types";
+import type { Template } from "@/lib/types";
+import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
+import { EditButton } from "@/components/common/actions/EditButton";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { plural } from "@/lib/utils";
 
-interface FileRow {
-  path: string;
-  content: string;
+function fileCountLabel(count: number): string {
+  return `${count} ${plural(count, ["файл", "файла", "файлов"])}`;
 }
 
 export function TemplatesPage() {
-  const { user } = useAuth();
   const { data: templates, isLoading } = useTemplates();
-  // GET /mcp-servers admin-only — для не-admin список серверов недоступен
-  // (реальное расхождение прав доступа между api/templates.py и
-  // api/mcp_servers.py, см. итоговый отчёт по Этапу 13).
-  const { data: mcpServers } = useMcpServers({ enabled: user?.role === UserRole.ADMIN });
-  const createTemplate = useCreateTemplate();
   const deleteTemplate = useDeleteTemplate();
-
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [files, setFiles] = useState<FileRow[]>([{ path: "CLAUDE.md", content: "" }]);
-  const [mcpServerIds, setMcpServerIds] = useState<string[]>([]);
-
-  function updateFile(index: number, patch: Partial<FileRow>) {
-    setFiles((prev) => prev.map((file, i) => (i === index ? { ...file, ...patch } : file)));
-  }
-
-  function handleCreate() {
-    const filesRecord = Object.fromEntries(
-      files.filter((file) => file.path.trim()).map((file) => [file.path, file.content]),
-    );
-    createTemplate.mutate(
-      { name, files: filesRecord, mcp_server_ids: mcpServerIds },
-      {
-        onSuccess: () => {
-          setOpen(false);
-          setName("");
-          setFiles([{ path: "CLAUDE.md", content: "" }]);
-          setMcpServerIds([]);
-        },
-        onError: (error) => {
-          toast.error(error instanceof ApiError ? error.message : "Не удалось создать шаблон");
-        },
-      },
-    );
-  }
+  const [dialogTemplate, setDialogTemplate] = useState<Template | "new" | null>(null);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className={PAGE_ROOT}>
       <PageHeader
         title="Шаблоны"
         actions={
-          <Button onClick={() => setOpen(true)}>
+          <Button onClick={() => setDialogTemplate("new")}>
             <Plus className="size-4" /> Шаблон
           </Button>
         }
       />
-      <div className="min-h-0 flex-1 overflow-auto px-5 pb-8 lg:px-8">
-        {isLoading && <div className="text-text-3">Загрузка…</div>}
+      <div className={PAGE_BODY}>
+        {isLoading && <LoadingState />}
+        {!isLoading && (templates ?? []).length === 0 && (
+          <EmptyState
+            icon={FileStack}
+            title="Шаблонов пока нет"
+            hint="Шаблон — набор файлов (например, CLAUDE.md или .mcp.json) и MCP-серверов, которые подключаются к репозиторию задачи. Нажмите «+ Шаблон» вверху справа и добавьте файлы."
+          />
+        )}
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {(templates ?? []).map((template) => (
             <Card key={template.id} className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
-                <div className="font-bold">{template.name}</div>
-                <button
-                  type="button"
-                  onClick={() =>
+              <div className="flex items-center gap-1">
+                <div className="min-w-0 flex-1 truncate font-bold" title={template.name}>
+                  {template.name}
+                </div>
+                <EditButton name={template.name} onClick={() => setDialogTemplate(template)} />
+                <ConfirmDeleteButton
+                  kind="шаблон"
+                  name={template.name}
+                  pending={deleteTemplate.isPending}
+                  onConfirm={() =>
                     deleteTemplate.mutate(template.id, {
                       onError: (error) =>
                         toast.error(
                           error instanceof ApiError ? error.message : "Не удалось удалить",
                         ),
-                    })
-                  }
-                  className="touch-target flex items-center justify-center text-text-3 hover:text-danger"
-                  aria-label="Удалить"
-                >
-                  <Trash2 className="size-4" />
-                </button>
+                    })}
+                />
               </div>
-              <div className="text-[12px] text-text-3">
-                {Object.keys(template.files).length} файл(ов)
+              <div className="text-small text-text-3">
+                {fileCountLabel(Object.keys(template.files).length)}
               </div>
             </Card>
           ))}
         </div>
       </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={dialogTemplate !== null} onOpenChange={(open) => !open && setDialogTemplate(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Новый шаблон</DialogTitle>
+            <DialogTitle>{dialogTemplate === "new" ? "Новый шаблон" : "Редактировать шаблон"}</DialogTitle>
           </DialogHeader>
-          <div className="flex flex-col gap-3">
-            <div>
-              <Label htmlFor="tpl-name">Название</Label>
-              <Input id="tpl-name" value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-
-            <Card>
-              <CardTitle>Файлы шаблона</CardTitle>
-              <div className="flex flex-col gap-2">
-                {files.map((file, index) => (
-                  <div key={index} className="flex flex-col gap-1 rounded-md border border-border p-2">
-                    <div className="flex items-center gap-2">
-                      <Input
-                        placeholder=".claude/settings.json"
-                        value={file.path}
-                        onChange={(e) => updateFile(index, { path: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
-                        className="touch-target flex items-center justify-center text-text-3 hover:text-danger"
-                      >
-                        <Trash2 className="size-4" />
-                      </button>
-                    </div>
-                    <Textarea
-                      rows={3}
-                      placeholder="Содержимое файла"
-                      value={file.content}
-                      onChange={(e) => updateFile(index, { content: e.target.value })}
-                    />
-                  </div>
-                ))}
-              </div>
-              <Button
-                size="sm"
-                variant="secondary"
-                className="mt-2"
-                onClick={() => setFiles((prev) => [...prev, { path: "", content: "" }])}
-              >
-                <Plus className="size-4" /> Файл
-              </Button>
-            </Card>
-
-            <Card>
-              <CardTitle>MCP-серверы шаблона</CardTitle>
-              {user?.role === UserRole.ADMIN ? (
-                <div className="flex flex-col gap-1.5">
-                  {(mcpServers ?? []).map((server) => (
-                    <label key={server.id} className="flex items-center gap-2 text-[13px]">
-                      <Checkbox
-                        checked={mcpServerIds.includes(server.id)}
-                        onCheckedChange={(checked) =>
-                          setMcpServerIds((prev) =>
-                            checked === true
-                              ? [...prev, server.id]
-                              : prev.filter((id) => id !== server.id),
-                          )
-                        }
-                      />
-                      {server.name}
-                    </label>
-                  ))}
-                  {(mcpServers ?? []).length === 0 && (
-                    <div className="text-[12px] text-text-3">Нет зарегистрированных MCP-серверов</div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-[12px] text-text-3">
-                  Выбор MCP-серверов требует роли admin (см. /mcp-servers)
-                </div>
-              )}
-            </Card>
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setOpen(false)}>
-              Отмена
-            </Button>
-            <Button onClick={handleCreate} disabled={!name || createTemplate.isPending}>
-              Создать
-            </Button>
-          </DialogFooter>
+          {dialogTemplate !== null && (
+            <TemplateForm
+              template={dialogTemplate === "new" ? undefined : dialogTemplate}
+              onSaved={() => setDialogTemplate(null)}
+              onCancel={() => setDialogTemplate(null)}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

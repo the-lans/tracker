@@ -14,10 +14,3 @@ export function NodeTypeIcon({ type, className }: { type: NodeType; className?: 
   return <Icon className={className} />;
 }
 
-export const NODE_TYPE_LABEL: Record<NodeType, string> = {
-  [NodeType.PLAIN_PROMPT]: "Обычный промт",
-  [NodeType.SLASH_COMMAND]: "Слэш-команда",
-  [NodeType.SCRIPT]: "Скрипт",
-  [NodeType.CLEAR_CONTEXT]: "Очистить контекст",
-  [NodeType.PLAN_PROMPT]: "Режим планирования",
-};

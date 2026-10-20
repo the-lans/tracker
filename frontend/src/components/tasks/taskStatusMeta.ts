@@ -27,11 +27,6 @@ export const TASK_STATUS_META: Record<TaskStatus, StatusMeta> = {
   [TaskStatus.DONE]: { label: "Готово", tone: "success", borderVar: "var(--success)" },
 };
 
-export const AWAITING_DECISION_STATUSES: TaskStatus[] = [
-  TaskStatus.AWAITING_INPUT,
-  TaskStatus.PLAN_REVIEW,
-];
-
 /** Раздел 8.2: ручные промты принимаются, пока сессия задачи активна. */
 export const SESSION_ACTIVE_STATUSES: TaskStatus[] = [
   TaskStatus.IN_PROGRESS,

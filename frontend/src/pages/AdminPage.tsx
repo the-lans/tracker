@@ -6,12 +6,13 @@ import { McpServersPanel } from "@/components/admin/McpServersPanel";
 import { PeriodicTasksPanel } from "@/components/admin/PeriodicTasksPanel";
 import { MonitoringPanel } from "@/components/admin/MonitoringPanel";
 import { PromptLibraryPanel } from "@/components/admin/PromptLibraryPanel";
+import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 
 export function AdminPage() {
   return (
-    <div className="flex h-full flex-col">
+    <div className={PAGE_ROOT}>
       <PageHeader title="Администрирование" />
-      <div className="min-h-0 flex-1 overflow-auto px-5 pb-8 lg:px-8">
+      <div className={PAGE_BODY}>
         <Tabs defaultValue="users">
           <TabsList className="mb-4 flex-wrap">
             <TabsTrigger value="users">Пользователи и доступ</TabsTrigger>

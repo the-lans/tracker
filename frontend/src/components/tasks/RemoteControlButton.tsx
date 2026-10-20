@@ -4,6 +4,7 @@ import { useReconnectRemoteControl } from "@/hooks/useTasks";
 import { ApiError } from "@/lib/apiClient";
 import { RemoteControlStatus, type Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
 
 /** Раздел 6.3, 6.5: «Переподключить удалённую сессию» — доступна всегда
  * (блокируется только на время самого запроса), акцент при разрыве. В `claude.ai/code` сессия только для просмотра:
@@ -28,15 +29,19 @@ export function RemoteControlButton({ task }: { task: Task }) {
       onClick={handleClick}
       disabled={reconnect.isPending}
       title="В claude.ai/code сессия доступна для просмотра; отвечать агенту — через поля трекера"
+      aria-label="Переподключить удалённую сессию"
+      // Раздел 15.2: кнопка присутствует всегда; на телефоне — только значок.
       className={cn(
-        "hidden items-center gap-2 rounded-md border px-3 py-2 text-[13px] font-bold disabled:opacity-60 sm:flex",
+        "flex touch-target items-center justify-center gap-2 whitespace-nowrap rounded-md border px-3 py-2 text-body font-bold disabled:opacity-60 short:py-1",
         disconnected
           ? "border-warning-border bg-warning-tint text-warning-text"
           : "border-border bg-surface text-text-2",
       )}
     >
       <RefreshCw className={cn("size-3.5", reconnecting && "animate-spin")} />
-      {reconnecting ? "Переподключение…" : "Переподключить сессию"}
+      <ButtonLabel>
+        {reconnecting ? "Переподключение…" : "Переподключить сессию"}
+      </ButtonLabel>
     </button>
   );
 }

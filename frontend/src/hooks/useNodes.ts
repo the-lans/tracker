@@ -6,7 +6,6 @@ const nodeKeys = {
   all: ["nodes"] as const,
   list: (params: { libraryOnly?: boolean; includeArchived?: boolean }) =>
     ["nodes", "list", params] as const,
-  detail: (id: string) => ["nodes", "detail", id] as const,
 };
 
 export function useNodes(params: { libraryOnly?: boolean; includeArchived?: boolean } = {}) {
@@ -17,14 +16,6 @@ export function useNodes(params: { libraryOnly?: boolean; includeArchived?: bool
         library_only: params.libraryOnly,
         include_archived: params.includeArchived,
       }),
-  });
-}
-
-export function useNode(nodeId: string | undefined) {
-  return useQuery({
-    queryKey: nodeId ? nodeKeys.detail(nodeId) : ["nodes", "detail", "none"],
-    queryFn: () => api.get<NodeItem>(`/nodes/${nodeId}`),
-    enabled: Boolean(nodeId),
   });
 }
 
@@ -47,7 +38,6 @@ export function useUpdateNode(nodeId: string) {
     mutationFn: (body: NodeUpdateRequest) => api.patch<NodeItem>(`/nodes/${nodeId}`, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: nodeKeys.all });
-      void queryClient.invalidateQueries({ queryKey: nodeKeys.detail(nodeId) });
       void queryClient.invalidateQueries({ queryKey: ["pipelines"] });
     },
   });

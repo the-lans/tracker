@@ -37,7 +37,7 @@ export function DecisionWidget({ taskId, log }: { taskId: string; log: NodeLog }
       {log.pending_plan_text && <PlanCard text={log.pending_plan_text} />}
 
       {!hasOptions && log.pending_question && (
-        <div className="rounded-[14px] border border-border bg-surface px-3.5 py-2.5 text-[13.5px] leading-relaxed">
+        <div className="rounded-[14px] border border-border bg-surface px-3.5 py-2.5 text-body-lg leading-relaxed">
           {log.pending_question}
         </div>
       )}
@@ -51,7 +51,7 @@ export function DecisionWidget({ taskId, log }: { taskId: string; log: NodeLog }
               disabled={submitDecision.isPending}
               onClick={() => submit(option.id, comment)}
               className={cn(
-                "touch-target rounded-xl border-[1.5px] border-border bg-surface px-4 py-3 text-left text-[13.5px] font-bold text-text disabled:opacity-50",
+                "touch-target rounded-xl border-[1.5px] border-border bg-surface px-4 py-3 text-left text-body-lg font-bold text-text disabled:opacity-50 short:py-1.5",
                 index === 0 && "border-accent bg-accent-tint text-accent-hov",
               )}
             >

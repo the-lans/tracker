@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -16,15 +16,20 @@ import {
 } from "@/hooks/useAdmin";
 import { ApiError } from "@/lib/apiClient";
 import { UserRole, type User } from "@/lib/types";
+import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
+import { USER_ROLE_LABEL } from "@/lib/labels";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { SectionTitle } from "@/components/common/typography/SectionTitle";
 
 function UserRow({ user }: { user: User }) {
   const updateUser = useUpdateUser(user.id);
 
   return (
     <Card className="flex flex-wrap items-center gap-3">
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-bold">{user.email}</div>
-        <div className="text-[11.5px] text-text-3">
+      <div className="min-w-0 flex-1 basis-48">
+        <div className="truncate font-bold" title={user.email}>{user.email}</div>
+        <div className="text-meta text-text-3">
           {new Date(user.created_at).toLocaleDateString("ru-RU")}
         </div>
       </div>
@@ -44,12 +49,14 @@ function UserRow({ user }: { user: User }) {
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={UserRole.USER}>user</SelectItem>
-          <SelectItem value={UserRole.ADMIN}>admin</SelectItem>
+          <SelectItem value={UserRole.USER}>{USER_ROLE_LABEL[UserRole.USER]}</SelectItem>
+          <SelectItem value={UserRole.ADMIN}>{USER_ROLE_LABEL[UserRole.ADMIN]}</SelectItem>
         </SelectContent>
       </Select>
       <div className="flex items-center gap-2">
-        <span className="text-[12px] text-text-3">активен</span>
+        <span className="text-small text-text-3">
+          {user.is_active ? "активен" : "заблокирован"}
+        </span>
         <Switch
           checked={user.is_active}
           onCheckedChange={(checked) =>
@@ -78,8 +85,8 @@ export function UsersPanel() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <div className="mb-2 text-[12.5px] font-extrabold text-text-2">Пользователи</div>
-        {isLoading && <div className="text-text-3">Загрузка…</div>}
+        <SectionTitle className="mb-2">Пользователи</SectionTitle>
+        {isLoading && <LoadingState />}
         <div className="flex flex-col gap-2">
           {(users ?? []).map((user) => (
             <UserRow key={user.id} user={user} />
@@ -89,27 +96,35 @@ export function UsersPanel() {
 
       <Card>
         <CardTitle>
-          <span>allowed_emails</span>
+          <span>Список допуска (e-mail)</span>
           <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>
             <Plus className="size-3.5" /> Добавить
           </Button>
         </CardTitle>
         <div className="flex flex-col">
+          {(allowedEmails ?? []).length === 0 && (
+            <EmptyState
+              compact
+              title="Список допуска пуст"
+              hint="Нажмите «+ Добавить» и укажите e-mail: войти в трекер через Google смогут только адреса из этого списка."
+            />
+          )}
           {(allowedEmails ?? []).map((entry) => (
             <div key={entry.id} className="flex items-center gap-2 border-t border-border py-1.5 first:border-t-0">
-              <span className="flex-1 text-[13px]">{entry.email}</span>
-              <button
-                type="button"
-                onClick={() =>
+              <span className="min-w-0 flex-1 truncate text-body" title={entry.email}>
+                {entry.email}
+              </span>
+              <ConfirmDeleteButton
+                kind="e-mail из списка допуска"
+                name={entry.email}
+                pending={deleteAllowedEmail.isPending}
+                iconClassName="size-3.5"
+                onConfirm={() =>
                   deleteAllowedEmail.mutate(entry.id, {
                     onError: (error) =>
                       toast.error(error instanceof ApiError ? error.message : "Не удалось удалить"),
-                  })
-                }
-                className="touch-target flex items-center justify-center text-text-3 hover:text-danger"
-              >
-                <Trash2 className="size-3.5" />
-              </button>
+                  })}
+              />
             </div>
           ))}
         </div>

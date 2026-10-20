@@ -63,15 +63,15 @@ export function Composer({ taskId, taskStatus }: { taskId: string; taskStatus: T
   }
 
   return (
-    <div className="border-t border-border bg-surface p-3.5">
+    <div className="border-t border-border bg-surface p-3.5 short:sticky short:bottom-0 short:z-10 short:px-3 short:py-1.5">
       {queuedFreeform > 0 && (
-        <div className="mb-2 flex items-center gap-1.5 text-[11.5px] font-bold text-info-text">
+        <div className="mb-2 flex items-center gap-1.5 text-meta font-bold text-info-text short:mb-1">
           <Clock className="size-3" />
           В очереди: {queuedFreeform}
         </div>
       )}
       {!sessionActive ? (
-        <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-[12.5px] text-text-3">
+        <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
           <MessageSquarePlus className="size-3.5 shrink-0" />
           Свободный промт доступен, пока сессия задачи активна
         </div>
@@ -79,7 +79,7 @@ export function Composer({ taskId, taskStatus }: { taskId: string; taskStatus: T
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="flex touch-target w-full items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-left text-[12.5px] text-text-3"
+          className="flex touch-target w-full items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-left text-note text-text-3 short:py-1"
         >
           <MessageSquarePlus className="size-3.5 shrink-0" />
           Свободный промт — задать вопрос сессии в любой момент
@@ -87,8 +87,8 @@ export function Composer({ taskId, taskStatus }: { taskId: string; taskStatus: T
       ) : (
         <div className="flex flex-col gap-2">
           {previewText !== null && (
-            <div className="whitespace-pre-wrap rounded-lg border border-border bg-surface-2 px-3 py-2 text-[12.5px] text-text-2">
-              <div className="mb-1 text-[10.5px] font-extrabold uppercase tracking-wider text-text-3">
+            <div className="whitespace-pre-wrap rounded-lg border border-border bg-surface-2 px-3 py-2 text-note text-text-2">
+              <div className="mb-1 text-caption font-extrabold uppercase tracking-wider text-text-3">
                 После подстановки
               </div>
               {previewText}

@@ -57,7 +57,7 @@ function DuplicateTaskForm({
         value={values}
         onChange={(patch) => setValues((prev) => ({ ...prev, ...patch }))}
       />
-      <div className="text-[11.5px] text-text-3">
+      <div className="text-meta text-text-3">
         В копию перейдут пайплайн с отмеченными нодами, переменные задачи и системные промты.
         История, сессия и родитель не копируются.
       </div>
@@ -98,7 +98,7 @@ export function DuplicateTaskDialog({
             onClose={() => onOpenChange(false)}
           />
         ) : (
-          <div className="text-[12.5px] text-text-3">Загрузка…</div>
+          <div className="text-note text-text-3">Загрузка…</div>
         )}
       </DialogContent>
     </Dialog>

@@ -33,21 +33,29 @@ export function TaskPage() {
   const workspaceTabs = <TaskWorkspaceTabs value={workspaceView} onChange={setMobileTab} />;
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-3.5 border-b border-border bg-surface px-4 py-3 lg:px-7">
+    <div className="flex h-full flex-col short:h-auto">
+      {/* Название занимает свою строку; кнопки переносятся под него, а не сжимают его. */}
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-b border-border bg-surface px-4 py-3 short:gap-y-1 short:py-1.5 lg:px-7">
         <Link
           to="/"
+          aria-label="К списку задач"
           className="flex touch-target size-8 shrink-0 items-center justify-center rounded-[9px] border border-border text-text-2"
         >
           <ArrowLeft className="size-4" />
         </Link>
-        <div className="min-w-0">
-          <div className="font-mono text-[12px] font-bold text-text-3">{task.code}</div>
-          <div className="truncate text-[16px] font-extrabold tracking-tight">{task.title}</div>
+        <div className="min-w-0 flex-1 basis-56">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-small font-bold text-text-3">{task.code}</span>
+            <TaskStatusBadge status={task.status} />
+          </div>
+          <div className="truncate text-title font-extrabold tracking-tight" title={task.title}>
+            {task.title}
+          </div>
         </div>
-        <TaskStatusBadge status={task.status} />
-        <TaskControlButtons task={task} />
-        <RemoteControlButton task={task} />
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <TaskControlButtons task={task} />
+          <RemoteControlButton task={task} />
+        </div>
       </div>
 
       <div className="flex border-b border-border xl:hidden">
@@ -55,7 +63,7 @@ export function TaskPage() {
           type="button"
           onClick={() => setMobileTab("overview")}
           className={cn(
-            "flex-1 touch-target border-b-2 border-transparent py-2.5 text-[13px] font-bold text-text-2",
+            "flex-1 touch-target border-b-2 border-transparent py-2.5 text-body font-bold text-text-2 short:py-1",
             mobileTab === "overview" && "border-accent text-accent",
           )}
         >
@@ -65,7 +73,7 @@ export function TaskPage() {
           type="button"
           onClick={() => setMobileTab("dialogue")}
           className={cn(
-            "flex-1 touch-target border-b-2 border-transparent py-2.5 text-[13px] font-bold text-text-2",
+            "flex-1 touch-target border-b-2 border-transparent py-2.5 text-body font-bold text-text-2 short:py-1",
             mobileTab === "dialogue" && "border-accent text-accent",
           )}
         >
@@ -75,7 +83,7 @@ export function TaskPage() {
           type="button"
           onClick={() => setMobileTab("logs")}
           className={cn(
-            "flex-1 touch-target border-b-2 border-transparent py-2.5 text-[13px] font-bold text-text-2",
+            "flex-1 touch-target border-b-2 border-transparent py-2.5 text-body font-bold text-text-2 short:py-1",
             mobileTab === "logs" && "border-accent text-accent",
           )}
         >
@@ -83,10 +91,10 @@ export function TaskPage() {
         </button>
       </div>
 
-      <div className="flex min-h-0 flex-1 xl:flex-row">
+      <div className="flex min-h-0 flex-1 xl:flex-row short:flex-none">
         <div
           className={cn(
-            "min-h-0 w-full overflow-auto border-border bg-surface xl:block xl:w-[420px] xl:shrink-0 xl:border-r",
+            "min-h-0 w-full overflow-auto border-border bg-surface xl:block xl:w-[420px] xl:shrink-0 xl:border-r short:overflow-visible",
             mobileTab === "overview" ? "block" : "hidden",
           )}
         >

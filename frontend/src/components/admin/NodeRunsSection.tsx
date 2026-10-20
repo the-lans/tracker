@@ -6,15 +6,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useNodeRuns } from "@/hooks/useAdmin";
 import { formatDateTime } from "@/lib/utils";
 import { NodeLogStatus } from "@/lib/types";
+import { NODE_LOG_STATUS_LABEL, NODE_LOG_STATUS_TONE, NODE_LOG_TRIGGER_LABEL } from "@/lib/labels";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { SectionTitle } from "@/components/common/typography/SectionTitle";
 
-const STATUS_TONE: Record<NodeLogStatus, "danger" | "warning" | "info" | "success" | "neutral"> = {
-  [NodeLogStatus.PENDING]: "neutral",
-  [NodeLogStatus.RUNNING]: "info",
-  [NodeLogStatus.AWAITING_DECISION]: "warning",
-  [NodeLogStatus.SUCCESS]: "success",
-  [NodeLogStatus.FAILED]: "danger",
-  [NodeLogStatus.STOPPED]: "warning",
-};
 
 /** Раздел 13.4: какая нода, в какой задаче, когда и с каким итоговым статусом. */
 export function NodeRunsSection() {
@@ -24,7 +20,7 @@ export function NodeRunsSection() {
   return (
     <section className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <div className="text-[12.5px] font-extrabold text-text-2">Выполнение нод</div>
+        <SectionTitle>Выполнение нод</SectionTitle>
         <Select value={status} onValueChange={(value) => setStatus(value as NodeLogStatus | "all")}>
           <SelectTrigger className="w-44">
             <SelectValue />
@@ -33,32 +29,36 @@ export function NodeRunsSection() {
             <SelectItem value="all">Все статусы</SelectItem>
             {Object.values(NodeLogStatus).map((value) => (
               <SelectItem key={value} value={value}>
-                {value}
+                {NODE_LOG_STATUS_LABEL[value]}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </div>
-      {isLoading && <div className="text-text-3">Загрузка…</div>}
+      {isLoading && <LoadingState />}
       {(runs ?? []).map((run) => (
         <Card key={run.node_log_id} className="flex items-center gap-3 py-2.5">
-          <Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>
+          <Badge tone={NODE_LOG_STATUS_TONE[run.status]} className="shrink-0">{NODE_LOG_STATUS_LABEL[run.status]}</Badge>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[13px] font-bold">
-              {run.node_name ?? run.trigger_type}
+            <div className="truncate text-body font-bold" title={run.node_name ?? NODE_LOG_TRIGGER_LABEL[run.trigger_type]}>
+              {run.node_name ?? NODE_LOG_TRIGGER_LABEL[run.trigger_type]}
               {run.attempt_number > 1 && ` · попытка ${run.attempt_number}`}
             </div>
-            <div className="mt-0.5 text-[11px] text-text-3">
-              {run.trigger_type} · {formatDateTime(run.started_at)}
+            <div className="mt-0.5 text-caption text-text-3">
+              {NODE_LOG_TRIGGER_LABEL[run.trigger_type]} · {formatDateTime(run.started_at)}
             </div>
           </div>
-          <Link to={`/tasks/${run.task_id}`} className="font-mono text-[12px] font-bold text-accent">
+          <Link to={`/tasks/${run.task_id}`} className="touch-target inline-flex shrink-0 items-center justify-end font-mono text-small font-bold text-accent">
             {run.task_code}
           </Link>
         </Card>
       ))}
       {!isLoading && (runs ?? []).length === 0 && (
-        <div className="py-3 text-center text-text-3">Нет записей</div>
+        <EmptyState
+          compact
+          title="Запусков нод пока нет"
+          hint="Здесь появятся запуски нод по всем задачам. Если выбран статус — попробуйте «Все статусы»."
+        />
       )}
     </section>
   );

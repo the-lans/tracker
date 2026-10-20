@@ -5,9 +5,10 @@
 
     backend/.venv/bin/python scripts/seed_periodic_tasks.py
 
-Идемпотентен: уже существующие по `name` записи не трогает (администратор
-мог изменить расписание через UI, раздел 16.1 — повторный запуск не должен
-это перезаписывать).
+Идемпотентен: у уже существующих по `name` записей обновляет только
+название и описание — их задаёт код, а не администратор. Расписание и
+включение не трогает: администратор мог изменить их через UI (раздел 16.1),
+повторный запуск не должен это перезаписывать.
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ _SEED_TASKS: list[tuple[str, str, str, str, int]] = [
     (
         "check_llm_account_limits",
         "Проверка лимитов LLM-аккаунтов",
-        "Опрашивает статус каждого активного LLM-аккаунта",
+        "Возвращает в active LLM-аккаунты, у которых истекло окно лимита",
         "tasks.periodic.check_llm_account_limits",
         5 * _MINUTE,
     ),
@@ -96,7 +97,7 @@ _SEED_TASKS: list[tuple[str, str, str, str, int]] = [
     (
         "rotate_task_logs",
         "Ротация логов задач",
-        "Архивирует записи node_logs для задач старше установленного порога",
+        "Выгружает старые записи node_logs выполненных задач в архив и удаляет их из БД",
         "tasks.periodic.rotate_task_logs",
         _WEEK,
     ),
@@ -157,6 +158,8 @@ async def _seed() -> None:
                 sa.select(PeriodicTask).where(PeriodicTask.name == name),
             )
             if existing is not None:
+                existing.display_name = display_name
+                existing.description = description
                 continue
             db_session.add(
                 PeriodicTask(

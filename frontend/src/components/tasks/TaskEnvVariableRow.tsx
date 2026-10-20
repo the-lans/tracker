@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye, Pencil, Trash2 } from "lucide-react";
+import { Eye, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import {
 } from "@/hooks/useTaskEnvVariables";
 import { ApiError } from "@/lib/apiClient";
 import type { TaskEnvVariable } from "@/lib/types";
+import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 
 function onError(fallback: string) {
   return (error: Error) => toast.error(error instanceof ApiError ? error.message : fallback);
@@ -54,13 +55,38 @@ export function TaskEnvVariableRow({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-border py-2 first:border-t-0">
-      <div className="font-mono text-[12px] font-bold">{variable.key}</div>
+    <div className="flex flex-col gap-1 border-t border-border py-2 first:border-t-0">
+      <div className="flex min-w-0 items-center gap-1">
+        <div className="min-w-0 flex-1 truncate font-mono text-small font-bold" title={variable.key}>
+          {variable.key}
+        </div>
+        {!readOnly && !editing && (
+          <>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={`Изменить ${variable.key}`}
+              onClick={() => setEditing(true)}
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+            <ConfirmDeleteButton
+              kind="переменную"
+              name={variable.key}
+              pending={remove.isPending}
+              iconClassName="size-3.5"
+              onConfirm={() =>
+                remove.mutate(variable.id, { onError: onError("Не удалось удалить переменную") })}
+            />
+          </>
+        )}
+      </div>
       {editing ? (
-        <div className="flex w-full items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2">
           <Input
             autoFocus
             aria-label={`Новое значение ${variable.key}`}
+            className="min-w-0 flex-1"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
           />
@@ -72,8 +98,8 @@ export function TaskEnvVariableRow({
           </Button>
         </div>
       ) : (
-        <>
-          <div className="min-w-0 flex-1 truncate font-mono text-[12px] text-text-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="min-w-0 flex-1 truncate font-mono text-small text-text-3" title={revealed ?? undefined}>
             {revealed ?? "••••••"}
           </div>
           {revealed === null && (
@@ -81,30 +107,7 @@ export function TaskEnvVariableRow({
               <Eye className="size-3.5" /> Показать
             </Button>
           )}
-          {!readOnly && (
-            <>
-              <Button
-                size="icon"
-                variant="ghost"
-                aria-label={`Изменить ${variable.key}`}
-                onClick={() => setEditing(true)}
-              >
-                <Pencil className="size-3.5" />
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                aria-label={`Удалить ${variable.key}`}
-                disabled={remove.isPending}
-                onClick={() =>
-                  remove.mutate(variable.id, { onError: onError("Не удалось удалить переменную") })
-                }
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
-            </>
-          )}
-        </>
+        </div>
       )}
     </div>
   );

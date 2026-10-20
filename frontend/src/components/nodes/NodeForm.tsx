@@ -11,12 +11,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DialogFooter } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useCreateNode, useUpdateNode } from "@/hooks/useNodes";
 import { useTemplatePreview } from "@/hooks/useTemplates";
 import { useSystemSettings } from "@/hooks/useAdmin";
 import { ApiError } from "@/lib/apiClient";
 import { NodeType, ScriptLanguage, type NodeItem } from "@/lib/types";
-import { NODE_TYPE_LABEL } from "@/components/tasks/NodeTypeIcon";
+import { NODE_TYPE_LABEL } from "@/lib/labels";
 
 const PIPELINE_ONLY_TYPES = Object.values(NodeType);
 const LIBRARY_ALLOWED_TYPES = [
@@ -74,6 +75,9 @@ export function NodeForm({
   const [maxRetries, setMaxRetries] = useState<number | null>(
     node?.max_retries ?? null,
   );
+  const [retryBaseDelaySeconds, setRetryBaseDelaySeconds] = useState<
+    number | null
+  >(node?.retry_base_delay_seconds ?? null);
   const { data: settings } = useSystemSettings();
   const [isSkipped, setIsSkipped] = useState(node?.is_skipped ?? false);
   const [previewText, setPreviewText] = useState<string | null>(null);
@@ -118,6 +122,8 @@ export function NodeForm({
       guide_url: guideUrl || null,
       timeout_seconds: timeoutSeconds ?? undefined,
       max_retries: mode === "pipeline" ? (maxRetries ?? undefined) : undefined,
+      retry_base_delay_seconds:
+        mode === "pipeline" ? (retryBaseDelaySeconds ?? undefined) : undefined,
       is_skipped: mode === "pipeline" ? isSkipped : false,
     };
 
@@ -177,7 +183,7 @@ export function NodeForm({
       </div>
 
       {nodeType === NodeType.PLAN_PROMPT && (
-        <div className="rounded-md border border-info-tint bg-info-tint px-3 py-2 text-[12.5px] text-info-text">
+        <div className="rounded-md border border-info-tint bg-info-tint px-3 py-2 text-note text-info-text">
           Нода доступна только внутри пайплайна и не может быть сохранена как
           элемент библиотеки.
         </div>
@@ -193,7 +199,7 @@ export function NodeForm({
             value={promptTemplate}
             onChange={(e) => setPromptTemplate(e.target.value)}
           />
-          <div className="mt-1 text-[11px] text-text-3">
+          <div className="mt-1 text-caption text-text-3">
             Доступные переменные: {"{{task.*}}"}, {"{{env.VAR}}"}
             {mode === "pipeline" && ", {{node.*}}"}, {"{{session.id}}"}
           </div>
@@ -207,11 +213,11 @@ export function NodeForm({
               Предпросмотр
             </Button>
             {preview.isPending && (
-              <span className="text-[11px] text-text-3">Рендеринг…</span>
+              <span className="text-caption text-text-3">Рендеринг…</span>
             )}
           </div>
           {previewText !== null && (
-            <div className="mt-2 whitespace-pre-wrap rounded-md border border-border bg-surface-2 p-2.5 text-[12.5px]">
+            <div className="mt-2 whitespace-pre-wrap rounded-md border border-border bg-surface-2 p-2.5 text-note">
               {previewText}
             </div>
           )}
@@ -227,7 +233,7 @@ export function NodeForm({
             value={commandInvocation}
             onChange={(e) => setCommandInvocation(e.target.value)}
           />
-          <div className="mt-1 text-[11px] text-text-3">
+          <div className="mt-1 text-caption text-text-3">
             Команда передаётся в сессию без изменений — шаблонизатор не
             применяется.
           </div>
@@ -256,7 +262,7 @@ export function NodeForm({
             <Textarea
               id="node-script"
               rows={6}
-              className="font-mono text-[12px]"
+              className="font-mono text-small"
               value={scriptContent}
               onChange={(e) => setScriptContent(e.target.value)}
             />
@@ -294,13 +300,28 @@ export function NodeForm({
               onChange={(e) => setMaxRetries(Number(e.target.value))}
             />
           </div>
-          <label className="flex items-center gap-2 text-[13px] font-semibold">
-            <input
-              type="checkbox"
-              checked={isSkipped}
-              onChange={(e) => setIsSkipped(e.target.checked)}
+          <div>
+            <Label htmlFor="node-retry-delay">
+              Базовая задержка retry (сек.)
+            </Label>
+            <Input
+              id="node-retry-delay"
+              type="number"
+              min={0}
+              value={
+                retryBaseDelaySeconds ??
+                settings?.default_retry_base_delay_seconds ??
+                ""
+              }
+              onChange={(e) => setRetryBaseDelaySeconds(Number(e.target.value))}
             />
-            Пропускать по умолчанию (is_skipped)
+          </div>
+          <label className="flex min-h-11 items-center gap-2.5 text-body font-semibold">
+            <Checkbox
+              checked={isSkipped}
+              onCheckedChange={(checked) => setIsSkipped(checked === true)}
+            />
+            Пропускать по умолчанию
           </label>
         </>
       )}

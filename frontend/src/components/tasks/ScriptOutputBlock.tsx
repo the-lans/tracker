@@ -1,4 +1,11 @@
 import { CollapsibleText } from "@/components/tasks/CollapsibleText";
+import { ScriptOutputText } from "@/components/tasks/ScriptOutputText";
+import { cn } from "@/lib/utils";
+
+function exitCodeClass(exitCode: number | null): string {
+  if (exitCode === null) return "text-term-muted";
+  return exitCode === 0 ? "text-term-success" : "text-term-error";
+}
 
 export function ScriptOutputBlock({
   stdout,
@@ -8,12 +15,20 @@ export function ScriptOutputBlock({
   exitCode: number | null;
 }) {
   return (
-    <div className="max-w-[560px] rounded-xl bg-[#14151d] p-3.5 text-[#c9cbe0]">
-      <div className="mb-2 flex items-center justify-between text-[11px] font-bold text-[#8b8ea8]">
+    <div className="max-w-[560px] rounded-xl border border-term-border bg-term-bg p-3.5 text-term-fg">
+      <div className="mb-2 flex items-center justify-between text-caption font-bold text-term-muted">
         <span>ВЫВОД СКРИПТА</span>
-        <span>{exitCode === null ? "выполняется…" : `exit ${exitCode}`}</span>
+        <span className={cn("flex items-center gap-1.5", exitCodeClass(exitCode))}>
+          {exitCode !== null && <span className="size-1.5 rounded-full bg-current" aria-hidden />}
+          {exitCode === null ? "выполняется…" : `exit ${exitCode}`}
+        </span>
       </div>
-      <CollapsibleText text={stdout ?? "(пусто)"} monospace filename="script-output.txt" />
+      <CollapsibleText
+        text={stdout ?? "(пусто)"}
+        monospace
+        filename="script-output.txt"
+        renderText={(text) => <ScriptOutputText text={text} />}
+      />
     </div>
   );
 }

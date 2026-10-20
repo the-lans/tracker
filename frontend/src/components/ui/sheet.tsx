@@ -23,7 +23,7 @@ export const SheetContent = forwardRef<
       )}
       {...props}
     >
-      <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-border" />
+      <div data-sheet-handle className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-border" />
       {children}
       <DialogPrimitive.Close className="absolute right-4 top-4 touch-target flex items-center justify-center rounded-md text-text-3 hover:text-text">
         <X className="size-4" />

@@ -27,7 +27,7 @@ export function TaskCard({ task }: { task: Task }) {
       style={{ borderColor: meta.borderVar }}
     >
       <div className="flex items-center gap-2">
-        <Link to={`/tasks/${task.id}`} className="font-mono text-[11.5px] font-bold text-text-3">
+        <Link to={`/tasks/${task.id}`} className="touch-hit font-mono text-meta font-bold text-text-3">
           {task.code}
         </Link>
         <div className="ml-auto">
@@ -36,7 +36,7 @@ export function TaskCard({ task }: { task: Task }) {
       </div>
       <Link
         to={`/tasks/${task.id}`}
-        className="min-h-[38px] text-[14.5px] font-bold leading-snug text-text"
+        className="min-h-11 text-card-title font-bold leading-snug text-text"
       >
         {task.title}
       </Link>
@@ -47,7 +47,8 @@ export function TaskCard({ task }: { task: Task }) {
           <button
             type="button"
             className="ml-auto flex touch-target size-[30px] items-center justify-center rounded-[9px] border border-accent-border bg-accent-tint text-accent"
-            aria-label="Выполнить"
+            aria-label="Запустить задачу"
+            title="Запустить задачу"
             disabled={startTask.isPending}
             onClick={(event) => {
               event.preventDefault();

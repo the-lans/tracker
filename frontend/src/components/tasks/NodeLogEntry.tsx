@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Maximize2 } from "lucide-react";
 import { MessageBubble } from "@/components/tasks/MessageBubble";
+import { promptKindOf } from "@/components/tasks/messageKinds";
+import { describeUserInput } from "@/lib/userInput";
 import { NodeOutputSheet } from "@/components/tasks/NodeOutputSheet";
 import { ScriptOutputBlock } from "@/components/tasks/ScriptOutputBlock";
 import { DecisionWidget } from "@/components/tasks/DecisionWidget";
@@ -10,12 +12,12 @@ import { NodeLogStatus, NodeLogTriggerType, type NodeLog } from "@/lib/types";
  * дочерней задачи и саммари родителя (раздел 3.1), автообработка конфликта
  * ребейза (раздел 14) — пайплайновая запись без ноды. */
 function sourceLabelOf(log: NodeLog): string | undefined {
-  if (log.trigger_type === NodeLogTriggerType.FREEFORM_MANUAL) return "отправлено вручную";
-  if (log.trigger_type === NodeLogTriggerType.LIBRARY_MANUAL) return "промт из библиотеки";
-  if (log.trigger_type === NodeLogTriggerType.SUMMARY_FOR_CHILD) return "пересказ для дочерней задачи";
-  if (log.trigger_type === NodeLogTriggerType.PARENT_SUMMARY) return "саммари родительской задачи";
+  if (log.trigger_type === NodeLogTriggerType.FREEFORM_MANUAL) return "Отправлено вручную";
+  if (log.trigger_type === NodeLogTriggerType.LIBRARY_MANUAL) return "Промт из библиотеки";
+  if (log.trigger_type === NodeLogTriggerType.SUMMARY_FOR_CHILD) return "Пересказ для дочерней задачи";
+  if (log.trigger_type === NodeLogTriggerType.PARENT_SUMMARY) return "Саммари родительской задачи";
   if (log.trigger_type === NodeLogTriggerType.PIPELINE && log.node_id === null) {
-    return "разрешение конфликта ребейза";
+    return "Разрешение конфликта ребейза";
   }
   return undefined;
 }
@@ -32,34 +34,45 @@ export function NodeLogEntry({
   streamedText?: string;
 }) {
   const [outputOpen, setOutputOpen] = useState(false);
+  // Раздел 15.2: служебная реплика помечена источником — один раз, в заголовке записи.
+  const source = sourceLabelOf(log);
+  const heading = source ? [source, title].filter(Boolean).join(" · ") : (title ?? "Нода пайплайна");
   const isScript = log.script_stdout !== null || log.script_exit_code !== null;
   const isAwaitingDecision = log.status === NodeLogStatus.AWAITING_DECISION;
   const isSummaryNote =
     log.trigger_type === NodeLogTriggerType.PARENT_SUMMARY && log.llm_output_text === null;
   // Раздел 15.2: пока ход идёт, ответ показывается по мере генерации;
   // итоговый текст из БД заменяет его.
+  const userInput =
+    !isAwaitingDecision && log.user_input_text ? describeUserInput(log) : null;
   const liveText = !log.llm_output_text && log.status === NodeLogStatus.RUNNING ? streamedText : undefined;
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-text-3">
-        <span className="truncate">{title ?? sourceLabelOf(log) ?? "Нода пайплайна"}</span>
+      <div className="flex items-center justify-between gap-2 text-caption font-bold text-text-3">
+        <span className="truncate" title={heading}>
+          {heading}
+        </span>
         <button
           type="button"
           onClick={() => setOutputOpen(true)}
-          className="inline-flex shrink-0 items-center gap-1 hover:text-text-2"
+          className="touch-hit inline-flex shrink-0 items-center gap-1 hover:text-text-2"
         >
           <Maximize2 className="size-3" /> Полный вывод
         </button>
       </div>
       <NodeOutputSheet
         log={log}
-        title={title ?? sourceLabelOf(log) ?? "Нода пайплайна"}
+        title={heading}
         open={outputOpen}
         onOpenChange={setOutputOpen}
       />
       {log.rendered_prompt && !isScript && (
-        <MessageBubble role="user" text={log.rendered_prompt} sourceLabel={sourceLabelOf(log)} />
+        <MessageBubble
+          role="user"
+          text={log.rendered_prompt}
+          kind={promptKindOf(log)}
+        />
       )}
       {isScript && <ScriptOutputBlock stdout={log.script_stdout} exitCode={log.script_exit_code} />}
       {log.llm_output_text && <MessageBubble role="llm" text={log.llm_output_text} />}
@@ -73,14 +86,18 @@ export function NodeLogEntry({
         />
       )}
       {log.status === NodeLogStatus.STOPPED && (
-        <MessageBubble role="llm" danger text="Остановлено пользователем" />
+        <MessageBubble role="llm" danger kind="stopped" text="Остановлено пользователем" />
       )}
       {isAwaitingDecision && <DecisionWidget taskId={taskId} log={log} />}
       {!isAwaitingDecision && log.pending_plan_text && log.status === NodeLogStatus.SUCCESS && (
-        <MessageBubble role="llm" text={`План принят.\n\n${log.pending_plan_text}`} />
+        <MessageBubble role="llm" kind="plan" text={`План принят.\n\n${log.pending_plan_text}`} />
       )}
-      {!isAwaitingDecision && log.user_input_text && (
-        <MessageBubble role="user" text={log.user_input_text.split("\n")[0] ?? log.user_input_text} />
+      {userInput && (
+        <MessageBubble
+          role={userInput.automatic ? "llm" : "user"}
+          kind={userInput.automatic ? "plan" : "decision"}
+          text={userInput.text}
+        />
       )}
     </div>
   );
