@@ -21,6 +21,7 @@ from claude_agent_sdk.types import ToolPermissionContext
 
 from clients.claude_agent import REMOTE_CONTROL_EXTRA_ARG
 from db.models.enums import (
+    LlmAccountStatus,
     McpAuthType,
     McpIsolationMode,
     MergeStatus,
@@ -55,7 +56,7 @@ from services.task_control import (
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name
 from tasks import session_worker
-from tests.fakes import FakeClaudeAgentClient, make_result_message
+from tests.fakes import FakeClaudeAgentClient, make_rate_limit_event, make_result_message
 from tests.worker_support import GIT_AUTHOR_ARGS, WorkerEnv, init_bare_origin, run_command
 
 if TYPE_CHECKING:
@@ -1022,3 +1023,30 @@ class TestSessionHeartbeat:
 
         assert observed == [True]
         assert not await is_session_alive(redis_client, task.id)
+
+
+class TestRateLimitEvents:
+    async def test_account_marked_rate_limited(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        tmp_path: Path,
+    ) -> None:
+        """Раздел 16.2: CLI сообщил об упоре в лимит — аккаунт задачи `rate_limited`."""
+        account = LlmAccount(label="main", claude_config_dir=str(tmp_path / "acc"))
+        db_session.add(account)
+        await db_session.flush()
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        task.llm_account_id = account.id
+        await _add_node(db_session, task, order_index=0)
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=[
+                [make_rate_limit_event("rejected", resets_at=1_900_000_000), make_result_message()],
+            ],
+        )
+
+        await _run_worker(task)
+
+        await db_session.refresh(account)
+        assert account.status is LlmAccountStatus.RATE_LIMITED
+        assert account.rate_limit_resets_at is not None

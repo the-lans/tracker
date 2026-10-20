@@ -36,6 +36,7 @@ from db.models.tasks import TaskRepository
 from db.session import async_session_factory
 from services import gitlab_sync, maintenance_tasks
 from services.autostart import run_scheduled_autostart_check
+from services.llm_accounts import restore_expired_rate_limits
 from services.manual_queue import expire_stale_manual_queue_requests
 from services.periodic_tasks import record_periodic_task_run
 from services.remote_control import check_task_bridge
@@ -110,8 +111,8 @@ def check_scheduled_tasks_for_autostart() -> None:
 
 @celery_app.task(name="check_llm_account_limits")
 def check_llm_account_limits() -> None:
-    async def body(_db_session: AsyncSession) -> None:
-        maintenance_tasks.check_llm_account_limits()
+    async def body(db_session: AsyncSession) -> None:
+        await restore_expired_rate_limits(db_session, now=datetime.now(UTC))
 
     _run_periodic("check_llm_account_limits", body)
 

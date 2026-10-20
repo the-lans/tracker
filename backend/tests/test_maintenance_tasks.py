@@ -14,7 +14,6 @@ from db.models.tasks import Task
 from db.models.users import User
 from services.crypto import encrypt
 from services.maintenance_tasks import (
-    check_llm_account_limits,
     check_mcp_server_health,
     deprovision_inactive_users,
     find_node_logs_eligible_for_rotation,
@@ -246,10 +245,6 @@ def test_revoke_stale_sshfs_keys_is_a_noop() -> None:
 
 def test_deprovision_inactive_users_is_a_noop() -> None:
     deprovision_inactive_users()  # не должно бросать исключений
-
-
-def test_check_llm_account_limits_is_a_noop() -> None:
-    check_llm_account_limits()  # не должно бросать исключений
 
 
 def test_purge_orphaned_playwright_processes_is_a_noop() -> None:

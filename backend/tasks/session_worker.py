@@ -18,13 +18,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from claude_agent_sdk import ClaudeSDKClient, ClaudeSDKError
+from claude_agent_sdk import ClaudeSDKClient, ClaudeSDKError, RateLimitInfo
 from redis.asyncio import Redis
 
 from app_logging.config import get_logger
 from clients.claude_agent import (
     ClaudeAgentClientProtocol,
     ClaudeCodeSession,
+    RateLimitHandler,
     build_claude_agent_options,
 )
 from db.models.enums import ParentSummaryStatus, RemoteControlStatus, TaskStatus
@@ -35,6 +36,7 @@ from db.models.tasks import Task, TaskParentSummary, TaskRepository
 from db.session import async_session_factory
 from services.claude_config import ensure_history_retention, history_retention_days
 from services.errors import ConflictError
+from services.llm_accounts import record_rate_limit
 from services.manual_queue import DEFAULT_FREEFORM_TIMEOUT_SECONDS, process_manual_queue_once
 from services.mcp_config import build_mcp_server_config
 from services.output_stream import build_output_publisher
@@ -408,6 +410,18 @@ async def _claude_config_dir(db_session: AsyncSession, task: Task) -> str:
     return llm_account.claude_config_dir if llm_account else ""
 
 
+def _rate_limit_recorder(db_session: AsyncSession, task: Task) -> RateLimitHandler | None:
+    """Раздел 16.2: события лимитов из потока сессии обновляют статус аккаунта задачи."""
+    account_id = task.llm_account_id
+    if account_id is None:
+        return None
+
+    async def record(info: RateLimitInfo) -> None:
+        await record_rate_limit(db_session, account_id=account_id, info=info)
+
+    return record
+
+
 async def _summarize_parent_in_fork(
     db_session: AsyncSession,
     *,
@@ -562,6 +576,7 @@ async def _run_claimed_task(
         ),
         on_text_delta=build_output_publisher(redis_client, active_node_context),
         on_abort=active_node_context.cancel_decision_wait,
+        on_rate_limit=_rate_limit_recorder(db_session, task),
     )
     control = _SessionControl(
         db_session=db_session,

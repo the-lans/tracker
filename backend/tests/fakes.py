@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 
-from claude_agent_sdk import Message, ResultMessage, StreamEvent
+from claude_agent_sdk import Message, RateLimitEvent, RateLimitInfo, ResultMessage, StreamEvent
 
 
 def make_result_message(*, is_error: bool = False, session_id: str = "sess-1") -> ResultMessage:
@@ -29,6 +29,15 @@ def make_text_delta(text: str, *, parent_tool_use_id: str | None = None) -> Stre
         session_id="sess-1",
         event={"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}},
         parent_tool_use_id=parent_tool_use_id,
+    )
+
+
+def make_rate_limit_event(status: str, *, resets_at: int | None = None) -> RateLimitEvent:
+    """Событие лимита, которое CLI присылает в поток сессии."""
+    return RateLimitEvent(
+        rate_limit_info=RateLimitInfo(status=status, resets_at=resets_at),  # type: ignore[arg-type]
+        uuid="rl",
+        session_id="sess-1",
     )
 
 

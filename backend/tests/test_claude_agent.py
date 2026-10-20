@@ -11,14 +11,19 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from claude_agent_sdk import AssistantMessage, TextBlock
+from claude_agent_sdk import AssistantMessage, RateLimitInfo, TextBlock
 
 from clients.claude_agent import (
     REMOTE_CONTROL_EXTRA_ARG,
     ClaudeCodeSession,
     build_claude_agent_options,
 )
-from tests.fakes import FakeClaudeAgentClient, make_result_message, make_text_delta
+from tests.fakes import (
+    FakeClaudeAgentClient,
+    make_rate_limit_event,
+    make_result_message,
+    make_text_delta,
+)
 
 
 def test_build_claude_agent_options_sets_remote_control_flag_on_first_connect() -> None:
@@ -270,3 +275,20 @@ class TestAbortHook:
         await session.abort_turn()
 
         assert events == ["abort_hook", "interrupt"]
+
+
+class TestRateLimitHook:
+    async def test_events_forwarded(self) -> None:
+        received: list[str] = []
+
+        async def on_rate_limit(info: RateLimitInfo) -> None:
+            received.append(info.status)
+
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[[make_rate_limit_event("rejected"), make_result_message()]],
+        )
+        session = ClaudeCodeSession(fake, on_rate_limit=on_rate_limit)
+
+        await session.send_and_collect_text("ход")
+
+        assert received == ["rejected"]
