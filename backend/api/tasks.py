@@ -20,6 +20,7 @@ from api.schemas import (
     AwaitingDecisionCountResponse,
     BindPipelineRequest,
     DecisionRequest,
+    EnvVariableRevealResponse,
     FreeformPromptRequest,
     LibraryPromptAddRequest,
     ManualRequestResponse,
@@ -27,6 +28,9 @@ from api.schemas import (
     NodeLogResponse,
     TaskCreateRequest,
     TaskDuplicateRequest,
+    TaskEnvVariableCreateRequest,
+    TaskEnvVariableResponse,
+    TaskEnvVariableUpdateRequest,
     TaskLibraryPromptListItem,
     TaskLibraryPromptResponse,
     TaskNodeResponse,
@@ -40,6 +44,7 @@ from db.models.enums import (
     NodeLogStatus,
     TaskStatus,
 )
+from db.models.env_vars import TaskEnvVariable
 from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.pipelines import Node
@@ -67,10 +72,18 @@ from services.task_control import (
 from services.task_creation import RepositoryAttachment, TaskDraft
 from services.task_creation import create_task as create_task_with_repositories
 from services.task_duplication import duplicate_task
+from services.task_env_variables import (
+    create_task_env_variable,
+    delete_task_env_variable,
+    list_task_env_variables,
+    reveal_task_env_variable,
+    update_task_env_variable,
+)
 from services.task_nodes import bind_pipeline_to_task, list_task_nodes, set_task_node_enabled
 from services.task_signal import publish_task_signal
 from services.task_status import SESSION_ACTIVE_STATUSES, transition_task_status
 from services.task_workspace import load_task_repositories, resolve_repos_root
+from services.template_context import ensure_no_repository_env_conflicts
 from tasks.session_worker import run_task_session
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -272,6 +285,7 @@ async def start_task(
     `new -> queued`, затем Celery-таск, владеющий сессией, подхватывает
     задачу асинхронно (`tasks/session_worker.py`)."""
     await _get_task_or_404(db_session, task_id)
+    await ensure_no_repository_env_conflicts(db_session, task_id=task_id)
     updated = await transition_task_status(
         db_session,
         task_id=task_id,
@@ -295,6 +309,7 @@ async def restart_task(
     task = await _get_task_or_404(db_session, task_id)
     if task.status is not TaskStatus.FAILED or task.last_failed_order_index is None:
         raise ValidationError("Перезапуск доступен только для задачи в статусе failed")
+    await ensure_no_repository_env_conflicts(db_session, task_id=task_id)
     run_task_session.delay(
         str(task_id),
         start_after_order_index=task.last_failed_order_index - 1,
@@ -707,3 +722,81 @@ async def _publish_signal(task_id: uuid.UUID) -> None:
         await publish_task_signal(redis_client, task_id)
     finally:
         await redis_client.aclose()
+
+
+@router.get("/{task_id}/env-variables", response_model=list[TaskEnvVariableResponse])
+async def list_env_variables_of_task(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> list[TaskEnvVariable]:
+    """Раздел 15.2: переменные в зоне статичных данных задачи."""
+    task = await _get_task_or_404(db_session, task_id)
+    return await list_task_env_variables(db_session, task)
+
+
+@router.post(
+    "/{task_id}/env-variables",
+    response_model=TaskEnvVariableResponse,
+    status_code=201,
+)
+async def create_env_variable_of_task(
+    task_id: uuid.UUID,
+    body: TaskEnvVariableCreateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> TaskEnvVariable:
+    task = await _get_task_or_404(db_session, task_id)
+    return await create_task_env_variable(
+        db_session,
+        task=task,
+        key=body.key,
+        value=body.value,
+    )
+
+
+@router.patch(
+    "/{task_id}/env-variables/{variable_id}",
+    response_model=TaskEnvVariableResponse,
+)
+async def update_env_variable_of_task(
+    task_id: uuid.UUID,
+    variable_id: uuid.UUID,
+    body: TaskEnvVariableUpdateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> TaskEnvVariable:
+    task = await _get_task_or_404(db_session, task_id)
+    return await update_task_env_variable(
+        db_session,
+        task=task,
+        variable_id=variable_id,
+        value=body.value,
+    )
+
+
+@router.delete("/{task_id}/env-variables/{variable_id}", status_code=204)
+async def delete_env_variable_of_task(
+    task_id: uuid.UUID,
+    variable_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    task = await _get_task_or_404(db_session, task_id)
+    await delete_task_env_variable(db_session, task=task, variable_id=variable_id)
+
+
+@router.get(
+    "/{task_id}/env-variables/{variable_id}/reveal",
+    response_model=EnvVariableRevealResponse,
+)
+async def reveal_env_variable_of_task(
+    task_id: uuid.UUID,
+    variable_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> EnvVariableRevealResponse:
+    """Правило 8: значение — только по явному запросу «Показать»."""
+    task = await _get_task_or_404(db_session, task_id)
+    value = await reveal_task_env_variable(db_session, task=task, variable_id=variable_id)
+    return EnvVariableRevealResponse(value=value)

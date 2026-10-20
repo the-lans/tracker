@@ -1270,3 +1270,83 @@ class TestRemoteControlReconnect:
 
         assert response.status_code == 409
         assert await consume_bridge_reconnect(redis_client, uuid.UUID(task_body["id"])) is False
+
+
+class TestTaskEnvVariables:
+    async def test_lifecycle(self, authed_client: AsyncClient, db_session: AsyncSession) -> None:
+        task_body = await _create_task(authed_client)
+        base = f"/tasks/{task_body['id']}/env-variables"
+
+        created = await authed_client.post(base, json={"key": "API_URL", "value": "https://a"})
+        assert created.status_code == 201, created.text
+        assert created.json() == {"id": created.json()["id"], "key": "API_URL"}
+        variable_id = created.json()["id"]
+        stored = await db_session.get(TaskEnvVariable, uuid.UUID(variable_id))
+        assert stored is not None
+        assert stored.value_encrypted != "https://a"
+
+        updated = await authed_client.patch(f"{base}/{variable_id}", json={"value": "https://b"})
+        assert updated.status_code == 200
+        revealed = await authed_client.get(f"{base}/{variable_id}/reveal")
+        assert revealed.json() == {"value": "https://b"}
+        assert [item["key"] for item in (await authed_client.get(base)).json()] == ["API_URL"]
+
+        deleted = await authed_client.delete(f"{base}/{variable_id}")
+        assert deleted.status_code == 204
+        assert (await authed_client.get(base)).json() == []
+
+    @pytest.mark.parametrize(
+        ("key", "expected_code"),
+        [("api_url", 422), ("1KEY", 422), ("API-URL", 422), ("TOKEN_2", 201)],
+    )
+    async def test_key_format(
+        self,
+        authed_client: AsyncClient,
+        key: str,
+        expected_code: int,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/env-variables",
+            json={"key": key, "value": "v"},
+        )
+
+        assert response.status_code == expected_code
+
+    async def test_duplicate_key(self, authed_client: AsyncClient) -> None:
+        task_body = await _create_task(authed_client)
+        base = f"/tasks/{task_body['id']}/env-variables"
+        await authed_client.post(base, json={"key": "API_URL", "value": "a"})
+
+        response = await authed_client.post(base, json={"key": "API_URL", "value": "b"})
+
+        assert response.status_code == 409
+
+    async def test_done_task_is_read_only(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.DONE)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/env-variables",
+            json={"key": "API_URL", "value": "a"},
+        )
+
+        assert response.status_code == 409
+
+    async def test_variable_of_another_task(self, authed_client: AsyncClient) -> None:
+        first = await _create_task(authed_client)
+        second = await _create_task(authed_client)
+        created = await authed_client.post(
+            f"/tasks/{first['id']}/env-variables",
+            json={"key": "API_URL", "value": "a"},
+        )
+
+        response = await authed_client.get(
+            f"/tasks/{second['id']}/env-variables/{created.json()['id']}/reveal",
+        )
+
+        assert response.status_code == 404

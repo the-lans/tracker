@@ -39,6 +39,9 @@ class EnvVariable(UUIDPrimaryKeyMixin, Base):
 
 class TaskEnvVariable(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "task_env_variables"
+    __table_args__ = (
+        sa.Index("uq_task_env_variables_task_key", "task_id", "key", unique=True),
+    )
 
     task_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("tasks.id"))
     key: Mapped[str] = mapped_column(sa.String)

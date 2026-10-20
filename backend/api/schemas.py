@@ -327,6 +327,25 @@ class EnvVariableRevealResponse(BaseModel):
     value: str
 
 
+class TaskEnvVariableCreateRequest(BaseModel):
+    key: str
+    value: str
+
+
+class TaskEnvVariableUpdateRequest(BaseModel):
+    value: str
+
+
+class TaskEnvVariableResponse(BaseModel):
+    """Раздел 15.2: переменная задачи; значение скрыто (правило 8) — только
+    через `.../reveal`."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    key: str
+
+
 # --- MCP-серверы (раздел 3.1, 10.2) --------------------------------------
 
 

@@ -1,23 +1,28 @@
 import uuid
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import (
     EnvVariableScope,
     NodeLogStatus,
     NodeLogTriggerType,
+    RepositoryRole,
     TaskStatus,
     UserRole,
 )
 from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.logs import NodeLog
-from db.models.tasks import Task
+from db.models.repositories import Repository
+from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from services.crypto import encrypt
+from services.errors import ValidationError
 from services.template_context import (
     build_node_context,
     build_session_context,
     build_task_context,
+    ensure_no_repository_env_conflicts,
     render_for_task,
     resolve_env_value,
 )
@@ -153,3 +158,104 @@ async def test_render_for_task_combines_all_sources(db_session: AsyncSession) ->
     )
 
     assert rendered == f"{task.code} / eu / sess-123"
+
+
+async def _attach_repository_variable(
+    session: AsyncSession,
+    task: Task,
+    *,
+    repository_name: str,
+    key: str,
+    value: str,
+) -> None:
+    repository = Repository(
+        name=repository_name,
+        git_url=f"git@example.com:{repository_name}.git",
+        deploy_key_encrypted=encrypt("k"),
+    )
+    session.add(repository)
+    await session.flush()
+    session.add_all(
+        [
+            TaskRepository(
+                task_id=task.id,
+                repository_id=repository.id,
+                role=RepositoryRole.READ_WRITE,
+                branch_name=f"feature/{task.code}",
+                base_branch="main",
+            ),
+            EnvVariable(
+                key=key,
+                value_encrypted=encrypt(value),
+                is_secret=False,
+                scope=EnvVariableScope.REPOSITORY,
+                repository_id=repository.id,
+            ),
+        ],
+    )
+    await session.flush()
+
+
+class TestRepositoryEnvVariables:
+    @pytest.mark.parametrize(
+        ("levels", "expected"),
+        [
+            (("task", "repository", "global"), "task"),
+            (("repository", "global"), "repository"),
+            (("global",), "global"),
+        ],
+        ids=["task_wins", "repository_over_global", "global_only"],
+    )
+    async def test_priority(
+        self,
+        db_session: AsyncSession,
+        levels: tuple[str, ...],
+        expected: str,
+    ) -> None:
+        task = await _make_task(db_session)
+        if "global" in levels:
+            db_session.add(_global_env_variable("API_URL", "global"))
+        if "task" in levels:
+            db_session.add(
+                TaskEnvVariable(task_id=task.id, key="API_URL", value_encrypted=encrypt("task")),
+            )
+        await db_session.flush()
+        if "repository" in levels:
+            await _attach_repository_variable(
+                db_session,
+                task,
+                repository_name="backend",
+                key="API_URL",
+                value="repository",
+            )
+
+        assert await resolve_env_value(db_session, task_id=task.id, key="API_URL") == expected
+
+    async def test_other_task_repository_ignored(self, db_session: AsyncSession) -> None:
+        task = await _make_task(db_session)
+        other = await _make_task(db_session)
+        await _attach_repository_variable(
+            db_session,
+            other,
+            repository_name="frontend",
+            key="API_URL",
+            value="чужой",
+        )
+
+        assert await resolve_env_value(db_session, task_id=task.id, key="API_URL") is None
+
+    async def test_conflict_between_repositories(self, db_session: AsyncSession) -> None:
+        task = await _make_task(db_session)
+        for name in ("backend", "frontend"):
+            await _attach_repository_variable(
+                db_session,
+                task,
+                repository_name=name,
+                key="API_URL",
+                value=name,
+            )
+
+        with pytest.raises(ValidationError, match="backend, frontend"):
+            await resolve_env_value(db_session, task_id=task.id, key="API_URL")
+        with pytest.raises(ValidationError, match="API_URL"):
+            await ensure_no_repository_env_conflicts(db_session, task_id=task.id)
