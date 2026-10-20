@@ -4,8 +4,9 @@ import { CollapsibleText } from "@/components/tasks/CollapsibleText";
 
 /**
  * `sourceLabel` — метка источника реплики (раздел 8.2: «отправлено
- * вручную»; раздел 15.2: сообщения из claude.ai/code). Канал claude.ai/code
- * `node_logs` пока не хранит — эта метка появится вместе с полем в API.
+ * вручную», промт библиотеки, пересказ родительской задачи). `streaming` —
+ * ответ ещё генерируется (раздел 15.2). Реплики из `claude.ai/code` в ленту
+ * не попадают: там сессия доступна только для просмотра (раздел 6.3).
  */
 
 export function MessageBubble({
@@ -13,11 +14,13 @@ export function MessageBubble({
   text,
   danger,
   sourceLabel,
+  streaming = false,
 }: {
   role: "user" | "llm";
   text: string;
   danger?: boolean;
   sourceLabel?: string;
+  streaming?: boolean;
 }) {
   return (
     <div className={cn("flex max-w-[640px] gap-2.5", role === "user" && "ml-auto flex-row-reverse")}>
@@ -44,6 +47,11 @@ export function MessageBubble({
         >
           <CollapsibleText text={text} />
         </div>
+        {streaming && (
+          <div className="mt-1 text-[10.5px] font-bold text-text-3" aria-live="polite">
+            генерируется…
+          </div>
+        )}
       </div>
     </div>
   );

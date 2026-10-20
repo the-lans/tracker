@@ -323,10 +323,23 @@ export interface BindPipelineRequest {
   disabled_node_ids: string[];
 }
 
+/** События `/ws/tasks/{id}/status` (раздел 15.2, 18.1). */
 export interface TaskStatusEvent {
+  type: "status";
   task_id: string;
   status: TaskStatus;
 }
+
+export interface TaskOutputDeltaEvent {
+  type: "output_delta";
+  node_log_id: string;
+  text: string;
+}
+
+export type TaskSocketEvent = TaskStatusEvent | TaskOutputDeltaEvent;
+
+/** Накопленный потоковый текст по `node_logs.id`. */
+export type TaskOutputStream = Record<string, string>;
 
 // --- Пайплайны и ноды --------------------------------------------------
 

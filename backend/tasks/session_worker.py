@@ -31,6 +31,7 @@ from db.session import async_session_factory
 from services.errors import ConflictError
 from services.manual_queue import process_manual_queue_once
 from services.mcp_config import build_mcp_server_config
+from services.output_stream import build_output_publisher
 from services.pipeline_orchestrator import CheckpointDecision, StopGuard, run_pipeline
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
@@ -367,7 +368,10 @@ async def _run_claimed_task(
         enable_remote_control=start_plan.enable_remote_control,
         can_use_tool=can_use_tool,
     )
-    session = ClaudeCodeSession(ClaudeSDKClient(options=options))
+    session = ClaudeCodeSession(
+        ClaudeSDKClient(options=options),
+        on_text_delta=build_output_publisher(redis_client, active_node_context),
+    )
     control = _SessionControl(
         db_session=db_session,
         task=task,

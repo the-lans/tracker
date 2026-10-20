@@ -18,7 +18,7 @@ from clients.claude_agent import (
     ClaudeCodeSession,
     build_claude_agent_options,
 )
-from tests.fakes import FakeClaudeAgentClient, make_result_message
+from tests.fakes import FakeClaudeAgentClient, make_result_message, make_text_delta
 
 
 def test_build_claude_agent_options_sets_remote_control_flag_on_first_connect() -> None:
@@ -173,3 +173,75 @@ class TestAbortTurnWithoutOpenTurn:
         await session.abort_turn(drain_timeout_seconds=5)
 
         assert fake.interrupted is False
+
+
+class TestStreamingOptions:
+    @pytest.mark.parametrize("fork_session", [False, True])
+    def test_partial_messages_and_fork(self, fork_session: bool) -> None:
+        options = build_claude_agent_options(
+            resume_session_id="sess-parent",
+            cwd="tracker/repos/RR-00001/",
+            permission_mode="default",
+            mcp_servers={},
+            claude_config_dir="/data/llm-accounts/acc-1",
+            enable_remote_control=False,
+            fork_session=fork_session,
+        )
+
+        assert options.include_partial_messages is True
+        assert options.fork_session is fork_session
+
+
+class TestTextDeltas:
+    async def test_forwarded_while_answer_is_collected(self) -> None:
+        deltas: list[str] = []
+
+        async def collect(text: str) -> None:
+            deltas.append(text)
+
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    make_text_delta("При"),
+                    make_text_delta("вет"),
+                    make_text_delta("субагент", parent_tool_use_id="tool-1"),
+                    AssistantMessage(content=[TextBlock(text="Привет")], model="claude"),
+                    make_result_message(),
+                ],
+            ],
+        )
+        session = ClaudeCodeSession(fake, on_text_delta=collect)
+
+        result = await session.send_and_collect_text("скажи привет")
+
+        assert deltas == ["При", "вет"]
+        assert result.text == "Привет"
+
+
+class TestReplaceClient:
+    async def test_switches_to_new_process(self) -> None:
+        old = FakeClaudeAgentClient(messages_per_query=[])
+        new = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        session = ClaudeCodeSession(old)
+
+        await session.replace_client(new)
+        await session.send_and_collect_text("после переподключения")
+
+        assert new.connected is True
+        assert old.disconnected is True
+        assert new.queries == ["после переподключения"]
+
+    async def test_keeps_old_process_when_connect_fails(self) -> None:
+        class FailingClient(FakeClaudeAgentClient):
+            async def connect(self) -> None:
+                raise RuntimeError("CLI не запустился")
+
+        old = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        session = ClaudeCodeSession(old)
+
+        with pytest.raises(RuntimeError):
+            await session.replace_client(FailingClient(messages_per_query=[]))
+        await session.send_and_collect_text("всё ещё работает")
+
+        assert old.disconnected is False
+        assert old.queries == ["всё ещё работает"]

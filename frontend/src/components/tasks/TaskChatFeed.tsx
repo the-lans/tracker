@@ -3,6 +3,7 @@ import { Maximize2, Minimize2 } from "lucide-react";
 import { NodeLogEntry } from "@/components/tasks/NodeLogEntry";
 import { Composer } from "@/components/tasks/Composer";
 import { Button } from "@/components/ui/button";
+import { useTaskOutputStream } from "@/hooks/useTaskStatusSocket";
 import { cn } from "@/lib/utils";
 import type { NodeLog, TaskStatus } from "@/lib/types";
 
@@ -16,6 +17,7 @@ export function TaskChatFeed({
   nodeLogs: NodeLog[];
 }) {
   const [fullscreen, setFullscreen] = useState(false);
+  const outputStream = useTaskOutputStream(taskId);
   const feedRef = useRef<HTMLDivElement>(null);
   const previousLength = useRef(0);
 
@@ -49,7 +51,12 @@ export function TaskChatFeed({
           </div>
         )}
         {nodeLogs.map((log) => (
-          <NodeLogEntry key={log.id} taskId={taskId} log={log} />
+          <NodeLogEntry
+            key={log.id}
+            taskId={taskId}
+            log={log}
+            streamedText={outputStream[log.id]}
+          />
         ))}
       </div>
 

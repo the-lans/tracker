@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 
-from claude_agent_sdk import Message, ResultMessage
+from claude_agent_sdk import Message, ResultMessage, StreamEvent
 
 
 def make_result_message(*, is_error: bool = False, session_id: str = "sess-1") -> ResultMessage:
@@ -19,6 +19,16 @@ def make_result_message(*, is_error: bool = False, session_id: str = "sess-1") -
         num_turns=1,
         session_id=session_id,
         result="итоговый результат" if not is_error else None,
+    )
+
+
+def make_text_delta(text: str, *, parent_tool_use_id: str | None = None) -> StreamEvent:
+    """Частичное сообщение SDK (`include_partial_messages`) с фрагментом текста."""
+    return StreamEvent(
+        uuid="evt",
+        session_id="sess-1",
+        event={"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}},
+        parent_tool_use_id=parent_tool_use_id,
     )
 
 

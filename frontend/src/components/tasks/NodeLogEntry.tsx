@@ -14,9 +14,20 @@ function sourceLabelOf(log: NodeLog): string | undefined {
   return undefined;
 }
 
-export function NodeLogEntry({ taskId, log }: { taskId: string; log: NodeLog }) {
+export function NodeLogEntry({
+  taskId,
+  log,
+  streamedText,
+}: {
+  taskId: string;
+  log: NodeLog;
+  streamedText?: string;
+}) {
   const isScript = log.script_stdout !== null || log.script_exit_code !== null;
   const isAwaitingDecision = log.status === NodeLogStatus.AWAITING_DECISION;
+  // Раздел 15.2: пока ход идёт, ответ показывается по мере генерации;
+  // итоговый текст из БД заменяет его.
+  const liveText = !log.llm_output_text && log.status === NodeLogStatus.RUNNING ? streamedText : undefined;
 
   return (
     <div className="flex flex-col gap-3">
@@ -25,6 +36,7 @@ export function NodeLogEntry({ taskId, log }: { taskId: string; log: NodeLog }) 
       )}
       {isScript && <ScriptOutputBlock stdout={log.script_stdout} exitCode={log.script_exit_code} />}
       {log.llm_output_text && <MessageBubble role="llm" text={log.llm_output_text} />}
+      {liveText && <MessageBubble role="llm" text={liveText} streaming />}
       {log.status === NodeLogStatus.FAILED && (
         <MessageBubble
           role="llm"

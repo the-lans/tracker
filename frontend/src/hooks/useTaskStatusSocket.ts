@@ -1,16 +1,35 @@
 import { useEffect, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { wsUrl } from "@/lib/apiClient";
-import type { Task, TaskStatusEvent } from "@/lib/types";
+import type { Task, TaskOutputStream, TaskSocketEvent } from "@/lib/types";
 
 const RECONNECT_DELAY_MS = 3000;
 
+// Вне префикса ["tasks"]: инвалидация задач не должна обнулять текст,
+// который ещё генерируется.
+const streamKey = (taskId: string) => ["task-stream", taskId] as const;
+
+function applyEvent(queryClient: QueryClient, taskId: string, payload: TaskSocketEvent) {
+  if (payload.type === "output_delta") {
+    queryClient.setQueryData<TaskOutputStream>(streamKey(taskId), (prev) => ({
+      ...prev,
+      [payload.node_log_id]: (prev?.[payload.node_log_id] ?? "") + payload.text,
+    }));
+    return;
+  }
+  queryClient.setQueryData<Task | undefined>(["tasks", "detail", taskId], (prev) =>
+    prev ? { ...prev, status: payload.status } : prev,
+  );
+  void queryClient.invalidateQueries({ queryKey: ["tasks", "list"] });
+  void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "node-logs"] });
+}
+
 /**
- * Подписка на `/ws/tasks/{id}/status` (раздел 18.1 ТЗ) — при получении
- * события со сменой статуса точечно обновляет TanStack Query кэш задачи и
- * список задач, без опроса вручную. Переподключается с фиксированной
- * задержкой при разрыве (закрытие сокета — сеть/перезапуск backend — не
- * обязательно означает, что сессия недействительна).
+ * Подписка на `/ws/tasks/{id}/status` (раздел 15.2, 18.1 ТЗ): смена статуса
+ * точечно обновляет TanStack Query кэш задачи и списка, фрагменты ответа LLM
+ * копятся в кэше потока (`useTaskOutputStream`). Переподключается с
+ * фиксированной задержкой при разрыве (закрытие сокета — сеть/перезапуск
+ * backend — не обязательно означает, что сессия недействительна).
  */
 export function useTaskStatusSocket(taskId: string | undefined) {
   const queryClient = useQueryClient();
@@ -26,12 +45,7 @@ export function useTaskStatusSocket(taskId: string | undefined) {
       socket = new WebSocket(wsUrl(`/ws/tasks/${taskId}/status`));
       socket.onmessage = (event: MessageEvent<string>) => {
         try {
-          const payload = JSON.parse(event.data) as TaskStatusEvent;
-          queryClient.setQueryData<Task | undefined>(["tasks", "detail", taskId], (prev) =>
-            prev ? { ...prev, status: payload.status } : prev,
-          );
-          void queryClient.invalidateQueries({ queryKey: ["tasks", "list"] });
-          void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "node-logs"] });
+          applyEvent(queryClient, taskId, JSON.parse(event.data) as TaskSocketEvent);
         } catch {
           // неожиданный формат сообщения — игнорируем, следующее событие поправит состояние
         }
@@ -51,4 +65,15 @@ export function useTaskStatusSocket(taskId: string | undefined) {
       socket?.close();
     };
   }, [taskId, queryClient]);
+}
+
+/** Раздел 15.2: текст ответа, пришедший по сокету, пока ход ещё идёт. */
+export function useTaskOutputStream(taskId: string): TaskOutputStream {
+  const { data } = useQuery<TaskOutputStream>({
+    queryKey: streamKey(taskId),
+    queryFn: () => ({}),
+    initialData: {},
+    staleTime: Infinity,
+  });
+  return data;
 }
