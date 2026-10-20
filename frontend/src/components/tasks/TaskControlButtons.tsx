@@ -1,15 +1,7 @@
 import { useState } from "react";
 import { Ban, Pause, Play, RotateCcw, Square } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import {
   useCancelQueuedTask,
   usePauseTask,
@@ -120,25 +112,16 @@ export function TaskControlButtons({ task }: { task: Task }) {
         </button>
       )}
 
-      <Dialog open={stopConfirmOpen} onOpenChange={setStopConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Остановить задачу?</DialogTitle>
-            <DialogDescription>
-              Текущее обращение к сессии будет прервано, задача перейдёт в статус «Ошибка». Продолжить
-              можно кнопкой «Перезапустить с текущей ноды».
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setStopConfirmOpen(false)}>
-              Отмена
-            </Button>
-            <Button variant="danger" onClick={handleStop} disabled={stopTask.isPending}>
-              Остановить
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={stopConfirmOpen}
+        onOpenChange={setStopConfirmOpen}
+        title="Остановить задачу?"
+        description="Текущее обращение к сессии будет прервано, задача перейдёт в статус «Ошибка». Продолжить можно кнопкой «Перезапустить с текущей ноды»."
+        confirmLabel="Остановить"
+        danger
+        pending={stopTask.isPending}
+        onConfirm={handleStop}
+      />
     </div>
   );
 }

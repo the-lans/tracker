@@ -110,6 +110,23 @@ class TaskResponse(BaseModel):
 
 class BindPipelineRequest(BaseModel):
     pipeline_id: uuid.UUID
+    # Раздел 13.1: чекбоксы, снятые при выборе пайплайна; `None` — по
+    # умолчанию выключены ноды с `is_skipped`.
+    disabled_node_ids: list[uuid.UUID] | None = None
+
+
+class NodeDependentResponse(BaseModel):
+    """Раздел 13.3, 15.2: нода, которая берёт вывод у отключаемой."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    node_id: uuid.UUID
+    name: str
+
+
+class PipelineDependentsRequest(BaseModel):
+    node_id: uuid.UUID
+    enabled_node_ids: list[uuid.UUID]
 
 
 class NodeLogResponse(BaseModel):

@@ -872,3 +872,139 @@ async def test_stop_button_interrupts_processing_request(
     assert response.status_code == 202
     assert await is_manual_stop_requested(redis_client, task_id, request_id)
     assert late.status_code == 409
+
+
+async def _make_script_pipeline(db_session: AsyncSession) -> tuple[Pipeline, list[Node]]:
+    """Скрипт, его потребитель и нода, пропускаемая по умолчанию."""
+    pipeline = Pipeline(name=f"p-{uuid.uuid4().hex[:6]}", is_archived=False)
+    db_session.add(pipeline)
+    await db_session.flush()
+    specs = [
+        ("script", NodeType.SCRIPT, None, False),
+        ("consumer", NodeType.PLAIN_PROMPT, "Разбери {{node.script_output}}", False),
+        ("optional", NodeType.PLAIN_PROMPT, "необязательно", True),
+    ]
+    nodes = [
+        Node(
+            pipeline_id=pipeline.id,
+            order_index=order_index,
+            name=name,
+            node_type=node_type,
+            prompt_template=prompt_template,
+            script_content="echo hi" if node_type is NodeType.SCRIPT else None,
+            is_skipped=is_skipped,
+            is_library_item=False,
+            is_archived=False,
+        )
+        for order_index, (name, node_type, prompt_template, is_skipped) in enumerate(specs)
+    ]
+    db_session.add_all(nodes)
+    await db_session.flush()
+    return pipeline, nodes
+
+
+class TestBindPipelineNodeSelection:
+    @pytest.mark.parametrize(
+        ("disabled", "expected"),
+        [
+            (None, [True, True, False]),
+            ([0], [False, True, True]),
+        ],
+        ids=["is_skipped_default", "explicit_choice"],
+    )
+    async def test_enabled_flags(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        disabled: list[int] | None,
+        expected: list[bool],
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        pipeline, nodes = await _make_script_pipeline(db_session)
+        body: dict[str, Any] = {"pipeline_id": str(pipeline.id)}
+        if disabled is not None:
+            body["disabled_node_ids"] = [str(nodes[index].id) for index in disabled]
+
+        response = await authed_client.post(f"/tasks/{task_body['id']}/pipeline", json=body)
+
+        assert response.status_code == 200, response.text
+        task_nodes = (await authed_client.get(f"/tasks/{task_body['id']}/nodes")).json()
+        assert [node["is_enabled"] for node in task_nodes] == expected
+
+    async def test_rejects_foreign_node(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        pipeline, _nodes = await _make_script_pipeline(db_session)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/pipeline",
+            json={"pipeline_id": str(pipeline.id), "disabled_node_ids": [str(uuid.uuid4())]},
+        )
+
+        assert response.status_code == 422
+        task = (await authed_client.get(f"/tasks/{task_body['id']}")).json()
+        assert task["pipeline_id"] is None
+
+
+class TestNodeDependents:
+    async def test_task_node(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        pipeline, _nodes = await _make_script_pipeline(db_session)
+        await authed_client.post(
+            f"/tasks/{task_body['id']}/pipeline",
+            json={"pipeline_id": str(pipeline.id)},
+        )
+        task_nodes = (await authed_client.get(f"/tasks/{task_body['id']}/nodes")).json()
+
+        response = await authed_client.get(
+            f"/tasks/{task_body['id']}/nodes/{task_nodes[0]['id']}/dependents",
+        )
+
+        assert response.status_code == 200
+        assert [node["name"] for node in response.json()] == ["consumer"]
+
+    @pytest.mark.parametrize(
+        ("enabled", "expected"),
+        [([0, 1], ["consumer"]), ([0], [])],
+        ids=["consumer_enabled", "consumer_disabled"],
+    )
+    async def test_pipeline_node(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        enabled: list[int],
+        expected: list[str],
+    ) -> None:
+        pipeline, nodes = await _make_script_pipeline(db_session)
+
+        response = await authed_client.post(
+            f"/pipelines/{pipeline.id}/dependents",
+            json={
+                "node_id": str(nodes[0].id),
+                "enabled_node_ids": [str(nodes[index].id) for index in enabled],
+            },
+        )
+
+        assert response.status_code == 200
+        assert [node["name"] for node in response.json()] == expected
+
+    async def test_unknown_node_is_404(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        pipeline, _nodes = await _make_script_pipeline(db_session)
+
+        response = await authed_client.post(
+            f"/pipelines/{pipeline.id}/dependents",
+            json={"node_id": str(uuid.uuid4()), "enabled_node_ids": []},
+        )
+
+        assert response.status_code == 404

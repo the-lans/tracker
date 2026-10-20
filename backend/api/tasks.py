@@ -23,6 +23,7 @@ from api.schemas import (
     FreeformPromptRequest,
     LibraryPromptAddRequest,
     ManualRequestResponse,
+    NodeDependentResponse,
     NodeLogResponse,
     TaskCreateRequest,
     TaskLibraryPromptListItem,
@@ -36,7 +37,7 @@ from api.schemas import (
 from db.models.enums import ManualRequestStatus, NodeLogStatus, TaskStatus
 from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
-from db.models.pipelines import Node, TaskNode
+from db.models.pipelines import Node
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
@@ -48,9 +49,10 @@ from services.manual_queue import (
     enqueue_freeform_prompt_run,
     enqueue_library_prompt_run,
 )
+from services.node_dependencies import find_task_node_dependents
 from services.plan_mode import encode_decision
 from services.task_control import TaskControlCommand, request_manual_stop, request_task_control
-from services.task_nodes import list_task_nodes, set_task_node_enabled
+from services.task_nodes import bind_pipeline_to_task, list_task_nodes, set_task_node_enabled
 from services.task_signal import publish_task_signal
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name, load_task_repositories
@@ -226,24 +228,14 @@ async def bind_pipeline(
     """Раздел 3.1, правило 10 CLAUDE.md: создание `task_nodes` и обновление
     `tasks.pipeline_id` — атомарно, в одной транзакции."""
     task = await _get_task_or_404(db_session, task_id)
-    if task.status is not TaskStatus.NEW:
-        raise ValidationError("Пайплайн можно привязать только к задаче в статусе new")
-
-    nodes_stmt = (
-        sa.select(Node)
-        .where(Node.pipeline_id == body.pipeline_id)
-        .order_by(Node.order_index)
+    await bind_pipeline_to_task(
+        db_session,
+        task=task,
+        pipeline_id=body.pipeline_id,
+        disabled_node_ids=(
+            set(body.disabled_node_ids) if body.disabled_node_ids is not None else None
+        ),
     )
-    nodes = list((await db_session.execute(nodes_stmt)).scalars().all())
-    if not nodes:
-        raise ValidationError("У пайплайна нет нод либо он не существует")
-
-    task.pipeline_id = body.pipeline_id
-    for node in nodes:
-        db_session.add(
-            TaskNode(task_id=task.id, node_id=node.id, order_index=node.order_index or 0),
-        )
-    await db_session.commit()
     # `updated_at` — колонка с `onupdate=sa.func.now()` (не `server_default`):
     # значение, вычисленное сервером при UPDATE, не возвращается автоматически
     # через RETURNING для обычного ORM-flush'а (в отличие от INSERT) — без
@@ -402,6 +394,26 @@ async def update_task_node(
     )
     views = await list_task_nodes(db_session, task)
     return TaskNodeResponse.model_validate(next(v for v in views if v.id == task_node_id))
+
+
+@router.get(
+    "/{task_id}/nodes/{task_node_id}/dependents",
+    response_model=list[NodeDependentResponse],
+)
+async def list_task_node_dependents(
+    task_id: uuid.UUID,
+    task_node_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> list[NodeDependentResponse]:
+    """Раздел 13.3, 15.2: кого затронет отключение ноды — для предупреждения."""
+    task = await _get_task_or_404(db_session, task_id)
+    dependents = await find_task_node_dependents(
+        db_session,
+        task=task,
+        task_node_id=task_node_id,
+    )
+    return [NodeDependentResponse.model_validate(node) for node in dependents]
 
 
 @router.get("/{task_id}/node-logs", response_model=list[NodeLogResponse])

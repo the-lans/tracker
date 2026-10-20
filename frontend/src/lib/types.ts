@@ -301,6 +301,22 @@ export interface TaskNodeItem {
   editable: boolean;
 }
 
+/** Раздел 13.3, 15.2: нода, которая берёт вывод у отключаемой. */
+export interface NodeDependent {
+  node_id: string;
+  name: string;
+}
+
+export interface PipelineDependentsRequest {
+  node_id: string;
+  enabled_node_ids: string[];
+}
+
+export interface BindPipelineRequest {
+  pipeline_id: string;
+  disabled_node_ids: string[];
+}
+
 export interface TaskStatusEvent {
   task_id: string;
   status: TaskStatus;

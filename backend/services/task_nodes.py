@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from app_logging.config import get_logger
 from db.models.enums import NodeType, TaskStatus
 from db.models.pipelines import Node, TaskNode
-from services.errors import ConflictError, NotFoundError
+from services.errors import ConflictError, NotFoundError, ValidationError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,3 +94,49 @@ async def set_task_node_enabled(
         is_enabled=is_enabled,
     )
     return task_node
+
+
+async def bind_pipeline_to_task(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    pipeline_id: uuid.UUID,
+    disabled_node_ids: set[uuid.UUID] | None,
+) -> None:
+    """
+    Раздел 3.1, 13.1, правило 10 CLAUDE.md: снимок нод и `tasks.pipeline_id`
+    — одной транзакцией.
+
+    ``disabled_node_ids`` — чекбоксы, снятые пользователем при выборе
+    пайплайна; `None` — выбор не делался, и выключены ноды с `is_skipped`
+    (раздел 15.4, «пропуск по умолчанию»).
+    """
+    if task.status is not TaskStatus.NEW:
+        raise ValidationError("Пайплайн можно привязать только к задаче в статусе new")
+    nodes_stmt = sa.select(Node).where(Node.pipeline_id == pipeline_id).order_by(Node.order_index)
+    nodes = list((await db_session.execute(nodes_stmt)).scalars().all())
+    if not nodes:
+        raise ValidationError("У пайплайна нет нод либо он не существует")
+    if disabled_node_ids is None:
+        disabled_node_ids = {node.id for node in nodes if node.is_skipped}
+    unknown = disabled_node_ids - {node.id for node in nodes}
+    if unknown:
+        raise ValidationError("Отключаемые ноды не принадлежат выбранному пайплайну")
+
+    task.pipeline_id = pipeline_id
+    for node in nodes:
+        db_session.add(
+            TaskNode(
+                task_id=task.id,
+                node_id=node.id,
+                order_index=node.order_index or 0,
+                is_enabled=node.id not in disabled_node_ids,
+            ),
+        )
+    await db_session.commit()
+    logger.info(
+        "pipeline_bound_to_task",
+        task_id=str(task.id),
+        pipeline_id=str(pipeline_id),
+        disabled_count=len(disabled_node_ids),
+    )

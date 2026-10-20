@@ -6,16 +6,28 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useSetTaskNodeEnabled, useTaskNodes, useUpdateTask } from "@/hooks/useTasks";
+import {
+  useSetTaskNodeEnabled,
+  useTaskNodeDependents,
+  useTaskNodes,
+  useUpdateTask,
+} from "@/hooks/useTasks";
+import { useDependentNodesGuard } from "@/hooks/useDependentNodesGuard";
 import { ApiError } from "@/lib/apiClient";
-import type { TaskUpdateRequest } from "@/lib/types";
 import { TaskRepositoriesCard } from "@/components/tasks/TaskRepositoriesCard";
 import { useNodes } from "@/hooks/useNodes";
 import { cn, formatDateTime } from "@/lib/utils";
-import { TaskStatus, type NodeLog, type Task } from "@/lib/types";
+import {
+  TaskStatus,
+  type NodeLog,
+  type Task,
+  type TaskNodeItem,
+  type TaskUpdateRequest,
+} from "@/lib/types";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { TaskLibraryPromptsCard } from "@/components/tasks/TaskLibraryPromptsCard";
 import { PipelinePickerDialog } from "@/components/tasks/PipelinePickerDialog";
+import { DependentNodesDialog } from "@/components/tasks/DependentNodesDialog";
 
 /** ISO-время ↔ значение `<input type="datetime-local">` в локальной зоне. */
 function toLocalInputValue(iso: string | null): string {
@@ -47,8 +59,10 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
   }
   const { data: taskNodes } = useTaskNodes(task.id, Boolean(task.pipeline_id));
   const setTaskNodeEnabled = useSetTaskNodeEnabled(task.id);
+  const taskNodeDependents = useTaskNodeDependents(task.id);
+  const dependentsGuard = useDependentNodesGuard();
 
-  function toggleNode(taskNodeId: string, isEnabled: boolean) {
+  function setNodeEnabled(taskNodeId: string, isEnabled: boolean) {
     setTaskNodeEnabled.mutate(
       { taskNodeId, isEnabled },
       {
@@ -56,6 +70,18 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
           toast.error(error instanceof ApiError ? error.message : "Не удалось изменить состав нод");
         },
       },
+    );
+  }
+
+  function toggleNode(taskNode: TaskNodeItem, isEnabled: boolean) {
+    if (isEnabled) {
+      setNodeEnabled(taskNode.id, true);
+      return;
+    }
+    void dependentsGuard.guard(
+      taskNode.name,
+      () => taskNodeDependents.mutateAsync(taskNode.id),
+      () => setNodeEnabled(taskNode.id, false),
     );
   }
   const { data: libraryNodes } = useNodes({ libraryOnly: true });
@@ -166,9 +192,13 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
                 >
                   <Checkbox
                     checked={taskNode.is_enabled}
-                    disabled={!taskNode.editable || setTaskNodeEnabled.isPending}
+                    disabled={
+                      !taskNode.editable ||
+                      setTaskNodeEnabled.isPending ||
+                      taskNodeDependents.isPending
+                    }
                     aria-label={`Включить ноду ${taskNode.name}`}
-                    onCheckedChange={(checked) => toggleNode(taskNode.id, checked === true)}
+                    onCheckedChange={(checked) => toggleNode(taskNode, checked === true)}
                   />
                   <NodeTypeIcon type={taskNode.node_type} className="size-[15px] shrink-0 text-text-2" />
                   <div className="flex-1 truncate text-[12.5px] font-bold">{taskNode.name}</div>
@@ -206,6 +236,11 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
         task={task}
         open={pipelinePickerOpen}
         onOpenChange={setPipelinePickerOpen}
+      />
+      <DependentNodesDialog
+        pending={dependentsGuard.pending}
+        onConfirm={dependentsGuard.confirm}
+        onCancel={dependentsGuard.cancel}
       />
     </div>
   );

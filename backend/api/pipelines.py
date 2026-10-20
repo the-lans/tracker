@@ -10,12 +10,20 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user
-from api.schemas import NodeResponse, PipelineCreateRequest, PipelineResponse, PipelineUpdateRequest
+from api.schemas import (
+    NodeDependentResponse,
+    NodeResponse,
+    PipelineCreateRequest,
+    PipelineDependentsRequest,
+    PipelineResponse,
+    PipelineUpdateRequest,
+)
 from db.models.pipelines import Node, Pipeline
 from db.models.users import User
 from db.session import get_session
 from services.errors import NotFoundError
 from services.integrity import ensure_pipeline_deletable
+from services.node_dependencies import find_pipeline_node_dependents
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
@@ -105,3 +113,21 @@ async def delete_pipeline(
     await db_session.execute(sa.delete(Node).where(Node.pipeline_id == pipeline_id))
     await db_session.execute(sa.delete(Pipeline).where(Pipeline.id == pipeline_id))
     await db_session.commit()
+
+
+@router.post("/{pipeline_id}/dependents", response_model=list[NodeDependentResponse])
+async def list_pipeline_node_dependents(
+    pipeline_id: uuid.UUID,
+    body: PipelineDependentsRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> list[NodeDependentResponse]:
+    """Раздел 13.3, 15.2: предупреждение при снятии чекбокса в окне выбора
+    пайплайна, пока `task_nodes` задачи ещё не созданы."""
+    dependents = await find_pipeline_node_dependents(
+        db_session,
+        pipeline_id=pipeline_id,
+        node_id=body.node_id,
+        enabled_node_ids=set(body.enabled_node_ids),
+    )
+    return [NodeDependentResponse.model_validate(node) for node in dependents]

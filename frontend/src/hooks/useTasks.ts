@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/apiClient";
 import type {
+  BindPipelineRequest,
   DecisionRequest,
   ManualRequest,
+  NodeDependent,
   NodeLog,
   Task,
   TaskCreateRequest,
@@ -102,8 +104,7 @@ export function useRestartTask(taskId: string) {
 export function useBindPipeline(taskId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (pipelineId: string) =>
-      api.post<Task>(`/tasks/${taskId}/pipeline`, { pipeline_id: pipelineId }),
+    mutationFn: (body: BindPipelineRequest) => api.post<Task>(`/tasks/${taskId}/pipeline`, body),
     onSuccess: (task) => {
       queryClient.setQueryData(taskKeys.detail(taskId), task);
       void queryClient.invalidateQueries({ queryKey: taskKeys.all });
@@ -215,6 +216,14 @@ export function useTaskNodes(taskId: string, enabled: boolean) {
     queryKey: taskKeys.nodes(taskId),
     queryFn: () => api.get<TaskNodeItem[]>(`/tasks/${taskId}/nodes`),
     enabled,
+  });
+}
+
+/** Раздел 13.3, 15.2: какие ноды берут вывод у отключаемой — для предупреждения. */
+export function useTaskNodeDependents(taskId: string) {
+  return useMutation({
+    mutationFn: (taskNodeId: string) =>
+      api.get<NodeDependent[]>(`/tasks/${taskId}/nodes/${taskNodeId}/dependents`),
   });
 }
 
