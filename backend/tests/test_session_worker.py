@@ -15,11 +15,13 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 import sqlalchemy as sa
-from claude_agent_sdk import PermissionResultAllow
+from claude_agent_sdk import ClaudeAgentOptions, PermissionResultAllow
 from claude_agent_sdk.types import ToolPermissionContext
 
 from clients.claude_agent import REMOTE_CONTROL_EXTRA_ARG
 from db.models.enums import (
+    McpAuthType,
+    McpIsolationMode,
     MergeStatus,
     NodeLogStatus,
     NodeLogTriggerType,
@@ -30,8 +32,9 @@ from db.models.enums import (
     UserRole,
 )
 from db.models.logs import NodeLog
+from db.models.mcp import McpServer
 from db.models.pipelines import Node, Pipeline, TaskNode
-from db.models.repositories import Repository
+from db.models.repositories import Repository, Template, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from services.crypto import encrypt
@@ -793,3 +796,85 @@ class TestRestartAfterClearContext:
         await db_session.refresh(task)
         assert task.session_id == "sess-worker"
         assert task.status is TaskStatus.DONE
+
+
+_ISOLATION_HEADER = "X-Tracker-Isolation-Path"
+
+
+def _isolation_header(options: ClaudeAgentOptions) -> str:
+    assert isinstance(options.mcp_servers, dict)
+    config = options.mcp_servers["playwright"]
+    assert config.get("type") == "http"
+    headers = config.get("headers")
+    assert isinstance(headers, dict)
+    return str(headers[_ISOLATION_HEADER])
+
+
+class TestStatefulMcpIsolation:
+    """Раздел 21.2, сценарий 12 (решение 2026-10-20 — уровень backend): две
+    задачи с одним MCP-сервером с состоянием получают каждая свою изоляцию
+    профиля; соблюдать её на стороне сервера — дело администратора (10.2)."""
+
+    @pytest.mark.parametrize(
+        ("isolation_mode", "path_template"),
+        [
+            (
+                McpIsolationMode.PER_TASK_DATA_DIR,
+                "{{task.repos_path}}/.mcp-profiles/{{mcp_server.name}}",
+            ),
+            (McpIsolationMode.ISOLATED_FLAG, None),
+        ],
+    )
+    async def test_each_task_gets_own_profile(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        tmp_path: Path,
+        isolation_mode: McpIsolationMode,
+        path_template: str | None,
+    ) -> None:
+        server = McpServer(
+            name="playwright",
+            url="https://mcp.internal/playwright",
+            auth_type=McpAuthType.NONE,
+            auth_config_encrypted=encrypt(""),
+            is_healthy=True,
+            has_stateful_resource=True,
+            isolation_mode=isolation_mode,
+            isolation_path_template=path_template,
+        )
+        template = Template(name=f"tpl-{uuid.uuid4().hex[:6]}", files={})
+        db_session.add_all([server, template])
+        await db_session.flush()
+        db_session.add(TemplateMcpServer(template_id=template.id, mcp_server_id=server.id))
+        tasks = []
+        for index in range(2):
+            origin_dir = tmp_path / f"origin-{index}"
+            origin_dir.mkdir()
+            origin = init_bare_origin(origin_dir)
+            task = await _make_task(db_session, status=TaskStatus.QUEUED, origin=origin)
+            await _add_node(db_session, task, order_index=0)
+            repository = await db_session.scalar(
+                sa.select(Repository)
+                .join(TaskRepository, TaskRepository.repository_id == Repository.id)
+                .where(TaskRepository.task_id == task.id),
+            )
+            assert repository is not None
+            repository.default_template_id = template.id
+            tasks.append(task)
+        await db_session.flush()
+
+        for task in tasks:
+            worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+            await _run_worker(task)
+
+        headers = [_isolation_header(options) for options in worker_env.options]
+        if isolation_mode is McpIsolationMode.PER_TASK_DATA_DIR:
+            assert headers == [
+                f"tracker/repos/{task.code}/.mcp-profiles/playwright" for task in tasks
+            ]
+        else:
+            assert headers == ["ephemeral", "ephemeral"]
+        for task in tasks:
+            await db_session.refresh(task)
+            assert task.status is TaskStatus.DONE
