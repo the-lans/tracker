@@ -15,6 +15,7 @@ import {
 import { useDependentNodesGuard } from "@/hooks/useDependentNodesGuard";
 import { ApiError } from "@/lib/apiClient";
 import { TaskRepositoriesCard } from "@/components/tasks/TaskRepositoriesCard";
+import { ParentTaskCard } from "@/components/tasks/ParentTaskCard";
 import { useNodes } from "@/hooks/useNodes";
 import { cn, formatDateTime } from "@/lib/utils";
 import {
@@ -118,6 +119,8 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
           </>
         )}
       </Card>
+
+      {task.parent_task_id && <ParentTaskCard task={task} />}
 
       <TaskRepositoriesCard taskId={task.id} />
 

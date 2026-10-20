@@ -1,4 +1,4 @@
-"""Таблицы `tasks`, `task_repositories` (раздел 3.1 ТЗ)."""
+"""Таблицы `tasks`, `task_repositories` (раздел 3.1 ТЗ), `task_parent_summaries`."""
 
 from __future__ import annotations
 
@@ -11,12 +11,18 @@ from sqlalchemy.orm import Mapped, mapped_column
 from db.base import Base
 from db.models.enums import (
     MergeStatus,
+    ParentSummaryStatus,
     PermissionMode,
     RemoteControlStatus,
     RepositoryRole,
     TaskStatus,
 )
-from db.models.mixins import CreatedUpdatedAtMixin, UUIDPrimaryKeyMixin, pg_enum
+from db.models.mixins import (
+    CreatedAtMixin,
+    CreatedUpdatedAtMixin,
+    UUIDPrimaryKeyMixin,
+    pg_enum,
+)
 
 _DEFAULT_REMOTE_CONTROL_RECONNECT_ATTEMPTS = 0
 
@@ -76,3 +82,30 @@ class TaskRepository(UUIDPrimaryKeyMixin, Base):
         pg_enum(MergeStatus, name="merge_status"),
         default=MergeStatus.NOT_PUSHED,
     )
+
+
+class TaskParentSummary(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """Пересказ истории родителя для дочерней задачи (`tasks.use_parent_summary`).
+
+    Отдельный артефакт, а не реплика в `node_logs`: его составляет сессия
+    родителя, а получает первым сообщением новая сессия дочерней задачи.
+    Одна запись на дочернюю задачу — повторный запуск не просит пересказ снова.
+    """
+
+    __tablename__ = "task_parent_summaries"
+
+    parent_task_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("tasks.id"))
+    child_task_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("tasks.id"), unique=True)
+    status: Mapped[ParentSummaryStatus] = mapped_column(
+        pg_enum(ParentSummaryStatus, name="parent_summary_status"),
+        default=ParentSummaryStatus.PENDING,
+    )
+    summary_text: Mapped[str | None] = mapped_column(sa.Text)
+    unavailable_reason: Mapped[str | None] = mapped_column(sa.Text)
+    # Запрос в очереди родителя, если его сессия была занята; NULL — пересказ
+    # делается в ответвлении сессии родителя.
+    manual_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("task_manual_request_queue.id"),
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))

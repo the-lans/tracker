@@ -27,16 +27,27 @@ from clients.claude_agent import (
     ClaudeCodeSession,
     build_claude_agent_options,
 )
-from db.models.enums import RemoteControlStatus, TaskStatus
+from db.models.enums import ParentSummaryStatus, RemoteControlStatus, TaskStatus
 from db.models.llm import LlmAccount
 from db.models.mcp import McpServer
 from db.models.repositories import Repository, TemplateMcpServer
-from db.models.tasks import Task, TaskRepository
+from db.models.tasks import Task, TaskParentSummary, TaskRepository
 from db.session import async_session_factory
 from services.errors import ConflictError
-from services.manual_queue import process_manual_queue_once
+from services.manual_queue import DEFAULT_FREEFORM_TIMEOUT_SECONDS, process_manual_queue_once
 from services.mcp_config import build_mcp_server_config
 from services.output_stream import build_output_publisher
+from services.parent_summary import (
+    REASON_NO_SESSION,
+    REASON_SUMMARY_FAILED,
+    deliver_parent_summary,
+    deny_all_tools,
+    get_or_request_parent_summary,
+    mark_parent_summary_unavailable,
+    needs_parent_summary,
+    summarize_parent_in_fork,
+    wait_for_parent_summary,
+)
 from services.pipeline_orchestrator import CheckpointDecision, StopGuard, run_pipeline
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
@@ -60,6 +71,7 @@ from services.task_workspace import (
     prepare_task_workspace,
     push_task_workspace,
     resolve_repos_root,
+    task_root,
 )
 from tasks.celery_app import celery_app
 
@@ -370,6 +382,102 @@ async def _run_task_session_async(
             await redis_client.aclose()
 
 
+async def _claude_config_dir(db_session: AsyncSession, task: Task) -> str:
+    """Раздел 19.5: изолированная конфигурация LLM-аккаунта задачи."""
+    if task.llm_account_id is None:
+        return ""
+    llm_account = await db_session.get(LlmAccount, task.llm_account_id)
+    return llm_account.claude_config_dir if llm_account else ""
+
+
+async def _summarize_parent_in_fork(
+    db_session: AsyncSession,
+    *,
+    summary: TaskParentSummary,
+    child: Task,
+    parent: Task,
+    repos_root: Path,
+) -> None:
+    """Пересказ в ответвлении сессии свободного родителя: его история не
+    меняется, а процесс CLI живёт только на время одного хода."""
+    assert parent.session_id is not None
+    parent_root = task_root(repos_root, parent)
+    # После очистки репозиториев родителя его папки может не быть, а resume
+    # ищет историю сессии по рабочей директории.
+    parent_root.mkdir(parents=True, exist_ok=True)
+    options = build_claude_agent_options(
+        resume_session_id=parent.session_id,
+        cwd=str(parent_root),
+        permission_mode=None,
+        mcp_servers={},
+        claude_config_dir=await _claude_config_dir(db_session, parent),
+        enable_remote_control=False,
+        can_use_tool=deny_all_tools,
+        fork_session=True,
+    )
+    fork = ClaudeCodeSession(ClaudeSDKClient(options=options))
+    try:
+        await fork.connect()
+    except ClaudeSDKError:
+        logger.exception("parent_summary_fork_failed", task_id=str(child.id))
+        await mark_parent_summary_unavailable(
+            db_session,
+            summary=summary,
+            reason=REASON_SUMMARY_FAILED,
+        )
+        return
+    try:
+        await summarize_parent_in_fork(
+            db_session,
+            summary=summary,
+            child=child,
+            parent=parent,
+            claude_session=fork,
+            timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
+        )
+    finally:
+        await _disconnect_quietly(fork)
+
+
+async def _obtain_parent_summary(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    redis_client: Redis,
+    repos_root: Path,
+) -> TaskParentSummary | None:
+    """Раздел 3.1 `use_parent_summary`: пересказ родителя до старта своей
+    сессии; `None` — задачу остановили, пока она ждала очередь родителя."""
+    summary = await get_or_request_parent_summary(db_session, child=task, redis_client=redis_client)
+    if summary.delivered_at is not None:
+        return summary
+
+    async def stop_requested() -> bool:
+        return await read_task_control(redis_client, task.id) is TaskControlCommand.STOP
+
+    if not await wait_for_parent_summary(
+        db_session,
+        summary=summary,
+        redis_client=redis_client,
+        is_stop_requested=stop_requested,
+    ):
+        return None
+    if summary.status is not ParentSummaryStatus.PENDING:
+        return summary
+    parent = await db_session.get(Task, summary.parent_task_id, populate_existing=True)
+    if parent is None or parent.session_id is None:
+        await mark_parent_summary_unavailable(db_session, summary=summary, reason=REASON_NO_SESSION)
+        return summary
+    await _summarize_parent_in_fork(
+        db_session,
+        summary=summary,
+        child=task,
+        parent=parent,
+        repos_root=repos_root,
+    )
+    return summary
+
+
 async def _run_claimed_task(
     db_session: AsyncSession,
     *,
@@ -377,14 +485,27 @@ async def _run_claimed_task(
     redis_client: Redis,
     start_after_order_index: int | None,
 ) -> None:
-    claude_config_dir = None
-    if task.llm_account_id is not None:
-        llm_account = await db_session.get(LlmAccount, task.llm_account_id)
-        claude_config_dir = llm_account.claude_config_dir if llm_account else None
-
+    claude_config_dir = await _claude_config_dir(db_session, task)
     repos_root = resolve_repos_root()
     workspace = await prepare_task_workspace(db_session, task=task, repos_root=repos_root)
     mcp_servers = await _resolve_mcp_servers_for_task(db_session, task)
+
+    parent_summary = None
+    if needs_parent_summary(task):
+        parent_summary = await _obtain_parent_summary(
+            db_session,
+            task=task,
+            redis_client=redis_client,
+            repos_root=repos_root,
+        )
+        if parent_summary is None:
+            logger.info("task_stopped_while_waiting_parent_summary", task_id=str(task.id))
+            await _fail_task(
+                db_session,
+                task,
+                failed_order_index=await first_unfinished_order_index(db_session, task.id),
+            )
+            return
 
     active_node_context = ActiveNodeContext()
     can_use_tool = build_can_use_tool_callback(
@@ -433,6 +554,15 @@ async def _run_claimed_task(
         await record_bridge_status(db_session, task=task, status=RemoteControlStatus.CONNECTED)
     outcome = None
     try:
+        if parent_summary is not None and parent_summary.delivered_at is None:
+            await deliver_parent_summary(
+                db_session,
+                child=task,
+                summary=parent_summary,
+                claude_session=session,
+                timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
+                active_node_context=active_node_context,
+            )
         # Конфликт, оставшийся от прошлого прогона (перезапуск из `failed`,
         # продолжение после `clear_context`), — до первой же ноды.
         rebase_resolved = await control.resolve_rebase_conflict_if_any(

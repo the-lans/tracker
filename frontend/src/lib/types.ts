@@ -71,6 +71,7 @@ export type LibraryPromptRunStatus =
 export const ManualRequestType = {
   LIBRARY_PROMPT: "library_prompt",
   FREEFORM_PROMPT: "freeform_prompt",
+  PARENT_SUMMARY: "parent_summary",
 } as const;
 export type ManualRequestType = (typeof ManualRequestType)[keyof typeof ManualRequestType];
 
@@ -86,6 +87,8 @@ export const NodeLogTriggerType = {
   PIPELINE: "pipeline",
   LIBRARY_MANUAL: "library_manual",
   FREEFORM_MANUAL: "freeform_manual",
+  SUMMARY_FOR_CHILD: "summary_for_child",
+  PARENT_SUMMARY: "parent_summary",
 } as const;
 export type NodeLogTriggerType = (typeof NodeLogTriggerType)[keyof typeof NodeLogTriggerType];
 

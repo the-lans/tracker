@@ -178,6 +178,17 @@ _UNFINISHED_NODE_LOG_STATUSES = (
     NodeLogStatus.AWAITING_DECISION,
 )
 _AWAITING_STATUSES = (TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW)
+# Раздел 8.2: сессией задачи владеет воркер ровно в этих статусах — ручные
+# запросы принимаются в её очередь, только пока она активна.
+SESSION_ACTIVE_STATUSES = frozenset(
+    {
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.PAUSED,
+        TaskStatus.PLAN_REVIEW,
+        TaskStatus.AWAITING_INPUT,
+        TaskStatus.REBASE_CONFLICT,
+    },
+)
 # Статусы, из которых `failed` достижим напрямую (раздел 14.1).
 FAILABLE_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT)
 

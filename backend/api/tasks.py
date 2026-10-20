@@ -70,7 +70,7 @@ from services.task_creation import create_task as create_task_with_repositories
 from services.task_duplication import duplicate_task
 from services.task_nodes import bind_pipeline_to_task, list_task_nodes, set_task_node_enabled
 from services.task_signal import publish_task_signal
-from services.task_status import transition_task_status
+from services.task_status import SESSION_ACTIVE_STATUSES, transition_task_status
 from services.task_workspace import load_task_repositories, resolve_repos_root
 from tasks.session_worker import run_task_session
 
@@ -88,17 +88,6 @@ async def _get_task_or_404(db_session: AsyncSession, task_id: uuid.UUID) -> Task
     return task
 
 
-# Раздел 8.2: ручные промты — «пока сессия активна»; воркер, владеющий
-# сессией, существует ровно в этих статусах.
-_SESSION_ACTIVE_STATUSES = frozenset(
-    {
-        TaskStatus.IN_PROGRESS,
-        TaskStatus.PAUSED,
-        TaskStatus.PLAN_REVIEW,
-        TaskStatus.AWAITING_INPUT,
-        TaskStatus.REBASE_CONFLICT,
-    },
-)
 _ACTIVE_REQUEST_STATUSES = (ManualRequestStatus.QUEUED, ManualRequestStatus.PROCESSING)
 
 
@@ -405,7 +394,7 @@ async def reconnect_remote_control(
     владеет воркер — он пересоздаст процесс CLI между ходами и обновит
     `remote_control_status`; восстановление моста не гарантируется."""
     task = await _get_task_or_404(db_session, task_id)
-    _require_status(task, _SESSION_ACTIVE_STATUSES, "У задачи нет активной сессии")
+    _require_status(task, SESSION_ACTIVE_STATUSES, "У задачи нет активной сессии")
     task.remote_control_status = RemoteControlStatus.RECONNECTING
     await db_session.commit()
     redis_client = _get_redis_client()
@@ -543,7 +532,7 @@ async def submit_freeform_prompt(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> ManualRequestResponse:
     task = await _get_task_or_404(db_session, task_id)
-    _require_status(task, _SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
+    _require_status(task, SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
     request = await enqueue_freeform_prompt_run(
         db_session,
         task_id=task_id,
@@ -592,7 +581,7 @@ async def run_library_prompt(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> ManualRequestResponse:
     task = await _get_task_or_404(db_session, task_id)
-    _require_status(task, _SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
+    _require_status(task, SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
     task_library_prompt = await db_session.get(TaskLibraryPrompt, task_library_prompt_id)
     if task_library_prompt is None or task_library_prompt.task_id != task_id:
         raise NotFoundError(f"Промт {task_library_prompt_id} не найден у этой задачи")

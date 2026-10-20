@@ -35,7 +35,8 @@ class TaskManualRequestQueue(UUIDPrimaryKeyMixin, Base):
 
     ``request_type`` определяет, какое из двух взаимоисключающих полей
     заполнено — ``node_id`` для ``library_prompt``, ``raw_prompt_text`` для
-    ``freeform_prompt`` (ТЗ прямо привязывает поле к типу через "Для ...").
+    ``freeform_prompt`` (ТЗ прямо привязывает поле к типу через "Для ...") и
+    для ``parent_summary`` (текст просьбы о пересказе для дочерней задачи).
     """
 
     __tablename__ = "task_manual_request_queue"
@@ -43,7 +44,7 @@ class TaskManualRequestQueue(UUIDPrimaryKeyMixin, Base):
         sa.CheckConstraint(
             "(request_type = 'library_prompt' "
             "AND node_id IS NOT NULL AND raw_prompt_text IS NULL) "
-            "OR (request_type = 'freeform_prompt' "
+            "OR (request_type IN ('freeform_prompt', 'parent_summary') "
             "AND raw_prompt_text IS NOT NULL AND node_id IS NULL)",
             name="ck_task_manual_request_queue_type_matches_payload",
         ),

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 import sqlalchemy as sa
+from claude_agent_sdk import PermissionResultAllow
 from claude_agent_sdk.types import ToolPermissionContext
 
 from clients.claude_agent import REMOTE_CONTROL_EXTRA_ARG
@@ -181,7 +182,7 @@ async def test_crash_during_session_fails_task_instead_of_hanging(
     async def sdk_crashes() -> None:
         raise RuntimeError("процесс claude упал")
 
-    worker_env.client.connect = sdk_crashes
+    worker_env.client.connect = sdk_crashes  # type: ignore[method-assign]
 
     await _run_worker(task)
 
@@ -707,7 +708,9 @@ class TestQuestionDuringPausedPrompt:
                     {"question": "Какую базу?", "options": ["main", "dev"]},
                     ToolPermissionContext(),
                 )
-                answers.append(result.updated_input["answer"])  # type: ignore[union-attr]
+                assert isinstance(result, PermissionResultAllow)
+                assert result.updated_input is not None
+                answers.append(result.updated_input["answer"])
 
         async def while_paused(observed: list[TaskStatus]) -> None:
             await db_session.refresh(task)

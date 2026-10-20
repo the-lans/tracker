@@ -44,6 +44,7 @@ from services.nodes.dispatch import (
     resolve_node_prompt_or_none,
 )
 from services.notifications import NotificationEvent, notify_task_event
+from services.parent_summary import run_parent_summary_request
 from services.pipeline_orchestrator import StopGuard, run_node_execution
 from services.task_control import clear_manual_stop, is_manual_stop_requested
 from services.template_context import render_for_task
@@ -360,7 +361,19 @@ async def _process_single_request(
     request.status = ManualRequestStatus.PROCESSING
     await db_session.commit()
 
-    if request.request_type is ManualRequestType.LIBRARY_PROMPT:
+    if request.request_type is ManualRequestType.PARENT_SUMMARY:
+        # Короткий ход без кнопки ■ (её нет у служебного запроса): «Остановить»
+        # задачу подождёт его завершения, не дольше таймаута свободного промта.
+        await run_parent_summary_request(
+            db_session,
+            parent=task,
+            request=request,
+            claude_session=claude_session,
+            redis_client=redis_client,
+            timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
+            active_node_context=active_node_context,
+        )
+    elif request.request_type is ManualRequestType.LIBRARY_PROMPT:
         await _run_library_prompt(
             db_session,
             task=task,
