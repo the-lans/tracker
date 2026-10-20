@@ -5,10 +5,12 @@ import type {
   AllowedEmail,
   AppLog,
   AppLogLevel,
+  LibraryUsage,
   NodeLogStatus,
   NodeRun,
   PeriodicTask,
   PeriodicTaskUpdateRequest,
+  SystemSettings,
   User,
   UserUpdateRequest,
 } from "@/lib/types";
@@ -116,5 +118,30 @@ export function useActiveCeleryTasks() {
     queryKey: ["admin", "celery-tasks"],
     queryFn: () => api.get<ActiveCeleryTask[]>("/monitoring/celery-tasks"),
     refetchInterval: 10_000,
+  });
+}
+
+const SYSTEM_SETTINGS_KEY = ["system-settings"] as const;
+
+/** Раздел 15.5: читается и формой ноды, поэтому вне ключей админки. */
+export function useSystemSettings() {
+  return useQuery({
+    queryKey: SYSTEM_SETTINGS_KEY,
+    queryFn: () => api.get<SystemSettings>("/system-settings"),
+  });
+}
+
+export function useUpdateSystemSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: SystemSettings) => api.put<SystemSettings>("/system-settings", body),
+    onSuccess: (settings) => queryClient.setQueryData(SYSTEM_SETTINGS_KEY, settings),
+  });
+}
+
+export function useLibraryUsage() {
+  return useQuery({
+    queryKey: ["admin", "library-usage"],
+    queryFn: () => api.get<LibraryUsage[]>("/nodes/library-usage"),
   });
 }

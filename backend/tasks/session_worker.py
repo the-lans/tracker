@@ -18,13 +18,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from claude_agent_sdk import ClaudeSDKClient, ClaudeSDKError
+from claude_agent_sdk import ClaudeSDKClient, ClaudeSDKError, RateLimitInfo
 from redis.asyncio import Redis
 
 from app_logging.config import get_logger
 from clients.claude_agent import (
     ClaudeAgentClientProtocol,
     ClaudeCodeSession,
+    RateLimitHandler,
     build_claude_agent_options,
 )
 from db.models.enums import ParentSummaryStatus, RemoteControlStatus, TaskStatus
@@ -33,7 +34,9 @@ from db.models.mcp import McpServer
 from db.models.repositories import Repository, TemplateMcpServer
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
 from db.session import async_session_factory
+from services.claude_config import ensure_history_retention, history_retention_days
 from services.errors import ConflictError
+from services.llm_accounts import record_rate_limit
 from services.manual_queue import DEFAULT_FREEFORM_TIMEOUT_SECONDS, process_manual_queue_once
 from services.mcp_config import build_mcp_server_config
 from services.output_stream import build_output_publisher
@@ -52,6 +55,7 @@ from services.pipeline_orchestrator import CheckpointDecision, StopGuard, run_pi
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
 from services.remote_control import record_bridge_status
+from services.session_heartbeat import keep_session_heartbeat
 from services.session_lifecycle import plan_session_start
 from services.task_control import (
     TaskControlCommand,
@@ -379,12 +383,13 @@ async def _run_task_session_async(
             if not continuation:
                 # Команда, адресованная прошлому прогону, к этому не относится.
                 await clear_task_control(redis_client, task_id)
-            await _run_claimed_task(
-                db_session,
-                task=task,
-                redis_client=redis_client,
-                start_after_order_index=start_after_order_index,
-            )
+            async with keep_session_heartbeat(redis_client, task_id):
+                await _run_claimed_task(
+                    db_session,
+                    task=task,
+                    redis_client=redis_client,
+                    start_after_order_index=start_after_order_index,
+                )
         except Exception as exc:
             # Раздел 17.3: любая ошибка сессии переводит задачу в `failed`,
             # а не оставляет её в `in_progress` навсегда.
@@ -403,6 +408,18 @@ async def _claude_config_dir(db_session: AsyncSession, task: Task) -> str:
         return ""
     llm_account = await db_session.get(LlmAccount, task.llm_account_id)
     return llm_account.claude_config_dir if llm_account else ""
+
+
+def _rate_limit_recorder(db_session: AsyncSession, task: Task) -> RateLimitHandler | None:
+    """Раздел 16.2: события лимитов из потока сессии обновляют статус аккаунта задачи."""
+    account_id = task.llm_account_id
+    if account_id is None:
+        return None
+
+    async def record(info: RateLimitInfo) -> None:
+        await record_rate_limit(db_session, account_id=account_id, info=info)
+
+    return record
 
 
 async def _summarize_parent_in_fork(
@@ -432,6 +449,7 @@ async def _summarize_parent_in_fork(
         can_use_tool=deny_all_tools,
         fork_session=True,
     )
+    ensure_history_retention(options.env["CLAUDE_CONFIG_DIR"], days=history_retention_days())
     fork = ClaudeCodeSession(ClaudeSDKClient(options=options))
     try:
         await fork.connect()
@@ -548,6 +566,8 @@ async def _run_claimed_task(
         )
         return ClaudeSDKClient(options=options)
 
+    # Раздел 6.4: история сессии нужна, пока существует задача (resume, пересказ).
+    ensure_history_retention(claude_config_dir, days=history_retention_days())
     start_plan = plan_session_start(existing_session_id=task.session_id)
     session = ClaudeCodeSession(
         make_client(
@@ -556,6 +576,7 @@ async def _run_claimed_task(
         ),
         on_text_delta=build_output_publisher(redis_client, active_node_context),
         on_abort=active_node_context.cancel_decision_wait,
+        on_rate_limit=_rate_limit_recorder(db_session, task),
     )
     control = _SessionControl(
         db_session=db_session,

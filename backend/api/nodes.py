@@ -16,14 +16,20 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.dependencies import get_current_user
-from api.schemas import NodeCreateRequest, NodeResponse, NodeUpdateRequest
+from api.dependencies import get_current_user, require_admin
+from api.schemas import (
+    LibraryUsageResponse,
+    NodeCreateRequest,
+    NodeResponse,
+    NodeUpdateRequest,
+)
 from db.models.enums import NodeType
 from db.models.pipelines import Node
 from db.models.users import User
 from db.session import get_session
 from services.errors import NotFoundError, ValidationError
-from services.integrity import ensure_node_deletable
+from services.integrity import count_library_prompt_usage, ensure_node_deletable
+from services.system_settings import resolve_node_execution_defaults
 from services.templating import RenderScope, validate_template_variables
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
@@ -101,6 +107,12 @@ async def create_node(
         prompt_template=body.prompt_template,
         llm_output_last_n=body.llm_output_last_n,
     )
+    defaults = await resolve_node_execution_defaults(
+        db_session,
+        timeout_seconds=body.timeout_seconds,
+        max_retries=body.max_retries,
+        retry_base_delay_seconds=body.retry_base_delay_seconds,
+    )
     node = Node(
         id=uuid.uuid4(),
         pipeline_id=body.pipeline_id,
@@ -113,9 +125,9 @@ async def create_node(
         script_language=body.script_language,
         script_content=body.script_content,
         docker_image=body.docker_image,
-        timeout_seconds=body.timeout_seconds,
-        max_retries=body.max_retries,
-        retry_base_delay_seconds=body.retry_base_delay_seconds,
+        timeout_seconds=defaults.timeout_seconds,
+        max_retries=defaults.max_retries,
+        retry_base_delay_seconds=defaults.retry_base_delay_seconds,
         guide_url=body.guide_url,
         is_skipped=body.is_skipped,
         is_library_item=body.pipeline_id is None,
@@ -139,6 +151,18 @@ async def list_nodes(
     if not include_archived:
         stmt = stmt.where(Node.is_archived == False)  # noqa: E712
     return list((await db_session.execute(stmt)).scalars().all())
+
+
+@router.get("/library-usage", response_model=list[LibraryUsageResponse])
+async def list_library_usage(
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _admin: Annotated[User, Depends(require_admin)],
+) -> list[LibraryUsageResponse]:
+    """Раздел 15.5: в скольких задачах используется каждый промт библиотеки."""
+    return [
+        LibraryUsageResponse(node_id=node_id, task_count=task_count)
+        for node_id, task_count in await count_library_prompt_usage(db_session)
+    ]
 
 
 @router.get("/{node_id}", response_model=NodeResponse)

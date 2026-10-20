@@ -6,6 +6,8 @@ import type {
   ManualRequest,
   NodeDependent,
   NodeLog,
+  NodeLogStatus,
+  NodeLogTriggerType,
   Task,
   TaskCreateRequest,
   TaskDuplicateRequest,
@@ -59,6 +61,35 @@ export function useTaskNodeLogs(taskId: string | undefined) {
     queryFn: () => api.get<NodeLog[]>(`/tasks/${taskId}/node-logs`),
     enabled: Boolean(taskId),
     refetchInterval: 4_000,
+  });
+}
+
+export interface NodeLogFilters {
+  nodeId?: string;
+  status?: NodeLogStatus;
+  triggerType?: NodeLogTriggerType;
+}
+
+/** Раздел 13.4: вкладка «Логи» — история с фильтрами по ноде, статусу, источнику. */
+export function useFilteredNodeLogs(taskId: string, filters: NodeLogFilters) {
+  return useQuery({
+    queryKey: [...taskKeys.nodeLogs(taskId), filters],
+    queryFn: () =>
+      api.get<NodeLog[]>(`/tasks/${taskId}/node-logs`, {
+        node_id: filters.nodeId,
+        status: filters.status,
+        trigger_type: filters.triggerType,
+      }),
+    refetchInterval: 4_000,
+  });
+}
+
+/** Раздел 15.1: активные сессии Claude Code задач текущего пользователя. */
+export function useActiveSessions() {
+  return useQuery({
+    queryKey: ["tasks", "active-sessions"],
+    queryFn: () => api.get<Task[]>("/tasks/active-sessions"),
+    refetchInterval: 15_000,
   });
 }
 

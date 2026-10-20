@@ -118,15 +118,21 @@ async def execute_script_node(
     node: Node,
     *,
     repos_path: Path,
+    runner_image: str | None = None,
 ) -> NodeExecutionOutcome:
-    """Выполняет `script` в изолированном Docker-контейнере (раздел 11.4, 19.3)."""
+    """
+    Выполняет `script` в изолированном Docker-контейнере (раздел 11.4, 19.3).
+
+    ``runner_image`` — образ, выбранный вызывающим кодом при запуске
+    (`services/system_settings.py::resolve_runner_image`).
+    """
     if node.script_content is None or node.script_language is None:
         message = "У ноды script не заполнены script_content/script_language"
         raise ValueError(message)
     result: ScriptExecutionResult = await run_script_node(
         script_content=node.script_content,
         script_language=node.script_language,
-        docker_image=node.docker_image,
+        docker_image=runner_image or node.docker_image,
         repos_path=repos_path,
         timeout_seconds=node.timeout_seconds,
     )
@@ -172,7 +178,9 @@ async def execute_plan_prompt_node(
     if not outcome.success:
         return outcome
 
-    node_log = await db_session.get(NodeLog, node_log_id)
+    # Решение по плану записал callback разрешений в своей сессии БД — читаем
+    # актуальное состояние, а не объект из карты этой сессии.
+    node_log = await db_session.get(NodeLog, node_log_id, populate_existing=True)
     plan_accepted = node_log is not None and node_log.status is NodeLogStatus.SUCCESS
     if not plan_accepted:
         return NodeExecutionOutcome(
@@ -192,6 +200,7 @@ async def execute_node(
     timeout_seconds: float,
     db_session: AsyncSession | None = None,
     node_log_id: uuid.UUID | None = None,
+    runner_image: str | None = None,
 ) -> NodeExecutionOutcome:
     """Единая точка диспетчеризации по `node_type` (раздел 11.1: "тип ноды
     определяет способ выполнения, но не создаёт отдельную сущность").
@@ -205,7 +214,7 @@ async def execute_node(
     `services/pipeline_orchestrator.py` передаёт эти аргументы).
     """
     if node.node_type is NodeType.SCRIPT:
-        return await execute_script_node(node, repos_path=repos_path)
+        return await execute_script_node(node, repos_path=repos_path, runner_image=runner_image)
     if prompt is None:
         message = f"Для ноды типа {node.node_type} не передан prompt"
         raise ValueError(message)

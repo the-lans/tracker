@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from db.models.enums import (
     AppLogLevel,
@@ -327,6 +327,27 @@ class EnvVariableRevealResponse(BaseModel):
     value: str
 
 
+class TaskEnvVariableCreateRequest(BaseModel):
+    key: str
+    value: str
+
+
+class TaskEnvVariableUpdateRequest(BaseModel):
+    value: str
+
+
+class TaskEnvVariableResponse(BaseModel):
+    """
+    Раздел 15.2: переменная задачи; значение скрыто (правило 8) — только
+    через `.../reveal`.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    key: str
+
+
 # --- MCP-серверы (раздел 3.1, 10.2) --------------------------------------
 
 
@@ -399,9 +420,10 @@ class NodeCreateRequest(BaseModel):
     script_language: ScriptLanguage | None = None
     script_content: str | None = None
     docker_image: str | None = None
-    timeout_seconds: int = 600
-    max_retries: int = 3
-    retry_base_delay_seconds: int = 5
+    # Раздел 15.5: не переданные значения берутся из «Системных настроек».
+    timeout_seconds: int | None = Field(default=None, ge=1)
+    max_retries: int | None = Field(default=None, ge=1)
+    retry_base_delay_seconds: int | None = Field(default=None, ge=0)
     guide_url: str | None = None
     is_skipped: bool = False
     llm_output_last_n: int | None = None
@@ -585,3 +607,27 @@ class AppLogResponse(BaseModel):
     context: dict[str, Any]
     task_id: uuid.UUID | None
     created_at: datetime
+
+
+# --- Системные настройки (раздел 15.5) ------------------------------------
+
+_MAX_TIMEOUT_SECONDS = 24 * 60 * 60
+_MAX_RETRIES = 10
+_MAX_RETRY_DELAY_SECONDS = 60 * 60
+
+
+class SystemSettingsBody(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    default_timeout_seconds: int = Field(ge=1, le=_MAX_TIMEOUT_SECONDS)
+    default_max_retries: int = Field(ge=1, le=_MAX_RETRIES)
+    default_retry_base_delay_seconds: int = Field(ge=0, le=_MAX_RETRY_DELAY_SECONDS)
+    default_runner_image_python: str = Field(min_length=1)
+    default_runner_image_bash: str = Field(min_length=1)
+
+
+class LibraryUsageResponse(BaseModel):
+    """Раздел 15.5: в скольких задачах используется промт библиотеки."""
+
+    node_id: uuid.UUID
+    task_count: int

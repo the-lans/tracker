@@ -13,11 +13,13 @@ Celery-задачи — синхронные функции (`@celery_app.task`)
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import httpx
 import sqlalchemy as sa
+from redis.asyncio import Redis
 
 from app_logging.config import get_logger
 from clients.gitlab import GitlabClient
@@ -25,7 +27,6 @@ from db.models.enums import (
     AppLogLevel,
     MergeStatus,
     PeriodicRunStatus,
-    RemoteControlStatus,
     RepositoryRole,
 )
 from db.models.logs import AppLog
@@ -35,10 +36,11 @@ from db.models.tasks import TaskRepository
 from db.session import async_session_factory
 from services import gitlab_sync, maintenance_tasks
 from services.autostart import run_scheduled_autostart_check
+from services.llm_accounts import restore_expired_rate_limits
+from services.log_rotation import resolve_archive_root, rotate_node_logs
 from services.manual_queue import expire_stale_manual_queue_requests
-from services.notifications import NotificationEvent, notify_task_event
 from services.periodic_tasks import record_periodic_task_run
-from services.remote_control import decide_remote_control_bridge_action
+from services.remote_control import check_task_bridge
 from services.task_workspace import resolve_repos_root
 from services.template_context import resolve_global_env_value
 from tasks.celery_app import celery_app
@@ -110,8 +112,8 @@ def check_scheduled_tasks_for_autostart() -> None:
 
 @celery_app.task(name="check_llm_account_limits")
 def check_llm_account_limits() -> None:
-    async def body(_db_session: AsyncSession) -> None:
-        maintenance_tasks.check_llm_account_limits()
+    async def body(db_session: AsyncSession) -> None:
+        await restore_expired_rate_limits(db_session, now=datetime.now(UTC))
 
     _run_periodic("check_llm_account_limits", body)
 
@@ -211,11 +213,16 @@ def purge_orphaned_playwright_processes() -> None:
 @celery_app.task(name="rotate_task_logs")
 def rotate_task_logs() -> None:
     async def body(db_session: AsyncSession) -> None:
-        eligible = await maintenance_tasks.find_node_logs_eligible_for_rotation(
+        result = await rotate_node_logs(
             db_session,
+            archive_root=resolve_archive_root(),
             now=datetime.now(UTC),
         )
-        logger.info("node_logs_eligible_for_rotation", count=len(eligible))
+        logger.info(
+            "node_logs_rotated",
+            files=len(result.archived_files),
+            deleted=result.deleted_count,
+        )
 
     _run_periodic("rotate_task_logs", body)
 
@@ -252,28 +259,12 @@ def deprovision_inactive_users() -> None:
 def check_remote_control_bridges() -> None:
     async def body(db_session: AsyncSession) -> None:
         tasks = await maintenance_tasks.find_tasks_requiring_remote_control_check(db_session)
-        for task in tasks:
-            # Раздел 6.6, решение №1 плана: "жив ли процесс" здесь определяется
-            # приблизительно, без реестра активных сессий оркестратора (появится
-            # вместе с ним) — заведомо считается живым, если задача не отмечена
-            # disconnected дольше двух проверок подряд.
-            decision = decide_remote_control_bridge_action(
-                is_process_alive=True,
-                current_reconnect_attempts=task.remote_control_reconnect_attempts,
-            )
-            if decision.new_status is not None:
-                task.remote_control_status = decision.new_status
-                task.remote_control_last_check_at = datetime.now(UTC)
-                # Раздел 18.2: уведомление только когда восстановление НЕ
-                # удалось (попытки исчерпаны) — переход в "reconnecting"
-                # ещё не финальная неудача.
-                if decision.new_status is RemoteControlStatus.DISCONNECTED:
-                    await notify_task_event(
-                        db_session,
-                        event=NotificationEvent.REMOTE_CONTROL_DISCONNECTED,
-                        task=task,
-                    )
-        await db_session.commit()
+        redis_client = Redis.from_url(os.environ["REDIS_URL"])
+        try:
+            for task in tasks:
+                await check_task_bridge(db_session, task=task, redis_client=redis_client)
+        finally:
+            await redis_client.aclose()
 
     _run_periodic("check_remote_control_bridges", body)
 

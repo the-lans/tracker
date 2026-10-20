@@ -29,6 +29,7 @@ from services.nodes.dispatch import (
     execute_node,
     resolve_node_prompt_or_none,
 )
+from services.system_settings import resolve_runner_image
 from services.task_control import TaskControlCommand, read_task_control, run_stoppable
 
 if TYPE_CHECKING:
@@ -51,10 +52,14 @@ def compute_retry_delay_seconds(attempt_number: int, base_delay_seconds: int) ->
 
 
 async def _load_node_log_history(db_session: AsyncSession, task_id: uuid.UUID) -> list[NodeLog]:
+    # План и ответы пользователя пишет callback разрешений в своей сессии БД;
+    # без перечитывания здесь остались бы прежние значения (`expire_on_commit`
+    # выключен) и `{{node.plan_text}}`/`{{node.user_input}}` пришли бы пустыми.
     stmt = (
         sa.select(NodeLog)
         .where(NodeLog.task_id == task_id)
         .order_by(NodeLog.started_at, NodeLog.id)
+        .execution_options(populate_existing=True)
     )
     return list((await db_session.execute(stmt)).scalars().all())
 
@@ -189,6 +194,7 @@ async def run_pipeline_node_with_retry(
                 timeout_seconds=node.timeout_seconds,
                 db_session=db_session,
                 node_log_id=node_log.id,
+                runner_image=await resolve_runner_image(db_session, node),
             ),
             node_type=node.node_type,
             claude_session=claude_session,

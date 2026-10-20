@@ -11,7 +11,8 @@ from db.models.logs import AppLog
 from db.models.tasks import Task
 from db.models.users import User
 from services.autostart import find_tasks_due_for_autostart, run_scheduled_autostart_check
-from services.errors import ConflictError
+from services.errors import ConflictError, ValidationError
+from services.notifications import NotificationEvent
 from tasks import periodic, session_worker
 
 
@@ -178,3 +179,31 @@ async def test_periodic_autostart_enqueues_session_worker_for_started_tasks(
     await body(db_session)  # type: ignore[operator]
 
     assert enqueued_task_ids == [str(due_task.id)]
+
+
+class TestRepositoryEnvConflict:
+    async def test_autostart_fails_with_notification(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Решение 2026-10-20: конфликт переменных репозиториев — ошибка до запуска."""
+        now = datetime.now(UTC)
+        task = await _make_task(db_session, scheduled_start_at=now - timedelta(minutes=1))
+        events: list[NotificationEvent] = []
+
+        async def capture(_db: AsyncSession, *, event: NotificationEvent, **_: object) -> None:
+            events.append(event)
+
+        async def conflict(_db: AsyncSession, *, task_id: uuid.UUID) -> None:
+            raise ValidationError("Переменная API_URL задана в нескольких репозиториях задачи")
+
+        monkeypatch.setattr(autostart_module, "notify_task_event", capture)
+        monkeypatch.setattr(autostart_module, "ensure_no_repository_env_conflicts", conflict)
+
+        result = await run_scheduled_autostart_check(db_session, now=now)
+
+        assert result.failed_task_ids == [task.id]
+        assert events == [NotificationEvent.AUTOSTART_FAILED]
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.NEW

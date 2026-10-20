@@ -1,5 +1,6 @@
 import { LogOut } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { ActiveSessionsCard } from "@/components/profile/ActiveSessionsCard";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { initialsFromEmail } from "@/lib/utils";
@@ -33,13 +34,7 @@ export function ProfilePage() {
             </div>
           </Card>
 
-          <Card>
-            <CardTitle>Активные сессии</CardTitle>
-            <div className="text-[13px] text-text-3">
-              Список активных сессий входа не отдаётся ни одним эндпоинтом API — есть только
-              текущий токен, которым выполнен вход в этом браузере.
-            </div>
-          </Card>
+          <ActiveSessionsCard />
 
           <Button variant="secondary" className="self-start" onClick={logout}>
             <LogOut className="size-4" />

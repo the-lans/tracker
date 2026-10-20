@@ -12,6 +12,7 @@ volume-данных, без изменений кода или повторно�
 | Данные PostgreSQL | volume `postgres_data` | Через дамп `pg_dump`/`pg_restore` (см. ниже) — не архивом сырых файлов данных, т.к. версия PostgreSQL на новом сервере обязана совпадать для архивного переноса, а дамп независим от версии |
 | Репозитории задач (включая профили MCP-инструментов, раздел 10.3) | volume `task_repos` | Архив `tar` |
 | Пользовательские файлы задач | volume `user_files` | Архив `tar` |
+| Архив истории выполнения (`rotate_task_logs`, раздел 16.2) | volume `log_archive` | Архив `tar` |
 | TLS-сертификаты Caddy | volumes `caddy_data`/`caddy_config` | Не переносятся — Caddy сам перевыпустит сертификат на новом сервере при первом запуске (раздел 20.2, шаг 10); перенос усложнил бы процедуру без реальной пользы |
 
 ## Процедура
@@ -35,18 +36,22 @@ volume-данных, без изменений кода или повторно�
      tar czf /backup/task_repos.tar.gz -C /data .
    docker run --rm -v tracker_user_files:/data -v "$(pwd)":/backup alpine \
      tar czf /backup/user_files.tar.gz -C /data .
+   docker run --rm -v tracker_log_archive:/data -v "$(pwd)":/backup alpine \
+     tar czf /backup/log_archive.tar.gz -C /data .
    docker compose start worker beat
 
    docker cp "$(docker compose ps -q backup)":/backups/<файл-дампа>.sql.gz ./
    ```
 
    Перенести на новый сервер: `.env`, `task_repos.tar.gz`, `user_files.tar.gz`,
+   `log_archive.tar.gz`,
    `<файл-дампа>.sql.gz` (например, `scp`).
 
 ### На новом сервере
 
 3. Сложить перенесённые файлы в один каталог, например `/root/transfer`:
-   `.env`, `<файл-дампа>.sql.gz`, `task_repos.tar.gz`, `user_files.tar.gz`.
+   `.env`, `<файл-дампа>.sql.gz`, `task_repos.tar.gz`, `user_files.tar.gz`,
+   `log_archive.tar.gz`.
 4. Запустить `deploy/install.sh` (тот же скрипт, что и для обычной
    установки, раздел 20.2) в режиме восстановления:
 
@@ -54,13 +59,13 @@ volume-данных, без изменений кода или повторно�
    bash install.sh --restore /root/transfer
    ```
 
-   Скрипт сначала проверяет, что в каталоге есть все четыре файла (если
+   Скрипт сначала проверяет, что в каталоге есть все пять файлов (если
    дампов несколько — берёт самый свежий по имени), и только потом:
    ставит Docker при необходимости, клонирует репозиторий, кладёт
    перенесённый `.env` в `${INSTALL_DIR}/.env` (прежний, если был,
    сохраняется как `.env.before-restore`), собирает образы, поднимает
    PostgreSQL и Redis, восстанавливает дамп в пустую БД **до** миграций,
-   распаковывает архивы в volumes `task_repos`/`user_files` через сервис
+   распаковывает архивы в volumes `task_repos`/`user_files`/`log_archive` через сервис
    `backend`, применяет миграции и запускает прикладные сервисы. Генерация
    секретов, интерактивные вопросы и seed пропускаются: всё это уже есть
    в `.env` и дампе.
@@ -89,6 +94,8 @@ docker run --rm -v tracker_task_repos:/data -v "$(pwd)":/backup alpine \
   sh -c "rm -rf /data/* && tar xzf /backup/task_repos.tar.gz -C /data"
 docker run --rm -v tracker_user_files:/data -v "$(pwd)":/backup alpine \
   sh -c "rm -rf /data/* && tar xzf /backup/user_files.tar.gz -C /data"
+docker run --rm -v tracker_log_archive:/data -v "$(pwd)":/backup alpine \
+  sh -c "rm -rf /data/* && tar xzf /backup/log_archive.tar.gz -C /data"
 
 docker compose up -d --wait postgres
 zcat <файл-дампа>.sql.gz | docker compose exec -T postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"

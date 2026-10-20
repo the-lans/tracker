@@ -12,17 +12,13 @@
 периметра проекта) — только логируют факт вызова, не выполняют реальных
 действий, поскольку обслуживать им нечего без реального провижининга.
 
-`check_llm_account_limits` и `purge_orphaned_playwright_processes` — тоже
-заглушки, но по другой причине: ТЗ (раздел 16.2) называет задачи, не
-называя конкретный механизм проверки. `check_llm_account_limits` не
-специфицирует API, которым можно "опросить статус" LLM-аккаунта — Claude
-Agent SDK не предоставляет для этого отдельного вызова. Аналогично,
-`purge_orphaned_playwright_processes` предполагает поиск процессов
-браузера, физически работающих на стороне конкретного MCP-сервера
-(раздел 10) — топология его развёртывания (собственный контейнер backend
-не контролирует) не определена этим проектом, поэтому "найти и завершить"
-здесь нечем управлять напрямую. Обе задачи логируют факт вызова и
-оставлены точками расширения, когда появится конкретный протокол.
+`purge_orphaned_playwright_processes` — тоже заглушка, но по другой
+причине: она предполагает поиск процессов браузера, физически работающих на
+стороне конкретного MCP-сервера (раздел 10), а топология его развёртывания
+(собственный контейнер backend не контролирует) не определена этим
+проектом, поэтому "найти и завершить" здесь нечем управлять напрямую.
+Задача логирует факт вызова и оставлена точкой расширения.
+`check_llm_account_limits` — в `services/llm_accounts.py`.
 """
 
 from __future__ import annotations
@@ -190,12 +186,6 @@ def deprovision_inactive_users() -> None:
     logger.info("deprovision_inactive_users_noop")
 
 
-def check_llm_account_limits() -> None:
-    """Заглушка: Claude Agent SDK не предоставляет отдельного API для опроса
-    лимитов аккаунта вне активной сессии (см. docstring модуля)."""
-    logger.info("check_llm_account_limits_noop")
-
-
 def purge_orphaned_playwright_processes() -> None:
     """Заглушка: топология развёртывания конкретного MCP-сервера, физически
     держащего процесс браузера, вне контроля backend (см. docstring модуля)."""
@@ -210,24 +200,26 @@ async def find_node_logs_eligible_for_rotation(
     *,
     now: datetime,
     threshold_days: int = DEFAULT_LOG_ROTATION_THRESHOLD_DAYS,
+    limit: int | None = None,
 ) -> list[uuid.UUID]:
-    """Раздел 16.2: `rotate_task_logs`.
+    """
+    Раздел 16.2: `rotate_task_logs` — какие записи `node_logs` архивировать.
 
-    Возвращает id записей `node_logs`, подходящих под архивацию — только
-    для задач в терминальном статусе (`done`/`failed`), старше
-    ``threshold_days``. Само физическое архивирование (выгрузка в холодное
-    хранилище, формат) — открытый инфраструктурный вопрос, ТЗ не называет
-    ни формат, ни место хранения; удаление истории без явного решения об
-    этом было бы необратимым и вне того, что здесь оправданно решать
-    самостоятельно.
+    Только задачи в `done` и записи старше ``threshold_days``. Задачу в
+    `failed` можно перезапустить, а перезапуск опирается на её историю:
+    успешные записи пройденных нод (переход в `done`, правило 14), их вывод
+    для подстановок и точку возобновления. Саму выгрузку делает
+    `services/log_rotation.py`.
     """
     cutoff = now - timedelta(days=threshold_days)
     stmt = (
         sa.select(NodeLog.id)
         .join(Task, Task.id == NodeLog.task_id)
         .where(
-            Task.status.in_((TaskStatus.DONE, TaskStatus.FAILED)),
+            Task.status == TaskStatus.DONE,
             NodeLog.started_at < cutoff,
         )
+        .order_by(NodeLog.started_at, NodeLog.id)
+        .limit(limit)
     )
     return list((await db_session.execute(stmt)).scalars().all())

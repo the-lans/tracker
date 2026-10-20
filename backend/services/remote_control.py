@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 from app_logging.config import get_logger
 from db.models.enums import RemoteControlStatus
 from services.errors import ConflictError
+from services.notifications import NotificationEvent, notify_task_event
+from services.session_heartbeat import is_session_alive
 from services.task_control import request_bridge_reconnect
 from services.task_status import SESSION_ACTIVE_STATUSES
 
@@ -100,3 +102,45 @@ async def start_bridge_reconnect(
     task.remote_control_status = RemoteControlStatus.RECONNECTING
     await db_session.commit()
     await request_bridge_reconnect(redis_client, task.id)
+
+
+async def check_task_bridge(db_session: AsyncSession, *, task: Task, redis_client: Redis) -> None:
+    """
+    Раздел 6.6: одна проверка моста задачи с активной сессией.
+
+    Живость процесса — пульс воркера (`services/session_heartbeat.py`).
+    Пульса нет — попытка восстановления: запрос переподключения воркеру и
+    статус `reconnecting`; после `MAX_RECONNECT_ATTEMPTS` попыток —
+    `disconnected` и уведомление (раздел 18.2), один раз, а не на каждой
+    следующей проверке.
+    """
+    alive = await is_session_alive(redis_client, task.id)
+    decision = decide_remote_control_bridge_action(
+        is_process_alive=alive,
+        current_reconnect_attempts=task.remote_control_reconnect_attempts,
+    )
+    task.remote_control_last_check_at = datetime.now(UTC)
+    if alive:
+        task.remote_control_reconnect_attempts = 0
+        await db_session.commit()
+        return
+    if decision.should_attempt_reconnect:
+        task.remote_control_reconnect_attempts += 1
+        task.remote_control_status = RemoteControlStatus.RECONNECTING
+        await db_session.commit()
+        await request_bridge_reconnect(redis_client, task.id)
+        logger.info(
+            "remote_control_reconnect_attempted",
+            task_id=str(task.id),
+            attempt=task.remote_control_reconnect_attempts,
+        )
+        return
+    already_reported = task.remote_control_status is RemoteControlStatus.DISCONNECTED
+    task.remote_control_status = RemoteControlStatus.DISCONNECTED
+    await db_session.commit()
+    if not already_reported:
+        await notify_task_event(
+            db_session,
+            event=NotificationEvent.REMOTE_CONTROL_DISCONNECTED,
+            task=task,
+        )

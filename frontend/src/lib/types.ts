@@ -310,6 +310,12 @@ export interface TaskNodeItem {
   editable: boolean;
 }
 
+/** Раздел 3.1, 15.2: переменная уровня задачи; значение — только через reveal. */
+export interface TaskEnvVariable {
+  id: string;
+  key: string;
+}
+
 /** Раздел 13.3, 15.2: нода, которая берёт вывод у отключаемой. */
 export interface NodeDependent {
   node_id: string;
@@ -563,6 +569,21 @@ export interface ActiveCeleryTask {
   started_at: string | null;
   task_id: string | null;
   task_code: string | null;
+}
+
+/** Раздел 15.5: значения по умолчанию для новых нод. */
+export interface SystemSettings {
+  default_timeout_seconds: number;
+  default_max_retries: number;
+  default_retry_base_delay_seconds: number;
+  default_runner_image_python: string;
+  default_runner_image_bash: string;
+}
+
+/** Раздел 15.5: в скольких задачах используется промт библиотеки. */
+export interface LibraryUsage {
+  node_id: string;
+  task_count: number;
 }
 
 export interface ApiErrorBody {

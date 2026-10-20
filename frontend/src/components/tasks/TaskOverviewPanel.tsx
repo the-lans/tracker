@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { useUpdateTask } from "@/hooks/useTasks";
 import { ApiError } from "@/lib/apiClient";
 import { TaskRepositoriesCard } from "@/components/tasks/TaskRepositoriesCard";
+import { TaskEnvVariablesCard } from "@/components/tasks/TaskEnvVariablesCard";
 import { ParentTaskCard } from "@/components/tasks/ParentTaskCard";
 import { useNodes } from "@/hooks/useNodes";
 import { formatDateTime } from "@/lib/utils";
@@ -85,6 +86,8 @@ export function TaskOverviewPanel({
       {task.parent_task_id && <ParentTaskCard task={task} />}
 
       <TaskRepositoriesCard taskId={task.id} />
+
+      <TaskEnvVariablesCard task={task} />
 
       <Card>
         <div className="flex items-center justify-between py-1">

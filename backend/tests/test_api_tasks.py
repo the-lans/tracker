@@ -1270,3 +1270,186 @@ class TestRemoteControlReconnect:
 
         assert response.status_code == 409
         assert await consume_bridge_reconnect(redis_client, uuid.UUID(task_body["id"])) is False
+
+
+class TestTaskEnvVariables:
+    async def test_lifecycle(self, authed_client: AsyncClient, db_session: AsyncSession) -> None:
+        task_body = await _create_task(authed_client)
+        base = f"/tasks/{task_body['id']}/env-variables"
+
+        created = await authed_client.post(base, json={"key": "API_URL", "value": "https://a"})
+        assert created.status_code == 201, created.text
+        assert created.json() == {"id": created.json()["id"], "key": "API_URL"}
+        variable_id = created.json()["id"]
+        stored = await db_session.get(TaskEnvVariable, uuid.UUID(variable_id))
+        assert stored is not None
+        assert stored.value_encrypted != "https://a"
+
+        updated = await authed_client.patch(f"{base}/{variable_id}", json={"value": "https://b"})
+        assert updated.status_code == 200
+        revealed = await authed_client.get(f"{base}/{variable_id}/reveal")
+        assert revealed.json() == {"value": "https://b"}
+        assert [item["key"] for item in (await authed_client.get(base)).json()] == ["API_URL"]
+
+        deleted = await authed_client.delete(f"{base}/{variable_id}")
+        assert deleted.status_code == 204
+        assert (await authed_client.get(base)).json() == []
+
+    @pytest.mark.parametrize(
+        ("key", "expected_code"),
+        [("api_url", 422), ("1KEY", 422), ("API-URL", 422), ("TOKEN_2", 201)],
+    )
+    async def test_key_format(
+        self,
+        authed_client: AsyncClient,
+        key: str,
+        expected_code: int,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/env-variables",
+            json={"key": key, "value": "v"},
+        )
+
+        assert response.status_code == expected_code
+
+    async def test_duplicate_key(self, authed_client: AsyncClient) -> None:
+        task_body = await _create_task(authed_client)
+        base = f"/tasks/{task_body['id']}/env-variables"
+        await authed_client.post(base, json={"key": "API_URL", "value": "a"})
+
+        response = await authed_client.post(base, json={"key": "API_URL", "value": "b"})
+
+        assert response.status_code == 409
+
+    async def test_done_task_is_read_only(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.DONE)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/env-variables",
+            json={"key": "API_URL", "value": "a"},
+        )
+
+        assert response.status_code == 409
+
+    async def test_variable_of_another_task(self, authed_client: AsyncClient) -> None:
+        first = await _create_task(authed_client)
+        second = await _create_task(authed_client)
+        created = await authed_client.post(
+            f"/tasks/{first['id']}/env-variables",
+            json={"key": "API_URL", "value": "a"},
+        )
+
+        response = await authed_client.get(
+            f"/tasks/{second['id']}/env-variables/{created.json()['id']}/reveal",
+        )
+
+        assert response.status_code == 404
+
+
+class TestNodeLogFilters:
+    @pytest.mark.parametrize(
+        ("params", "expected"),
+        [
+            ({}, 3),
+            ({"status": "failed"}, 1),
+            ({"trigger_type": "freeform_manual"}, 1),
+            ({"trigger_type": "pipeline", "status": "success"}, 1),
+        ],
+        ids=["all", "status", "trigger_type", "combined"],
+    )
+    async def test_filters(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        params: dict[str, str],
+        expected: int,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        task_id = uuid.UUID(task_body["id"])
+        db_session.add_all(
+            [
+                NodeLog(
+                    task_id=task_id,
+                    trigger_type=trigger_type,
+                    status=status,
+                )
+                for trigger_type, status in [
+                    (NodeLogTriggerType.PIPELINE, NodeLogStatus.SUCCESS),
+                    (NodeLogTriggerType.PIPELINE, NodeLogStatus.FAILED),
+                    (NodeLogTriggerType.FREEFORM_MANUAL, NodeLogStatus.SUCCESS),
+                ]
+            ],
+        )
+        await db_session.flush()
+
+        response = await authed_client.get(f"/tasks/{task_id}/node-logs", params=params)
+
+        assert response.status_code == 200
+        assert len(response.json()) == expected
+
+    async def test_node_filter(self, authed_client: AsyncClient, db_session: AsyncSession) -> None:
+        task_body = await _create_task(authed_client)
+        nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 2)
+        task_id = uuid.UUID(task_body["id"])
+        db_session.add_all(
+            [
+                NodeLog(
+                    task_id=task_id,
+                    node_id=uuid.UUID(node["node_id"]),
+                    trigger_type=NodeLogTriggerType.PIPELINE,
+                    status=NodeLogStatus.SUCCESS,
+                )
+                for node in nodes
+            ],
+        )
+        await db_session.flush()
+
+        response = await authed_client.get(
+            f"/tasks/{task_id}/node-logs",
+            params={"node_id": nodes[1]["node_id"]},
+        )
+
+        assert [entry["node_id"] for entry in response.json()] == [nodes[1]["node_id"]]
+
+
+class TestActiveSessions:
+    async def test_only_own_active_tasks(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        other_user = User(email=f"{uuid.uuid4()}@example.com")
+        db_session.add(other_user)
+        await db_session.flush()
+        statuses = [TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.DONE, TaskStatus.NEW]
+        own = [
+            Task(
+                code=f"RR-{uuid.uuid4().hex[:8]}",
+                title=status.value,
+                description="d",
+                created_by=current_user.id,
+                status=status,
+            )
+            for status in statuses
+        ]
+        foreign = Task(
+            code=f"RR-{uuid.uuid4().hex[:8]}",
+            title="чужая",
+            description="d",
+            created_by=other_user.id,
+            status=TaskStatus.IN_PROGRESS,
+        )
+        db_session.add_all([*own, foreign])
+        await db_session.flush()
+
+        response = await authed_client.get("/tasks/active-sessions")
+
+        assert response.status_code == 200
+        assert sorted(item["title"] for item in response.json()) == ["in_progress", "paused"]

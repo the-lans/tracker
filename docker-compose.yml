@@ -49,9 +49,15 @@ services:
       # "tracker/repos" от текущей рабочей директории процесса, никак не
       # связанный с примонтированным /data/repos.
       TRACKER_REPOS_ROOT: /data/repos
+      # Раздел 16.2: архив ротированной истории `node_logs` (rotate_task_logs).
+      TRACKER_LOG_ARCHIVE_ROOT: /data/log-archive
+      # Раздел 6.4: срок хранения истории сессий Claude Code (cleanupPeriodDays).
+      CLAUDE_SESSION_RETENTION_DAYS: ${CLAUDE_SESSION_RETENTION_DAYS:-36500}
     volumes:
       - task_repos:/data/repos
       - user_files:/data/user-files
+      # Через backend `install.sh --restore` распаковывает архивы всех volume.
+      - log_archive:/data/log-archive
       # Раздел 20.5: доступ Celery worker/backend к Docker-демону хоста для запуска
       # script-нод и раннеров — задокументированный компромисс, без --privileged.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -79,6 +85,7 @@ services:
     volumes:
       - task_repos:/data/repos
       - user_files:/data/user-files
+      - log_archive:/data/log-archive
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
@@ -159,6 +166,9 @@ volumes:
   # и пользовательские файлы задач — именованные Docker-volumes, раздельный жизненный цикл.
   task_repos:
   user_files:
+  # Раздел 16.2: сжатые JSONL-архивы истории `node_logs`, переносятся вместе
+  # с остальными данными (docs/migration.md).
+  log_archive:
   caddy_data:
   caddy_config:
   postgres_backups:

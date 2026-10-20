@@ -122,7 +122,8 @@ deploy/
               расписанию (раздел 20.4): Dockerfile, entrypoint.sh (crond),
               backup.sh (pg_dump + ротация по POSTGRES_BACKUP_RETENTION_DAYS)
   install.sh — единственный скрипт установки по разделу 20.2 ТЗ;
-              `--restore <каталог>` — перенос на новый сервер (раздел 20.4)
+              `--restore <каталог>` — перенос на новый сервер (раздел 20.4):
+              дамп БД и архивы volume task_repos, user_files, log_archive
 runners/
   tracker-runner-python/ — Docker-образ раннера для script-нод (Python)
   tracker-runner-bash/   — Docker-образ раннера для script-нод (Bash)
@@ -130,7 +131,7 @@ alembic/
   env.py       — async env (target_metadata = db.base.Base.metadata)
   versions/    — миграции базы данных (полная схема раздела 3.1,
                  push_subscriptions, nodes.llm_output_last_n, статус paused,
-                 task_parent_summaries)
+                 task_parent_summaries, system_settings)
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
                 приложения), запускать backend-venv'ом, см. раздел 4

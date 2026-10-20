@@ -5,7 +5,7 @@
 #   deploy/install.sh                     — новая установка
 #   deploy/install.sh --restore <каталог> — перенос на новый сервер (раздел
 #     20.4, docs/migration.md): в каталоге .env, дамп БД *.sql.gz,
-#     task_repos.tar.gz и user_files.tar.gz со старого сервера
+#     task_repos.tar.gz, user_files.tar.gz и log_archive.tar.gz со старого сервера
 
 set -euo pipefail
 
@@ -21,7 +21,11 @@ ADMIN_EMAIL=""
 RESTORE_DIR=""
 RESTORE_DUMP=""
 # Архив -> точка монтирования volume в контейнере backend (docker-compose.yml).
-RESTORE_ARCHIVES=("task_repos:/data/repos" "user_files:/data/user-files")
+RESTORE_ARCHIVES=(
+  "task_repos:/data/repos"
+  "user_files:/data/user-files"
+  "log_archive:/data/log-archive"
+)
 
 log() { echo "[install.sh] $*"; }
 
@@ -31,7 +35,7 @@ die() {
 }
 
 usage() {
-  echo "Использование: $0 [--restore <каталог с .env, *.sql.gz, task_repos.tar.gz, user_files.tar.gz>]"
+  echo "Использование: $0 [--restore <каталог с .env, *.sql.gz, task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz>]"
 }
 
 parse_args() {

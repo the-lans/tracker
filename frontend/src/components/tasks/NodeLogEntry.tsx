@@ -1,4 +1,7 @@
+import { useState } from "react";
+import { Maximize2 } from "lucide-react";
 import { MessageBubble } from "@/components/tasks/MessageBubble";
+import { NodeOutputSheet } from "@/components/tasks/NodeOutputSheet";
 import { ScriptOutputBlock } from "@/components/tasks/ScriptOutputBlock";
 import { DecisionWidget } from "@/components/tasks/DecisionWidget";
 import { NodeLogStatus, NodeLogTriggerType, type NodeLog } from "@/lib/types";
@@ -20,12 +23,15 @@ function sourceLabelOf(log: NodeLog): string | undefined {
 export function NodeLogEntry({
   taskId,
   log,
+  title,
   streamedText,
 }: {
   taskId: string;
   log: NodeLog;
+  title?: string;
   streamedText?: string;
 }) {
+  const [outputOpen, setOutputOpen] = useState(false);
   const isScript = log.script_stdout !== null || log.script_exit_code !== null;
   const isAwaitingDecision = log.status === NodeLogStatus.AWAITING_DECISION;
   const isSummaryNote =
@@ -36,6 +42,22 @@ export function NodeLogEntry({
 
   return (
     <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-text-3">
+        <span className="truncate">{title ?? sourceLabelOf(log) ?? "Нода пайплайна"}</span>
+        <button
+          type="button"
+          onClick={() => setOutputOpen(true)}
+          className="inline-flex shrink-0 items-center gap-1 hover:text-text-2"
+        >
+          <Maximize2 className="size-3" /> Полный вывод
+        </button>
+      </div>
+      <NodeOutputSheet
+        log={log}
+        title={title ?? sourceLabelOf(log) ?? "Нода пайплайна"}
+        open={outputOpen}
+        onOpenChange={setOutputOpen}
+      />
       {log.rendered_prompt && !isScript && (
         <MessageBubble role="user" text={log.rendered_prompt} sourceLabel={sourceLabelOf(log)} />
       )}

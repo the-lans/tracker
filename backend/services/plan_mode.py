@@ -339,6 +339,10 @@ async def _record_plan_auto_accept(
         raise ValueError(message)
     node_log.pending_plan_text = plan_text
     node_log.user_input_text = PlanDecisionOption.ACCEPT_AUTO
+    # Как и при решении пользователя: принятый план — успешная запись, по
+    # ней `execute_plan_prompt_node` понимает, что план подтверждён.
+    node_log.status = NodeLogStatus.SUCCESS
+    node_log.finished_at = datetime.now(UTC)
     # Раздел 9.2: auto_accept_plan всегда продолжает в "auto"-режиме.
     await _set_task_permission_mode(db_session, task_id=task_id, mode=PermissionMode.ACCEPT_EDITS)
     await db_session.commit()

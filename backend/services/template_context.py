@@ -2,7 +2,7 @@
 
 Не открывает сессию БД самостоятельно (правило C плана реализации) —
 принимает уже полученные вызывающим кодом объекты; единственное исключение —
-``resolve_env_value``, которому для приоритета "задача > глобально" нужно
+``resolve_env_value``, которому для приоритета "задача > репозиторий > глобально" нужно
 обратиться к двум таблицам, и явная передача обеих выборок в каждый вызов
 была бы менее читаемой, чем передача сессии.
 """
@@ -18,8 +18,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models.enums import EnvVariableScope
 from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.logs import NodeLog
-from db.models.tasks import Task
+from db.models.repositories import Repository
+from db.models.tasks import Task, TaskRepository
 from services.crypto import decrypt
+from services.errors import ValidationError
 from services.templating import VARIABLE_PATTERN, render_template
 
 REPOS_PATH_TEMPLATE = "tracker/repos/{code}/"
@@ -120,8 +122,61 @@ async def resolve_global_env_value(session: AsyncSession, *, key: str) -> str | 
     return decrypt(global_variable.value_encrypted)
 
 
+def _repository_env_stmt(task_id: uuid.UUID) -> sa.Select[EnvVariable, str]:
+    """Переменные `scope = repository` репозиториев задачи вместе с именем репозитория."""
+    return (
+        sa.select(EnvVariable, Repository.name)
+        .join(Repository, Repository.id == EnvVariable.repository_id)
+        .join(TaskRepository, TaskRepository.repository_id == Repository.id)
+        .where(
+            TaskRepository.task_id == task_id,
+            EnvVariable.scope == EnvVariableScope.REPOSITORY,
+        )
+    )
+
+
+def _conflict_error(key: str, repository_names: list[str]) -> ValidationError:
+    names = ", ".join(sorted(repository_names))
+    return ValidationError(
+        f"Переменная {key} задана в нескольких репозиториях задачи ({names}) — "
+        "значение неоднозначно, переименуйте переменную в одном из них",
+    )
+
+
+async def ensure_no_repository_env_conflicts(session: AsyncSession, *, task_id: uuid.UUID) -> None:
+    """
+    Решение 2026-10-20: один ключ в двух репозиториях задачи — ошибка до
+    запуска, а не молчаливый выбор одного из значений.
+    """
+    repositories_by_key: dict[str, list[str]] = {}
+    for variable, repository_name in (await session.execute(_repository_env_stmt(task_id))).all():
+        repositories_by_key.setdefault(variable.key, []).append(repository_name)
+    for key, repository_names in sorted(repositories_by_key.items()):
+        if len(repository_names) > 1:
+            raise _conflict_error(key, repository_names)
+
+
+async def _resolve_repository_env_value(
+    session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    key: str,
+) -> str | None:
+    stmt = _repository_env_stmt(task_id).where(EnvVariable.key == key)
+    rows = (await session.execute(stmt)).all()
+    if len(rows) > 1:
+        raise _conflict_error(key, [repository_name for _, repository_name in rows])
+    if not rows:
+        return None
+    variable, _ = rows[0]
+    return decrypt(variable.value_encrypted)
+
+
 async def resolve_env_value(session: AsyncSession, *, task_id: uuid.UUID, key: str) -> str | None:
-    """``{{env.VAR_NAME}}`` — приоритет `task_env_variables` над `env_variables` (раздел 5)."""
+    """
+    ``{{env.VAR_NAME}}`` (раздел 5): уровень задачи, затем репозитории задачи
+    (`scope = repository`), затем глобальные переменные.
+    """
     task_override = await session.scalar(
         sa.select(TaskEnvVariable).where(
             TaskEnvVariable.task_id == task_id,
@@ -131,6 +186,9 @@ async def resolve_env_value(session: AsyncSession, *, task_id: uuid.UUID, key: s
     if task_override is not None:
         return decrypt(task_override.value_encrypted)
 
+    repository_value = await _resolve_repository_env_value(session, task_id=task_id, key=key)
+    if repository_value is not None:
+        return repository_value
     return await resolve_global_env_value(session, key=key)
 
 

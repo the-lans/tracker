@@ -1,0 +1,101 @@
+"""«Системные настройки» и их применение к новым нодам (раздел 15.5 ТЗ)."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+import pytest
+
+from db.models.enums import NodeType, ScriptLanguage
+
+if TYPE_CHECKING:
+    from httpx import AsyncClient
+
+_SETTINGS = {
+    "default_timeout_seconds": 900,
+    "default_max_retries": 2,
+    "default_retry_base_delay_seconds": 10,
+    "default_runner_image_python": "registry.local/runner-python:2",
+    "default_runner_image_bash": "registry.local/runner-bash:2",
+}
+
+
+class TestSystemSettings:
+    async def test_defaults_then_update(self, admin_client: AsyncClient) -> None:
+        initial = await admin_client.get("/system-settings")
+        assert initial.status_code == 200
+        assert initial.json()["default_timeout_seconds"] == 600
+        assert initial.json()["default_runner_image_bash"] == "tracker-runner-bash:latest"
+
+        updated = await admin_client.put("/system-settings", json=_SETTINGS)
+
+        assert updated.status_code == 200
+        assert (await admin_client.get("/system-settings")).json() == _SETTINGS
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("default_timeout_seconds", 0),
+            ("default_max_retries", 11),
+            ("default_retry_base_delay_seconds", -1),
+            ("default_runner_image_python", ""),
+        ],
+    )
+    async def test_rejects_out_of_range(
+        self,
+        admin_client: AsyncClient,
+        field: str,
+        value: Any,
+    ) -> None:
+        response = await admin_client.put("/system-settings", json={**_SETTINGS, field: value})
+
+        assert response.status_code == 422
+
+    async def test_update_is_admin_only(self, authed_client: AsyncClient) -> None:
+        assert (await authed_client.get("/system-settings")).status_code == 200
+        response = await authed_client.put("/system-settings", json=_SETTINGS)
+
+        assert response.status_code == 403
+
+
+class TestNewNodeDefaults:
+    async def test_taken_from_settings(self, admin_client: AsyncClient) -> None:
+        await admin_client.put("/system-settings", json=_SETTINGS)
+
+        response = await admin_client.post(
+            "/nodes",
+            json={
+                "name": "Скрипт",
+                "description": "d",
+                "node_type": NodeType.SCRIPT.value,
+                "script_language": ScriptLanguage.BASH.value,
+                "script_content": "echo hi",
+            },
+        )
+
+        assert response.status_code == 201, response.text
+        body = response.json()
+        assert body["timeout_seconds"] == 900
+        assert body["max_retries"] == 2
+        assert body["retry_base_delay_seconds"] == 10
+        # Образ раннера выбирается при запуске, а не записывается в ноду.
+        assert body["docker_image"] is None
+
+    async def test_explicit_values_kept(self, admin_client: AsyncClient) -> None:
+        await admin_client.put("/system-settings", json=_SETTINGS)
+
+        response = await admin_client.post(
+            "/nodes",
+            json={
+                "name": "Промт",
+                "description": "d",
+                "node_type": NodeType.PLAIN_PROMPT.value,
+                "prompt_template": "x",
+                "timeout_seconds": 30,
+                "max_retries": 1,
+            },
+        )
+
+        assert response.json()["timeout_seconds"] == 30
+        assert response.json()["max_retries"] == 1
+        assert response.json()["docker_image"] is None

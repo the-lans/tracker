@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Protocol
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    RateLimitEvent,
+    RateLimitInfo,
     ResultMessage,
     StreamEvent,
     TextBlock,
@@ -44,6 +46,8 @@ _TEXT_DELTA = "text_delta"
 
 # Получатель фрагментов ответа по мере генерации (раздел 15.2).
 TextDeltaHandler = Callable[[str], Awaitable[None]]
+# Получатель изменений лимита LLM-аккаунта, о которых сообщает CLI (раздел 16.2).
+RateLimitHandler = Callable[[RateLimitInfo], Awaitable[None]]
 # Вызывается при прерывании хода до `interrupt()` — чтобы снять то, что ход
 # успел начать вне самой сессии (ожидание решения пользователя).
 AbortHandler = Callable[[], Awaitable[None]]
@@ -162,10 +166,12 @@ class ClaudeCodeSession:
         *,
         on_text_delta: TextDeltaHandler | None = None,
         on_abort: AbortHandler | None = None,
+        on_rate_limit: RateLimitHandler | None = None,
     ) -> None:
         self._client = client
         self._on_text_delta = on_text_delta
         self._on_abort = on_abort
+        self._on_rate_limit = on_rate_limit
         self._lock = asyncio.Lock()
         self._session_id: str | None = None
         # Ход начат (`query()` отправлен), а его `ResultMessage` ещё не
@@ -271,6 +277,8 @@ class ClaudeCodeSession:
             async for message in self._client.receive_response():
                 if isinstance(message, StreamEvent):
                     await self._forward_text_delta(message)
+                if isinstance(message, RateLimitEvent) and self._on_rate_limit is not None:
+                    await self._on_rate_limit(message.rate_limit_info)
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):

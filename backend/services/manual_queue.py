@@ -46,6 +46,7 @@ from services.nodes.dispatch import (
 from services.notifications import NotificationEvent, notify_task_event
 from services.parent_summary import run_parent_summary_request
 from services.pipeline_orchestrator import StopGuard, run_node_execution
+from services.system_settings import resolve_runner_image
 from services.task_control import clear_manual_stop, is_manual_stop_requested
 from services.template_context import render_for_task
 from services.templating import (
@@ -159,10 +160,14 @@ async def cancel_manual_request(
 
 
 async def _load_node_log_history(db_session: AsyncSession, task_id: uuid.UUID) -> list[NodeLog]:
+    # План и ответы пользователя пишет callback разрешений в своей сессии БД;
+    # без перечитывания здесь остались бы прежние значения (`expire_on_commit`
+    # выключен) и `{{node.plan_text}}`/`{{node.user_input}}` пришли бы пустыми.
     stmt = (
         sa.select(NodeLog)
         .where(NodeLog.task_id == task_id)
         .order_by(NodeLog.started_at, NodeLog.id)
+        .execution_options(populate_existing=True)
     )
     return list((await db_session.execute(stmt)).scalars().all())
 
@@ -247,6 +252,7 @@ async def _run_library_prompt(
             claude_session=claude_session,
             repos_path=repos_path,
             timeout_seconds=node.timeout_seconds,
+            runner_image=await resolve_runner_image(db_session, node),
         ),
         node_type=node.node_type,
         claude_session=claude_session,
