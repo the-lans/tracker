@@ -37,6 +37,7 @@ from db.session import async_session_factory
 from services import gitlab_sync, maintenance_tasks
 from services.autostart import run_scheduled_autostart_check
 from services.llm_accounts import restore_expired_rate_limits
+from services.log_rotation import resolve_archive_root, rotate_node_logs
 from services.manual_queue import expire_stale_manual_queue_requests
 from services.periodic_tasks import record_periodic_task_run
 from services.remote_control import check_task_bridge
@@ -212,11 +213,16 @@ def purge_orphaned_playwright_processes() -> None:
 @celery_app.task(name="rotate_task_logs")
 def rotate_task_logs() -> None:
     async def body(db_session: AsyncSession) -> None:
-        eligible = await maintenance_tasks.find_node_logs_eligible_for_rotation(
+        result = await rotate_node_logs(
             db_session,
+            archive_root=resolve_archive_root(),
             now=datetime.now(UTC),
         )
-        logger.info("node_logs_eligible_for_rotation", count=len(eligible))
+        logger.info(
+            "node_logs_rotated",
+            files=len(result.archived_files),
+            deleted=result.deleted_count,
+        )
 
     _run_periodic("rotate_task_logs", body)
 

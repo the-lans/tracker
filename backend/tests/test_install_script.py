@@ -142,7 +142,7 @@ def _make_restore_dir(tmp_path: Path, *, skip: str | None = None) -> Path:
     for name, write in files.items():
         if name != skip:
             write(restore_dir / name)
-    for archive in ("task_repos.tar.gz", "user_files.tar.gz"):
+    for archive in ("task_repos.tar.gz", "user_files.tar.gz", "log_archive.tar.gz"):
         if archive != skip:
             with tarfile.open(restore_dir / archive, "w:gz"):
                 pass
@@ -179,6 +179,7 @@ class TestRestore:
             "docker compose exec -T postgres",
             "task_repos.tar.gz",
             "user_files.tar.gz",
+            "log_archive.tar.gz",
             "docker compose run --rm backend alembic upgrade head",
             "docker compose up -d backend worker beat frontend caddy backup",
         ]
@@ -192,7 +193,7 @@ class TestRestore:
         env_file = install_dir / ".env"
         assert env_file.read_text() == "SECRET_ENCRYPTION_KEY=старый-ключ\n"
 
-    @pytest.mark.parametrize("missing", [".env", "user_files.tar.gz"])
+    @pytest.mark.parametrize("missing", [".env", "user_files.tar.gz", "log_archive.tar.gz"])
     def test_incomplete_transfer(
         self,
         tmp_path: Path,

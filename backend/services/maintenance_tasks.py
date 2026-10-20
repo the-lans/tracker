@@ -200,16 +200,13 @@ async def find_node_logs_eligible_for_rotation(
     *,
     now: datetime,
     threshold_days: int = DEFAULT_LOG_ROTATION_THRESHOLD_DAYS,
+    limit: int | None = None,
 ) -> list[uuid.UUID]:
-    """Раздел 16.2: `rotate_task_logs`.
+    """
+    Раздел 16.2: `rotate_task_logs` — какие записи `node_logs` архивировать.
 
-    Возвращает id записей `node_logs`, подходящих под архивацию — только
-    для задач в терминальном статусе (`done`/`failed`), старше
-    ``threshold_days``. Само физическое архивирование (выгрузка в холодное
-    хранилище, формат) — открытый инфраструктурный вопрос, ТЗ не называет
-    ни формат, ни место хранения; удаление истории без явного решения об
-    этом было бы необратимым и вне того, что здесь оправданно решать
-    самостоятельно.
+    Только задачи в терминальном статусе (`done`/`failed`) и записи старше
+    ``threshold_days``. Саму выгрузку делает `services/log_rotation.py`.
     """
     cutoff = now - timedelta(days=threshold_days)
     stmt = (
@@ -219,5 +216,7 @@ async def find_node_logs_eligible_for_rotation(
             Task.status.in_((TaskStatus.DONE, TaskStatus.FAILED)),
             NodeLog.started_at < cutoff,
         )
+        .order_by(NodeLog.started_at, NodeLog.id)
+        .limit(limit)
     )
     return list((await db_session.execute(stmt)).scalars().all())
