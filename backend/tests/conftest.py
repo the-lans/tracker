@@ -49,6 +49,7 @@ os.environ.setdefault("DATABASE_URL", _TEST_DATABASE_URL)
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
+import redis  # noqa: E402
 import sqlalchemy as sa  # noqa: E402
 from redis.asyncio import Redis  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
@@ -118,6 +119,16 @@ def postgres_container() -> Iterator[None]:
         subprocess.run(["docker", "stop", _PG_CONTAINER_NAME], capture_output=True)
 
 
+def _redis_responds() -> bool:
+    client = redis.Redis.from_url(os.environ["REDIS_URL"])
+    try:
+        return bool(client.ping())
+    except redis.RedisError:
+        return False
+    finally:
+        client.close()
+
+
 @pytest.fixture(scope="session")
 def redis_container() -> Iterator[None]:
     """Одноразовый Redis для тестовой сессии (раздел 21.1) — тот же паттерн,
@@ -151,8 +162,10 @@ def redis_container() -> Iterator[None]:
             capture_output=True,
             env={**os.environ, "REDIS_PASSWORD": _TEST_REDIS_PASSWORD},
         )
+        # Порт публикует docker-proxy раньше, чем Redis начинает принимать
+        # соединения, — готовность проверяется ответом на PING.
         for _ in range(60):
-            if _port_open(_TEST_REDIS_PORT):
+            if _redis_responds():
                 break
             time.sleep(0.5)
         else:
