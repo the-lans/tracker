@@ -310,6 +310,12 @@ export interface TaskNodeItem {
   editable: boolean;
 }
 
+/** Раздел 3.1, 15.2: переменная уровня задачи; значение — только через reveal. */
+export interface TaskEnvVariable {
+  id: string;
+  key: string;
+}
+
 /** Раздел 13.3, 15.2: нода, которая берёт вывод у отключаемой. */
 export interface NodeDependent {
   node_id: string;
