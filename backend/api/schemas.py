@@ -337,8 +337,10 @@ class TaskEnvVariableUpdateRequest(BaseModel):
 
 
 class TaskEnvVariableResponse(BaseModel):
-    """Раздел 15.2: переменная задачи; значение скрыто (правило 8) — только
-    через `.../reveal`."""
+    """
+    Раздел 15.2: переменная задачи; значение скрыто (правило 8) — только
+    через `.../reveal`.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 

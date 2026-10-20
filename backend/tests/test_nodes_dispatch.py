@@ -428,8 +428,8 @@ class TestScriptRunnerImage:
     ) -> None:
         seen: list[str | None] = []
 
-        async def fake_run(**kwargs: object) -> ScriptExecutionResult:
-            seen.append(kwargs["docker_image"])  # type: ignore[arg-type]
+        async def fake_run(*, docker_image: str | None, **_: object) -> ScriptExecutionResult:
+            seen.append(docker_image)
             return ScriptExecutionResult(exit_code=0, stdout="", stderr="", timed_out=False)
 
         monkeypatch.setattr(dispatch, "run_script_node", fake_run)

@@ -104,21 +104,22 @@ class TestNodeExecutionDefaults:
 
 class TestResolveRunnerImage:
     @pytest.mark.parametrize(
-        ("node_kwargs", "expected"),
+        ("node", "expected"),
         [
             # Язык сменили после создания — образ берётся по текущему языку.
-            ({"language": ScriptLanguage.BASH}, "sh:1"),
-            ({"language": ScriptLanguage.PYTHON}, "py:1"),
-            ({"docker_image": "custom:2"}, "custom:2"),
-            ({"node_type": NodeType.PLAIN_PROMPT, "language": None}, None),
+            (_node(language=ScriptLanguage.BASH), "sh:1"),
+            (_node(language=ScriptLanguage.PYTHON), "py:1"),
+            (_node(docker_image="custom:2"), "custom:2"),
+            (_node(node_type=NodeType.PLAIN_PROMPT, language=None), None),
         ],
+        ids=["bash", "python", "own_image", "not_script"],
     )
     async def test_image(
         self,
         db_session: AsyncSession,
-        node_kwargs: dict[str, object],
+        node: Node,
         expected: str | None,
     ) -> None:
         await update_system_settings(db_session, values=_CUSTOM_SETTINGS)
 
-        assert await resolve_runner_image(db_session, _node(**node_kwargs)) == expected  # type: ignore[arg-type]
+        assert await resolve_runner_image(db_session, node) == expected

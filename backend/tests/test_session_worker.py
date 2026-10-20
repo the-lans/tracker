@@ -782,7 +782,6 @@ class TestBridgeReconnect:
         assert task.status is TaskStatus.DONE
         assert task.remote_control_status is RemoteControlStatus.CONNECTED
 
-
     async def test_last_node_request_dropped(
         self,
         db_session: AsyncSession,
@@ -1061,8 +1060,10 @@ class TestPlanRevision:
         worker_env: WorkerEnv,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Раздел 21.2, сценарий 3: «Доработать план» возвращает агента к плану
-        в той же попытке — при `max_retries = 1` нода всё равно проходит."""
+        """
+        Раздел 21.2, сценарий 3: «Доработать план» возвращает агента к плану
+        в той же попытке — при `max_retries = 1` нода всё равно проходит.
+        """
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
         plan_node = await _add_node(db_session, task, order_index=0, node_type=NodeType.PLAN_PROMPT)
         plan_node.prompt_template = "Составь план"
@@ -1103,8 +1104,10 @@ class TestPlanRevision:
 
         assert denials == ["добавь тесты"]
         logs = (
-            await db_session.execute(sa.select(NodeLog).where(NodeLog.task_id == task.id))
-        ).scalars().all()
+            (await db_session.execute(sa.select(NodeLog).where(NodeLog.task_id == task.id)))
+            .scalars()
+            .all()
+        )
         assert [(log.attempt_number, log.status) for log in logs] == [(1, NodeLogStatus.SUCCESS)]
         assert logs[0].pending_plan_text == "1. Сделать\n2. Покрыть тестами"
         await db_session.refresh(task)
@@ -1174,8 +1177,10 @@ class TestAllNodeTypesPipeline:
 
         assert continuation.queries == ["После очистки контекста"]
         node_ids = (
-            await db_session.execute(sa.select(NodeLog.node_id).where(NodeLog.task_id == task.id))
-        ).scalars().all()
+            (await db_session.execute(sa.select(NodeLog.node_id).where(NodeLog.task_id == task.id)))
+            .scalars()
+            .all()
+        )
         assert nodes[2].id not in node_ids
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE

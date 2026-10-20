@@ -515,8 +515,10 @@ async def list_node_logs(
     status: NodeLogStatus | None = None,
     trigger_type: NodeLogTriggerType | None = None,
 ) -> list[NodeLog]:
-    """Раздел 13.4: история выполнения — лента и вкладка «Логи» с фильтрами
-    по ноде, статусу и источнику."""
+    """
+    Раздел 13.4: история выполнения — лента и вкладка «Логи» с фильтрами
+    по ноде, статусу и источнику.
+    """
     await _get_task_or_404(db_session, task_id)
     stmt = (
         sa.select(NodeLog)

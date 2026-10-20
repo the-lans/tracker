@@ -34,7 +34,8 @@ async def record_rate_limit(
     account_id: uuid.UUID,
     info: RateLimitInfo,
 ) -> None:
-    """`rejected` — аккаунт упёрся в лимит до `resets_at`; иначе — снова `active`.
+    """
+    `rejected` — аккаунт упёрся в лимит до `resets_at`; иначе — снова `active`.
 
     Аккаунт, отключённый администратором (`disabled`), не трогается.
     """

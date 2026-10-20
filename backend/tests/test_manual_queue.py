@@ -641,8 +641,10 @@ class TestLibraryPromptTimeout:
         tmp_path: Path,
         redis_client: Redis,
     ) -> None:
-        """Раздел 21.2, сценарий 9: превышение `timeout_seconds` запуска из
-        библиотеки — `failed` без повторной попытки; задача не падает."""
+        """
+        Раздел 21.2, сценарий 9: превышение `timeout_seconds` запуска из
+        библиотеки — `failed` без повторной попытки; задача не падает.
+        """
         task, task_library_prompt, request = await _enqueue_library_run(db_session)
         node = await db_session.get(Node, task_library_prompt.node_id)
         assert node is not None

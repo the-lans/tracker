@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from claude_agent_sdk import RateLimitInfo
+from claude_agent_sdk.types import RateLimitStatus
 
 from db.models.enums import LlmAccountStatus
 from db.models.llm import LlmAccount
@@ -40,13 +41,13 @@ class TestRecordRateLimit:
         self,
         db_session: AsyncSession,
         start: LlmAccountStatus,
-        event_status: str,
+        event_status: RateLimitStatus,
         expected: LlmAccountStatus,
         resets_at: datetime | None,
     ) -> None:
         account = await _account(db_session, start)
         info = RateLimitInfo(
-            status=event_status,  # type: ignore[arg-type]
+            status=event_status,
             resets_at=int(_RESETS_AT.timestamp()),
         )
 
