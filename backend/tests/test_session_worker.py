@@ -8,6 +8,7 @@ Origin репозитория — локальный bare-репозиторий
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import uuid
 from pathlib import Path
@@ -31,12 +32,14 @@ from db.models.enums import (
     TaskStatus,
     UserRole,
 )
+from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.repositories import Repository, Template, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
+from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
 from services.manual_queue import enqueue_freeform_prompt_run
 from services.session_context import clear_task_session_context
@@ -969,3 +972,26 @@ class TestNodeTimeoutWhileAwaitingDecision:
         assert task.status is TaskStatus.FAILED
         assert task.last_failed_order_index == 0
         assert all(handler.done() for handler in sdk_handlers)
+
+
+class TestHistoryRetention:
+    async def test_set_before_session_starts(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        tmp_path: Path,
+    ) -> None:
+        """Раздел 6.4: CLI не должен удалить историю, пока задача существует."""
+        config_dir = tmp_path / "llm-account"
+        account = LlmAccount(label="main", claude_config_dir=str(config_dir))
+        db_session.add(account)
+        await db_session.flush()
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        task.llm_account_id = account.id
+        await _add_node(db_session, task, order_index=0)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        await _run_worker(task)
+
+        settings = json.loads((config_dir / "settings.json").read_text())
+        assert settings["cleanupPeriodDays"] == DEFAULT_HISTORY_RETENTION_DAYS

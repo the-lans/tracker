@@ -33,6 +33,7 @@ from db.models.mcp import McpServer
 from db.models.repositories import Repository, TemplateMcpServer
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
 from db.session import async_session_factory
+from services.claude_config import ensure_history_retention, history_retention_days
 from services.errors import ConflictError
 from services.manual_queue import DEFAULT_FREEFORM_TIMEOUT_SECONDS, process_manual_queue_once
 from services.mcp_config import build_mcp_server_config
@@ -432,6 +433,7 @@ async def _summarize_parent_in_fork(
         can_use_tool=deny_all_tools,
         fork_session=True,
     )
+    ensure_history_retention(options.env["CLAUDE_CONFIG_DIR"], days=history_retention_days())
     fork = ClaudeCodeSession(ClaudeSDKClient(options=options))
     try:
         await fork.connect()
@@ -548,6 +550,8 @@ async def _run_claimed_task(
         )
         return ClaudeSDKClient(options=options)
 
+    # Раздел 6.4: история сессии нужна, пока существует задача (resume, пересказ).
+    ensure_history_retention(claude_config_dir, days=history_retention_days())
     start_plan = plan_session_start(existing_session_id=task.session_id)
     session = ClaudeCodeSession(
         make_client(
