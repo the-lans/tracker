@@ -57,24 +57,31 @@ export function TaskEnvVariablesCard({ task }: { task: Task }) {
         </div>
       )}
       {!readOnly && (
-        <form onSubmit={handleAdd} className="mt-2 flex flex-wrap items-center gap-2">
-          <Input
-            aria-label="Ключ переменной"
-            placeholder="API_URL"
-            className="w-36 font-mono"
-            value={key}
-            onChange={(event) => setKey(event.target.value)}
-            required
-          />
-          <Input
-            aria-label="Значение переменной"
-            placeholder="Значение"
-            className="min-w-0 flex-1"
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            required
-          />
-          <Button type="submit" size="sm" variant="secondary" disabled={create.isPending}>
+        <form onSubmit={handleAdd} className="mt-2 flex flex-col gap-2">
+          <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-2">
+            <Input
+              aria-label="Ключ переменной"
+              placeholder="API_URL"
+              className="font-mono"
+              value={key}
+              onChange={(event) => setKey(event.target.value)}
+              required
+            />
+            <Input
+              aria-label="Значение переменной"
+              placeholder="Значение"
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+              required
+            />
+          </div>
+          <Button
+            type="submit"
+            size="sm"
+            variant="secondary"
+            className="self-end"
+            disabled={create.isPending}
+          >
             <Plus className="size-4" /> Добавить
           </Button>
         </form>
