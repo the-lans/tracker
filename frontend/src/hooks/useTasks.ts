@@ -84,6 +84,15 @@ export function useFilteredNodeLogs(taskId: string, filters: NodeLogFilters) {
   });
 }
 
+/** Раздел 15.1: активные сессии Claude Code задач текущего пользователя. */
+export function useActiveSessions() {
+  return useQuery({
+    queryKey: ["tasks", "active-sessions"],
+    queryFn: () => api.get<Task[]>("/tasks/active-sessions"),
+    refetchInterval: 15_000,
+  });
+}
+
 export function useCreateTask() {
   const queryClient = useQueryClient();
   return useMutation({

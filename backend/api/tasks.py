@@ -63,7 +63,7 @@ from services.manual_queue import (
 from services.node_dependencies import find_task_node_dependents
 from services.plan_mode import encode_decision
 from services.remote_control import start_bridge_reconnect
-from services.session_context import clear_task_session_context
+from services.session_context import clear_task_session_context, list_active_sessions
 from services.task_cleanup import cleanup_task_repositories
 from services.task_control import (
     TaskControlCommand,
@@ -238,6 +238,15 @@ async def get_awaiting_decision_count(
     )
     count = (await db_session.execute(stmt)).scalar_one()
     return AwaitingDecisionCountResponse(count=count)
+
+
+@router.get("/active-sessions", response_model=list[TaskResponse])
+async def list_my_active_sessions(
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> list[Task]:
+    """Раздел 15.1: активные сессии Claude Code задач текущего пользователя."""
+    return await list_active_sessions(db_session, user_id=current_user.id)
 
 
 @router.get("/{task_id}", response_model=TaskResponse)

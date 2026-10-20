@@ -1416,3 +1416,40 @@ class TestNodeLogFilters:
         )
 
         assert [entry["node_id"] for entry in response.json()] == [nodes[1]["node_id"]]
+
+
+class TestActiveSessions:
+    async def test_only_own_active_tasks(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        other_user = User(email=f"{uuid.uuid4()}@example.com")
+        db_session.add(other_user)
+        await db_session.flush()
+        statuses = [TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.DONE, TaskStatus.NEW]
+        own = [
+            Task(
+                code=f"RR-{uuid.uuid4().hex[:8]}",
+                title=status.value,
+                description="d",
+                created_by=current_user.id,
+                status=status,
+            )
+            for status in statuses
+        ]
+        foreign = Task(
+            code=f"RR-{uuid.uuid4().hex[:8]}",
+            title="чужая",
+            description="d",
+            created_by=other_user.id,
+            status=TaskStatus.IN_PROGRESS,
+        )
+        db_session.add_all([*own, foreign])
+        await db_session.flush()
+
+        response = await authed_client.get("/tasks/active-sessions")
+
+        assert response.status_code == 200
+        assert sorted(item["title"] for item in response.json()) == ["in_progress", "paused"]
