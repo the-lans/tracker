@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { NodeLogEntry } from "@/components/tasks/NodeLogEntry";
 import { Composer } from "@/components/tasks/Composer";
 import { Button } from "@/components/ui/button";
 import { useTaskOutputStream } from "@/hooks/useTaskStatusSocket";
+import { useTaskNodes } from "@/hooks/useTasks";
 import { cn } from "@/lib/utils";
 import type { NodeLog, TaskStatus } from "@/lib/types";
 
@@ -11,13 +12,17 @@ export function TaskChatFeed({
   taskId,
   taskStatus,
   nodeLogs,
+  header,
 }: {
   taskId: string;
   taskStatus: TaskStatus;
   nodeLogs: NodeLog[];
+  header: ReactNode;
 }) {
   const [fullscreen, setFullscreen] = useState(false);
   const outputStream = useTaskOutputStream(taskId);
+  const { data: taskNodes } = useTaskNodes(taskId, true);
+  const nodeNames = new Map((taskNodes ?? []).map((node) => [node.node_id, node.name]));
   const feedRef = useRef<HTMLDivElement>(null);
   const previousLength = useRef(0);
 
@@ -36,9 +41,7 @@ export function TaskChatFeed({
       )}
     >
       <div className="flex items-center justify-between border-b border-border px-6 py-3.5">
-        <div className="text-[11px] font-extrabold uppercase tracking-wider text-text-3">
-          Выполнение
-        </div>
+        {header}
         <Button variant="ghost" size="icon" onClick={() => setFullscreen((prev) => !prev)}>
           {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
         </Button>
@@ -55,6 +58,7 @@ export function TaskChatFeed({
             key={log.id}
             taskId={taskId}
             log={log}
+            title={log.node_id ? nodeNames.get(log.node_id) : undefined}
             streamedText={outputStream[log.id]}
           />
         ))}

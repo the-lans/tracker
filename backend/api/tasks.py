@@ -42,6 +42,7 @@ from api.schemas import (
 from db.models.enums import (
     ManualRequestStatus,
     NodeLogStatus,
+    NodeLogTriggerType,
     TaskStatus,
 )
 from db.models.env_vars import TaskEnvVariable
@@ -501,13 +502,22 @@ async def list_node_logs(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
     _current_user: Annotated[User, Depends(get_current_user)],
+    node_id: uuid.UUID | None = None,
+    status: NodeLogStatus | None = None,
+    trigger_type: NodeLogTriggerType | None = None,
 ) -> list[NodeLog]:
+    """Раздел 13.4: история выполнения — лента и вкладка «Логи» с фильтрами
+    по ноде, статусу и источнику."""
     await _get_task_or_404(db_session, task_id)
     stmt = (
         sa.select(NodeLog)
         .where(NodeLog.task_id == task_id)
         .order_by(NodeLog.started_at, NodeLog.id)
     )
+    filters = {NodeLog.node_id: node_id, NodeLog.status: status, NodeLog.trigger_type: trigger_type}
+    for column, value in filters.items():
+        if value is not None:
+            stmt = stmt.where(column == value)
     return list((await db_session.execute(stmt)).scalars().all())
 
 

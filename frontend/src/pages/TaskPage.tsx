@@ -4,6 +4,8 @@ import { ArrowLeft } from "lucide-react";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { TaskOverviewPanel } from "@/components/tasks/TaskOverviewPanel";
 import { TaskChatFeed } from "@/components/tasks/TaskChatFeed";
+import { TaskLogsPanel } from "@/components/tasks/TaskLogsPanel";
+import { TaskWorkspaceTabs, type WorkspaceView } from "@/components/tasks/TaskWorkspaceTabs";
 import { TaskControlButtons } from "@/components/tasks/TaskControlButtons";
 import { RemoteControlButton } from "@/components/tasks/RemoteControlButton";
 import { useTask, useTaskNodeLogs } from "@/hooks/useTasks";
@@ -14,7 +16,7 @@ export function TaskPage() {
   const { taskId } = useParams<{ taskId: string }>();
   const { data: task, isLoading } = useTask(taskId);
   const { data: nodeLogs } = useTaskNodeLogs(taskId);
-  const [mobileTab, setMobileTab] = useState<"overview" | "dialogue">("dialogue");
+  const [mobileTab, setMobileTab] = useState<"overview" | WorkspaceView>("dialogue");
   useTaskStatusSocket(taskId);
 
   if (isLoading || !task) {
@@ -25,6 +27,10 @@ export function TaskPage() {
     );
   }
 
+
+  // На десктопе правая панель видна всегда; «Обзор» — только мобильная вкладка.
+  const workspaceView: WorkspaceView = mobileTab === "logs" ? "logs" : "dialogue";
+  const workspaceTabs = <TaskWorkspaceTabs value={workspaceView} onChange={setMobileTab} />;
 
   return (
     <div className="flex h-full flex-col">
@@ -65,6 +71,16 @@ export function TaskPage() {
         >
           Диалог
         </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab("logs")}
+          className={cn(
+            "flex-1 touch-target border-b-2 border-transparent py-2.5 text-[13px] font-bold text-text-2",
+            mobileTab === "logs" && "border-accent text-accent",
+          )}
+        >
+          Логи
+        </button>
       </div>
 
       <div className="flex min-h-0 flex-1 xl:flex-row">
@@ -76,8 +92,17 @@ export function TaskPage() {
         >
           <TaskOverviewPanel task={task} nodeLogs={nodeLogs ?? []} />
         </div>
-        <div className={cn("min-h-0 min-w-0 flex-1 xl:flex", mobileTab === "dialogue" ? "flex" : "hidden")}>
-          <TaskChatFeed taskId={task.id} taskStatus={task.status} nodeLogs={nodeLogs ?? []} />
+        <div className={cn("min-h-0 min-w-0 flex-1 xl:flex", mobileTab !== "overview" ? "flex" : "hidden")}>
+          {workspaceView === "logs" ? (
+            <TaskLogsPanel taskId={task.id} header={workspaceTabs} />
+          ) : (
+            <TaskChatFeed
+              taskId={task.id}
+              taskStatus={task.status}
+              nodeLogs={nodeLogs ?? []}
+              header={workspaceTabs}
+            />
+          )}
         </div>
       </div>
     </div>

@@ -1350,3 +1350,69 @@ class TestTaskEnvVariables:
         )
 
         assert response.status_code == 404
+
+
+class TestNodeLogFilters:
+    @pytest.mark.parametrize(
+        ("params", "expected"),
+        [
+            ({}, 3),
+            ({"status": "failed"}, 1),
+            ({"trigger_type": "freeform_manual"}, 1),
+            ({"trigger_type": "pipeline", "status": "success"}, 1),
+        ],
+        ids=["all", "status", "trigger_type", "combined"],
+    )
+    async def test_filters(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        params: dict[str, str],
+        expected: int,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        task_id = uuid.UUID(task_body["id"])
+        db_session.add_all(
+            [
+                NodeLog(
+                    task_id=task_id,
+                    trigger_type=trigger_type,
+                    status=status,
+                )
+                for trigger_type, status in [
+                    (NodeLogTriggerType.PIPELINE, NodeLogStatus.SUCCESS),
+                    (NodeLogTriggerType.PIPELINE, NodeLogStatus.FAILED),
+                    (NodeLogTriggerType.FREEFORM_MANUAL, NodeLogStatus.SUCCESS),
+                ]
+            ],
+        )
+        await db_session.flush()
+
+        response = await authed_client.get(f"/tasks/{task_id}/node-logs", params=params)
+
+        assert response.status_code == 200
+        assert len(response.json()) == expected
+
+    async def test_node_filter(self, authed_client: AsyncClient, db_session: AsyncSession) -> None:
+        task_body = await _create_task(authed_client)
+        nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 2)
+        task_id = uuid.UUID(task_body["id"])
+        db_session.add_all(
+            [
+                NodeLog(
+                    task_id=task_id,
+                    node_id=uuid.UUID(node["node_id"]),
+                    trigger_type=NodeLogTriggerType.PIPELINE,
+                    status=NodeLogStatus.SUCCESS,
+                )
+                for node in nodes
+            ],
+        )
+        await db_session.flush()
+
+        response = await authed_client.get(
+            f"/tasks/{task_id}/node-logs",
+            params={"node_id": nodes[1]["node_id"]},
+        )
+
+        assert [entry["node_id"] for entry in response.json()] == [nodes[1]["node_id"]]
