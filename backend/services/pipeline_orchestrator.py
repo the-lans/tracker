@@ -174,9 +174,11 @@ async def run_pipeline_node_with_retry(
         await db_session.commit()
 
         if active_node_context is not None:
-            active_node_context.node_log_id = node_log.id
-            active_node_context.task_id = task.id
-            active_node_context.auto_accept_plan = task.auto_accept_plan
+            active_node_context.activate(
+                node_log_id=node_log.id,
+                task_id=task.id,
+                auto_accept_plan=task.auto_accept_plan,
+            )
 
         outcome = await run_node_execution(
             execute_node(

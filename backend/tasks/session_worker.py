@@ -147,6 +147,7 @@ class _SessionControl:
     claude_session: ClaudeCodeSession
     workspace: Path
     redis_client: Redis
+    active_node_context: ActiveNodeContext
 
     async def process_manual_queue(self) -> None:
         await process_manual_queue_once(
@@ -155,6 +156,7 @@ class _SessionControl:
             claude_session=self.claude_session,
             repos_path=self.workspace,
             redis_client=self.redis_client,
+            active_node_context=self.active_node_context,
         )
 
     async def resolve_rebase_conflict_if_any(self, *, resume_status: TaskStatus) -> bool:
@@ -178,6 +180,7 @@ class _SessionControl:
             task=self.task,
             claude_session=self.claude_session,
             workspace=self.workspace,
+            active_node_context=self.active_node_context,
         ):
             return False
         if not in_conflict_status:
@@ -369,6 +372,7 @@ async def _run_claimed_task(
         claude_session=session,
         workspace=workspace,
         redis_client=redis_client,
+        active_node_context=active_node_context,
     )
     await session.connect()
     outcome = None

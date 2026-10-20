@@ -46,7 +46,12 @@ from services.nodes.dispatch import (
 from services.notifications import NotificationEvent, notify_task_event
 from services.pipeline_orchestrator import StopGuard, run_node_execution
 from services.task_control import clear_manual_stop, is_manual_stop_requested
-from services.templating import RenderScope, validate_template_variables
+from services.template_context import render_for_task
+from services.templating import (
+    RenderScope,
+    is_slash_command_text,
+    validate_template_variables,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -55,6 +60,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from clients.claude_agent import ClaudeCodeSession
+    from services.plan_mode import ActiveNodeContext
 
 # Раздел 17.5: "Обработка очереди task_manual_request_queue обязана быть
 # защищена той же распределённой блокировкой, что и обращения к сессии."
@@ -126,6 +132,18 @@ async def enqueue_freeform_prompt_run(
     return request
 
 
+async def render_freeform_prompt(db_session: AsyncSession, *, task: Task, text: str) -> str:
+    """Раздел 8.2: переменные раздела 5 (кроме `{{node.*}}`) подставляются
+    непосредственно перед отправкой (5.1); слэш-команда уходит буквально.
+
+    Та же функция отвечает и предпросмотру — пользователь видит ровно то,
+    что получит сессия.
+    """
+    if is_slash_command_text(text):
+        return text
+    return await render_for_task(db_session, task, text)
+
+
 async def cancel_manual_request(
     db_session: AsyncSession,
     request: TaskManualRequestQueue,
@@ -147,6 +165,22 @@ async def _load_node_log_history(db_session: AsyncSession, task_id: uuid.UUID) -
     return list((await db_session.execute(stmt)).scalars().all())
 
 
+def _activate_context(
+    active_node_context: ActiveNodeContext | None,
+    *,
+    node_log: NodeLog,
+    task: Task,
+) -> None:
+    """Вопрос агента во время ручного запроса (раздел 9.6) и потоковый вывод
+    (раздел 15.2) адресуются записи этого запроса."""
+    if active_node_context is not None:
+        active_node_context.activate(
+            node_log_id=node_log.id,
+            task_id=task.id,
+            auto_accept_plan=task.auto_accept_plan,
+        )
+
+
 def _manual_stop_guard(redis_client: Redis, request: TaskManualRequestQueue) -> StopGuard:
     return StopGuard(redis_client=redis_client, task_id=request.task_id)
 
@@ -166,6 +200,7 @@ async def _run_library_prompt(
     claude_session: ClaudeCodeSession,
     repos_path: Path,
     redis_client: Redis,
+    active_node_context: ActiveNodeContext | None,
 ) -> None:
     assert request.node_id is not None
     node = await db_session.get(Node, request.node_id)
@@ -194,6 +229,7 @@ async def _run_library_prompt(
     )
     db_session.add(node_log)
     await db_session.commit()
+    _activate_context(active_node_context, node_log=node_log, task=task)
 
     guard = _manual_stop_guard(redis_client, request)
 
@@ -258,18 +294,21 @@ async def _run_freeform_prompt(
     request: TaskManualRequestQueue,
     claude_session: ClaudeCodeSession,
     redis_client: Redis,
+    active_node_context: ActiveNodeContext | None,
 ) -> None:
     assert request.raw_prompt_text is not None
+    prompt = await render_freeform_prompt(db_session, task=task, text=request.raw_prompt_text)
     node_log = NodeLog(
         task_id=task.id,
         trigger_type=NodeLogTriggerType.FREEFORM_MANUAL,
         triggered_by=request.requested_by,
-        rendered_prompt=request.raw_prompt_text,
+        rendered_prompt=prompt,
         status=NodeLogStatus.RUNNING,
         started_at=datetime.now(UTC),
     )
     db_session.add(node_log)
     await db_session.commit()
+    _activate_context(active_node_context, node_log=node_log, task=task)
 
     # Свободный промт (раздел 8) — всегда обычный текст, без своей ноды и
     # без понятия node_type: `execute_node` здесь не подходит (ему нужен
@@ -283,7 +322,7 @@ async def _run_freeform_prompt(
     outcome = await run_node_execution(
         execute_llm_node_with_timeout(
             claude_session,
-            request.raw_prompt_text,
+            prompt,
             timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
         ),
         node_type=None,
@@ -316,6 +355,7 @@ async def _process_single_request(
     claude_session: ClaudeCodeSession,
     repos_path: Path,
     redis_client: Redis,
+    active_node_context: ActiveNodeContext | None,
 ) -> None:
     request.status = ManualRequestStatus.PROCESSING
     await db_session.commit()
@@ -328,6 +368,7 @@ async def _process_single_request(
             claude_session=claude_session,
             repos_path=repos_path,
             redis_client=redis_client,
+            active_node_context=active_node_context,
         )
     else:
         await _run_freeform_prompt(
@@ -336,6 +377,7 @@ async def _process_single_request(
             request=request,
             claude_session=claude_session,
             redis_client=redis_client,
+            active_node_context=active_node_context,
         )
     await clear_manual_stop(redis_client, task.id, request.id)
 
@@ -358,6 +400,7 @@ async def process_manual_queue_once(
     claude_session: ClaudeCodeSession,
     repos_path: Path,
     redis_client: Redis,
+    active_node_context: ActiveNodeContext | None = None,
 ) -> int:
     """Обрабатывает ВСЕ `queued`-запросы FIFO по `requested_at` (раздел 7.3).
 
@@ -402,6 +445,7 @@ async def process_manual_queue_once(
                     claude_session=claude_session,
                     repos_path=repos_path,
                     redis_client=redis_client,
+                    active_node_context=active_node_context,
                 )
         except LockNotAcquiredError:
             logger.info("manual_queue_processing_already_in_progress", task_id=str(task.id))

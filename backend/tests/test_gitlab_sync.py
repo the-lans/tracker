@@ -318,11 +318,21 @@ async def test_rebase_child_task_repositories_rebases_matching_children(
     assert (child_repo_dir / "from_child.txt").exists()
 
 
-@pytest.mark.parametrize("child_status", [TaskStatus.IN_PROGRESS, TaskStatus.PAUSED])
+@pytest.mark.parametrize(
+    ("child_status", "expected_status"),
+    [
+        (TaskStatus.IN_PROGRESS, TaskStatus.REBASE_CONFLICT),
+        (TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT),
+        # Из ожидания решения — только признак: воркер разберёт его после решения.
+        (TaskStatus.PLAN_REVIEW, TaskStatus.PLAN_REVIEW),
+        (TaskStatus.AWAITING_INPUT, TaskStatus.AWAITING_INPUT),
+    ],
+)
 async def test_rebase_child_task_repositories_marks_conflict_on_rebase_conflict(
     db_session: AsyncSession,
     tmp_path: Path,
     child_status: TaskStatus,
+    expected_status: TaskStatus,
 ) -> None:
     origin = _init_bare_origin(tmp_path)
 
@@ -425,7 +435,7 @@ async def test_rebase_child_task_repositories_marks_conflict_on_rebase_conflict(
     assert rebased == []
     await db_session.refresh(child_task)
     await db_session.refresh(child_task_repository)
-    assert child_task.status is TaskStatus.REBASE_CONFLICT
+    assert child_task.status is expected_status
     # Признак переживает уход задачи в `failed` (services/rebase_resolution.py).
     assert child_task_repository.merge_status is MergeStatus.CONFLICT
 

@@ -70,12 +70,20 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
         },
     ),
     # «Приостановить» (раздел 14.2): продолжить, остановить или поймать
-    # конфликт ребейза, пока задача стоит на паузе.
+    # конфликт ребейза, пока задача стоит на паузе. Ручной промт на паузе
+    # выполняется сразу и тоже может спросить пользователя.
     TaskStatus.PAUSED: frozenset(
-        {TaskStatus.IN_PROGRESS, TaskStatus.FAILED, TaskStatus.REBASE_CONFLICT},
+        {
+            TaskStatus.IN_PROGRESS,
+            TaskStatus.FAILED,
+            TaskStatus.REBASE_CONFLICT,
+            TaskStatus.PLAN_REVIEW,
+            TaskStatus.AWAITING_INPUT,
+        },
     ),
-    TaskStatus.PLAN_REVIEW: frozenset({TaskStatus.IN_PROGRESS}),
-    TaskStatus.AWAITING_INPUT: frozenset({TaskStatus.IN_PROGRESS}),
+    # После решения задача возвращается туда, откуда ушла в ожидание.
+    TaskStatus.PLAN_REVIEW: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
+    TaskStatus.AWAITING_INPUT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
     TaskStatus.REBASE_CONFLICT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.FAILED}),
     TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS}),
     TaskStatus.DONE: frozenset(),

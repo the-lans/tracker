@@ -69,3 +69,33 @@ async def test_preview_rejects_node_variables_in_freeform_scope(authed_client: A
     )
 
     assert response.status_code == 422
+
+
+class TestFreeformPreviewSlashCommand:
+    async def test_returned_verbatim(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        task = Task(
+            id=uuid.uuid4(),
+            code=f"RR-{uuid.uuid4().hex[:8]}",
+            title="t",
+            description="",
+            created_by=current_user.id,
+        )
+        db_session.add(task)
+        await db_session.flush()
+
+        response = await authed_client.post(
+            "/templates/preview",
+            json={
+                "text": "/review {{task.title}}",
+                "scope": RenderScope.FREEFORM.value,
+                "task_id": str(task.id),
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["rendered_text"] == "/review {{task.title}}"

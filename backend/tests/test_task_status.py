@@ -88,6 +88,10 @@ async def _add_enabled_node(db_session: AsyncSession, task: Task, *, order_index
         (TaskStatus.IN_PROGRESS, TaskStatus.REBASE_CONFLICT),
         (TaskStatus.PLAN_REVIEW, TaskStatus.IN_PROGRESS),
         (TaskStatus.AWAITING_INPUT, TaskStatus.IN_PROGRESS),
+        (TaskStatus.PAUSED, TaskStatus.PLAN_REVIEW),
+        (TaskStatus.PAUSED, TaskStatus.AWAITING_INPUT),
+        (TaskStatus.PLAN_REVIEW, TaskStatus.PAUSED),
+        (TaskStatus.AWAITING_INPUT, TaskStatus.PAUSED),
         (TaskStatus.REBASE_CONFLICT, TaskStatus.IN_PROGRESS),
         (TaskStatus.FAILED, TaskStatus.IN_PROGRESS),
     ],
@@ -119,6 +123,8 @@ async def test_allowed_transitions_succeed(
         (TaskStatus.PAUSED, TaskStatus.DONE),
         (TaskStatus.NEW, TaskStatus.PAUSED),
         (TaskStatus.REBASE_CONFLICT, TaskStatus.DONE),
+        (TaskStatus.PLAN_REVIEW, TaskStatus.REBASE_CONFLICT),
+        (TaskStatus.AWAITING_INPUT, TaskStatus.DONE),
     ],
 )
 async def test_disallowed_transitions_are_rejected(

@@ -22,6 +22,7 @@ from db.models.enums import NodeLogStatus, NodeLogTriggerType, PermissionMode, T
 from db.models.logs import NodeLog
 from db.models.tasks import Task
 from db.models.users import User
+from services.notifications import NotificationEvent
 from services.plan_mode import (
     DEFAULT_PLAN_OPTIONS,
     ActiveNodeContext,
@@ -41,7 +42,11 @@ if TYPE_CHECKING:
 _TEST_TOOL_CONTEXT = ToolPermissionContext()
 
 
-async def _make_task_with_running_node_log(db_session: AsyncSession) -> tuple[Task, NodeLog]:
+async def _make_task_with_running_node_log(
+    db_session: AsyncSession,
+    *,
+    status: TaskStatus = TaskStatus.IN_PROGRESS,
+) -> tuple[Task, NodeLog]:
     user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
     db_session.add(user)
     await db_session.flush()
@@ -50,7 +55,7 @@ async def _make_task_with_running_node_log(db_session: AsyncSession) -> tuple[Ta
         title="t",
         description="d",
         created_by=user.id,
-        status=TaskStatus.IN_PROGRESS,
+        status=status,
     )
     db_session.add(task)
     await db_session.flush()
@@ -397,3 +402,151 @@ async def test_callback_handles_ask_user_question_with_plain_string_options(
         {"id": "0", "label": "Да"},
         {"id": "1", "label": "Нет"},
     ]
+
+
+async def _status_of(db_session: AsyncSession, task: Task) -> TaskStatus:
+    await db_session.refresh(task)
+    return task.status
+
+
+async def _wait_for_status(db_session: AsyncSession, task: Task, status: TaskStatus) -> None:
+    for _ in range(100):
+        if await _status_of(db_session, task) is status:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"задача не перешла в {status}")
+
+
+class TestDecisionStatus:
+    """Раздел 14.3: на время ожидания решения — статус ожидания, затем возврат."""
+
+    @pytest.mark.parametrize(
+        ("tool_name", "tool_input", "start_status", "awaiting_status", "answer"),
+        [
+            (
+                "ExitPlanMode",
+                {"plan": "1. Сделать X"},
+                TaskStatus.IN_PROGRESS,
+                TaskStatus.PLAN_REVIEW,
+                PlanDecisionOption.ACCEPT_DEFAULT,
+            ),
+            (
+                "AskUserQuestion",
+                {"question": "Какую базу?", "options": ["main", "dev"]},
+                TaskStatus.PAUSED,
+                TaskStatus.AWAITING_INPUT,
+                "main",
+            ),
+        ],
+        ids=["plan_from_in_progress", "question_from_paused"],
+    )
+    async def test_round_trip(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+        tool_name: str,
+        tool_input: dict[str, object],
+        start_status: TaskStatus,
+        awaiting_status: TaskStatus,
+        answer: str,
+    ) -> None:
+        events: list[NotificationEvent] = []
+
+        async def capture_notification(
+            _db: AsyncSession,
+            *,
+            event: NotificationEvent,
+            **_: object,
+        ) -> None:
+            events.append(event)
+
+        monkeypatch.setattr("services.task_status.notify_task_event", capture_notification)
+        task, node_log = await _make_task_with_running_node_log(db_session, status=start_status)
+        callback = build_can_use_tool_callback(
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=redis_client,
+            decision_wait_timeout_seconds=5.0,
+        )
+
+        async def user_answers() -> None:
+            await _wait_for_status(db_session, task, awaiting_status)
+            node_log.user_input_text = answer
+            await db_session.commit()
+            await publish_task_signal(redis_client, task.id)
+
+        resolver = asyncio.create_task(user_answers())
+        try:
+            result = await callback(tool_name, tool_input, _TEST_TOOL_CONTEXT)
+        finally:
+            await resolver
+
+        assert result.behavior == "allow"
+        assert await _status_of(db_session, task) is start_status
+        assert events == [NotificationEvent.AWAITING_DECISION]
+
+    async def test_cancelled_wait_restores_status(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+    ) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        callback = build_can_use_tool_callback(
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=redis_client,
+        )
+
+        async def agent_exits_plan_mode() -> object:
+            return await callback("ExitPlanMode", {"plan": "p"}, _TEST_TOOL_CONTEXT)
+
+        waiting = asyncio.create_task(agent_exits_plan_mode())
+        await _wait_for_status(db_session, task, TaskStatus.PLAN_REVIEW)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+
+        assert await _status_of(db_session, task) is TaskStatus.IN_PROGRESS
+
+    async def test_rebase_conflict_kept(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+    ) -> None:
+        task, node_log = await _make_task_with_running_node_log(
+            db_session,
+            status=TaskStatus.REBASE_CONFLICT,
+        )
+        callback = build_can_use_tool_callback(
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=redis_client,
+            decision_wait_timeout_seconds=0.2,
+        )
+
+        result = await callback("AskUserQuestion", {"question": "?"}, _TEST_TOOL_CONTEXT)
+
+        assert result.behavior == "deny"
+        assert await _status_of(db_session, task) is TaskStatus.REBASE_CONFLICT
+
+    async def test_auto_accept_keeps_status(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+    ) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        callback = build_can_use_tool_callback(
+            context=ActiveNodeContext(
+                node_log_id=node_log.id,
+                task_id=task.id,
+                auto_accept_plan=True,
+            ),
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=redis_client,
+        )
+
+        result = await callback("ExitPlanMode", {"plan": "p"}, _TEST_TOOL_CONTEXT)
+
+        assert result.behavior == "allow"
+        assert await _status_of(db_session, task) is TaskStatus.IN_PROGRESS

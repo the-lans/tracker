@@ -591,3 +591,43 @@ class TestQueueAfterTaskStop:
 
 def _results_for(count: int) -> list[list[Message]]:
     return [[make_result_message()] for _ in range(count)]
+
+
+class TestFreeformRendering:
+    @pytest.mark.parametrize(
+        ("raw_text", "expected"),
+        [
+            ("Задача {{task.code}}: {{task.title}}", "Задача {code}: t"),
+            ("/review {{task.code}}", "/review {{{{task.code}}}}"),
+        ],
+        ids=["variables", "slash_command"],
+    )
+    async def test_sent_text(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        redis_client: Redis,
+        raw_text: str,
+        expected: str,
+    ) -> None:
+        task, user_id = await _make_task(db_session)
+        await enqueue_freeform_prompt_run(
+            db_session,
+            task_id=task.id,
+            raw_prompt_text=raw_text,
+            requested_by=user_id,
+        )
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+
+        await process_manual_queue_once(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            redis_client=redis_client,
+        )
+
+        sent = expected.format(code=task.code)
+        assert fake.queries == [sent]
+        logs = await _node_logs_for(db_session, task.id)
+        assert logs[0].rendered_prompt == sent
