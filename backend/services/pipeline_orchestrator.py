@@ -29,6 +29,7 @@ from services.nodes.dispatch import (
     execute_node,
     resolve_node_prompt_or_none,
 )
+from services.system_settings import resolve_runner_image
 from services.task_control import TaskControlCommand, read_task_control, run_stoppable
 
 if TYPE_CHECKING:
@@ -193,6 +194,7 @@ async def run_pipeline_node_with_retry(
                 timeout_seconds=node.timeout_seconds,
                 db_session=db_session,
                 node_log_id=node_log.id,
+                runner_image=await resolve_runner_image(db_session, node),
             ),
             node_type=node.node_type,
             claude_session=claude_session,

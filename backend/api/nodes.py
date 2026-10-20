@@ -29,7 +29,7 @@ from db.models.users import User
 from db.session import get_session
 from services.errors import NotFoundError, ValidationError
 from services.integrity import count_library_prompt_usage, ensure_node_deletable
-from services.system_settings import default_runner_image, get_system_settings
+from services.system_settings import resolve_node_execution_defaults
 from services.templating import RenderScope, validate_template_variables
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
@@ -107,11 +107,12 @@ async def create_node(
         prompt_template=body.prompt_template,
         llm_output_last_n=body.llm_output_last_n,
     )
-    # Раздел 15.5: значения по умолчанию для новых нод — из «Системных настроек».
-    settings = await get_system_settings(db_session)
-    docker_image = body.docker_image
-    if docker_image is None and body.node_type is NodeType.SCRIPT and body.script_language:
-        docker_image = default_runner_image(settings, body.script_language)
+    defaults = await resolve_node_execution_defaults(
+        db_session,
+        timeout_seconds=body.timeout_seconds,
+        max_retries=body.max_retries,
+        retry_base_delay_seconds=body.retry_base_delay_seconds,
+    )
     node = Node(
         id=uuid.uuid4(),
         pipeline_id=body.pipeline_id,
@@ -123,20 +124,10 @@ async def create_node(
         command_invocation=body.command_invocation,
         script_language=body.script_language,
         script_content=body.script_content,
-        docker_image=docker_image,
-        timeout_seconds=(
-            body.timeout_seconds
-            if body.timeout_seconds is not None
-            else settings.default_timeout_seconds
-        ),
-        max_retries=(
-            body.max_retries if body.max_retries is not None else settings.default_max_retries
-        ),
-        retry_base_delay_seconds=(
-            body.retry_base_delay_seconds
-            if body.retry_base_delay_seconds is not None
-            else settings.default_retry_base_delay_seconds
-        ),
+        docker_image=body.docker_image,
+        timeout_seconds=defaults.timeout_seconds,
+        max_retries=defaults.max_retries,
+        retry_base_delay_seconds=defaults.retry_base_delay_seconds,
         guide_url=body.guide_url,
         is_skipped=body.is_skipped,
         is_library_item=body.pipeline_id is None,
@@ -247,4 +238,3 @@ async def delete_node(
     await ensure_node_deletable(db_session, node_id)
     await db_session.delete(node)
     await db_session.commit()
-

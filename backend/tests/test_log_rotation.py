@@ -75,6 +75,8 @@ class TestRotateNodeLogs:
     ) -> None:
         done = await _task_with_logs(db_session, status=TaskStatus.DONE, started=[_OLD, _RECENT])
         running = await _task_with_logs(db_session, status=TaskStatus.IN_PROGRESS, started=[_OLD])
+        # Из `failed` задачу перезапускают по её истории — она не ротируется.
+        failed = await _task_with_logs(db_session, status=TaskStatus.FAILED, started=[_OLD])
 
         result = await rotate_node_logs(db_session, archive_root=tmp_path, now=_NOW)
 
@@ -88,6 +90,7 @@ class TestRotateNodeLogs:
         assert records[0]["status"] == "success"
         assert await _remaining(db_session, done) == 1
         assert await _remaining(db_session, running) == 1
+        assert await _remaining(db_session, failed) == 1
 
     async def test_failed_write_keeps_history(
         self,
@@ -95,7 +98,7 @@ class TestRotateNodeLogs:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        task = await _task_with_logs(db_session, status=TaskStatus.FAILED, started=[_OLD])
+        task = await _task_with_logs(db_session, status=TaskStatus.DONE, started=[_OLD])
 
         def disk_full(_path: Path, _records: object) -> None:
             raise OSError("No space left on device")

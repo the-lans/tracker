@@ -205,15 +205,18 @@ async def find_node_logs_eligible_for_rotation(
     """
     Раздел 16.2: `rotate_task_logs` — какие записи `node_logs` архивировать.
 
-    Только задачи в терминальном статусе (`done`/`failed`) и записи старше
-    ``threshold_days``. Саму выгрузку делает `services/log_rotation.py`.
+    Только задачи в `done` и записи старше ``threshold_days``. Задачу в
+    `failed` можно перезапустить, а перезапуск опирается на её историю:
+    успешные записи пройденных нод (переход в `done`, правило 14), их вывод
+    для подстановок и точку возобновления. Саму выгрузку делает
+    `services/log_rotation.py`.
     """
     cutoff = now - timedelta(days=threshold_days)
     stmt = (
         sa.select(NodeLog.id)
         .join(Task, Task.id == NodeLog.task_id)
         .where(
-            Task.status.in_((TaskStatus.DONE, TaskStatus.FAILED)),
+            Task.status == TaskStatus.DONE,
             NodeLog.started_at < cutoff,
         )
         .order_by(NodeLog.started_at, NodeLog.id)

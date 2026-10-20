@@ -17,6 +17,7 @@ from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline
 from db.models.tasks import Task
 from db.models.users import User
+from services.nodes import dispatch
 from services.nodes.dispatch import (
     execute_llm_node,
     execute_llm_node_with_timeout,
@@ -25,6 +26,7 @@ from services.nodes.dispatch import (
     execute_script_node,
     resolve_node_prompt,
 )
+from services.nodes.script import ScriptExecutionResult
 from tests.fakes import FakeClaudeAgentClient, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
@@ -409,3 +411,39 @@ async def test_execute_node_plan_prompt_requires_db_session_and_node_log_id(
             repos_path=tmp_path,
             timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
         )
+
+
+class TestScriptRunnerImage:
+    @pytest.mark.parametrize(
+        ("node_image", "runner_image", "expected"),
+        [(None, "settings:1", "settings:1"), ("own:1", None, "own:1"), (None, None, None)],
+    )
+    async def test_image_passed_to_runner(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        node_image: str | None,
+        runner_image: str | None,
+        expected: str | None,
+    ) -> None:
+        seen: list[str | None] = []
+
+        async def fake_run(**kwargs: object) -> ScriptExecutionResult:
+            seen.append(kwargs["docker_image"])  # type: ignore[arg-type]
+            return ScriptExecutionResult(exit_code=0, stdout="", stderr="", timed_out=False)
+
+        monkeypatch.setattr(dispatch, "run_script_node", fake_run)
+        node = Node(
+            name="n",
+            node_type=NodeType.SCRIPT,
+            script_language=ScriptLanguage.BASH,
+            script_content="echo",
+            docker_image=node_image,
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+            is_library_item=True,
+            is_archived=False,
+        )
+
+        await execute_script_node(node, repos_path=tmp_path, runner_image=runner_image)
+
+        assert seen == [expected]

@@ -78,7 +78,8 @@ class TestNewNodeDefaults:
         assert body["timeout_seconds"] == 900
         assert body["max_retries"] == 2
         assert body["retry_base_delay_seconds"] == 10
-        assert body["docker_image"] == "registry.local/runner-bash:2"
+        # Образ раннера выбирается при запуске, а не записывается в ноду.
+        assert body["docker_image"] is None
 
     async def test_explicit_values_kept(self, admin_client: AsyncClient) -> None:
         await admin_client.put("/system-settings", json=_SETTINGS)

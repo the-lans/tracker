@@ -46,6 +46,7 @@ from services.nodes.dispatch import (
 from services.notifications import NotificationEvent, notify_task_event
 from services.parent_summary import run_parent_summary_request
 from services.pipeline_orchestrator import StopGuard, run_node_execution
+from services.system_settings import resolve_runner_image
 from services.task_control import clear_manual_stop, is_manual_stop_requested
 from services.template_context import render_for_task
 from services.templating import (
@@ -251,6 +252,7 @@ async def _run_library_prompt(
             claude_session=claude_session,
             repos_path=repos_path,
             timeout_seconds=node.timeout_seconds,
+            runner_image=await resolve_runner_image(db_session, node),
         ),
         node_type=node.node_type,
         claude_session=claude_session,
