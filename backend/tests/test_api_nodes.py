@@ -147,3 +147,54 @@ async def test_delete_library_prompt_used_by_task_is_rejected(
     response = await authed_client.delete(f"/nodes/{node.id}")
 
     assert response.status_code == 409
+
+
+class TestLibraryUsage:
+    async def test_counts_distinct_tasks(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+        admin_user: User,
+    ) -> None:
+        used = Node(
+            name="Используемый",
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="x",
+            is_library_item=True,
+        )
+        unused = Node(
+            name="Свободный",
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="x",
+            is_library_item=True,
+        )
+        db_session.add_all([used, unused])
+        tasks = [
+            Task(
+                id=uuid.uuid4(),
+                code=f"RR-{uuid.uuid4().hex[:8]}",
+                title="t",
+                description="",
+                created_by=admin_user.id,
+            )
+            for _ in range(2)
+        ]
+        db_session.add_all(tasks)
+        await db_session.flush()
+        db_session.add_all(
+            [
+                TaskLibraryPrompt(task_id=task.id, node_id=used.id, added_by=admin_user.id)
+                for task in tasks
+            ],
+        )
+        await db_session.flush()
+
+        response = await admin_client.get("/nodes/library-usage")
+
+        assert response.status_code == 200
+        counts = {item["node_id"]: item["task_count"] for item in response.json()}
+        assert counts[str(used.id)] == 2
+        assert str(unused.id) not in counts
+
+    async def test_admin_only(self, authed_client: AsyncClient) -> None:
+        assert (await authed_client.get("/nodes/library-usage")).status_code == 403

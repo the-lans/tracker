@@ -3,16 +3,27 @@ import { toast } from "sonner";
 import { Input, Textarea } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { DialogFooter } from "@/components/ui/dialog";
 import { useCreateNode, useUpdateNode } from "@/hooks/useNodes";
 import { useTemplatePreview } from "@/hooks/useTemplates";
+import { useSystemSettings } from "@/hooks/useAdmin";
 import { ApiError } from "@/lib/apiClient";
 import { NodeType, ScriptLanguage, type NodeItem } from "@/lib/types";
 import { NODE_TYPE_LABEL } from "@/components/tasks/NodeTypeIcon";
 
 const PIPELINE_ONLY_TYPES = Object.values(NodeType);
-const LIBRARY_ALLOWED_TYPES = [NodeType.PLAIN_PROMPT, NodeType.SLASH_COMMAND, NodeType.SCRIPT];
+const LIBRARY_ALLOWED_TYPES = [
+  NodeType.PLAIN_PROMPT,
+  NodeType.SLASH_COMMAND,
+  NodeType.SCRIPT,
+];
 
 /** Раздел 15.4: общая форма для ноды пайплайна и промта библиотеки —
  * различие в наборе доступных полей, не в отдельных компонентах. */
@@ -39,20 +50,36 @@ export function NodeForm({
 
   const [name, setName] = useState(node?.name ?? "");
   const [description, setDescription] = useState(node?.description ?? "");
-  const [nodeType, setNodeType] = useState<NodeType>(node?.node_type ?? NodeType.PLAIN_PROMPT);
-  const [promptTemplate, setPromptTemplate] = useState(node?.prompt_template ?? "");
-  const [commandInvocation, setCommandInvocation] = useState(node?.command_invocation ?? "");
+  const [nodeType, setNodeType] = useState<NodeType>(
+    node?.node_type ?? NodeType.PLAIN_PROMPT,
+  );
+  const [promptTemplate, setPromptTemplate] = useState(
+    node?.prompt_template ?? "",
+  );
+  const [commandInvocation, setCommandInvocation] = useState(
+    node?.command_invocation ?? "",
+  );
   const [scriptLanguage, setScriptLanguage] = useState<ScriptLanguage>(
     node?.script_language ?? ScriptLanguage.PYTHON,
   );
-  const [scriptContent, setScriptContent] = useState(node?.script_content ?? "");
+  const [scriptContent, setScriptContent] = useState(
+    node?.script_content ?? "",
+  );
   const [guideUrl, setGuideUrl] = useState(node?.guide_url ?? "");
-  const [timeoutSeconds, setTimeoutSeconds] = useState(node?.timeout_seconds ?? 600);
-  const [maxRetries, setMaxRetries] = useState(node?.max_retries ?? 3);
+  // `null` — пользователь не менял: для новой ноды значение возьмёт backend
+  // из «Системных настроек» (раздел 15.5).
+  const [timeoutSeconds, setTimeoutSeconds] = useState<number | null>(
+    node?.timeout_seconds ?? null,
+  );
+  const [maxRetries, setMaxRetries] = useState<number | null>(
+    node?.max_retries ?? null,
+  );
+  const { data: settings } = useSystemSettings();
   const [isSkipped, setIsSkipped] = useState(node?.is_skipped ?? false);
   const [previewText, setPreviewText] = useState<string | null>(null);
 
-  const availableTypes = mode === "pipeline" ? PIPELINE_ONLY_TYPES : LIBRARY_ALLOWED_TYPES;
+  const availableTypes =
+    mode === "pipeline" ? PIPELINE_ONLY_TYPES : LIBRARY_ALLOWED_TYPES;
 
   function handlePreview() {
     preview.mutate(
@@ -63,7 +90,9 @@ export function NodeForm({
       {
         onSuccess: (data) => setPreviewText(data.rendered_text),
         onError: (error) => {
-          toast.error(error instanceof ApiError ? error.message : "Ошибка предпросмотра");
+          toast.error(
+            error instanceof ApiError ? error.message : "Ошибка предпросмотра",
+          );
           setPreviewText(null);
         },
       },
@@ -73,7 +102,8 @@ export function NodeForm({
   function handleSave() {
     const body = {
       pipeline_id: mode === "pipeline" ? pipelineId : null,
-      order_index: mode === "pipeline" ? (orderIndex ?? node?.order_index ?? 0) : null,
+      order_index:
+        mode === "pipeline" ? (orderIndex ?? node?.order_index ?? 0) : null,
       name,
       description: description || null,
       node_type: nodeType,
@@ -81,17 +111,20 @@ export function NodeForm({
         nodeType === NodeType.PLAIN_PROMPT || nodeType === NodeType.PLAN_PROMPT
           ? promptTemplate
           : null,
-      command_invocation: nodeType === NodeType.SLASH_COMMAND ? commandInvocation : null,
+      command_invocation:
+        nodeType === NodeType.SLASH_COMMAND ? commandInvocation : null,
       script_language: nodeType === NodeType.SCRIPT ? scriptLanguage : null,
       script_content: nodeType === NodeType.SCRIPT ? scriptContent : null,
       guide_url: guideUrl || null,
-      timeout_seconds: timeoutSeconds,
-      max_retries: mode === "pipeline" ? maxRetries : 3,
+      timeout_seconds: timeoutSeconds ?? undefined,
+      max_retries: mode === "pipeline" ? (maxRetries ?? undefined) : undefined,
       is_skipped: mode === "pipeline" ? isSkipped : false,
     };
 
     const onError = (error: unknown) => {
-      toast.error(error instanceof ApiError ? error.message : "Не удалось сохранить ноду");
+      toast.error(
+        error instanceof ApiError ? error.message : "Не удалось сохранить ноду",
+      );
     };
 
     if (node) {
@@ -107,7 +140,11 @@ export function NodeForm({
     <div className="flex flex-col gap-3">
       <div>
         <Label htmlFor="node-name">Название</Label>
-        <Input id="node-name" value={name} onChange={(e) => setName(e.target.value)} />
+        <Input
+          id="node-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
       </div>
       <div>
         <Label htmlFor="node-description">
@@ -122,7 +159,10 @@ export function NodeForm({
       </div>
       <div>
         <Label>Тип ноды</Label>
-        <Select value={nodeType} onValueChange={(v) => setNodeType(v as NodeType)}>
+        <Select
+          value={nodeType}
+          onValueChange={(v) => setNodeType(v as NodeType)}
+        >
           <SelectTrigger>
             <SelectValue />
           </SelectTrigger>
@@ -138,11 +178,13 @@ export function NodeForm({
 
       {nodeType === NodeType.PLAN_PROMPT && (
         <div className="rounded-md border border-info-tint bg-info-tint px-3 py-2 text-[12.5px] text-info-text">
-          Нода доступна только внутри пайплайна и не может быть сохранена как элемент библиотеки.
+          Нода доступна только внутри пайплайна и не может быть сохранена как
+          элемент библиотеки.
         </div>
       )}
 
-      {(nodeType === NodeType.PLAIN_PROMPT || nodeType === NodeType.PLAN_PROMPT) && (
+      {(nodeType === NodeType.PLAIN_PROMPT ||
+        nodeType === NodeType.PLAN_PROMPT) && (
         <div>
           <Label htmlFor="node-prompt">Текст промта</Label>
           <Textarea
@@ -156,10 +198,17 @@ export function NodeForm({
             {mode === "pipeline" && ", {{node.*}}"}, {"{{session.id}}"}
           </div>
           <div className="mt-1.5 flex items-center gap-2">
-            <Button type="button" size="sm" variant="secondary" onClick={handlePreview}>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={handlePreview}
+            >
               Предпросмотр
             </Button>
-            {preview.isPending && <span className="text-[11px] text-text-3">Рендеринг…</span>}
+            {preview.isPending && (
+              <span className="text-[11px] text-text-3">Рендеринг…</span>
+            )}
           </div>
           {previewText !== null && (
             <div className="mt-2 whitespace-pre-wrap rounded-md border border-border bg-surface-2 p-2.5 text-[12.5px]">
@@ -179,7 +228,8 @@ export function NodeForm({
             onChange={(e) => setCommandInvocation(e.target.value)}
           />
           <div className="mt-1 text-[11px] text-text-3">
-            Команда передаётся в сессию без изменений — шаблонизатор не применяется.
+            Команда передаётся в сессию без изменений — шаблонизатор не
+            применяется.
           </div>
         </div>
       )}
@@ -188,7 +238,10 @@ export function NodeForm({
         <>
           <div>
             <Label>Язык</Label>
-            <Select value={scriptLanguage} onValueChange={(v) => setScriptLanguage(v as ScriptLanguage)}>
+            <Select
+              value={scriptLanguage}
+              onValueChange={(v) => setScriptLanguage(v as ScriptLanguage)}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -213,7 +266,11 @@ export function NodeForm({
 
       <div>
         <Label htmlFor="node-guide">Гайд (URL Confluence)</Label>
-        <Input id="node-guide" value={guideUrl} onChange={(e) => setGuideUrl(e.target.value)} />
+        <Input
+          id="node-guide"
+          value={guideUrl}
+          onChange={(e) => setGuideUrl(e.target.value)}
+        />
       </div>
 
       <div>
@@ -221,7 +278,7 @@ export function NodeForm({
         <Input
           id="node-timeout"
           type="number"
-          value={timeoutSeconds}
+          value={timeoutSeconds ?? settings?.default_timeout_seconds ?? ""}
           onChange={(e) => setTimeoutSeconds(Number(e.target.value))}
         />
       </div>
@@ -233,7 +290,7 @@ export function NodeForm({
             <Input
               id="node-retries"
               type="number"
-              value={maxRetries}
+              value={maxRetries ?? settings?.default_max_retries ?? ""}
               onChange={(e) => setMaxRetries(Number(e.target.value))}
             />
           </div>
@@ -252,7 +309,11 @@ export function NodeForm({
         <Button type="button" variant="secondary" onClick={onCancel}>
           Отмена
         </Button>
-        <Button type="button" onClick={handleSave} disabled={!name || isPending}>
+        <Button
+          type="button"
+          onClick={handleSave}
+          disabled={!name || isPending}
+        >
           Сохранить
         </Button>
       </DialogFooter>

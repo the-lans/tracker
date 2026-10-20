@@ -60,3 +60,12 @@ async def ensure_repository_deletable(session: AsyncSession, repository_id: uuid
     )
     if (await session.execute(stmt)).first() is not None:
         raise ConflictError("Репозиторий привязан к активной задаче")
+
+
+async def count_library_prompt_usage(db_session: AsyncSession) -> list[tuple[uuid.UUID, int]]:
+    """Раздел 15.5: число задач, к которым привязан каждый промт библиотеки."""
+    stmt = (
+        sa.select(TaskLibraryPrompt.node_id, sa.func.count(sa.distinct(TaskLibraryPrompt.task_id)))
+        .group_by(TaskLibraryPrompt.node_id)
+    )
+    return [(node_id, int(count)) for node_id, count in (await db_session.execute(stmt)).all()]

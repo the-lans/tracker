@@ -21,6 +21,7 @@ from api.pipelines import router as pipelines_router
 from api.preview import router as preview_router
 from api.push import router as push_router
 from api.repositories import router as repositories_router
+from api.system_settings import router as system_settings_router
 from api.tasks import router as tasks_router
 from api.templates import router as templates_router
 from api.users import router as users_router
@@ -56,6 +57,7 @@ app.include_router(users_router)
 app.include_router(periodic_tasks_router)
 app.include_router(app_logs_router)
 app.include_router(monitoring_router)
+app.include_router(system_settings_router)
 app.include_router(push_router)
 app.include_router(ws_router)
 

@@ -571,6 +571,21 @@ export interface ActiveCeleryTask {
   task_code: string | null;
 }
 
+/** Раздел 15.5: значения по умолчанию для новых нод. */
+export interface SystemSettings {
+  default_timeout_seconds: number;
+  default_max_retries: number;
+  default_retry_base_delay_seconds: number;
+  default_runner_image_python: string;
+  default_runner_image_bash: string;
+}
+
+/** Раздел 15.5: в скольких задачах используется промт библиотеки. */
+export interface LibraryUsage {
+  node_id: string;
+  task_count: number;
+}
+
 export interface ApiErrorBody {
   error: {
     code: string;
