@@ -30,6 +30,7 @@ from db.models.enums import (
     NodeType,
     RemoteControlStatus,
     RepositoryRole,
+    ScriptLanguage,
     TaskStatus,
     UserRole,
 )
@@ -43,6 +44,7 @@ from db.models.users import User
 from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
 from services.manual_queue import enqueue_freeform_prompt_run
+from services.plan_mode import PlanDecisionOption, encode_decision
 from services.session_context import clear_task_session_context
 from services.session_heartbeat import is_session_alive
 from services.task_control import (
@@ -1050,3 +1052,130 @@ class TestRateLimitEvents:
         await db_session.refresh(account)
         assert account.status is LlmAccountStatus.RATE_LIMITED
         assert account.rate_limit_resets_at is not None
+
+
+class TestPlanRevision:
+    async def test_revise_does_not_consume_retries(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 21.2, сценарий 3: «Доработать план» возвращает агента к плану
+        в той же попытке — при `max_retries = 1` нода всё равно проходит."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        plan_node = await _add_node(db_session, task, order_index=0, node_type=NodeType.PLAN_PROMPT)
+        plan_node.prompt_template = "Составь план"
+        await db_session.flush()
+        decisions = iter(
+            [
+                encode_decision(PlanDecisionOption.REVISE, feedback_text="добавь тесты"),
+                encode_decision(PlanDecisionOption.ACCEPT_DEFAULT),
+            ],
+        )
+        denials: list[str] = []
+
+        async def user_decides(*_args: Any, **_kwargs: Any) -> bool:
+            pending = await db_session.scalar(
+                sa.select(NodeLog).where(NodeLog.status == NodeLogStatus.AWAITING_DECISION),
+            )
+            assert pending is not None
+            pending.user_input_text = next(decisions)
+            await db_session.commit()
+            return True
+
+        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_decides)
+
+        async def agent_plans_twice() -> None:
+            can_use_tool = worker_env.options[0].can_use_tool
+            assert can_use_tool is not None
+            for plan in ("1. Сделать", "1. Сделать\n2. Покрыть тестами"):
+                result = await can_use_tool("ExitPlanMode", {"plan": plan}, ToolPermissionContext())
+                if result.behavior == "deny":
+                    denials.append(result.message)
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(1),
+            on_query=agent_plans_twice,
+        )
+
+        await _run_worker(task)
+
+        assert denials == ["добавь тесты"]
+        logs = (
+            await db_session.execute(sa.select(NodeLog).where(NodeLog.task_id == task.id))
+        ).scalars().all()
+        assert [(log.attempt_number, log.status) for log in logs] == [(1, NodeLogStatus.SUCCESS)]
+        assert logs[0].pending_plan_text == "1. Сделать\n2. Покрыть тестами"
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+
+
+class TestAllNodeTypesPipeline:
+    async def test_outputs_flow_and_disabled_node_skipped(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """
+        Раздел 21.2, сценарий 1: пять типов нод, `{{node.script_output}}` и
+        `{{node.plan_text}}` передаются дальше, отключённая нода не
+        выполняется, после `clear_context` пайплайн продолжает новая сессия.
+        """
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        task.auto_accept_plan = True
+        script = await _add_node(db_session, task, order_index=0, node_type=NodeType.SCRIPT)
+        script.script_language = ScriptLanguage.PYTHON
+        script.script_content = 'print("42")'
+        templates = {
+            1: (NodeType.PLAIN_PROMPT, "Вывод скрипта: {{node.script_output}}"),
+            2: (NodeType.PLAIN_PROMPT, "Отключённая нода"),
+            3: (NodeType.PLAN_PROMPT, "Составь план"),
+            4: (NodeType.PLAIN_PROMPT, "Реализуй: {{node.plan_text}}"),
+            5: (NodeType.CLEAR_CONTEXT, None),
+            6: (NodeType.PLAIN_PROMPT, "После очистки контекста"),
+        }
+        nodes = {}
+        for order_index, (node_type, template) in templates.items():
+            node = await _add_node(db_session, task, order_index=order_index, node_type=node_type)
+            node.prompt_template = template
+            nodes[order_index] = node
+        disabled = await db_session.scalar(
+            sa.select(TaskNode).where(TaskNode.node_id == nodes[2].id),
+        )
+        assert disabled is not None
+        disabled.is_enabled = False
+        await db_session.flush()
+
+        async def agent_exits_plan_mode() -> None:
+            if worker_env.client.queries[-1] == "Составь план":
+                can_use_tool = worker_env.options[0].can_use_tool
+                assert can_use_tool is not None
+                await can_use_tool("ExitPlanMode", {"plan": "1. Шаг"}, ToolPermissionContext())
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(3),
+            on_query=agent_exits_plan_mode,
+        )
+
+        await _run_worker(task)
+
+        assert worker_env.client.queries == [
+            "Вывод скрипта: 42\n",
+            "Составь план",
+            "Реализуй: 1. Шаг",
+        ]
+        [(args, kwargs)] = worker_env.enqueued
+        assert kwargs == {"start_after_order_index": 5, "continuation": True}
+
+        continuation = FakeClaudeAgentClient(messages_per_query=_results(1))
+        worker_env.client = continuation
+        await _run_worker(task, **kwargs)
+
+        assert continuation.queries == ["После очистки контекста"]
+        node_ids = (
+            await db_session.execute(sa.select(NodeLog.node_id).where(NodeLog.task_id == task.id))
+        ).scalars().all()
+        assert nodes[2].id not in node_ids
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE

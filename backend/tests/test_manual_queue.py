@@ -45,6 +45,7 @@ from services.task_control import (
 from tests.fakes import FakeClaudeAgentClient, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
+_LIBRARY_PROMPT_TEXT = "библиотечный промт"
 
 
 async def _make_task(db_session: AsyncSession) -> tuple[Task, uuid.UUID]:
@@ -631,3 +632,48 @@ class TestFreeformRendering:
         assert fake.queries == [sent]
         logs = await _node_logs_for(db_session, task.id)
         assert logs[0].rendered_prompt == sent
+
+
+class TestLibraryPromptTimeout:
+    async def test_fails_once_without_retry(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        redis_client: Redis,
+    ) -> None:
+        """Раздел 21.2, сценарий 9: превышение `timeout_seconds` запуска из
+        библиотеки — `failed` без повторной попытки; задача не падает."""
+        task, task_library_prompt, request = await _enqueue_library_run(db_session)
+        node = await db_session.get(Node, task_library_prompt.node_id)
+        assert node is not None
+        node.timeout_seconds = 1
+        node.max_retries = 3
+        await db_session.flush()
+
+        class HangingClient(FakeClaudeAgentClient):
+            async def interrupt(self) -> None:
+                self.message_delay_seconds = 0
+                await super().interrupt()
+
+        fake = HangingClient(messages_per_query=[[make_result_message()]])
+        fake.message_delay_seconds = 30
+
+        await asyncio.wait_for(
+            process_manual_queue_once(
+                db_session,
+                task=task,
+                claude_session=ClaudeCodeSession(fake),
+                repos_path=tmp_path,
+                redis_client=redis_client,
+            ),
+            timeout=20,
+        )
+
+        logs = await _node_logs_for(db_session, task.id)
+        assert [(log.status, log.attempt_number) for log in logs] == [(NodeLogStatus.FAILED, 1)]
+        assert fake.queries == [_LIBRARY_PROMPT_TEXT]
+        assert fake.interrupted is True
+        assert task_library_prompt.last_run_status is LibraryPromptRunStatus.FAILED
+        assert request.status is ManualRequestStatus.DONE
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.IN_PROGRESS

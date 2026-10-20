@@ -179,6 +179,8 @@ async def test_callback_auto_accepts_plan_without_waiting(db_session: AsyncSessi
     await db_session.refresh(node_log)
     assert node_log.pending_plan_text == "1. Сделать X"
     assert node_log.user_input_text == PlanDecisionOption.ACCEPT_AUTO
+    # Без `success` нода `plan_prompt` считает план не принятым (сценарий 21.2 №4).
+    assert node_log.status is NodeLogStatus.SUCCESS
     await db_session.refresh(task)
     assert task.current_permission_mode is PermissionMode.ACCEPT_EDITS
 

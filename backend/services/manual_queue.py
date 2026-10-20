@@ -159,10 +159,14 @@ async def cancel_manual_request(
 
 
 async def _load_node_log_history(db_session: AsyncSession, task_id: uuid.UUID) -> list[NodeLog]:
+    # План и ответы пользователя пишет callback разрешений в своей сессии БД;
+    # без перечитывания здесь остались бы прежние значения (`expire_on_commit`
+    # выключен) и `{{node.plan_text}}`/`{{node.user_input}}` пришли бы пустыми.
     stmt = (
         sa.select(NodeLog)
         .where(NodeLog.task_id == task_id)
         .order_by(NodeLog.started_at, NodeLog.id)
+        .execution_options(populate_existing=True)
     )
     return list((await db_session.execute(stmt)).scalars().all())
 

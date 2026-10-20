@@ -172,7 +172,9 @@ async def execute_plan_prompt_node(
     if not outcome.success:
         return outcome
 
-    node_log = await db_session.get(NodeLog, node_log_id)
+    # Решение по плану записал callback разрешений в своей сессии БД — читаем
+    # актуальное состояние, а не объект из карты этой сессии.
+    node_log = await db_session.get(NodeLog, node_log_id, populate_existing=True)
     plan_accepted = node_log is not None and node_log.status is NodeLogStatus.SUCCESS
     if not plan_accepted:
         return NodeExecutionOutcome(
