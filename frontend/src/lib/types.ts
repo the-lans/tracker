@@ -189,6 +189,7 @@ export interface Task {
   pipeline_id: string | null;
   llm_account_id: string | null;
   parent_task_id: string | null;
+  use_parent_summary: boolean;
   session_id: string | null;
   current_permission_mode: PermissionMode | null;
   auto_accept_plan: boolean;
@@ -196,6 +197,7 @@ export interface Task {
   scheduled_start_at: string | null;
   auto_start_enabled: boolean;
   last_failed_order_index: number | null;
+  repo_cleaned_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -206,15 +208,19 @@ export interface TaskRepositoryAttach {
   base_branch: string;
 }
 
-export interface TaskCreateRequest {
+/** Раздел 14.2 «Дублировать задачу»: те же поля формы, без родителя. */
+export interface TaskDuplicateRequest {
   code: string;
   title: string;
   description: string;
   guide_url?: string | null;
-  parent_task_id?: string | null;
-  use_parent_summary?: boolean;
   llm_account_id?: string | null;
   repositories?: TaskRepositoryAttach[];
+}
+
+export interface TaskCreateRequest extends TaskDuplicateRequest {
+  parent_task_id?: string | null;
+  use_parent_summary?: boolean;
 }
 
 /** PATCH /tasks/{id}: auto_accept_plan — до `done`, остальное — только в `new`. */

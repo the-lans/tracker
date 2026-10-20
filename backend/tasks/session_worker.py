@@ -48,7 +48,11 @@ from services.task_status import (
     first_unfinished_order_index,
     transition_task_status,
 )
-from services.task_workspace import prepare_task_workspace, push_task_workspace
+from services.task_workspace import (
+    prepare_task_workspace,
+    push_task_workspace,
+    resolve_repos_root,
+)
 from tasks.celery_app import celery_app
 
 if TYPE_CHECKING:
@@ -57,8 +61,6 @@ if TYPE_CHECKING:
 
 logger = get_logger("tasks.session_worker")
 
-_REPOS_ROOT_ENV_VAR = "TRACKER_REPOS_ROOT"
-_DEFAULT_REPOS_ROOT = "tracker/repos"
 _CONTINUATION_COUNTDOWN_SECONDS = 1
 # `failed` — «Перезапустить с текущей ноды» (раздел 14.2).
 _CLAIMABLE_STATUSES = (TaskStatus.QUEUED, TaskStatus.FAILED)
@@ -345,7 +347,7 @@ async def _run_claimed_task(
         llm_account = await db_session.get(LlmAccount, task.llm_account_id)
         claude_config_dir = llm_account.claude_config_dir if llm_account else None
 
-    repos_root = Path(os.environ.get(_REPOS_ROOT_ENV_VAR, _DEFAULT_REPOS_ROOT))
+    repos_root = resolve_repos_root()
     workspace = await prepare_task_workspace(db_session, task=task, repos_root=repos_root)
     mcp_servers = await _resolve_mcp_servers_for_task(db_session, task)
 

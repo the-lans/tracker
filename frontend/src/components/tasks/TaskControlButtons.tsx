@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Ban, Pause, Play, RotateCcw, Square } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { HEADER_BUTTON } from "@/components/tasks/headerButton";
+import { TaskLifecycleActions } from "@/components/tasks/TaskLifecycleActions";
 import {
   useCancelQueuedTask,
   usePauseTask,
@@ -11,9 +13,6 @@ import {
 } from "@/hooks/useTasks";
 import { ApiError } from "@/lib/apiClient";
 import { TaskStatus, type Task } from "@/lib/types";
-
-const HEADER_BUTTON =
-  "flex touch-target items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-[13px] font-bold text-text-2 disabled:opacity-50";
 
 function onError(fallback: string) {
   return (error: Error) => toast.error(error instanceof ApiError ? error.message : fallback);
@@ -111,6 +110,8 @@ export function TaskControlButtons({ task }: { task: Task }) {
           <span className="hidden sm:inline">Перезапустить с текущей ноды</span>
         </button>
       )}
+
+      <TaskLifecycleActions task={task} />
 
       <ConfirmDialog
         open={stopConfirmOpen}

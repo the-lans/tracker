@@ -46,15 +46,20 @@ class TaskRepositoryAttachRequest(BaseModel):
     base_branch: str = "main"
 
 
-class TaskCreateRequest(BaseModel):
+class TaskDuplicateRequest(BaseModel):
+    """Раздел 14.2 «Дублировать задачу»: форма создания с новым кодом."""
+
     code: str
     title: str
     description: str
     guide_url: str | None = None
-    parent_task_id: uuid.UUID | None = None
-    use_parent_summary: bool = False
     llm_account_id: uuid.UUID | None = None
     repositories: list[TaskRepositoryAttachRequest] = []
+
+
+class TaskCreateRequest(TaskDuplicateRequest):
+    parent_task_id: uuid.UUID | None = None
+    use_parent_summary: bool = False
 
 
 class TaskUpdateRequest(BaseModel):
@@ -97,6 +102,7 @@ class TaskResponse(BaseModel):
     pipeline_id: uuid.UUID | None
     llm_account_id: uuid.UUID | None
     parent_task_id: uuid.UUID | None
+    use_parent_summary: bool
     session_id: str | None
     current_permission_mode: PermissionMode | None
     auto_accept_plan: bool
@@ -104,6 +110,7 @@ class TaskResponse(BaseModel):
     scheduled_start_at: datetime | None
     auto_start_enabled: bool
     last_failed_order_index: int | None
+    repo_cleaned_at: datetime | None
     created_at: datetime
     updated_at: datetime
 

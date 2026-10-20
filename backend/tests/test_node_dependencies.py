@@ -79,7 +79,12 @@ class TestFindDependentNodes:
     def test_llm_output_last_n_window(self) -> None:
         outside = _node(0, NodeType.PLAIN_PROMPT)
         inside = _node(1, NodeType.PLAIN_PROMPT)
-        consumer = _node(2, NodeType.PLAIN_PROMPT, "{{node.llm_output_last_n}}", llm_output_last_n=1)
+        consumer = _node(
+            2,
+            NodeType.PLAIN_PROMPT,
+            "{{node.llm_output_last_n}}",
+            llm_output_last_n=1,
+        )
 
         assert _dependent_names([outside, inside, consumer], outside) == []
         assert _dependent_names([outside, inside, consumer], inside) == ["node-2"]

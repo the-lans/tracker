@@ -14,13 +14,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from db.models.enums import MergeStatus, RepositoryRole, UserRole
+from db.models.enums import MergeStatus, RepositoryRole, TaskStatus, UserRole
 from db.models.repositories import Repository, Template
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from services.crypto import encrypt
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
-from services.errors import ValidationError
+from services.errors import ConflictError, ValidationError
+from services.task_cleanup import cleanup_task_repositories
 from services.task_workspace import (
     build_branch_name,
     prepare_task_workspace,
@@ -244,3 +245,65 @@ async def test_push_refuses_while_another_push_holds_the_lock(
                 repos_root=tmp_path,
                 redis_client=redis_client,
             )
+
+
+class TestCleanupAndReclone:
+    async def test_cleanup_then_prepare_reclones(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await _make_task(db_session)
+        task.status = TaskStatus.FAILED
+        origin = _init_bare_origin(tmp_path, "backend")
+        await _attach_repository(
+            db_session,
+            task,
+            origin=origin,
+            name="backend",
+            role=RepositoryRole.READ_WRITE,
+        )
+        repos_root = tmp_path / "repos"
+        root = await prepare_task_workspace(db_session, task=task, repos_root=repos_root)
+        user_files = tmp_path / "user-files" / task.code
+        user_files.mkdir(parents=True)
+
+        await cleanup_task_repositories(db_session, task=task, repos_root=repos_root)
+
+        assert not root.exists()
+        assert user_files.exists()
+        assert task.repo_cleaned_at is not None
+
+        await prepare_task_workspace(db_session, task=task, repos_root=repos_root)
+
+        assert (root / "backend" / "README.md").exists()
+        assert task.repo_cleaned_at is None
+
+    async def test_cleanup_is_repeatable(self, db_session: AsyncSession, tmp_path: Path) -> None:
+        task = await _make_task(db_session)
+        task.status = TaskStatus.DONE
+
+        await cleanup_task_repositories(db_session, task=task, repos_root=tmp_path)
+        await cleanup_task_repositories(db_session, task=task, repos_root=tmp_path)
+
+        assert task.repo_cleaned_at is not None
+
+    @pytest.mark.parametrize(
+        "status",
+        [TaskStatus.NEW, TaskStatus.QUEUED, TaskStatus.IN_PROGRESS, TaskStatus.PAUSED],
+    )
+    async def test_cleanup_requires_terminal_status(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        status: TaskStatus,
+    ) -> None:
+        task = await _make_task(db_session)
+        task.status = status
+        (tmp_path / task.code).mkdir()
+
+        with pytest.raises(ConflictError):
+            await cleanup_task_repositories(db_session, task=task, repos_root=tmp_path)
+
+        assert (tmp_path / task.code).exists()
+        assert task.repo_cleaned_at is None

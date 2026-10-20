@@ -14,6 +14,7 @@ Claude Code; внутри — по директории на каждый реп
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -38,6 +39,15 @@ logger = get_logger("task_workspace")
 _GIT_PUSH_LOCK_OPERATION = "git_push"
 _GIT_PUSH_LOCK_TTL_SECONDS = 600
 _JSON_INDENT = 2
+
+
+_REPOS_ROOT_ENV_VAR = "TRACKER_REPOS_ROOT"
+_DEFAULT_REPOS_ROOT = "tracker/repos"
+
+
+def resolve_repos_root() -> Path:
+    """Корень репозиториев задач — volume `task_repos` (раздел 20.4)."""
+    return Path(os.environ.get(_REPOS_ROOT_ENV_VAR, _DEFAULT_REPOS_ROOT))
 
 
 def task_root(repos_root: Path, task: Task) -> Path:
@@ -142,6 +152,12 @@ async def prepare_task_workspace(
                 template_id=str(template.id),
                 files=written,
             )
+
+    if task.repo_cleaned_at is not None:
+        # Директория снова на месте (перезапуск после очистки) — напоминание
+        # об очистке (`cleanup_stale_worktrees`) снова должно её учитывать.
+        task.repo_cleaned_at = None
+        await db_session.commit()
 
     logger.info("task_workspace_prepared", task_id=str(task.id), repositories=len(pairs))
     return root

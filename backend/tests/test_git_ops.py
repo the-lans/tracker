@@ -311,3 +311,37 @@ async def test_is_rebased_onto_base_tracks_rebase_progress(tmp_path: Path) -> No
     _run("git", "add", "README.md", cwd=target_dir)
     _run("git", *_GIT_AUTHOR_ARGS, "-c", "core.editor=true", "rebase", "--continue", cwd=target_dir)
     assert await check() is True
+
+
+class TestCloneAfterCleanup:
+    async def test_reuses_pushed_work_branch(self, tmp_path: Path) -> None:
+        origin = _init_bare_origin(tmp_path)
+        repository = _make_repository(git_url=str(origin))
+        task_repository = _make_task_repository(role=RepositoryRole.READ_WRITE)
+        repos_root = tmp_path / "repos"
+        first_clone = await clone_task_repository(
+            repository=repository,
+            task_repository=task_repository,
+            task_code="RR-00001",
+            repos_root=repos_root,
+        )
+        (first_clone / "work.txt").write_text("сделанная работа\n")
+        _run("git", "add", "work.txt", cwd=first_clone)
+        _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "работа", cwd=first_clone)
+        await push_task_repository(
+            repository=repository,
+            task_repository=task_repository,
+            repo_dir=first_clone,
+        )
+        _run("rm", "-rf", str(repos_root / "RR-00001"), cwd=tmp_path)
+
+        second_clone = await clone_task_repository(
+            repository=repository,
+            task_repository=task_repository,
+            task_code="RR-00001",
+            repos_root=repos_root,
+        )
+
+        assert (second_clone / "work.txt").read_text() == "сделанная работа\n"
+        current_branch = _run("git", "branch", "--show-current", cwd=second_clone).strip()
+        assert current_branch == "feature/RR-00001"

@@ -99,8 +99,10 @@ async def clone_task_repository(
 ) -> Path:
     """Клонирует репозиторий в ``{repos_root}/{task_code}/{repository.name}/``.
 
-    Также создаёт рабочую ветку ``task_repository.branch_name`` от
-    ``task_repository.base_branch``.
+    Рабочая ветка ``task_repository.branch_name`` создаётся от
+    ``task_repository.base_branch`` — либо берётся из origin, если она там
+    уже есть: перезапуск после ручной очистки директории (раздел 14.3) не
+    должен терять запушенную работу.
     """
     target_dir = repos_root / task_code / repository.name
     target_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -115,13 +117,31 @@ async def clone_task_repository(
             cwd=repos_root,
             env=env,
         )
-        await _run_git(
-            "checkout",
-            "-b",
+        _, remote_heads, _ = await _run_git(
+            "ls-remote",
+            "--heads",
+            "origin",
             task_repository.branch_name,
             cwd=target_dir,
             env=env,
         )
+        if remote_heads.strip():
+            await _run_git(
+                "fetch",
+                "origin",
+                f"{task_repository.branch_name}:{task_repository.branch_name}",
+                cwd=target_dir,
+                env=env,
+            )
+            await _run_git("checkout", task_repository.branch_name, cwd=target_dir, env=env)
+        else:
+            await _run_git(
+                "checkout",
+                "-b",
+                task_repository.branch_name,
+                cwd=target_dir,
+                env=env,
+            )
 
     logger.info(
         "repository_cloned",

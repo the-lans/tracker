@@ -8,6 +8,7 @@ import type {
   NodeLog,
   Task,
   TaskCreateRequest,
+  TaskDuplicateRequest,
   TaskLibraryPrompt,
   TaskLibraryPromptItem,
   TaskNodeItem,
@@ -90,6 +91,37 @@ export function useUpdateTask(taskId: string) {
 }
 
 /** Раздел 14.2: «Перезапустить с текущей ноды» — упавшая нода выполняется заново. */
+/** Раздел 14.2: «Дублировать задачу» из `done` — новая задача с копией настроек. */
+export function useDuplicateTask(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: TaskDuplicateRequest) => api.post<Task>(`/tasks/${taskId}/duplicate`, body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
+}
+
+/** Раздел 14.2, 14.3: действия над завершённой/упавшей задачей, возвращающие её. */
+function useTaskLifecycleAction(taskId: string, action: "cleanup-repositories" | "clear-context") {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<Task>(`/tasks/${taskId}/${action}`),
+    onSuccess: (task) => {
+      queryClient.setQueryData(taskKeys.detail(taskId), task);
+      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
+}
+
+export function useCleanupRepositories(taskId: string) {
+  return useTaskLifecycleAction(taskId, "cleanup-repositories");
+}
+
+export function useClearContext(taskId: string) {
+  return useTaskLifecycleAction(taskId, "clear-context");
+}
+
 export function useRestartTask(taskId: string) {
   const queryClient = useQueryClient();
   return useMutation({

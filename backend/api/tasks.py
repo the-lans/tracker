@@ -26,6 +26,7 @@ from api.schemas import (
     NodeDependentResponse,
     NodeLogResponse,
     TaskCreateRequest,
+    TaskDuplicateRequest,
     TaskLibraryPromptListItem,
     TaskLibraryPromptResponse,
     TaskNodeResponse,
@@ -51,11 +52,16 @@ from services.manual_queue import (
 )
 from services.node_dependencies import find_task_node_dependents
 from services.plan_mode import encode_decision
+from services.session_context import clear_task_session_context
+from services.task_cleanup import cleanup_task_repositories
 from services.task_control import TaskControlCommand, request_manual_stop, request_task_control
+from services.task_creation import RepositoryAttachment, TaskDraft
+from services.task_creation import create_task as create_task_with_repositories
+from services.task_duplication import duplicate_task
 from services.task_nodes import bind_pipeline_to_task, list_task_nodes, set_task_node_enabled
 from services.task_signal import publish_task_signal
 from services.task_status import transition_task_status
-from services.task_workspace import build_branch_name, load_task_repositories
+from services.task_workspace import load_task_repositories, resolve_repos_root
 from tasks.session_worker import run_task_session
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -101,48 +107,61 @@ async def _ensure_exists(
         raise NotFoundError(f"{label} {entity_id} не найден")
 
 
+def _draft_from_request(
+    body: TaskDuplicateRequest,
+    *,
+    parent_task_id: uuid.UUID | None = None,
+    use_parent_summary: bool = False,
+) -> TaskDraft:
+    return TaskDraft(
+        code=body.code,
+        title=body.title,
+        description=body.description,
+        guide_url=body.guide_url,
+        llm_account_id=body.llm_account_id,
+        parent_task_id=parent_task_id,
+        use_parent_summary=use_parent_summary,
+        repositories=[
+            RepositoryAttachment(
+                repository_id=attached.repository_id,
+                role=attached.role,
+                base_branch=attached.base_branch,
+            )
+            for attached in body.repositories
+        ],
+    )
+
+
 @router.post("", response_model=TaskResponse, status_code=201)
 async def create_task(
     body: TaskCreateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
-    """Раздел 1.2 (сценарий 1): задача сразу с репозиториями и LLM-аккаунтом.
-
-    Рабочая ветка каждого репозитория — ``feature/{code}`` (раздел 3.1).
-    """
-    repository_ids = [attached.repository_id for attached in body.repositories]
-    if len(set(repository_ids)) != len(repository_ids):
-        raise ValidationError("Репозиторий указан у задачи больше одного раза")
-    for repository_id in repository_ids:
-        await _ensure_exists(db_session, Repository, repository_id, "Репозиторий")
-    if body.llm_account_id is not None:
-        await _ensure_exists(db_session, LlmAccount, body.llm_account_id, "LLM-аккаунт")
-
-    task = Task(
-        id=uuid.uuid4(),
-        code=body.code,
-        title=body.title,
-        description=body.description,
-        guide_url=body.guide_url,
+    """Раздел 1.2 (сценарий 1): задача сразу с репозиториями и LLM-аккаунтом."""
+    draft = _draft_from_request(
+        body,
         parent_task_id=body.parent_task_id,
         use_parent_summary=body.use_parent_summary,
-        llm_account_id=body.llm_account_id,
+    )
+    return await create_task_with_repositories(db_session, draft=draft, created_by=current_user.id)
+
+
+@router.post("/{task_id}/duplicate", response_model=TaskResponse, status_code=201)
+async def duplicate_task_endpoint(
+    task_id: uuid.UUID,
+    body: TaskDuplicateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """Раздел 14.2: «Дублировать задачу» из `done`."""
+    source = await _get_task_or_404(db_session, task_id)
+    return await duplicate_task(
+        db_session,
+        source=source,
+        draft=_draft_from_request(body),
         created_by=current_user.id,
     )
-    db_session.add(task)
-    for attached in body.repositories:
-        db_session.add(
-            TaskRepository(
-                task_id=task.id,
-                repository_id=attached.repository_id,
-                role=attached.role,
-                branch_name=build_branch_name(body.code),
-                base_branch=attached.base_branch,
-            ),
-        )
-    await db_session.commit()
-    return task
 
 
 @router.patch("/{task_id}", response_model=TaskResponse)
@@ -282,6 +301,33 @@ async def restart_task(
         str(task_id),
         start_after_order_index=task.last_failed_order_index - 1,
     )
+    await db_session.refresh(task)
+    return task
+
+
+@router.post("/{task_id}/cleanup-repositories", response_model=TaskResponse)
+async def cleanup_repositories(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """Раздел 14.3: удаление рабочей директории репозиториев — только вручную
+    и только в `done`/`failed`; пользовательские файлы не затрагиваются."""
+    task = await _get_task_or_404(db_session, task_id)
+    await cleanup_task_repositories(db_session, task=task, repos_root=resolve_repos_root())
+    await db_session.refresh(task)
+    return task
+
+
+@router.post("/{task_id}/clear-context", response_model=TaskResponse)
+async def clear_context(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """Раздел 14.2: «очистить контекст» в `failed` — перезапуск начнёт новую сессию."""
+    task = await _get_task_or_404(db_session, task_id)
+    await clear_task_session_context(db_session, task=task)
     await db_session.refresh(task)
     return task
 
