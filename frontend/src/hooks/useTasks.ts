@@ -122,6 +122,17 @@ export function useClearContext(taskId: string) {
   return useTaskLifecycleAction(taskId, "clear-context");
 }
 
+/** Раздел 6.5: новая попытка поднять мост — статус обновит воркер. */
+export function useReconnectRemoteControl(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<void>(`/tasks/${taskId}/remote-control/reconnect`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
+    },
+  });
+}
+
 export function useRestartTask(taskId: string) {
   const queryClient = useQueryClient();
   return useMutation({

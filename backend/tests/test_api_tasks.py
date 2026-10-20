@@ -17,6 +17,7 @@ from db.models.enums import (
     NodeLogStatus,
     NodeLogTriggerType,
     NodeType,
+    RemoteControlStatus,
     RepositoryRole,
     TaskStatus,
 )
@@ -29,7 +30,12 @@ from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
 from services.plan_mode import PlanDecisionOption, encode_decision
-from services.task_control import TaskControlCommand, is_manual_stop_requested, read_task_control
+from services.task_control import (
+    TaskControlCommand,
+    consume_bridge_reconnect,
+    is_manual_stop_requested,
+    read_task_control,
+)
 from services.task_signal import wait_for_task_signal
 
 if TYPE_CHECKING:
@@ -1230,3 +1236,37 @@ class TestDuplicateTask:
         )
 
         assert response.status_code == 409
+
+
+class TestRemoteControlReconnect:
+    async def test_hands_request_to_worker(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        redis_client: Redis,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.PAUSED)
+        task_id = uuid.UUID(task_body["id"])
+
+        response = await authed_client.post(f"/tasks/{task_id}/remote-control/reconnect")
+
+        assert response.status_code == 202, response.text
+        assert await consume_bridge_reconnect(redis_client, task_id) is True
+        task = await db_session.get(Task, task_id, populate_existing=True)
+        assert task is not None
+        assert task.remote_control_status is RemoteControlStatus.RECONNECTING
+
+    @pytest.mark.parametrize("status", [TaskStatus.NEW, TaskStatus.DONE, TaskStatus.FAILED])
+    async def test_requires_active_session(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        status: TaskStatus,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, status)
+
+        response = await authed_client.post(f"/tasks/{task_body['id']}/remote-control/reconnect")
+
+        assert response.status_code == 409
+        assert await consume_bridge_reconnect(redis_client, uuid.UUID(task_body["id"])) is False

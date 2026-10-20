@@ -1,14 +1,13 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { toast } from "sonner";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { TaskOverviewPanel } from "@/components/tasks/TaskOverviewPanel";
 import { TaskChatFeed } from "@/components/tasks/TaskChatFeed";
 import { TaskControlButtons } from "@/components/tasks/TaskControlButtons";
+import { RemoteControlButton } from "@/components/tasks/RemoteControlButton";
 import { useTask, useTaskNodeLogs } from "@/hooks/useTasks";
 import { useTaskStatusSocket } from "@/hooks/useTaskStatusSocket";
-import { RemoteControlStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function TaskPage() {
@@ -26,7 +25,6 @@ export function TaskPage() {
     );
   }
 
-  const remoteControlDisconnected = task.remote_control_status !== RemoteControlStatus.CONNECTED;
 
   return (
     <div className="flex h-full flex-col">
@@ -43,23 +41,7 @@ export function TaskPage() {
         </div>
         <TaskStatusBadge status={task.status} />
         <TaskControlButtons task={task} />
-        <button
-          type="button"
-          onClick={() =>
-            toast.info(
-              "Переподключение доступно через claude.ai/code — прямая ссылка на сессию пока не отдаётся API",
-            )
-          }
-          className={cn(
-            "hidden items-center gap-2 rounded-md border px-3 py-2 text-[13px] font-bold sm:flex",
-            remoteControlDisconnected
-              ? "border-warning-border bg-warning-tint text-warning-text"
-              : "border-border bg-surface text-text-2",
-          )}
-        >
-          <RefreshCw className="size-3.5" />
-          Переподключить сессию
-        </button>
+        <RemoteControlButton task={task} />
       </div>
 
       <div className="flex border-b border-border xl:hidden">

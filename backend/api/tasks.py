@@ -35,7 +35,12 @@ from api.schemas import (
     TaskResponse,
     TaskUpdateRequest,
 )
-from db.models.enums import ManualRequestStatus, NodeLogStatus, TaskStatus
+from db.models.enums import (
+    ManualRequestStatus,
+    NodeLogStatus,
+    RemoteControlStatus,
+    TaskStatus,
+)
 from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.pipelines import Node
@@ -54,7 +59,12 @@ from services.node_dependencies import find_task_node_dependents
 from services.plan_mode import encode_decision
 from services.session_context import clear_task_session_context
 from services.task_cleanup import cleanup_task_repositories
-from services.task_control import TaskControlCommand, request_manual_stop, request_task_control
+from services.task_control import (
+    TaskControlCommand,
+    request_bridge_reconnect,
+    request_manual_stop,
+    request_task_control,
+)
 from services.task_creation import RepositoryAttachment, TaskDraft
 from services.task_creation import create_task as create_task_with_repositories
 from services.task_duplication import duplicate_task
@@ -383,6 +393,26 @@ async def stop_task(
         "Остановить можно только выполняющуюся или приостановленную задачу",
     )
     await _send_task_control(task_id, TaskControlCommand.STOP)
+
+
+@router.post("/{task_id}/remote-control/reconnect", status_code=202)
+async def reconnect_remote_control(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    """Раздел 6.5: новая попытка поднять мост `/remote-control`. Сессией
+    владеет воркер — он пересоздаст процесс CLI между ходами и обновит
+    `remote_control_status`; восстановление моста не гарантируется."""
+    task = await _get_task_or_404(db_session, task_id)
+    _require_status(task, _SESSION_ACTIVE_STATUSES, "У задачи нет активной сессии")
+    task.remote_control_status = RemoteControlStatus.RECONNECTING
+    await db_session.commit()
+    redis_client = _get_redis_client()
+    try:
+        await request_bridge_reconnect(redis_client, task_id)
+    finally:
+        await redis_client.aclose()
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponse)

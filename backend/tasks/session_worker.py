@@ -12,17 +12,22 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from claude_agent_sdk import ClaudeSDKClient
+from claude_agent_sdk import ClaudeSDKClient, ClaudeSDKError
 from redis.asyncio import Redis
 
 from app_logging.config import get_logger
-from clients.claude_agent import ClaudeCodeSession, build_claude_agent_options
-from db.models.enums import TaskStatus
+from clients.claude_agent import (
+    ClaudeAgentClientProtocol,
+    ClaudeCodeSession,
+    build_claude_agent_options,
+)
+from db.models.enums import RemoteControlStatus, TaskStatus
 from db.models.llm import LlmAccount
 from db.models.mcp import McpServer
 from db.models.repositories import Repository, TemplateMcpServer
@@ -35,10 +40,12 @@ from services.output_stream import build_output_publisher
 from services.pipeline_orchestrator import CheckpointDecision, StopGuard, run_pipeline
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
+from services.remote_control import record_bridge_status
 from services.session_lifecycle import plan_session_start
 from services.task_control import (
     TaskControlCommand,
     clear_task_control,
+    consume_bridge_reconnect,
     consume_task_control,
     read_task_control,
 )
@@ -151,6 +158,9 @@ class _SessionControl:
     workspace: Path
     redis_client: Redis
     active_node_context: ActiveNodeContext
+    # Новый процесс CLI, продолжающий сессию с данным `session_id` с флагом
+    # `--remote-control` (раздел 6.5).
+    bridge_client_factory: Callable[[str], ClaudeAgentClientProtocol]
 
     async def process_manual_queue(self) -> None:
         await process_manual_queue_once(
@@ -204,7 +214,30 @@ class _SessionControl:
         await self.db_session.refresh(self.task)
         return True
 
+    async def reconnect_bridge_if_requested(self) -> None:
+        """
+        Раздел 6.5 «Переподключить удалённую сессию» — новая попытка поднять
+        мост: процесс CLI пересоздаётся с `--remote-control`, продолжая ту же
+        сессию. Только между ходами — идущий ход не прерывается. Восстановление
+        моста не гарантировано (решение №1 плана): статус лишь best-effort.
+        """
+        if not await consume_bridge_reconnect(self.redis_client, self.task.id):
+            return
+        await self.db_session.refresh(self.task)
+        session_id = self.claude_session.session_id or self.task.session_id
+        status = RemoteControlStatus.DISCONNECTED
+        if session_id is None:
+            logger.info("bridge_reconnect_skipped_no_session", task_id=str(self.task.id))
+        else:
+            try:
+                await self.claude_session.replace_client(self.bridge_client_factory(session_id))
+                status = RemoteControlStatus.CONNECTED
+            except ClaudeSDKError:
+                logger.exception("bridge_reconnect_failed", task_id=str(self.task.id))
+        await record_bridge_status(self.db_session, task=self.task, status=status)
+
     async def checkpoint(self, _order_index: int) -> CheckpointDecision:
+        await self.reconnect_bridge_if_requested()
         if not await self.resolve_rebase_conflict_if_any(resume_status=TaskStatus.IN_PROGRESS):
             return CheckpointDecision.STOP
         await self.process_manual_queue()
@@ -233,6 +266,7 @@ class _SessionControl:
                 return CheckpointDecision.STOP
         logger.info("task_paused", task_id=str(self.task.id))
         while True:
+            await self.reconnect_bridge_if_requested()
             if not await self.resolve_rebase_conflict_if_any(resume_status=TaskStatus.PAUSED):
                 return CheckpointDecision.STOP
             await self.process_manual_queue()
@@ -358,18 +392,28 @@ async def _run_claimed_task(
         session_factory=async_session_factory,
         redis_client=redis_client,
     )
+    def make_client(
+        *,
+        resume_session_id: str | None,
+        enable_remote_control: bool,
+    ) -> ClaudeAgentClientProtocol:
+        options = build_claude_agent_options(
+            resume_session_id=resume_session_id,
+            cwd=str(workspace),
+            permission_mode=task.current_permission_mode,
+            mcp_servers=mcp_servers,
+            claude_config_dir=claude_config_dir or "",
+            enable_remote_control=enable_remote_control,
+            can_use_tool=can_use_tool,
+        )
+        return ClaudeSDKClient(options=options)
+
     start_plan = plan_session_start(existing_session_id=task.session_id)
-    options = build_claude_agent_options(
-        resume_session_id=start_plan.resume_session_id,
-        cwd=str(workspace),
-        permission_mode=task.current_permission_mode,
-        mcp_servers=mcp_servers,
-        claude_config_dir=claude_config_dir or "",
-        enable_remote_control=start_plan.enable_remote_control,
-        can_use_tool=can_use_tool,
-    )
     session = ClaudeCodeSession(
-        ClaudeSDKClient(options=options),
+        make_client(
+            resume_session_id=start_plan.resume_session_id,
+            enable_remote_control=start_plan.enable_remote_control,
+        ),
         on_text_delta=build_output_publisher(redis_client, active_node_context),
     )
     control = _SessionControl(
@@ -379,8 +423,14 @@ async def _run_claimed_task(
         workspace=workspace,
         redis_client=redis_client,
         active_node_context=active_node_context,
+        bridge_client_factory=lambda session_id: make_client(
+            resume_session_id=session_id,
+            enable_remote_control=True,
+        ),
     )
     await session.connect()
+    if start_plan.enable_remote_control:
+        await record_bridge_status(db_session, task=task, status=RemoteControlStatus.CONNECTED)
     outcome = None
     try:
         # Конфликт, оставшийся от прошлого прогона (перезапуск из `failed`,

@@ -55,6 +55,8 @@ from redis.asyncio import Redis  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 from sqlalchemy.orm import Session, SessionTransaction  # noqa: E402
 
+from tests.worker_support import WorkerEnv, install_worker_env  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _PG_CONTAINER_NAME = "tracker_pg_test"
 _REDIS_CONTAINER_NAME = "tracker_redis_test"
@@ -361,3 +363,19 @@ async def admin_client(
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         app.dependency_overrides.pop(require_admin, None)
+
+
+@pytest.fixture
+def worker_env(
+    db_session: AsyncSession,
+    redis_client: Redis,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> WorkerEnv:
+    """Зависимости воркера сессии подменены (`tests/worker_support.py`)."""
+    return install_worker_env(
+        db_session=db_session,
+        redis_client=redis_client,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+    )

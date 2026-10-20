@@ -12,13 +12,16 @@ from services.task_control import (
     TaskControlCommand,
     clear_manual_stop,
     clear_task_control,
+    consume_bridge_reconnect,
     consume_task_control,
     is_manual_stop_requested,
     read_task_control,
+    request_bridge_reconnect,
     request_manual_stop,
     request_task_control,
     run_stoppable,
 )
+from services.task_signal import wait_for_task_signal
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -180,3 +183,24 @@ class TestRunStoppableBeforeStart:
         assert result is None
         assert started == []
         assert stops == [], "прерывать нечего — ход не начинался"
+
+
+class TestBridgeReconnect:
+    async def test_consumed_once(self, redis_client: Redis) -> None:
+        task_id = uuid.uuid4()
+        waiter = asyncio.ensure_future(wait_for_task_signal(redis_client, task_id, timeout=5))
+        await asyncio.sleep(0.1)
+
+        await request_bridge_reconnect(redis_client, task_id)
+
+        assert await waiter is True
+        assert await consume_bridge_reconnect(redis_client, task_id) is True
+        assert await consume_bridge_reconnect(redis_client, task_id) is False
+
+    async def test_independent_of_control_command(self, redis_client: Redis) -> None:
+        task_id = uuid.uuid4()
+        await request_task_control(redis_client, task_id, TaskControlCommand.STOP)
+
+        await request_bridge_reconnect(redis_client, task_id)
+
+        assert await read_task_control(redis_client, task_id) is TaskControlCommand.STOP
