@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from clients.claude_agent import ClaudeCodeSession
     from db.models.repositories import Repository
     from db.models.tasks import Task
+    from services.plan_mode import ActiveNodeContext
 
 logger = get_logger("rebase_resolution")
 
@@ -131,6 +132,7 @@ async def resolve_rebase_conflict(
     task: Task,
     claude_session: ClaudeCodeSession,
     workspace: Path,
+    active_node_context: ActiveNodeContext | None = None,
 ) -> bool:
     """
     `True` — все ветки снова на актуальной базе, задача может продолжать.
@@ -155,6 +157,8 @@ async def resolve_rebase_conflict(
     )
     db_session.add(node_log)
     await db_session.commit()
+    if active_node_context is not None:
+        active_node_context.activate(node_log_id=node_log.id, task_id=task.id)
 
     outcome = await execute_llm_node_with_timeout(
         claude_session,

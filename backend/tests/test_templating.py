@@ -2,7 +2,12 @@ import pytest
 
 from db.models.enums import NodeType
 from services.errors import ValidationError
-from services.templating import RenderScope, render_template, validate_template_variables
+from services.templating import (
+    RenderScope,
+    is_slash_command_text,
+    render_template,
+    validate_template_variables,
+)
 
 
 def test_render_template_substitutes_values() -> None:
@@ -128,3 +133,12 @@ def test_validate_llm_output_last_n_passes_when_configured() -> None:
         preceding_node_types=[NodeType.PLAIN_PROMPT],
         current_node_llm_output_last_n=5,
     )
+
+
+class TestIsSlashCommandText:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [("/review", True), ("  /review now", True), ("сделай /review", False), ("", False)],
+    )
+    def test_detects_leading_slash(self, text: str, expected: bool) -> None:
+        assert is_slash_command_text(text) is expected

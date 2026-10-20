@@ -45,34 +45,58 @@ volume-данных, без изменений кода или повторно�
 
 ### На новом сервере
 
-3. Выполнить `deploy/install.sh` обычным образом (раздел 20.2) — **кроме**
-   шага генерации `.env`: положить перенесённый `.env` в `${INSTALL_DIR}/.env`
-   до запуска скрипта — `step_generate_env` пропускает генерацию, если файл
-   уже существует, поэтому секреты/ключи со старого сервера сохранятся
-   (важно: `SECRET_ENCRYPTION_KEY`/`SESSION_SECRET_KEY` обязаны быть теми же,
-   иначе расшифровка перенесённых `env_variables.value_encrypted`/
-   `repositories.deploy_key_encrypted`/`mcp_servers.auth_config_encrypted`
-   не сработает — раздел 3.2, 19.4).
-4. Остановить прикладные сервисы (если `install.sh` уже успел их поднять) и
-   восстановить volume-данные и дамп БД **до** первого реального использования:
+3. Сложить перенесённые файлы в один каталог, например `/root/transfer`:
+   `.env`, `<файл-дампа>.sql.gz`, `task_repos.tar.gz`, `user_files.tar.gz`.
+4. Запустить `deploy/install.sh` (тот же скрипт, что и для обычной
+   установки, раздел 20.2) в режиме восстановления:
 
    ```bash
-   cd /opt/tracker
-   docker compose stop backend worker beat
-
-   docker run --rm -v tracker_task_repos:/data -v "$(pwd)":/backup alpine \
-     sh -c "rm -rf /data/* && tar xzf /backup/task_repos.tar.gz -C /data"
-   docker run --rm -v tracker_user_files:/data -v "$(pwd)":/backup alpine \
-     sh -c "rm -rf /data/* && tar xzf /backup/user_files.tar.gz -C /data"
-
-   docker compose up -d --wait postgres
-   zcat <файл-дампа>.sql.gz | docker compose exec -T postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"
+   bash install.sh --restore /root/transfer
    ```
 
-5. Запустить прикладные сервисы: `docker compose up -d backend worker beat frontend caddy backup`.
-6. Открыть `https://<DOMAIN>` и войти тем же Google-аккаунтом администратора,
+   Скрипт сначала проверяет, что в каталоге есть все четыре файла (если
+   дампов несколько — берёт самый свежий по имени), и только потом:
+   ставит Docker при необходимости, клонирует репозиторий, кладёт
+   перенесённый `.env` в `${INSTALL_DIR}/.env` (прежний, если был,
+   сохраняется как `.env.before-restore`), собирает образы, поднимает
+   PostgreSQL и Redis, восстанавливает дамп в пустую БД **до** миграций,
+   распаковывает архивы в volumes `task_repos`/`user_files` через сервис
+   `backend`, применяет миграции и запускает прикладные сервисы. Генерация
+   секретов, интерактивные вопросы и seed пропускаются: всё это уже есть
+   в `.env` и дампе.
+
+   Важно: `SECRET_ENCRYPTION_KEY`/`SESSION_SECRET_KEY` обязаны быть теми же,
+   что на старом сервере, — иначе расшифровка перенесённых
+   `env_variables.value_encrypted`/`repositories.deploy_key_encrypted`/
+   `mcp_servers.auth_config_encrypted` не сработает (раздел 3.2, 19.4).
+   Поэтому `.env` берётся из каталога переноса, а не генерируется.
+
+5. Открыть `https://<DOMAIN>` и войти тем же Google-аккаунтом администратора,
    что и на старом сервере — восстановленная БД уже содержит его в `users`,
    повторная регистрация не требуется.
+
+### Ручное восстановление (если скрипт неприменим)
+
+Тот же порядок вручную: положить `.env` в `${INSTALL_DIR}/.env`, выполнить
+обычный `deploy/install.sh` (генерация `.env` пропустится — файл уже есть),
+затем остановить прикладные сервисы и восстановить данные:
+
+```bash
+cd /opt/tracker
+docker compose stop backend worker beat
+
+docker run --rm -v tracker_task_repos:/data -v "$(pwd)":/backup alpine \
+  sh -c "rm -rf /data/* && tar xzf /backup/task_repos.tar.gz -C /data"
+docker run --rm -v tracker_user_files:/data -v "$(pwd)":/backup alpine \
+  sh -c "rm -rf /data/* && tar xzf /backup/user_files.tar.gz -C /data"
+
+docker compose up -d --wait postgres
+zcat <файл-дампа>.sql.gz | docker compose exec -T postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"
+docker compose up -d backend worker beat frontend caddy backup
+```
+
+В этом варианте миграции уже применены к пустой БД до восстановления
+дампа — дамп со старого сервера должен быть снят с той же версией схемы.
 
 ## Проверка после переноса
 

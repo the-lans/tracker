@@ -80,6 +80,9 @@ class LibraryPromptRunStatus(StrEnum):
 class ManualRequestType(StrEnum):
     LIBRARY_PROMPT = "library_prompt"
     FREEFORM_PROMPT = "freeform_prompt"
+    # Пересказ истории для дочерней задачи (`use_parent_summary`): ставится в
+    # очередь родителя, пока его сессией владеет воркер.
+    PARENT_SUMMARY = "parent_summary"
 
 
 class ManualRequestStatus(StrEnum):
@@ -93,6 +96,16 @@ class NodeLogTriggerType(StrEnum):
     PIPELINE = "pipeline"
     LIBRARY_MANUAL = "library_manual"
     FREEFORM_MANUAL = "freeform_manual"
+    # Лента родителя: его сессия пересказывает историю для дочерней задачи.
+    SUMMARY_FOR_CHILD = "summary_for_child"
+    # Лента дочерней задачи: пересказ родителя — первый ход её новой сессии.
+    PARENT_SUMMARY = "parent_summary"
+
+
+class ParentSummaryStatus(StrEnum):
+    PENDING = "pending"
+    READY = "ready"
+    UNAVAILABLE = "unavailable"
 
 
 class NodeLogStatus(StrEnum):

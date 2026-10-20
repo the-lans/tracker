@@ -97,7 +97,8 @@ backend/
   docker-entrypoint.sh — применяет alembic-миграции перед стартом
               backend/worker/beat
   ws/        — WebSocket-обработчики real-time уведомлений (tasks.py —
-              `/ws/tasks/{task_id}/status`, раздел 18.1)
+              `/ws/tasks/{task_id}/status`: смена статуса и потоковый вывод
+              ответа LLM, разделы 15.2, 18.1)
   app_logging/ — конфигурация structlog и запись в app_logs (не "logging" —
               так называется модуль stdlib, вложенный пакет с этим именем
               внутри backend/ его перекрывает)
@@ -105,7 +106,8 @@ backend/
               корневой alembic/ (см. ниже), строку подключения задаёт
               alembic/env.py из DATABASE_URL, а не сам alembic.ini
   tests/     — pytest (test_*.py, плоско; conftest.py поднимает Postgres и
-              Redis в Docker, fakes.py — фейки Claude Agent SDK)
+              Redis в Docker, fakes.py — фейки Claude Agent SDK,
+              worker_support.py — обвязка воркера сессии для его тестов и E2E)
 frontend/    — React SPA: дашборд, страница задачи (обзор + диалог),
               конструктор пайплайна/библиотека, CRUD-страницы
               (репозитории/шаблоны/LLM-аккаунты/переменные окружения),
@@ -119,14 +121,16 @@ deploy/
   backup/    — встроенный сервис резервного копирования PostgreSQL по
               расписанию (раздел 20.4): Dockerfile, entrypoint.sh (crond),
               backup.sh (pg_dump + ротация по POSTGRES_BACKUP_RETENTION_DAYS)
-  install.sh — единственный скрипт установки по разделу 20.2 ТЗ
+  install.sh — единственный скрипт установки по разделу 20.2 ТЗ;
+              `--restore <каталог>` — перенос на новый сервер (раздел 20.4)
 runners/
   tracker-runner-python/ — Docker-образ раннера для script-нод (Python)
   tracker-runner-bash/   — Docker-образ раннера для script-нод (Bash)
 alembic/
   env.py       — async env (target_metadata = db.base.Base.metadata)
   versions/    — миграции базы данных (полная схема раздела 3.1,
-                 push_subscriptions, nodes.llm_output_last_n, статус paused)
+                 push_subscriptions, nodes.llm_output_last_n, статус paused,
+                 task_parent_summaries)
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
                 приложения), запускать backend-venv'ом, см. раздел 4
@@ -310,6 +314,8 @@ Postgres с проброшенным портом — см. `docker-compose.yml`
     API не трогает сессию и не меняет статусы `in_progress`/`paused`
     напрямую: ручные промты кладёт в очередь, команды pause/resume/stop —
     в Redis (`services/task_control.py`), и будит воркер сигналом. Воркер
-    перед каждой нодой обрабатывает конфликт ребейза, затем очередь ручных
-    запросов FIFO, затем команды; статус `paused` — решение пользователя,
-    см. `docs/implementation_plan.md`, п. 6.
+    перед каждой нодой выполняет запрошенное переподключение моста, затем
+    обрабатывает конфликт ребейза, очередь ручных запросов FIFO и команды;
+    статус `paused` — решение пользователя, см.
+    `docs/implementation_plan.md`, п. 6. `claude.ai/code` — только для
+    просмотра сессии: ввод в сессию идёт только через трекер (п. 8).

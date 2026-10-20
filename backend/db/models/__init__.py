@@ -23,7 +23,7 @@ from db.models.periodic import PeriodicTask
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.repositories import Repository, Template, TemplateMcpServer
-from db.models.tasks import Task, TaskRepository
+from db.models.tasks import Task, TaskParentSummary, TaskRepository
 from db.models.users import AllowedEmail, User
 
 __all__ = [
@@ -43,6 +43,7 @@ __all__ = [
     "TaskLibraryPrompt",
     "TaskManualRequestQueue",
     "TaskNode",
+    "TaskParentSummary",
     "TaskRepository",
     "Template",
     "TemplateMcpServer",

@@ -19,10 +19,16 @@ Celery-таска на весь активный жизненный цикл с�
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol
 
-from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ResultMessage,
+    StreamEvent,
+    TextBlock,
+)
 
 from app_logging.config import get_logger
 
@@ -33,6 +39,14 @@ if TYPE_CHECKING:
 logger = get_logger("claude_agent")
 
 REMOTE_CONTROL_EXTRA_ARG = "remote-control"
+_CONTENT_BLOCK_DELTA_EVENT = "content_block_delta"
+_TEXT_DELTA = "text_delta"
+
+# Получатель фрагментов ответа по мере генерации (раздел 15.2).
+TextDeltaHandler = Callable[[str], Awaitable[None]]
+# Вызывается при прерывании хода до `interrupt()` — чтобы снять то, что ход
+# успел начать вне самой сессии (ожидание решения пользователя).
+AbortHandler = Callable[[], Awaitable[None]]
 
 
 class ClaudeAgentClientProtocol(Protocol):
@@ -55,6 +69,7 @@ def build_claude_agent_options(
     claude_config_dir: str,
     enable_remote_control: bool,
     can_use_tool: CanUseTool | None = None,
+    fork_session: bool = False,
 ) -> ClaudeAgentOptions:
     """Собирает `ClaudeAgentOptions` для сессии задачи (раздел 6.1, 19.5).
 
@@ -64,6 +79,11 @@ def build_claude_agent_options(
     требуется. ``claude_config_dir`` — изолированная директория выбранного
     LLM-аккаунта (раздел 19.5), не пересекающаяся с директориями других
     аккаунтов.
+
+    Частичные сообщения включены всегда: ответ показывается в ленте по мере
+    генерации (раздел 15.2). ``fork_session`` вместе с ``resume_session_id``
+    продолжает чужую историю в новой сессии, не меняя исходную, — так
+    пересказывается история родительской задачи.
     """
     extra_args: dict[str, str | None] = {}
     if enable_remote_control:
@@ -77,17 +97,34 @@ def build_claude_agent_options(
         mcp_server_names=sorted(mcp_servers),
         enable_remote_control=enable_remote_control,
         extra_args=extra_args,
+        fork_session=fork_session,
     )
 
     return ClaudeAgentOptions(
         resume=resume_session_id,
+        fork_session=fork_session,
         cwd=cwd,
         permission_mode=permission_mode,  # type: ignore[arg-type]
         mcp_servers=mcp_servers,
         env={"CLAUDE_CONFIG_DIR": claude_config_dir},
         extra_args=extra_args,
         can_use_tool=can_use_tool,
+        include_partial_messages=True,
     )
+
+
+def _text_delta_of(message: StreamEvent) -> str | None:
+    """Фрагмент текста ответа самого агента; события субагентов не показываются."""
+    if message.parent_tool_use_id is not None:
+        return None
+    event = message.event
+    if event.get("type") != _CONTENT_BLOCK_DELTA_EVENT:
+        return None
+    delta = event.get("delta") or {}
+    if delta.get("type") != _TEXT_DELTA:
+        return None
+    text = delta.get("text")
+    return text if isinstance(text, str) and text else None
 
 
 class SessionTurnResult:
@@ -119,8 +156,16 @@ _ABORT_DRAIN_TIMEOUT_SECONDS = 10.0
 class ClaudeCodeSession:
     """Владелец единственного клиента активной сессии задачи (раздел 6.1, 6.2)."""
 
-    def __init__(self, client: ClaudeAgentClientProtocol) -> None:
+    def __init__(
+        self,
+        client: ClaudeAgentClientProtocol,
+        *,
+        on_text_delta: TextDeltaHandler | None = None,
+        on_abort: AbortHandler | None = None,
+    ) -> None:
         self._client = client
+        self._on_text_delta = on_text_delta
+        self._on_abort = on_abort
         self._lock = asyncio.Lock()
         self._session_id: str | None = None
         # Ход начат (`query()` отправлен), а его `ResultMessage` ещё не
@@ -141,6 +186,23 @@ class ClaudeCodeSession:
         async with self._lock:
             await self._client.disconnect()
             logger.info("session_disconnected")
+
+    async def replace_client(self, client: ClaudeAgentClientProtocol) -> None:
+        """
+        Пересоздаёт процесс CLI между ходами (раздел 6.5, переподключение моста).
+
+        Новый клиент подключается раньше, чем отключается старый: если
+        подключение не удалось, сессия остаётся на прежнем процессе.
+        """
+        async with self._lock:
+            await client.connect()
+            previous = self._client
+            self._client = client
+            try:
+                await previous.disconnect()
+            except Exception:  # noqa: BLE001 — старый процесс уже не нужен, сбой вторичен
+                logger.exception("session_previous_client_disconnect_failed")
+            logger.info("session_client_replaced")
 
     async def interrupt(self) -> None:
         async with self._lock:
@@ -169,6 +231,8 @@ class ClaudeCodeSession:
             if not self._turn_open:
                 logger.info("session_abort_skipped_no_open_turn")
                 return
+            if self._on_abort is not None:
+                await self._on_abort()
             await self._client.interrupt()
 
             async def drain() -> None:
@@ -205,6 +269,8 @@ class ClaudeCodeSession:
             text_parts: list[str] = []
             result: ResultMessage | None = None
             async for message in self._client.receive_response():
+                if isinstance(message, StreamEvent):
+                    await self._forward_text_delta(message)
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
@@ -222,3 +288,10 @@ class ClaudeCodeSession:
                 session_id=result.session_id,
             )
             return SessionTurnResult(text="".join(text_parts), result=result)
+
+    async def _forward_text_delta(self, message: StreamEvent) -> None:
+        if self._on_text_delta is None:
+            return
+        text = _text_delta_of(message)
+        if text is not None:
+            await self._on_text_delta(text)

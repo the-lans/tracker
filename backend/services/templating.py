@@ -143,6 +143,17 @@ def _validate_node_variable(
         )
 
 
+_SLASH_COMMAND_PREFIX = "/"
+
+
+def is_slash_command_text(text: str) -> bool:
+    """
+    Раздел 4, 22: текст, начинающийся с ``/``, — слэш-команда; шаблонизатор
+    её не трогает ни в пайплайне, ни в свободном вводе.
+    """
+    return text.lstrip().startswith(_SLASH_COMMAND_PREFIX)
+
+
 def render_template(template: str, context: Mapping[str, str]) -> str:
     """Подставляет значения переменных; вызывается непосредственно перед отправкой в SDK.
 

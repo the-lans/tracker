@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/apiClient";
-import type { NodeItem, Pipeline } from "@/lib/types";
+import type {
+  NodeDependent,
+  NodeItem,
+  Pipeline,
+  PipelineDependentsRequest,
+} from "@/lib/types";
 
 const pipelineKeys = {
   all: ["pipelines"] as const,
@@ -30,6 +35,14 @@ export function usePipelineNodes(pipelineId: string | undefined) {
     queryKey: pipelineId ? pipelineKeys.nodes(pipelineId) : ["pipelines", "none", "nodes"],
     queryFn: () => api.get<NodeItem[]>(`/pipelines/${pipelineId}/nodes`),
     enabled: Boolean(pipelineId),
+  });
+}
+
+/** Раздел 13.3: зависимые ноды при выборе пайплайна, до создания `task_nodes`. */
+export function usePipelineNodeDependents(pipelineId: string) {
+  return useMutation({
+    mutationFn: (body: PipelineDependentsRequest) =>
+      api.post<NodeDependent[]>(`/pipelines/${pipelineId}/dependents`, body),
   });
 }
 

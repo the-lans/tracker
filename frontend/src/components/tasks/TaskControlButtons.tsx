@@ -1,15 +1,9 @@
 import { useState } from "react";
 import { Ban, Pause, Play, RotateCcw, Square } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { HEADER_BUTTON } from "@/components/tasks/headerButton";
+import { TaskLifecycleActions } from "@/components/tasks/TaskLifecycleActions";
 import {
   useCancelQueuedTask,
   usePauseTask,
@@ -19,9 +13,6 @@ import {
 } from "@/hooks/useTasks";
 import { ApiError } from "@/lib/apiClient";
 import { TaskStatus, type Task } from "@/lib/types";
-
-const HEADER_BUTTON =
-  "flex touch-target items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-[13px] font-bold text-text-2 disabled:opacity-50";
 
 function onError(fallback: string) {
   return (error: Error) => toast.error(error instanceof ApiError ? error.message : fallback);
@@ -120,25 +111,18 @@ export function TaskControlButtons({ task }: { task: Task }) {
         </button>
       )}
 
-      <Dialog open={stopConfirmOpen} onOpenChange={setStopConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Остановить задачу?</DialogTitle>
-            <DialogDescription>
-              Текущее обращение к сессии будет прервано, задача перейдёт в статус «Ошибка». Продолжить
-              можно кнопкой «Перезапустить с текущей ноды».
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setStopConfirmOpen(false)}>
-              Отмена
-            </Button>
-            <Button variant="danger" onClick={handleStop} disabled={stopTask.isPending}>
-              Остановить
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <TaskLifecycleActions task={task} />
+
+      <ConfirmDialog
+        open={stopConfirmOpen}
+        onOpenChange={setStopConfirmOpen}
+        title="Остановить задачу?"
+        description="Текущее обращение к сессии будет прервано, задача перейдёт в статус «Ошибка». Продолжить можно кнопкой «Перезапустить с текущей ноды»."
+        confirmLabel="Остановить"
+        danger
+        pending={stopTask.isPending}
+        onConfirm={handleStop}
+      />
     </div>
   );
 }

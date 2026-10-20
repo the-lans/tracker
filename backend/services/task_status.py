@@ -70,12 +70,20 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
         },
     ),
     # «Приостановить» (раздел 14.2): продолжить, остановить или поймать
-    # конфликт ребейза, пока задача стоит на паузе.
+    # конфликт ребейза, пока задача стоит на паузе. Ручной промт на паузе
+    # выполняется сразу и тоже может спросить пользователя.
     TaskStatus.PAUSED: frozenset(
-        {TaskStatus.IN_PROGRESS, TaskStatus.FAILED, TaskStatus.REBASE_CONFLICT},
+        {
+            TaskStatus.IN_PROGRESS,
+            TaskStatus.FAILED,
+            TaskStatus.REBASE_CONFLICT,
+            TaskStatus.PLAN_REVIEW,
+            TaskStatus.AWAITING_INPUT,
+        },
     ),
-    TaskStatus.PLAN_REVIEW: frozenset({TaskStatus.IN_PROGRESS}),
-    TaskStatus.AWAITING_INPUT: frozenset({TaskStatus.IN_PROGRESS}),
+    # После решения задача возвращается туда, откуда ушла в ожидание.
+    TaskStatus.PLAN_REVIEW: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
+    TaskStatus.AWAITING_INPUT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
     TaskStatus.REBASE_CONFLICT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.FAILED}),
     TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS}),
     TaskStatus.DONE: frozenset(),
@@ -170,6 +178,17 @@ _UNFINISHED_NODE_LOG_STATUSES = (
     NodeLogStatus.AWAITING_DECISION,
 )
 _AWAITING_STATUSES = (TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW)
+# Раздел 8.2: сессией задачи владеет воркер ровно в этих статусах — ручные
+# запросы принимаются в её очередь, только пока она активна.
+SESSION_ACTIVE_STATUSES = frozenset(
+    {
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.PAUSED,
+        TaskStatus.PLAN_REVIEW,
+        TaskStatus.AWAITING_INPUT,
+        TaskStatus.REBASE_CONFLICT,
+    },
+)
 # Статусы, из которых `failed` достижим напрямую (раздел 14.1).
 FAILABLE_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT)
 
@@ -203,6 +222,49 @@ async def first_unfinished_order_index(db_session: AsyncSession, task_id: uuid.U
     last_stmt = sa.select(sa.func.max(TaskNode.order_index)).where(TaskNode.task_id == task_id)
     last = (await db_session.execute(last_stmt)).scalar_one_or_none()
     return 0 if last is None else int(last) + 1
+
+
+async def fail_task_from_current_status(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    failed_order_index: int,
+) -> bool:
+    """
+    Переводит задачу в `failed` из того статуса, в котором она сейчас.
+
+    Пока шёл ход, задачу могли поставить на паузу, поймать конфликт ребейза
+    или перевести в ожидание решения (раздел 14.1). Из `plan_review` и
+    `awaiting_input` прямого перехода в `failed` нет — сначала возврат в
+    `in_progress`. `False` — статус уже терминальный или неожиданный.
+    """
+    task = await db_session.get(Task, task_id, populate_existing=True)
+    if task is None:
+        return False
+    from_status = task.status
+    if from_status in _AWAITING_STATUSES:
+        await transition_task_status(
+            db_session,
+            task_id=task_id,
+            from_status=from_status,
+            to_status=TaskStatus.IN_PROGRESS,
+        )
+        from_status = TaskStatus.IN_PROGRESS
+    elif from_status not in FAILABLE_STATUSES:
+        logger.warning(
+            "task_not_failed_unexpected_status",
+            task_id=str(task_id),
+            status=from_status,
+        )
+        return False
+    await transition_task_status(
+        db_session,
+        task_id=task_id,
+        from_status=from_status,
+        to_status=TaskStatus.FAILED,
+        failed_order_index=failed_order_index,
+    )
+    return True
 
 
 async def fail_task_after_error(
@@ -254,29 +316,8 @@ async def fail_task_after_error(
     )
     await db_session.commit()
 
-    task = await db_session.get(Task, task_id, populate_existing=True)
-    if task is None:
-        return
-    from_status = task.status
-    if from_status in _AWAITING_STATUSES:
-        await transition_task_status(
-            db_session,
-            task_id=task_id,
-            from_status=from_status,
-            to_status=TaskStatus.IN_PROGRESS,
-        )
-        from_status = TaskStatus.IN_PROGRESS
-    elif from_status not in FAILABLE_STATUSES:
-        logger.warning(
-            "task_not_failed_unexpected_status",
-            task_id=str(task_id),
-            status=task.status,
-        )
-        return
-    await transition_task_status(
+    await fail_task_from_current_status(
         db_session,
         task_id=task_id,
-        from_status=from_status,
-        to_status=TaskStatus.FAILED,
         failed_order_index=await first_unfinished_order_index(db_session, task_id),
     )

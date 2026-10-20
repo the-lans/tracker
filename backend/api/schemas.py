@@ -46,15 +46,20 @@ class TaskRepositoryAttachRequest(BaseModel):
     base_branch: str = "main"
 
 
-class TaskCreateRequest(BaseModel):
+class TaskDuplicateRequest(BaseModel):
+    """Раздел 14.2 «Дублировать задачу»: форма создания с новым кодом."""
+
     code: str
     title: str
     description: str
     guide_url: str | None = None
-    parent_task_id: uuid.UUID | None = None
-    use_parent_summary: bool = False
     llm_account_id: uuid.UUID | None = None
     repositories: list[TaskRepositoryAttachRequest] = []
+
+
+class TaskCreateRequest(TaskDuplicateRequest):
+    parent_task_id: uuid.UUID | None = None
+    use_parent_summary: bool = False
 
 
 class TaskUpdateRequest(BaseModel):
@@ -97,6 +102,7 @@ class TaskResponse(BaseModel):
     pipeline_id: uuid.UUID | None
     llm_account_id: uuid.UUID | None
     parent_task_id: uuid.UUID | None
+    use_parent_summary: bool
     session_id: str | None
     current_permission_mode: PermissionMode | None
     auto_accept_plan: bool
@@ -104,12 +110,30 @@ class TaskResponse(BaseModel):
     scheduled_start_at: datetime | None
     auto_start_enabled: bool
     last_failed_order_index: int | None
+    repo_cleaned_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
 
 class BindPipelineRequest(BaseModel):
     pipeline_id: uuid.UUID
+    # Раздел 13.1: чекбоксы, снятые при выборе пайплайна; `None` — по
+    # умолчанию выключены ноды с `is_skipped`.
+    disabled_node_ids: list[uuid.UUID] | None = None
+
+
+class NodeDependentResponse(BaseModel):
+    """Раздел 13.3, 15.2: нода, которая берёт вывод у отключаемой."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    node_id: uuid.UUID
+    name: str
+
+
+class PipelineDependentsRequest(BaseModel):
+    node_id: uuid.UUID
+    enabled_node_ids: list[uuid.UUID]
 
 
 class NodeLogResponse(BaseModel):
@@ -519,6 +543,36 @@ class PushSubscriptionRequest(BaseModel):
 
 class VapidPublicKeyResponse(BaseModel):
     public_key: str
+
+
+class NodeRunResponse(BaseModel):
+    """Раздел 13.4: строка сводки выполнения нод по всем задачам."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    node_log_id: uuid.UUID
+    task_id: uuid.UUID
+    task_code: str
+    node_id: uuid.UUID | None
+    node_name: str | None
+    trigger_type: NodeLogTriggerType
+    attempt_number: int
+    status: NodeLogStatus
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class ActiveCeleryTaskResponse(BaseModel):
+    """Раздел 15.5: активная Celery-задача на одном из воркеров."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    worker: str
+    celery_task_id: str
+    name: str
+    started_at: datetime | None
+    task_id: uuid.UUID | None
+    task_code: str | None
 
 
 class AppLogResponse(BaseModel):

@@ -1,11 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/apiClient";
 import type {
+  BindPipelineRequest,
   DecisionRequest,
   ManualRequest,
+  NodeDependent,
   NodeLog,
   Task,
   TaskCreateRequest,
+  TaskDuplicateRequest,
   TaskLibraryPrompt,
   TaskLibraryPromptItem,
   TaskNodeItem,
@@ -88,6 +91,48 @@ export function useUpdateTask(taskId: string) {
 }
 
 /** Раздел 14.2: «Перезапустить с текущей ноды» — упавшая нода выполняется заново. */
+/** Раздел 14.2: «Дублировать задачу» из `done` — новая задача с копией настроек. */
+export function useDuplicateTask(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: TaskDuplicateRequest) => api.post<Task>(`/tasks/${taskId}/duplicate`, body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
+}
+
+/** Раздел 14.2, 14.3: действия над завершённой/упавшей задачей, возвращающие её. */
+function useTaskLifecycleAction(taskId: string, action: "cleanup-repositories" | "clear-context") {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<Task>(`/tasks/${taskId}/${action}`),
+    onSuccess: (task) => {
+      queryClient.setQueryData(taskKeys.detail(taskId), task);
+      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
+}
+
+export function useCleanupRepositories(taskId: string) {
+  return useTaskLifecycleAction(taskId, "cleanup-repositories");
+}
+
+export function useClearContext(taskId: string) {
+  return useTaskLifecycleAction(taskId, "clear-context");
+}
+
+/** Раздел 6.5: новая попытка поднять мост — статус обновит воркер. */
+export function useReconnectRemoteControl(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<void>(`/tasks/${taskId}/remote-control/reconnect`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
+    },
+  });
+}
+
 export function useRestartTask(taskId: string) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -102,8 +147,7 @@ export function useRestartTask(taskId: string) {
 export function useBindPipeline(taskId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (pipelineId: string) =>
-      api.post<Task>(`/tasks/${taskId}/pipeline`, { pipeline_id: pipelineId }),
+    mutationFn: (body: BindPipelineRequest) => api.post<Task>(`/tasks/${taskId}/pipeline`, body),
     onSuccess: (task) => {
       queryClient.setQueryData(taskKeys.detail(taskId), task);
       void queryClient.invalidateQueries({ queryKey: taskKeys.all });
@@ -215,6 +259,14 @@ export function useTaskNodes(taskId: string, enabled: boolean) {
     queryKey: taskKeys.nodes(taskId),
     queryFn: () => api.get<TaskNodeItem[]>(`/tasks/${taskId}/nodes`),
     enabled,
+  });
+}
+
+/** Раздел 13.3, 15.2: какие ноды берут вывод у отключаемой — для предупреждения. */
+export function useTaskNodeDependents(taskId: string) {
+  return useMutation({
+    mutationFn: (taskNodeId: string) =>
+      api.get<NodeDependent[]>(`/tasks/${taskId}/nodes/${taskNodeId}/dependents`),
   });
 }
 

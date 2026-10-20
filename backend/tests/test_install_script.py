@@ -1,0 +1,252 @@
+"""
+`deploy/install.sh` (раздел 20.2, 20.4 ТЗ) с заглушками внешних команд.
+
+Настоящие Docker, git и сеть не нужны: `docker`, `git`, `curl`, `sudo` и
+пакетный менеджер подменены скриптами, которые пишут свои вызовы в журнал.
+Проверяется, что и в каком порядке скрипт просит сделать.
+"""
+
+from __future__ import annotations
+
+import gzip
+import os
+import shutil
+import subprocess
+import tarfile
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+
+_INSTALL_SCRIPT = Path(__file__).resolve().parents[2] / "deploy" / "install.sh"
+# Системные утилиты, которые нужны скрипту и заглушкам. PATH теста состоит
+# только из каталога заглушек: настоящий docker (на CI он в /usr/bin) не
+# должен быть виден.
+_SYSTEM_TOOLS = (
+    "bash",
+    "sh",
+    "cat",
+    "cp",
+    "rm",
+    "chmod",
+    "mktemp",
+    "find",
+    "sort",
+    "tail",
+    "gzip",
+    "basename",
+    "id",
+    "sed",
+)
+
+_DOCKER_STUB = """#!/bin/sh
+echo "docker $*" >> "$STUB_LOG"
+if [ "$1 $2" = "compose version" ] && [ -f "$STUB_DIR/no-compose" ]; then
+  exit 1
+fi
+if [ "$1 $2 $3" = "compose exec -T" ]; then
+  cat > "$STUB_DIR/psql-input"
+fi
+exit 0
+"""
+_LOGGING_STUB = """#!/bin/sh
+echo "{name} $*" >> "$STUB_LOG"
+"""
+# «Официальный установщик»: ставит docker в PATH, как это сделал бы get.docker.com.
+_CURL_STUB = """#!/bin/sh
+echo "curl $*" >> "$STUB_LOG"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    printf 'cp "$STUB_DIR/docker.real" "$STUB_DIR/docker"\\nchmod +x "$STUB_DIR/docker"\\n' > "$2"
+  fi
+  shift
+done
+"""
+_SUDO_STUB = """#!/bin/sh
+exec "$@"
+"""
+_APT_STUB = """#!/bin/sh
+echo "apt-get $*" >> "$STUB_LOG"
+rm -f "$STUB_DIR/no-compose"
+"""
+
+
+def _write_executable(path: Path, content: str) -> None:
+    path.write_text(content)
+    path.chmod(0o755)
+
+
+@pytest.fixture
+def stubs(tmp_path: Path) -> Path:
+    stub_dir = tmp_path / "stubs"
+    stub_dir.mkdir()
+    for tool in _SYSTEM_TOOLS:
+        tool_path = shutil.which(tool)
+        assert tool_path is not None, f"нет системной утилиты {tool}"
+        (stub_dir / tool).symlink_to(tool_path)
+    _write_executable(stub_dir / "docker", _DOCKER_STUB)
+    (stub_dir / "docker.real").write_text(_DOCKER_STUB)
+    _write_executable(stub_dir / "git", _LOGGING_STUB.format(name="git"))
+    _write_executable(stub_dir / "curl", _CURL_STUB)
+    _write_executable(stub_dir / "sudo", _SUDO_STUB)
+    _write_executable(stub_dir / "apt-get", _APT_STUB)
+    return stub_dir
+
+
+@pytest.fixture
+def install_dir(tmp_path: Path) -> Path:
+    directory = tmp_path / "opt-tracker"
+    (directory / ".git").mkdir(parents=True)
+    return directory
+
+
+def _run_bash(
+    script: str,
+    *args: str,
+    stubs: Path,
+    install_dir: Path,
+) -> subprocess.CompletedProcess[str]:
+    env = {
+        "PATH": str(stubs),
+        "HOME": str(install_dir.parent),
+        "INSTALL_DIR": str(install_dir),
+        "STUB_DIR": str(stubs),
+        "STUB_LOG": str(stubs / "calls.log"),
+    }
+    return subprocess.run(
+        [str(stubs / "bash"), "-c", script, "install.sh", *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
+def _calls(stubs: Path) -> list[str]:
+    log = stubs / "calls.log"
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def _make_restore_dir(tmp_path: Path, *, skip: str | None = None) -> Path:
+    restore_dir = tmp_path / "transfer"
+    restore_dir.mkdir()
+    files: dict[str, Callable[[Path], object]] = {
+        ".env": lambda path: path.write_text("SECRET_ENCRYPTION_KEY=старый-ключ\n"),
+        "tracker-20261001T000000Z.sql.gz": lambda path: path.write_bytes(
+            gzip.compress(b"-- old dump\n"),
+        ),
+        "tracker-20261019T000000Z.sql.gz": lambda path: path.write_bytes(
+            gzip.compress(b"-- fresh dump\n"),
+        ),
+    }
+    for name, write in files.items():
+        if name != skip:
+            write(restore_dir / name)
+    for archive in ("task_repos.tar.gz", "user_files.tar.gz"):
+        if archive != skip:
+            with tarfile.open(restore_dir / archive, "w:gz"):
+                pass
+    return restore_dir
+
+
+class TestScriptSyntax:
+    def test_valid(self) -> None:
+        subprocess.run(["bash", "-n", str(_INSTALL_SCRIPT)], check=True)
+
+
+class TestRestore:
+    def test_steps_in_order(
+        self,
+        tmp_path: Path,
+        stubs: Path,
+        install_dir: Path,
+    ) -> None:
+        restore_dir = _make_restore_dir(tmp_path)
+
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--restore",
+            str(restore_dir),
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        docker_calls = [call for call in _calls(stubs) if call.startswith("docker")]
+        expected_order = [
+            "docker compose build backend frontend",
+            "docker compose up -d --wait postgres redis",
+            "docker compose exec -T postgres",
+            "task_repos.tar.gz",
+            "user_files.tar.gz",
+            "docker compose run --rm backend alembic upgrade head",
+            "docker compose up -d backend worker beat frontend caddy backup",
+        ]
+        positions = [
+            next(index for index, call in enumerate(docker_calls) if expected in call)
+            for expected in expected_order
+        ]
+        assert positions == sorted(positions)
+        assert not any("seed_" in call for call in docker_calls)
+        assert (stubs / "psql-input").read_text() == "-- fresh dump\n"
+        env_file = install_dir / ".env"
+        assert env_file.read_text() == "SECRET_ENCRYPTION_KEY=старый-ключ\n"
+
+    @pytest.mark.parametrize("missing", [".env", "user_files.tar.gz"])
+    def test_incomplete_transfer(
+        self,
+        tmp_path: Path,
+        stubs: Path,
+        install_dir: Path,
+        missing: str,
+    ) -> None:
+        restore_dir = _make_restore_dir(tmp_path, skip=missing)
+
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--restore",
+            str(restore_dir),
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode != 0
+        assert missing in result.stdout
+        assert _calls(stubs) == []
+
+    def test_unknown_argument(self, stubs: Path, install_dir: Path) -> None:
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--bogus",
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 2
+
+
+class TestInstallDocker:
+    def test_installs_engine_when_missing(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "docker").unlink()
+
+        result = _run_bash(
+            f'source "{_INSTALL_SCRIPT}" && step_install_docker',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "curl -fsSL https://get.docker.com" in _calls(stubs)[0]
+        assert os.access(stubs / "docker", os.X_OK)
+
+    def test_installs_compose_plugin(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "no-compose").touch()
+
+        result = _run_bash(
+            f'source "{_INSTALL_SCRIPT}" && step_install_docker',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "apt-get install -y docker-compose-plugin" in _calls(stubs)

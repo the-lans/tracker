@@ -13,9 +13,7 @@ Celery-задачи — синхронные функции (`@celery_app.task`)
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
@@ -41,6 +39,7 @@ from services.manual_queue import expire_stale_manual_queue_requests
 from services.notifications import NotificationEvent, notify_task_event
 from services.periodic_tasks import record_periodic_task_run
 from services.remote_control import decide_remote_control_bridge_action
+from services.task_workspace import resolve_repos_root
 from services.template_context import resolve_global_env_value
 from tasks.celery_app import celery_app
 from tasks.session_worker import run_task_session
@@ -52,7 +51,6 @@ if TYPE_CHECKING:
 
 logger = get_logger("tasks.periodic")
 
-_REPOS_ROOT_ENV_VAR = "TRACKER_REPOS_ROOT"
 _GITLAB_URL_ENV_KEY = "GITLAB_URL"
 _GITLAB_TOKEN_ENV_KEY = "GITLAB_TOKEN"
 
@@ -181,14 +179,14 @@ def sync_gitlab_merge_status() -> None:
 @celery_app.task(name="rebase_child_branches_on_parent_merge")
 def rebase_child_branches_on_parent_merge() -> None:
     async def body(db_session: AsyncSession) -> None:
-        repos_root = os.environ.get(_REPOS_ROOT_ENV_VAR, "tracker/repos")
+        repos_root = resolve_repos_root()
         stmt = sa.select(TaskRepository).where(TaskRepository.merge_status == MergeStatus.MERGED)
         merged = list((await db_session.execute(stmt)).scalars().all())
         for parent_task_repository in merged:
             await gitlab_sync.rebase_child_task_repositories_on_parent_merge(
                 db_session,
                 parent_task_repository=parent_task_repository,
-                repos_root=Path(repos_root),
+                repos_root=repos_root,
             )
 
     _run_periodic("rebase_child_branches_on_parent_merge", body)

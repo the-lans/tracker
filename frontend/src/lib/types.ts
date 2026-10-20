@@ -71,6 +71,7 @@ export type LibraryPromptRunStatus =
 export const ManualRequestType = {
   LIBRARY_PROMPT: "library_prompt",
   FREEFORM_PROMPT: "freeform_prompt",
+  PARENT_SUMMARY: "parent_summary",
 } as const;
 export type ManualRequestType = (typeof ManualRequestType)[keyof typeof ManualRequestType];
 
@@ -86,6 +87,8 @@ export const NodeLogTriggerType = {
   PIPELINE: "pipeline",
   LIBRARY_MANUAL: "library_manual",
   FREEFORM_MANUAL: "freeform_manual",
+  SUMMARY_FOR_CHILD: "summary_for_child",
+  PARENT_SUMMARY: "parent_summary",
 } as const;
 export type NodeLogTriggerType = (typeof NodeLogTriggerType)[keyof typeof NodeLogTriggerType];
 
@@ -189,6 +192,7 @@ export interface Task {
   pipeline_id: string | null;
   llm_account_id: string | null;
   parent_task_id: string | null;
+  use_parent_summary: boolean;
   session_id: string | null;
   current_permission_mode: PermissionMode | null;
   auto_accept_plan: boolean;
@@ -196,6 +200,7 @@ export interface Task {
   scheduled_start_at: string | null;
   auto_start_enabled: boolean;
   last_failed_order_index: number | null;
+  repo_cleaned_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -206,15 +211,19 @@ export interface TaskRepositoryAttach {
   base_branch: string;
 }
 
-export interface TaskCreateRequest {
+/** Раздел 14.2 «Дублировать задачу»: те же поля формы, без родителя. */
+export interface TaskDuplicateRequest {
   code: string;
   title: string;
   description: string;
   guide_url?: string | null;
-  parent_task_id?: string | null;
-  use_parent_summary?: boolean;
   llm_account_id?: string | null;
   repositories?: TaskRepositoryAttach[];
+}
+
+export interface TaskCreateRequest extends TaskDuplicateRequest {
+  parent_task_id?: string | null;
+  use_parent_summary?: boolean;
 }
 
 /** PATCH /tasks/{id}: auto_accept_plan — до `done`, остальное — только в `new`. */
@@ -301,10 +310,39 @@ export interface TaskNodeItem {
   editable: boolean;
 }
 
+/** Раздел 13.3, 15.2: нода, которая берёт вывод у отключаемой. */
+export interface NodeDependent {
+  node_id: string;
+  name: string;
+}
+
+export interface PipelineDependentsRequest {
+  node_id: string;
+  enabled_node_ids: string[];
+}
+
+export interface BindPipelineRequest {
+  pipeline_id: string;
+  disabled_node_ids: string[];
+}
+
+/** События `/ws/tasks/{id}/status` (раздел 15.2, 18.1). */
 export interface TaskStatusEvent {
+  type: "status";
   task_id: string;
   status: TaskStatus;
 }
+
+export interface TaskOutputDeltaEvent {
+  type: "output_delta";
+  node_log_id: string;
+  text: string;
+}
+
+export type TaskSocketEvent = TaskStatusEvent | TaskOutputDeltaEvent;
+
+/** Накопленный потоковый текст по `node_logs.id`. */
+export type TaskOutputStream = Record<string, string>;
 
 // --- Пайплайны и ноды --------------------------------------------------
 
@@ -501,6 +539,30 @@ export interface AppLog {
   context: Record<string, unknown>;
   task_id: string | null;
   created_at: string;
+}
+
+/** Раздел 13.4: строка сводки выполнения нод по всем задачам. */
+export interface NodeRun {
+  node_log_id: string;
+  task_id: string;
+  task_code: string;
+  node_id: string | null;
+  node_name: string | null;
+  trigger_type: NodeLogTriggerType;
+  attempt_number: number;
+  status: NodeLogStatus;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** Раздел 15.5: активная Celery-задача на одном из воркеров. */
+export interface ActiveCeleryTask {
+  worker: string;
+  celery_task_id: string;
+  name: string;
+  started_at: string | null;
+  task_id: string | null;
+  task_code: string | null;
 }
 
 export interface ApiErrorBody {

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import (
@@ -16,9 +17,11 @@ from db.models.enums import (
     NodeLogStatus,
     NodeLogTriggerType,
     NodeType,
+    RemoteControlStatus,
     RepositoryRole,
     TaskStatus,
 )
+from db.models.env_vars import TaskEnvVariable
 from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline
@@ -27,7 +30,12 @@ from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
 from services.plan_mode import PlanDecisionOption, encode_decision
-from services.task_control import TaskControlCommand, is_manual_stop_requested, read_task_control
+from services.task_control import (
+    TaskControlCommand,
+    consume_bridge_reconnect,
+    is_manual_stop_requested,
+    read_task_control,
+)
 from services.task_signal import wait_for_task_signal
 
 if TYPE_CHECKING:
@@ -872,3 +880,393 @@ async def test_stop_button_interrupts_processing_request(
     assert response.status_code == 202
     assert await is_manual_stop_requested(redis_client, task_id, request_id)
     assert late.status_code == 409
+
+
+async def _make_script_pipeline(db_session: AsyncSession) -> tuple[Pipeline, list[Node]]:
+    """Скрипт, его потребитель и нода, пропускаемая по умолчанию."""
+    pipeline = Pipeline(name=f"p-{uuid.uuid4().hex[:6]}", is_archived=False)
+    db_session.add(pipeline)
+    await db_session.flush()
+    specs = [
+        ("script", NodeType.SCRIPT, None, False),
+        ("consumer", NodeType.PLAIN_PROMPT, "Разбери {{node.script_output}}", False),
+        ("optional", NodeType.PLAIN_PROMPT, "необязательно", True),
+    ]
+    nodes = [
+        Node(
+            pipeline_id=pipeline.id,
+            order_index=order_index,
+            name=name,
+            node_type=node_type,
+            prompt_template=prompt_template,
+            script_content="echo hi" if node_type is NodeType.SCRIPT else None,
+            is_skipped=is_skipped,
+            is_library_item=False,
+            is_archived=False,
+        )
+        for order_index, (name, node_type, prompt_template, is_skipped) in enumerate(specs)
+    ]
+    db_session.add_all(nodes)
+    await db_session.flush()
+    return pipeline, nodes
+
+
+class TestBindPipelineNodeSelection:
+    @pytest.mark.parametrize(
+        ("disabled", "expected"),
+        [
+            (None, [True, True, False]),
+            ([0], [False, True, True]),
+        ],
+        ids=["is_skipped_default", "explicit_choice"],
+    )
+    async def test_enabled_flags(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        disabled: list[int] | None,
+        expected: list[bool],
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        pipeline, nodes = await _make_script_pipeline(db_session)
+        body: dict[str, Any] = {"pipeline_id": str(pipeline.id)}
+        if disabled is not None:
+            body["disabled_node_ids"] = [str(nodes[index].id) for index in disabled]
+
+        response = await authed_client.post(f"/tasks/{task_body['id']}/pipeline", json=body)
+
+        assert response.status_code == 200, response.text
+        task_nodes = (await authed_client.get(f"/tasks/{task_body['id']}/nodes")).json()
+        assert [node["is_enabled"] for node in task_nodes] == expected
+
+    async def test_rejects_foreign_node(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        pipeline, _nodes = await _make_script_pipeline(db_session)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/pipeline",
+            json={"pipeline_id": str(pipeline.id), "disabled_node_ids": [str(uuid.uuid4())]},
+        )
+
+        assert response.status_code == 422
+        task = (await authed_client.get(f"/tasks/{task_body['id']}")).json()
+        assert task["pipeline_id"] is None
+
+
+class TestNodeDependents:
+    async def test_task_node(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        pipeline, _nodes = await _make_script_pipeline(db_session)
+        await authed_client.post(
+            f"/tasks/{task_body['id']}/pipeline",
+            json={"pipeline_id": str(pipeline.id)},
+        )
+        task_nodes = (await authed_client.get(f"/tasks/{task_body['id']}/nodes")).json()
+
+        response = await authed_client.get(
+            f"/tasks/{task_body['id']}/nodes/{task_nodes[0]['id']}/dependents",
+        )
+
+        assert response.status_code == 200
+        assert [node["name"] for node in response.json()] == ["consumer"]
+
+    @pytest.mark.parametrize(
+        ("enabled", "expected"),
+        [([0, 1], ["consumer"]), ([0], [])],
+        ids=["consumer_enabled", "consumer_disabled"],
+    )
+    async def test_pipeline_node(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        enabled: list[int],
+        expected: list[str],
+    ) -> None:
+        pipeline, nodes = await _make_script_pipeline(db_session)
+
+        response = await authed_client.post(
+            f"/pipelines/{pipeline.id}/dependents",
+            json={
+                "node_id": str(nodes[0].id),
+                "enabled_node_ids": [str(nodes[index].id) for index in enabled],
+            },
+        )
+
+        assert response.status_code == 200
+        assert [node["name"] for node in response.json()] == expected
+
+    async def test_unknown_node_is_404(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        pipeline, _nodes = await _make_script_pipeline(db_session)
+
+        response = await authed_client.post(
+            f"/pipelines/{pipeline.id}/dependents",
+            json={"node_id": str(uuid.uuid4()), "enabled_node_ids": []},
+        )
+
+        assert response.status_code == 404
+
+
+async def _task_in_status(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    status: TaskStatus,
+) -> Task:
+    task_body = await _create_task(authed_client)
+    task = await db_session.get(Task, uuid.UUID(task_body["id"]))
+    assert task is not None
+    task.status = status
+    task.session_id = "sess-old"
+    await db_session.flush()
+    return task
+
+
+class TestCleanupRepositories:
+    @pytest.mark.parametrize(
+        ("status", "expected_code"),
+        [(TaskStatus.DONE, 200), (TaskStatus.FAILED, 200), (TaskStatus.IN_PROGRESS, 409)],
+    )
+    async def test_status_rule(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Any,
+        status: TaskStatus,
+        expected_code: int,
+    ) -> None:
+        monkeypatch.setenv("TRACKER_REPOS_ROOT", str(tmp_path))
+        task = await _task_in_status(authed_client, db_session, status)
+        (tmp_path / task.code / "repo").mkdir(parents=True)
+
+        response = await authed_client.post(f"/tasks/{task.id}/cleanup-repositories")
+
+        assert response.status_code == expected_code, response.text
+        cleaned = expected_code == 200
+        assert (tmp_path / task.code).exists() is not cleaned
+        if cleaned:
+            assert response.json()["repo_cleaned_at"] is not None
+
+
+class TestClearContext:
+    async def test_resets_session_in_failed(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task = await _task_in_status(authed_client, db_session, TaskStatus.FAILED)
+
+        response = await authed_client.post(f"/tasks/{task.id}/clear-context")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["session_id"] is None
+
+    async def test_rejected_outside_failed(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task = await _task_in_status(authed_client, db_session, TaskStatus.DONE)
+
+        response = await authed_client.post(f"/tasks/{task.id}/clear-context")
+
+        assert response.status_code == 409
+        await db_session.refresh(task)
+        assert task.session_id == "sess-old"
+
+    async def test_rejected_with_unfinished_node_log(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task = await _task_in_status(authed_client, db_session, TaskStatus.FAILED)
+        db_session.add(
+            NodeLog(
+                task_id=task.id,
+                trigger_type=NodeLogTriggerType.PIPELINE,
+                status=NodeLogStatus.AWAITING_DECISION,
+            ),
+        )
+        await db_session.flush()
+
+        response = await authed_client.post(f"/tasks/{task.id}/clear-context")
+
+        assert response.status_code == 409
+
+
+class TestCreateTaskValidation:
+    async def test_code_taken(self, authed_client: AsyncClient) -> None:
+        await _create_task(authed_client, code="RR-20001")
+
+        response = await authed_client.post(
+            "/tasks",
+            json={"code": "RR-20001", "title": "t", "description": "d"},
+        )
+
+        assert response.status_code == 409
+
+    @pytest.mark.parametrize(
+        ("parent", "use_summary", "expected_code"),
+        [("existing", True, 201), ("missing", False, 404), (None, True, 422)],
+    )
+    async def test_parent_rules(
+        self,
+        authed_client: AsyncClient,
+        parent: str | None,
+        use_summary: bool,
+        expected_code: int,
+    ) -> None:
+        parent_id = {
+            "existing": (await _create_task(authed_client))["id"],
+            "missing": str(uuid.uuid4()),
+            None: None,
+        }[parent]
+
+        response = await authed_client.post(
+            "/tasks",
+            json={
+                "code": f"RR-{uuid.uuid4().hex[:8]}",
+                "title": "t",
+                "description": "d",
+                "parent_task_id": parent_id,
+                "use_parent_summary": use_summary,
+            },
+        )
+
+        assert response.status_code == expected_code, response.text
+        if expected_code == 201:
+            assert response.json()["use_parent_summary"] is True
+
+
+class TestDuplicateTask:
+    async def _done_source(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> Task:
+        parent = await _create_task(authed_client)
+        source_body = await _create_task(authed_client)
+        nodes = await _bind_pipeline_with_nodes(authed_client, db_session, source_body, 2)
+        await authed_client.patch(
+            f"/tasks/{source_body['id']}/nodes/{nodes[1]['id']}",
+            json={"is_enabled": False},
+        )
+        source = await db_session.get(Task, uuid.UUID(source_body["id"]))
+        assert source is not None
+        library_node = Node(
+            name="lib",
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="x",
+            is_library_item=True,
+        )
+        db_session.add(library_node)
+        await db_session.flush()
+        db_session.add_all(
+            [
+                TaskEnvVariable(task_id=source.id, key="API_URL", value_encrypted="зашифровано"),
+                TaskLibraryPrompt(
+                    task_id=source.id,
+                    node_id=library_node.id,
+                    added_by=source.created_by,
+                    last_run_status=LibraryPromptRunStatus.SUCCESS,
+                ),
+            ],
+        )
+        source.status = TaskStatus.DONE
+        source.session_id = "sess-source"
+        source.parent_task_id = uuid.UUID(parent["id"])
+        await db_session.flush()
+        return source
+
+    async def test_copies_configuration(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        source = await self._done_source(authed_client, db_session)
+        repository = await _make_repository(db_session)
+
+        response = await authed_client.post(
+            f"/tasks/{source.id}/duplicate",
+            json={
+                "code": "RR-30001",
+                "title": "Копия",
+                "description": "d",
+                "repositories": [{"repository_id": str(repository.id), "role": "read_write"}],
+            },
+        )
+
+        assert response.status_code == 201, response.text
+        copy = response.json()
+        assert copy["status"] == TaskStatus.NEW.value
+        assert copy["pipeline_id"] == str(source.pipeline_id)
+        assert copy["session_id"] is None
+        assert copy["parent_task_id"] is None
+        copy_nodes = (await authed_client.get(f"/tasks/{copy['id']}/nodes")).json()
+        assert [node["is_enabled"] for node in copy_nodes] == [True, False]
+        prompts = (await authed_client.get(f"/tasks/{copy['id']}/library-prompts")).json()
+        assert [prompt["last_run_status"] for prompt in prompts] == ["never_run"]
+        copy_id = uuid.UUID(copy["id"])
+        variables = (
+            await db_session.execute(
+                sa.select(TaskEnvVariable.key).where(TaskEnvVariable.task_id == copy_id),
+            )
+        ).scalars().all()
+        assert list(variables) == ["API_URL"]
+        [attached] = (await authed_client.get(f"/tasks/{copy['id']}/repositories")).json()
+        assert attached["branch_name"] == "feature/RR-30001"
+
+    async def test_requires_done(self, authed_client: AsyncClient) -> None:
+        source = await _create_task(authed_client)
+
+        response = await authed_client.post(
+            f"/tasks/{source['id']}/duplicate",
+            json={"code": "RR-30002", "title": "t", "description": "d"},
+        )
+
+        assert response.status_code == 409
+
+
+class TestRemoteControlReconnect:
+    async def test_hands_request_to_worker(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        redis_client: Redis,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.PAUSED)
+        task_id = uuid.UUID(task_body["id"])
+
+        response = await authed_client.post(f"/tasks/{task_id}/remote-control/reconnect")
+
+        assert response.status_code == 202, response.text
+        assert await consume_bridge_reconnect(redis_client, task_id) is True
+        task = await db_session.get(Task, task_id, populate_existing=True)
+        assert task is not None
+        assert task.remote_control_status is RemoteControlStatus.RECONNECTING
+
+    @pytest.mark.parametrize("status", [TaskStatus.NEW, TaskStatus.DONE, TaskStatus.FAILED])
+    async def test_requires_active_session(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        status: TaskStatus,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, status)
+
+        response = await authed_client.post(f"/tasks/{task_body['id']}/remote-control/reconnect")
+
+        assert response.status_code == 409
+        assert await consume_bridge_reconnect(redis_client, uuid.UUID(task_body["id"])) is False

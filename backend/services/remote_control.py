@@ -14,8 +14,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
+from app_logging.config import get_logger
 from db.models.enums import RemoteControlStatus
+from services.errors import ConflictError
+from services.task_control import request_bridge_reconnect
+from services.task_status import SESSION_ACTIVE_STATUSES
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from db.models.tasks import Task
+
+logger = get_logger("remote_control")
 
 MAX_RECONNECT_ATTEMPTS = 2
 
@@ -46,3 +60,43 @@ def decide_remote_control_bridge_action(
         should_attempt_reconnect=False,
         new_status=RemoteControlStatus.DISCONNECTED,
     )
+
+
+async def record_bridge_status(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    status: RemoteControlStatus,
+) -> None:
+    """
+    Раздел 6.5, 6.6: best-effort статус моста после попытки его установить.
+
+    Решение №1 плана: достоверно узнать состояние моста SDK не позволяет —
+    `connected` означает лишь, что процесс CLI с флагом `--remote-control`
+    поднялся.
+    """
+    task.remote_control_status = status
+    task.remote_control_last_check_at = datetime.now(UTC)
+    if status is RemoteControlStatus.CONNECTED:
+        task.remote_control_reconnect_attempts = 0
+    await db_session.commit()
+    logger.info("remote_control_status_recorded", task_id=str(task.id), status=status.value)
+
+
+async def start_bridge_reconnect(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    redis_client: Redis,
+) -> None:
+    """
+    Раздел 6.5: новая попытка поднять мост `/remote-control`.
+
+    Сессией владеет воркер — он пересоздаст процесс CLI между ходами и
+    обновит статус; здесь лишь фиксируется намерение.
+    """
+    if task.status not in SESSION_ACTIVE_STATUSES:
+        raise ConflictError("У задачи нет активной сессии")
+    task.remote_control_status = RemoteControlStatus.RECONNECTING
+    await db_session.commit()
+    await request_bridge_reconnect(redis_client, task.id)

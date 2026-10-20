@@ -23,8 +23,10 @@ from api.schemas import (
     FreeformPromptRequest,
     LibraryPromptAddRequest,
     ManualRequestResponse,
+    NodeDependentResponse,
     NodeLogResponse,
     TaskCreateRequest,
+    TaskDuplicateRequest,
     TaskLibraryPromptListItem,
     TaskLibraryPromptResponse,
     TaskNodeResponse,
@@ -33,10 +35,14 @@ from api.schemas import (
     TaskResponse,
     TaskUpdateRequest,
 )
-from db.models.enums import ManualRequestStatus, NodeLogStatus, TaskStatus
+from db.models.enums import (
+    ManualRequestStatus,
+    NodeLogStatus,
+    TaskStatus,
+)
 from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
-from db.models.pipelines import Node, TaskNode
+from db.models.pipelines import Node
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
@@ -48,12 +54,23 @@ from services.manual_queue import (
     enqueue_freeform_prompt_run,
     enqueue_library_prompt_run,
 )
+from services.node_dependencies import find_task_node_dependents
 from services.plan_mode import encode_decision
-from services.task_control import TaskControlCommand, request_manual_stop, request_task_control
-from services.task_nodes import list_task_nodes, set_task_node_enabled
+from services.remote_control import start_bridge_reconnect
+from services.session_context import clear_task_session_context
+from services.task_cleanup import cleanup_task_repositories
+from services.task_control import (
+    TaskControlCommand,
+    request_manual_stop,
+    request_task_control,
+)
+from services.task_creation import RepositoryAttachment, TaskDraft
+from services.task_creation import create_task as create_task_with_repositories
+from services.task_duplication import duplicate_task
+from services.task_nodes import bind_pipeline_to_task, list_task_nodes, set_task_node_enabled
 from services.task_signal import publish_task_signal
-from services.task_status import transition_task_status
-from services.task_workspace import build_branch_name, load_task_repositories
+from services.task_status import SESSION_ACTIVE_STATUSES, transition_task_status
+from services.task_workspace import load_task_repositories, resolve_repos_root
 from tasks.session_worker import run_task_session
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -70,17 +87,6 @@ async def _get_task_or_404(db_session: AsyncSession, task_id: uuid.UUID) -> Task
     return task
 
 
-# Раздел 8.2: ручные промты — «пока сессия активна»; воркер, владеющий
-# сессией, существует ровно в этих статусах.
-_SESSION_ACTIVE_STATUSES = frozenset(
-    {
-        TaskStatus.IN_PROGRESS,
-        TaskStatus.PAUSED,
-        TaskStatus.PLAN_REVIEW,
-        TaskStatus.AWAITING_INPUT,
-        TaskStatus.REBASE_CONFLICT,
-    },
-)
 _ACTIVE_REQUEST_STATUSES = (ManualRequestStatus.QUEUED, ManualRequestStatus.PROCESSING)
 
 
@@ -99,48 +105,61 @@ async def _ensure_exists(
         raise NotFoundError(f"{label} {entity_id} не найден")
 
 
+def _draft_from_request(
+    body: TaskDuplicateRequest,
+    *,
+    parent_task_id: uuid.UUID | None = None,
+    use_parent_summary: bool = False,
+) -> TaskDraft:
+    return TaskDraft(
+        code=body.code,
+        title=body.title,
+        description=body.description,
+        guide_url=body.guide_url,
+        llm_account_id=body.llm_account_id,
+        parent_task_id=parent_task_id,
+        use_parent_summary=use_parent_summary,
+        repositories=[
+            RepositoryAttachment(
+                repository_id=attached.repository_id,
+                role=attached.role,
+                base_branch=attached.base_branch,
+            )
+            for attached in body.repositories
+        ],
+    )
+
+
 @router.post("", response_model=TaskResponse, status_code=201)
 async def create_task(
     body: TaskCreateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
-    """Раздел 1.2 (сценарий 1): задача сразу с репозиториями и LLM-аккаунтом.
-
-    Рабочая ветка каждого репозитория — ``feature/{code}`` (раздел 3.1).
-    """
-    repository_ids = [attached.repository_id for attached in body.repositories]
-    if len(set(repository_ids)) != len(repository_ids):
-        raise ValidationError("Репозиторий указан у задачи больше одного раза")
-    for repository_id in repository_ids:
-        await _ensure_exists(db_session, Repository, repository_id, "Репозиторий")
-    if body.llm_account_id is not None:
-        await _ensure_exists(db_session, LlmAccount, body.llm_account_id, "LLM-аккаунт")
-
-    task = Task(
-        id=uuid.uuid4(),
-        code=body.code,
-        title=body.title,
-        description=body.description,
-        guide_url=body.guide_url,
+    """Раздел 1.2 (сценарий 1): задача сразу с репозиториями и LLM-аккаунтом."""
+    draft = _draft_from_request(
+        body,
         parent_task_id=body.parent_task_id,
         use_parent_summary=body.use_parent_summary,
-        llm_account_id=body.llm_account_id,
+    )
+    return await create_task_with_repositories(db_session, draft=draft, created_by=current_user.id)
+
+
+@router.post("/{task_id}/duplicate", response_model=TaskResponse, status_code=201)
+async def duplicate_task_endpoint(
+    task_id: uuid.UUID,
+    body: TaskDuplicateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """Раздел 14.2: «Дублировать задачу» из `done`."""
+    source = await _get_task_or_404(db_session, task_id)
+    return await duplicate_task(
+        db_session,
+        source=source,
+        draft=_draft_from_request(body),
         created_by=current_user.id,
     )
-    db_session.add(task)
-    for attached in body.repositories:
-        db_session.add(
-            TaskRepository(
-                task_id=task.id,
-                repository_id=attached.repository_id,
-                role=attached.role,
-                branch_name=build_branch_name(body.code),
-                base_branch=attached.base_branch,
-            ),
-        )
-    await db_session.commit()
-    return task
 
 
 @router.patch("/{task_id}", response_model=TaskResponse)
@@ -226,24 +245,14 @@ async def bind_pipeline(
     """Раздел 3.1, правило 10 CLAUDE.md: создание `task_nodes` и обновление
     `tasks.pipeline_id` — атомарно, в одной транзакции."""
     task = await _get_task_or_404(db_session, task_id)
-    if task.status is not TaskStatus.NEW:
-        raise ValidationError("Пайплайн можно привязать только к задаче в статусе new")
-
-    nodes_stmt = (
-        sa.select(Node)
-        .where(Node.pipeline_id == body.pipeline_id)
-        .order_by(Node.order_index)
+    await bind_pipeline_to_task(
+        db_session,
+        task=task,
+        pipeline_id=body.pipeline_id,
+        disabled_node_ids=(
+            set(body.disabled_node_ids) if body.disabled_node_ids is not None else None
+        ),
     )
-    nodes = list((await db_session.execute(nodes_stmt)).scalars().all())
-    if not nodes:
-        raise ValidationError("У пайплайна нет нод либо он не существует")
-
-    task.pipeline_id = body.pipeline_id
-    for node in nodes:
-        db_session.add(
-            TaskNode(task_id=task.id, node_id=node.id, order_index=node.order_index or 0),
-        )
-    await db_session.commit()
     # `updated_at` — колонка с `onupdate=sa.func.now()` (не `server_default`):
     # значение, вычисленное сервером при UPDATE, не возвращается автоматически
     # через RETURNING для обычного ORM-flush'а (в отличие от INSERT) — без
@@ -290,6 +299,35 @@ async def restart_task(
         str(task_id),
         start_after_order_index=task.last_failed_order_index - 1,
     )
+    await db_session.refresh(task)
+    return task
+
+
+@router.post("/{task_id}/cleanup-repositories", response_model=TaskResponse)
+async def cleanup_repositories(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """
+    Раздел 14.3: удаление рабочей директории репозиториев — только вручную
+    и только в `done`/`failed`; пользовательские файлы не затрагиваются.
+    """
+    task = await _get_task_or_404(db_session, task_id)
+    await cleanup_task_repositories(db_session, task=task, repos_root=resolve_repos_root())
+    await db_session.refresh(task)
+    return task
+
+
+@router.post("/{task_id}/clear-context", response_model=TaskResponse)
+async def clear_context(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """Раздел 14.2: «очистить контекст» в `failed` — перезапуск начнёт новую сессию."""
+    task = await _get_task_or_404(db_session, task_id)
+    await clear_task_session_context(db_session, task=task)
     await db_session.refresh(task)
     return task
 
@@ -345,6 +383,25 @@ async def stop_task(
         "Остановить можно только выполняющуюся или приостановленную задачу",
     )
     await _send_task_control(task_id, TaskControlCommand.STOP)
+
+
+@router.post("/{task_id}/remote-control/reconnect", status_code=202)
+async def reconnect_remote_control(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    """
+    Раздел 6.5: новая попытка поднять мост `/remote-control`. Сессией
+    владеет воркер — он пересоздаст процесс CLI между ходами и обновит
+    `remote_control_status`; восстановление моста не гарантируется.
+    """
+    task = await _get_task_or_404(db_session, task_id)
+    redis_client = _get_redis_client()
+    try:
+        await start_bridge_reconnect(db_session, task=task, redis_client=redis_client)
+    finally:
+        await redis_client.aclose()
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponse)
@@ -404,6 +461,26 @@ async def update_task_node(
     return TaskNodeResponse.model_validate(next(v for v in views if v.id == task_node_id))
 
 
+@router.get(
+    "/{task_id}/nodes/{task_node_id}/dependents",
+    response_model=list[NodeDependentResponse],
+)
+async def list_task_node_dependents(
+    task_id: uuid.UUID,
+    task_node_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> list[NodeDependentResponse]:
+    """Раздел 13.3, 15.2: кого затронет отключение ноды — для предупреждения."""
+    task = await _get_task_or_404(db_session, task_id)
+    dependents = await find_task_node_dependents(
+        db_session,
+        task=task,
+        task_node_id=task_node_id,
+    )
+    return [NodeDependentResponse.model_validate(node) for node in dependents]
+
+
 @router.get("/{task_id}/node-logs", response_model=list[NodeLogResponse])
 async def list_node_logs(
     task_id: uuid.UUID,
@@ -455,7 +532,7 @@ async def submit_freeform_prompt(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> ManualRequestResponse:
     task = await _get_task_or_404(db_session, task_id)
-    _require_status(task, _SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
+    _require_status(task, SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
     request = await enqueue_freeform_prompt_run(
         db_session,
         task_id=task_id,
@@ -504,7 +581,7 @@ async def run_library_prompt(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> ManualRequestResponse:
     task = await _get_task_or_404(db_session, task_id)
-    _require_status(task, _SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
+    _require_status(task, SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
     task_library_prompt = await db_session.get(TaskLibraryPrompt, task_library_prompt_id)
     if task_library_prompt is None or task_library_prompt.task_id != task_id:
         raise NotFoundError(f"Промт {task_library_prompt_id} не найден у этой задачи")

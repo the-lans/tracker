@@ -11,118 +11,55 @@ import asyncio
 import subprocess
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
 import sqlalchemy as sa
+from claude_agent_sdk import ClaudeAgentOptions, PermissionResultAllow
+from claude_agent_sdk.types import ToolPermissionContext
 
+from clients.claude_agent import REMOTE_CONTROL_EXTRA_ARG
 from db.models.enums import (
+    McpAuthType,
+    McpIsolationMode,
     MergeStatus,
     NodeLogStatus,
     NodeLogTriggerType,
     NodeType,
+    RemoteControlStatus,
     RepositoryRole,
     TaskStatus,
     UserRole,
 )
 from db.models.logs import NodeLog
+from db.models.mcp import McpServer
 from db.models.pipelines import Node, Pipeline, TaskNode
-from db.models.repositories import Repository
+from db.models.repositories import Repository, Template, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from services.crypto import encrypt
 from services.manual_queue import enqueue_freeform_prompt_run
+from services.session_context import clear_task_session_context
 from services.task_control import (
     TaskControlCommand,
+    consume_bridge_reconnect,
     consume_task_control,
     read_task_control,
+    request_bridge_reconnect,
     request_task_control,
 )
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name
 from tasks import session_worker
 from tests.fakes import FakeClaudeAgentClient, make_result_message
+from tests.worker_support import GIT_AUTHOR_ARGS, WorkerEnv, init_bare_origin, run_command
 
 if TYPE_CHECKING:
     from claude_agent_sdk import Message
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
-_GIT_AUTHOR_ARGS = ["-c", "user.email=test@example.com", "-c", "user.name=Test"]
 _REPOSITORY_NAME = "backend"
-
-
-def _run(*args: str, cwd: Path) -> str:
-    result = subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True)
-    return result.stdout
-
-
-def _init_bare_origin(tmp_path: Path) -> Path:
-    origin = tmp_path / "origin.git"
-    _run("git", "init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
-    seed_dir = tmp_path / "seed"
-    _run("git", "clone", str(origin), str(seed_dir), cwd=tmp_path)
-    (seed_dir / "README.md").write_text("исходный файл\n")
-    _run("git", "add", "README.md", cwd=seed_dir)
-    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "начальный коммит", cwd=seed_dir)
-    _run("git", "push", "origin", "main", cwd=seed_dir)
-    return origin
-
-
-class _SharedSession:
-    """`async with async_session_factory()` воркера — та же тестовая сессия."""
-
-    def __init__(self, db_session: AsyncSession) -> None:
-        self._db_session = db_session
-
-    async def __aenter__(self) -> AsyncSession:
-        return self._db_session
-
-    async def __aexit__(self, *_exc_info: object) -> None:
-        return None
-
-
-class _KeepOpenRedis:
-    """Воркер закрывает свой клиент Redis — тестовый закрывать нельзя."""
-
-    def __init__(self, redis_client: Redis) -> None:
-        self._redis_client = redis_client
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._redis_client, name)
-
-    async def aclose(self) -> None:
-        return None
-
-
-@pytest.fixture
-def worker_env(
-    db_session: AsyncSession,
-    redis_client: Redis,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> SimpleNamespace:
-    """Подменяет зависимости воркера; ``env.client`` — фейк SDK следующего прогона."""
-    env = SimpleNamespace(
-        client=FakeClaudeAgentClient(messages_per_query=[]),
-        repos_root=tmp_path / "repos",
-        enqueued=[],
-    )
-    monkeypatch.setenv("TRACKER_REPOS_ROOT", str(env.repos_root))
-    monkeypatch.setattr(session_worker, "async_session_factory", lambda: _SharedSession(db_session))
-    monkeypatch.setattr(
-        session_worker,
-        "Redis",
-        SimpleNamespace(from_url=lambda _url: _KeepOpenRedis(redis_client)),
-    )
-    monkeypatch.setattr(session_worker, "ClaudeSDKClient", lambda options: env.client)
-    monkeypatch.setattr(
-        session_worker.run_task_session,
-        "apply_async",
-        lambda args, kwargs, countdown: env.enqueued.append((args, kwargs)),
-    )
-    return env
 
 
 async def _make_task(
@@ -207,18 +144,18 @@ async def _run_worker(task: Task, **kwargs: Any) -> None:
 
 async def test_completed_pipeline_pushes_work_branch_and_finishes_task(
     db_session: AsyncSession,
-    worker_env: SimpleNamespace,
+    worker_env: WorkerEnv,
     tmp_path: Path,
 ) -> None:
-    origin = _init_bare_origin(tmp_path)
+    origin = init_bare_origin(tmp_path)
     task = await _make_task(db_session, status=TaskStatus.QUEUED, origin=origin)
     await _add_node(db_session, task, order_index=0)
     repo_dir = worker_env.repos_root / task.code / _REPOSITORY_NAME
 
     async def agent_commits_work() -> None:
         (repo_dir / "feature.txt").write_text("результат\n")
-        _run("git", "add", "feature.txt", cwd=repo_dir)
-        _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
+        run_command("git", "add", "feature.txt", cwd=repo_dir)
+        run_command("git", *GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
 
     worker_env.client = FakeClaudeAgentClient(
         messages_per_query=_results(1),
@@ -231,7 +168,7 @@ async def test_completed_pipeline_pushes_work_branch_and_finishes_task(
     assert task.status is TaskStatus.DONE
     assert task.session_id == "sess-worker"
     branch = build_branch_name(task.code)
-    assert "feature.txt" in _run("git", "ls-tree", "--name-only", branch, cwd=origin)
+    assert "feature.txt" in run_command("git", "ls-tree", "--name-only", branch, cwd=origin)
     task_repository = (
         await db_session.execute(sa.select(TaskRepository).where(TaskRepository.task_id == task.id))
     ).scalar_one()
@@ -240,7 +177,7 @@ async def test_completed_pipeline_pushes_work_branch_and_finishes_task(
 
 async def test_crash_during_session_fails_task_instead_of_hanging(
     db_session: AsyncSession,
-    worker_env: SimpleNamespace,
+    worker_env: WorkerEnv,
 ) -> None:
     task = await _make_task(db_session, status=TaskStatus.QUEUED)
     await _add_node(db_session, task, order_index=0)
@@ -249,7 +186,7 @@ async def test_crash_during_session_fails_task_instead_of_hanging(
     async def sdk_crashes() -> None:
         raise RuntimeError("процесс claude упал")
 
-    worker_env.client.connect = sdk_crashes
+    worker_env.client.connect = sdk_crashes  # type: ignore[method-assign]
 
     await _run_worker(task)
 
@@ -260,7 +197,7 @@ async def test_crash_during_session_fails_task_instead_of_hanging(
 
 async def test_worker_skips_task_already_claimed_by_another_worker(
     db_session: AsyncSession,
-    worker_env: SimpleNamespace,
+    worker_env: WorkerEnv,
 ) -> None:
     task = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
     await _add_node(db_session, task, order_index=0)
@@ -274,7 +211,7 @@ async def test_worker_skips_task_already_claimed_by_another_worker(
 
 async def test_clear_context_hands_session_over_to_continuation_task(
     db_session: AsyncSession,
-    worker_env: SimpleNamespace,
+    worker_env: WorkerEnv,
 ) -> None:
     task = await _make_task(db_session, status=TaskStatus.QUEUED)
     await _add_node(db_session, task, order_index=0)
@@ -298,7 +235,7 @@ async def test_clear_context_hands_session_over_to_continuation_task(
 
 async def test_restart_after_failure_reruns_failed_node_only(
     db_session: AsyncSession,
-    worker_env: SimpleNamespace,
+    worker_env: WorkerEnv,
 ) -> None:
     task = await _make_task(db_session, status=TaskStatus.FAILED)
     done_node = await _add_node(db_session, task, order_index=0)
@@ -333,7 +270,7 @@ async def _enqueue_freeform(db_session: AsyncSession, task: Task, text: str) -> 
 
 async def test_manual_request_runs_before_next_pipeline_node(
     db_session: AsyncSession,
-    worker_env: SimpleNamespace,
+    worker_env: WorkerEnv,
 ) -> None:
     """Раздел 7.3: очередь FIFO обрабатывается «прежде, чем переходить к
     следующей ноде пайплайна»."""
@@ -360,7 +297,7 @@ async def test_manual_request_runs_before_next_pipeline_node(
 
 async def test_manual_request_queued_during_last_node_runs_before_done(
     db_session: AsyncSession,
-    worker_env: SimpleNamespace,
+    worker_env: WorkerEnv,
 ) -> None:
     task = await _make_task(db_session, status=TaskStatus.QUEUED)
     await _add_node(db_session, task, order_index=0)
@@ -399,7 +336,7 @@ def _patch_pause_wait(
 
 async def test_pause_holds_session_runs_manual_prompts_and_resumes(
     db_session: AsyncSession,
-    worker_env: SimpleNamespace,
+    worker_env: WorkerEnv,
     redis_client: Redis,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -434,7 +371,7 @@ async def test_pause_holds_session_runs_manual_prompts_and_resumes(
 
 async def test_stop_while_paused_fails_task_at_next_node(
     db_session: AsyncSession,
-    worker_env: SimpleNamespace,
+    worker_env: WorkerEnv,
     redis_client: Redis,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -465,7 +402,7 @@ async def test_stop_while_paused_fails_task_at_next_node(
 
 async def test_stop_during_node_interrupts_session_and_fails_task(
     db_session: AsyncSession,
-    worker_env: SimpleNamespace,
+    worker_env: WorkerEnv,
     redis_client: Redis,
 ) -> None:
     task = await _make_task(db_session, status=TaskStatus.QUEUED)
@@ -504,23 +441,23 @@ async def test_stop_during_node_interrupts_session_and_fails_task(
 
 def _push_conflicting_base_update(tmp_path: Path, origin: Path) -> None:
     updater_dir = tmp_path / "updater"
-    _run("git", "clone", str(origin), str(updater_dir), cwd=tmp_path)
+    run_command("git", "clone", str(origin), str(updater_dir), cwd=tmp_path)
     (updater_dir / "README.md").write_text("изменение родительской задачи\n")
-    _run("git", "add", "README.md", cwd=updater_dir)
-    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "смерджен родитель", cwd=updater_dir)
-    _run("git", "push", "origin", "main", cwd=updater_dir)
+    run_command("git", "add", "README.md", cwd=updater_dir)
+    run_command("git", *GIT_AUTHOR_ARGS, "commit", "-m", "смерджен родитель", cwd=updater_dir)
+    run_command("git", "push", "origin", "main", cwd=updater_dir)
 
 
 @pytest.mark.parametrize("agent_resolves", [True, False])
 async def test_rebase_conflict_is_resolved_by_agent_before_next_node(
     db_session: AsyncSession,
-    worker_env: SimpleNamespace,
+    worker_env: WorkerEnv,
     tmp_path: Path,
     agent_resolves: bool,
 ) -> None:
     """Раздел 14.1: `rebase_conflict -> in_progress (после автообработки)`,
     иначе `-> failed`."""
-    origin = _init_bare_origin(tmp_path)
+    origin = init_bare_origin(tmp_path)
     task = await _make_task(db_session, status=TaskStatus.QUEUED, origin=origin)
     await _add_node(db_session, task, order_index=0)
     await _add_node(db_session, task, order_index=1)
@@ -532,8 +469,8 @@ async def test_rebase_conflict_is_resolved_by_agent_before_next_node(
             # Нода 0: агент коммитит, а тем временем родителя смерджили и
             # периодическая задача поймала конфликт ребейза.
             (repo_dir / "README.md").write_text("изменение дочерней задачи\n")
-            _run("git", "add", "README.md", cwd=repo_dir)
-            _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
+            run_command("git", "add", "README.md", cwd=repo_dir)
+            run_command("git", *GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
             _push_conflicting_base_update(tmp_path, origin)
             await transition_task_status(
                 db_session,
@@ -542,18 +479,18 @@ async def test_rebase_conflict_is_resolved_by_agent_before_next_node(
                 to_status=TaskStatus.REBASE_CONFLICT,
             )
         elif call == 2 and agent_resolves:
-            _run("git", "fetch", "origin", "main", cwd=repo_dir)
+            run_command("git", "fetch", "origin", "main", cwd=repo_dir)
             subprocess.run(
-                ["git", *_GIT_AUTHOR_ARGS, "rebase", "origin/main"],
+                ["git", *GIT_AUTHOR_ARGS, "rebase", "origin/main"],
                 cwd=repo_dir,
                 capture_output=True,
                 check=False,
             )
             (repo_dir / "README.md").write_text("обе правки объединены\n")
-            _run("git", "add", "README.md", cwd=repo_dir)
-            _run(
+            run_command("git", "add", "README.md", cwd=repo_dir)
+            run_command(
                 "git",
-                *_GIT_AUTHOR_ARGS,
+                *GIT_AUTHOR_ARGS,
                 "-c",
                 "core.editor=true",
                 "rebase",
@@ -573,7 +510,7 @@ async def test_rebase_conflict_is_resolved_by_agent_before_next_node(
         assert task.status is TaskStatus.DONE
         assert worker_env.client.queries[2] == "шаг 1"
         branch = build_branch_name(task.code)
-        tree = _run("git", "show", f"{branch}:README.md", cwd=origin)
+        tree = run_command("git", "show", f"{branch}:README.md", cwd=origin)
         assert tree == "обе правки объединены\n"
     else:
         assert task.status is TaskStatus.FAILED
@@ -590,14 +527,14 @@ class TestConflictAfterRestart:
     async def test_resolved_before_nodes(
         self,
         db_session: AsyncSession,
-        worker_env: SimpleNamespace,
+        worker_env: WorkerEnv,
         tmp_path: Path,
     ) -> None:
         """
         После неудачной автообработки и «Перезапустить» статус уже не
         `rebase_conflict`, но ветка не перебазирована — её нельзя пушить как есть.
         """
-        origin = _init_bare_origin(tmp_path)
+        origin = init_bare_origin(tmp_path)
         task = await _make_task(db_session, status=TaskStatus.QUEUED, origin=origin)
         await _add_node(db_session, task, order_index=0)
         await _add_node(db_session, task, order_index=1)
@@ -607,8 +544,8 @@ class TestConflictAfterRestart:
             if len(worker_env.client.queries) != 1:
                 return
             (repo_dir / "README.md").write_text("изменение дочерней задачи\n")
-            _run("git", "add", "README.md", cwd=repo_dir)
-            _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
+            run_command("git", "add", "README.md", cwd=repo_dir)
+            run_command("git", *GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
             _push_conflicting_base_update(tmp_path, origin)
             # Как `gitlab_sync.rebase_child_task_repositories_on_parent_merge`.
             await db_session.execute(
@@ -634,18 +571,18 @@ class TestConflictAfterRestart:
         async def agent_resolves_on_first_query() -> None:
             if len(worker_env.client.queries) != 1:
                 return
-            _run("git", "fetch", "origin", "main", cwd=repo_dir)
+            run_command("git", "fetch", "origin", "main", cwd=repo_dir)
             subprocess.run(
-                ["git", *_GIT_AUTHOR_ARGS, "rebase", "origin/main"],
+                ["git", *GIT_AUTHOR_ARGS, "rebase", "origin/main"],
                 cwd=repo_dir,
                 capture_output=True,
                 check=False,
             )
             (repo_dir / "README.md").write_text("обе правки объединены\n")
-            _run("git", "add", "README.md", cwd=repo_dir)
-            _run(
+            run_command("git", "add", "README.md", cwd=repo_dir)
+            run_command(
                 "git",
-                *_GIT_AUTHOR_ARGS,
+                *GIT_AUTHOR_ARGS,
                 "-c",
                 "core.editor=true",
                 "rebase",
@@ -663,14 +600,15 @@ class TestConflictAfterRestart:
         assert "rebase" in worker_env.client.queries[0]
         assert worker_env.client.queries[1] == "шаг 1"
         branch = build_branch_name(task.code)
-        assert _run("git", "show", f"{branch}:README.md", cwd=origin) == "обе правки объединены\n"
+        merged = run_command("git", "show", f"{branch}:README.md", cwd=origin)
+        assert merged == "обе правки объединены\n"
 
 
 class TestPauseRace:
     async def test_survives_concurrent_conflict(
         self,
         db_session: AsyncSession,
-        worker_env: SimpleNamespace,
+        worker_env: WorkerEnv,
         redis_client: Redis,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -732,3 +670,302 @@ class TestPauseRace:
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
         assert worker_env.client.queries == ["шаг 0", "шаг 1"]
+
+
+class TestQuestionDuringPausedPrompt:
+    async def test_awaiting_input_then_back_to_paused(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Раздел 14.2, 14.3: ручной промт на паузе спрашивает пользователя —
+        задача уходит в `awaiting_input` и возвращается на паузу.
+        """
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        await _add_node(db_session, task, order_index=1)
+        statuses_while_asking: list[TaskStatus] = []
+        answers: list[str] = []
+
+        async def user_answers(_redis: Any, _task_id: uuid.UUID, *, timeout: float | None) -> bool:
+            await db_session.refresh(task)
+            statuses_while_asking.append(task.status)
+            pending = await db_session.scalar(
+                sa.select(NodeLog).where(NodeLog.status == NodeLogStatus.AWAITING_DECISION),
+            )
+            assert pending is not None
+            pending.user_input_text = "main"
+            await db_session.commit()
+            return True
+
+        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_answers)
+
+        async def agent_behaviour() -> None:
+            if len(worker_env.client.queries) == 1:
+                await request_task_control(redis_client, task.id, TaskControlCommand.PAUSE)
+            if worker_env.client.queries[-1] == "вопрос на паузе":
+                can_use_tool = worker_env.options[0].can_use_tool
+                assert can_use_tool is not None
+                result = await can_use_tool(
+                    "AskUserQuestion",
+                    {"question": "Какую базу?", "options": ["main", "dev"]},
+                    ToolPermissionContext(),
+                )
+                assert isinstance(result, PermissionResultAllow)
+                assert result.updated_input is not None
+                answers.append(result.updated_input["answer"])
+
+        async def while_paused(observed: list[TaskStatus]) -> None:
+            await db_session.refresh(task)
+            observed.append(task.status)
+            if len(observed) == 1:
+                await _enqueue_freeform(db_session, task, "вопрос на паузе")
+            else:
+                await request_task_control(redis_client, task.id, TaskControlCommand.RESUME)
+
+        observed = _patch_pause_wait(monkeypatch, while_paused)
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(3),
+            on_query=agent_behaviour,
+        )
+
+        await _run_worker(task)
+
+        assert statuses_while_asking == [TaskStatus.AWAITING_INPUT]
+        assert answers == ["main"]
+        assert observed == [TaskStatus.PAUSED, TaskStatus.PAUSED]
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+
+
+class TestBridgeReconnect:
+    async def test_resumes_with_bridge(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+    ) -> None:
+        """Раздел 6.5: «Переподключить» пересоздаёт процесс CLI между нодами."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        await _add_node(db_session, task, order_index=1)
+
+        async def user_presses_reconnect() -> None:
+            await request_bridge_reconnect(redis_client, task.id)
+
+        first = FakeClaudeAgentClient(
+            messages_per_query=_results(1),
+            on_query=user_presses_reconnect,
+        )
+        second = FakeClaudeAgentClient(messages_per_query=_results(1))
+        worker_env.queued_clients = [first, second]
+
+        await _run_worker(task)
+
+        assert first.queries == ["шаг 0"]
+        assert first.disconnected is True
+        assert second.queries == ["шаг 1"]
+        reconnect_options = worker_env.options[1]
+        assert reconnect_options.resume == "sess-worker"
+        assert REMOTE_CONTROL_EXTRA_ARG in reconnect_options.extra_args
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert task.remote_control_status is RemoteControlStatus.CONNECTED
+
+
+    async def test_last_node_request_dropped(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+    ) -> None:
+        """
+        Точки между нодами больше не будет — запрос снимается вместе с
+        прогоном, статус не остаётся `reconnecting`.
+        """
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+
+        async def user_presses_reconnect() -> None:
+            task.remote_control_status = RemoteControlStatus.RECONNECTING
+            await db_session.commit()
+            await request_bridge_reconnect(redis_client, task.id)
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(1),
+            on_query=user_presses_reconnect,
+        )
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert task.remote_control_status is RemoteControlStatus.DISCONNECTED
+        assert await consume_bridge_reconnect(redis_client, task.id) is False
+        assert len(worker_env.options) == 1
+
+
+class TestRestartAfterClearContext:
+    async def test_opens_new_session_with_bridge(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Раздел 14.2, 11.5: после «Очистить контекст» перезапуск — новая сессия."""
+        task = await _make_task(db_session, status=TaskStatus.FAILED)
+        await _add_node(db_session, task, order_index=0)
+        task.last_failed_order_index = 0
+        task.session_id = "sess-old"
+        await db_session.flush()
+        await clear_task_session_context(db_session, task=task)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        await _run_worker(task, start_after_order_index=-1)
+
+        [options] = worker_env.options
+        assert options.resume is None
+        assert REMOTE_CONTROL_EXTRA_ARG in options.extra_args
+        await db_session.refresh(task)
+        assert task.session_id == "sess-worker"
+        assert task.status is TaskStatus.DONE
+
+
+_ISOLATION_HEADER = "X-Tracker-Isolation-Path"
+
+
+def _isolation_header(options: ClaudeAgentOptions) -> str:
+    assert isinstance(options.mcp_servers, dict)
+    config = options.mcp_servers["playwright"]
+    assert config.get("type") == "http"
+    headers = config.get("headers")
+    assert isinstance(headers, dict)
+    return str(headers[_ISOLATION_HEADER])
+
+
+class TestStatefulMcpIsolation:
+    """
+    Раздел 21.2, сценарий 12 (решение 2026-10-20 — уровень backend): две
+    задачи с одним MCP-сервером с состоянием получают каждая свою изоляцию
+    профиля; соблюдать её на стороне сервера — дело администратора (10.2).
+    """
+
+    @pytest.mark.parametrize(
+        ("isolation_mode", "path_template"),
+        [
+            (
+                McpIsolationMode.PER_TASK_DATA_DIR,
+                "{{task.repos_path}}/.mcp-profiles/{{mcp_server.name}}",
+            ),
+            (McpIsolationMode.ISOLATED_FLAG, None),
+        ],
+    )
+    async def test_each_task_gets_own_profile(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        tmp_path: Path,
+        isolation_mode: McpIsolationMode,
+        path_template: str | None,
+    ) -> None:
+        server = McpServer(
+            name="playwright",
+            url="https://mcp.internal/playwright",
+            auth_type=McpAuthType.NONE,
+            auth_config_encrypted=encrypt(""),
+            is_healthy=True,
+            has_stateful_resource=True,
+            isolation_mode=isolation_mode,
+            isolation_path_template=path_template,
+        )
+        template = Template(name=f"tpl-{uuid.uuid4().hex[:6]}", files={})
+        db_session.add_all([server, template])
+        await db_session.flush()
+        db_session.add(TemplateMcpServer(template_id=template.id, mcp_server_id=server.id))
+        tasks = []
+        for index in range(2):
+            origin_dir = tmp_path / f"origin-{index}"
+            origin_dir.mkdir()
+            origin = init_bare_origin(origin_dir)
+            task = await _make_task(db_session, status=TaskStatus.QUEUED, origin=origin)
+            await _add_node(db_session, task, order_index=0)
+            repository = await db_session.scalar(
+                sa.select(Repository)
+                .join(TaskRepository, TaskRepository.repository_id == Repository.id)
+                .where(TaskRepository.task_id == task.id),
+            )
+            assert repository is not None
+            repository.default_template_id = template.id
+            tasks.append(task)
+        await db_session.flush()
+
+        for task in tasks:
+            worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+            await _run_worker(task)
+
+        headers = [_isolation_header(options) for options in worker_env.options]
+        if isolation_mode is McpIsolationMode.PER_TASK_DATA_DIR:
+            assert headers == [
+                f"tracker/repos/{task.code}/.mcp-profiles/playwright" for task in tasks
+            ]
+        else:
+            assert headers == ["ephemeral", "ephemeral"]
+        for task in tasks:
+            await db_session.refresh(task)
+            assert task.status is TaskStatus.DONE
+
+
+class TestNodeTimeoutWhileAwaitingDecision:
+    async def test_task_fails_instead_of_hanging(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Пользователь не принял план за `timeout_seconds` ноды: ход
+        прерывается, ожидание решения в задаче SDK снимается, задача — `failed`,
+        а не висит в `plan_review` или в `in_progress` без воркера.
+        """
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        plan_node = await _add_node(db_session, task, order_index=0, node_type=NodeType.PLAN_PROMPT)
+        plan_node.prompt_template = "Составь план"
+        plan_node.timeout_seconds = 1
+        await db_session.flush()
+        sdk_handlers: list[asyncio.Task[Any]] = []
+
+        async def user_never_answers(*_args: Any, **_kwargs: Any) -> bool:
+            await asyncio.Event().wait()
+            return False
+
+        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_never_answers)
+
+        class HangingClient(FakeClaudeAgentClient):
+            async def interrupt(self) -> None:
+                self.message_delay_seconds = 0
+                await super().interrupt()
+
+        async def agent_exits_plan_mode() -> None:
+            can_use_tool = worker_env.options[0].can_use_tool
+            assert can_use_tool is not None
+            # Как в SDK: callback разрешений живёт в своей задаче, не в ходе.
+            sdk_handlers.append(
+                asyncio.ensure_future(
+                    can_use_tool("ExitPlanMode", {"plan": "1. Шаг"}, ToolPermissionContext()),
+                ),
+            )
+            worker_env.client.message_delay_seconds = 30
+
+        worker_env.client = HangingClient(
+            messages_per_query=_results(1),
+            on_query=agent_exits_plan_mode,
+        )
+
+        await asyncio.wait_for(_run_worker(task), timeout=30)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.FAILED
+        assert task.last_failed_order_index == 0
+        assert all(handler.done() for handler in sdk_handlers)

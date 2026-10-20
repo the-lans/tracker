@@ -29,6 +29,8 @@ from services.errors import ExternalServiceError
 
 logger = get_logger("git_ops")
 
+_HEAD_REF_PREFIX = "refs/heads/"
+
 _KEY_FILE_MODE = 0o600
 
 # Ребейз переписывает коммиты и требует committer-идентичность; в контейнере
@@ -99,8 +101,10 @@ async def clone_task_repository(
 ) -> Path:
     """Клонирует репозиторий в ``{repos_root}/{task_code}/{repository.name}/``.
 
-    Также создаёт рабочую ветку ``task_repository.branch_name`` от
-    ``task_repository.base_branch``.
+    Рабочая ветка ``task_repository.branch_name`` создаётся от
+    ``task_repository.base_branch`` — либо берётся из origin, если она там
+    уже есть: перезапуск после ручной очистки директории (раздел 14.3) не
+    должен терять запушенную работу.
     """
     target_dir = repos_root / task_code / repository.name
     target_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -115,13 +119,34 @@ async def clone_task_repository(
             cwd=repos_root,
             env=env,
         )
-        await _run_git(
-            "checkout",
-            "-b",
+        _, remote_heads, _ = await _run_git(
+            "ls-remote",
+            "--heads",
+            "origin",
             task_repository.branch_name,
             cwd=target_dir,
             env=env,
         )
+        # `ls-remote` сравнивает шаблон с концом имени ссылки: без точной
+        # проверки `archive/feature/RR-1` сошла бы за `feature/RR-1`.
+        branch_ref = f"{_HEAD_REF_PREFIX}{task_repository.branch_name}"
+        if any(line.split("\t")[-1] == branch_ref for line in remote_heads.splitlines()):
+            await _run_git(
+                "fetch",
+                "origin",
+                f"{task_repository.branch_name}:{task_repository.branch_name}",
+                cwd=target_dir,
+                env=env,
+            )
+            await _run_git("checkout", task_repository.branch_name, cwd=target_dir, env=env)
+        else:
+            await _run_git(
+                "checkout",
+                "-b",
+                task_repository.branch_name,
+                cwd=target_dir,
+                env=env,
+            )
 
     logger.info(
         "repository_cloned",

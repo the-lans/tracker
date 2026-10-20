@@ -11,29 +11,35 @@
 не трогать их, пока не получен ответ (раздел 6.2 — сессия и так
 последовательна, гонок между нодами нет).
 
-Разрешение, зафиксированное пользователем (через любой из трёх каналов
-раздела 9.6 — кнопку в трекере, текст в трекере, `claude.ai/code`), — это
-API-эндпоинт (этап 12 плана), который АТОМАРНО заполняет
-`node_logs.user_input_text` данной записи и публикует сигнал
-(`services.task_signal.publish_task_signal`). Callback ниже ждёт именно
-этого: сигнал плюс непустой `user_input_text` на нужной записи.
+Разрешение, зафиксированное пользователем (кнопкой или текстом в трекере,
+раздел 9.6; `claude.ai/code` — только для просмотра, раздел 6.3), — это
+API-эндпоинт, который АТОМАРНО заполняет `node_logs.user_input_text` данной
+записи и публикует сигнал (`services.task_signal.publish_task_signal`).
+Callback ниже ждёт именно этого: сигнал плюс непустой `user_input_text` на
+нужной записи.
+
+На время ожидания задача переходит в `plan_review`/`awaiting_input` (раздел
+14.3: статус, WebSocket, push, подсветка на дашборде) и после решения
+возвращается в статус, из которого ушла, — `in_progress` или `paused`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from app_logging.config import get_logger
-from db.models.enums import NodeLogStatus, PermissionMode
+from db.models.enums import NodeLogStatus, PermissionMode, TaskStatus
 from db.models.logs import NodeLog
 from db.models.tasks import Task
+from services.errors import ConflictError
 from services.task_signal import wait_for_task_signal
+from services.task_status import transition_task_status
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -107,11 +113,54 @@ def decide_plan_auto_completion(*, auto_accept_plan: bool) -> PlanDecisionResult
 @dataclass
 class ActiveNodeContext:
     """Оркестратор выставляет перед каждым `query()` — единственный способ
-    сообщить callback'у, какая запись `node_logs` сейчас "текущая"."""
+    сообщить callback'у, какая запись `node_logs` сейчас "текущая".
+
+    Заодно контекст знает, какая задача-обработчик SDK сейчас ждёт решения
+    пользователя: SDK вызывает callback в своей задаче, и отмена хода
+    воркером (таймаут ноды, «Остановить») эту задачу сама не отменяет.
+    """
 
     node_log_id: uuid.UUID | None = None
     task_id: uuid.UUID | None = None
     auto_accept_plan: bool = False
+    _decision_wait: asyncio.Task[Any] | None = field(default=None, init=False, repr=False)
+
+    def activate(
+        self,
+        *,
+        node_log_id: uuid.UUID,
+        task_id: uuid.UUID,
+        auto_accept_plan: bool = False,
+    ) -> None:
+        """
+        Каждый, кто начинает ход в сессии (нода, ручной запрос, разрешение
+        конфликта, пересказ), сообщает, к какой записи `node_logs` он относится.
+        """
+        self.node_log_id = node_log_id
+        self.task_id = task_id
+        self.auto_accept_plan = auto_accept_plan
+
+    def track_decision_wait(self) -> None:
+        self._decision_wait = asyncio.current_task()
+
+    def untrack_decision_wait(self) -> None:
+        if self._decision_wait is asyncio.current_task():
+            self._decision_wait = None
+
+    async def cancel_decision_wait(self) -> None:
+        """
+        Прерванный ход не должен оставлять задачу в ожидании решения.
+
+        Отменяет ожидание и дожидается его `finally`, который возвращает
+        статус задачи, — до того, как воркер решит, что делать с нодой дальше
+        (повтор, `failed`).
+        """
+        waiting = self._decision_wait
+        if waiting is None or waiting.done():
+            return
+        waiting.cancel()
+        await asyncio.wait({waiting})
+        logger.info("decision_wait_cancelled", node_log_id=str(self.node_log_id))
 
 
 def _extract_question_options(tool_input: dict[str, Any]) -> list[dict[str, str]]:
@@ -210,6 +259,73 @@ async def _wait_for_resolution(
         logger.info("decision_wait_woken_without_resolution", node_log_id=str(node_log_id))
 
 
+# Из этих статусов задача уходит в ожидание решения и в них же возвращается.
+_DECISION_RESUMABLE_STATUSES = frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED})
+
+
+async def resumable_decision_status(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+) -> TaskStatus | None:
+    """
+    Статус, в который задачу вернуть после решения; `None` — статус на время
+    ожидания не меняется.
+
+    Так бывает, если задача в `rebase_conflict`: её конфликт разбирает
+    воркер, а решение принимается и без смены статуса.
+    """
+    task = await db_session.get(Task, task_id, populate_existing=True)
+    if task is None or task.status not in _DECISION_RESUMABLE_STATUSES:
+        logger.info(
+            "decision_status_not_changed",
+            task_id=str(task_id),
+            status=task.status if task is not None else None,
+        )
+        return None
+    return task.status
+
+
+async def enter_decision_status(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    resume_status: TaskStatus,
+    awaiting_status: TaskStatus,
+) -> None:
+    """Раздел 14.3: переход в `plan_review`/`awaiting_input` на время ожидания."""
+    try:
+        await transition_task_status(
+            db_session,
+            task_id=task_id,
+            from_status=resume_status,
+            to_status=awaiting_status,
+        )
+    except ConflictError:
+        # Возврат после решения тогда не сработает по compare-and-swap —
+        # статус остаётся тем, что выставил другой процесс.
+        logger.info("decision_status_changed_concurrently", task_id=str(task_id))
+
+
+async def leave_decision_status(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    awaiting_status: TaskStatus,
+    resume_status: TaskStatus,
+) -> None:
+    try:
+        await transition_task_status(
+            db_session,
+            task_id=task_id,
+            from_status=awaiting_status,
+            to_status=resume_status,
+        )
+    except ConflictError:
+        # Сбой сессии мог уже перевести задачу дальше (`fail_task_after_error`).
+        logger.info("decision_status_left_concurrently", task_id=str(task_id))
+
+
 async def _record_plan_auto_accept(
     db_session: AsyncSession,
     *,
@@ -248,14 +364,12 @@ def build_can_use_tool_callback(
     redis_client: Redis,
     decision_wait_timeout_seconds: float | None = None,
 ) -> CanUseTool:
-    """Раздел 9.2, 9.6: единый callback на весь жизненный цикл сессии.
+    """
+    Раздел 9.2, 9.6: единый callback на весь жизненный цикл сессии.
 
-    Не входит в область этого модуля: диспетчер SDK-сообщений, который
-    обнаруживает завершение планирования и переключает
-    `tasks.current_permission_mode`/`ClaudeCodeSession.set_permission_mode`
-    по результату (`PlanDecisionResult.updated_permission_mode`) — это
-    оркестратор нод (`services/nodes/plan_prompt.py`), использующий этот
-    callback лишь как один из компонентов.
+    Режим разрешений самой сессии переключает нода `plan_prompt`
+    (`services/nodes/dispatch.py`); callback лишь записывает выбранный
+    пользователем режим в `tasks.current_permission_mode`.
     """
 
     async def can_use_tool(
@@ -284,27 +398,58 @@ def build_can_use_tool_callback(
             logger.info("plan_auto_accepted", node_log_id=str(context.node_log_id))
             return PermissionResultAllow()
 
-        async with session_factory() as db_session:
-            await _mark_awaiting_decision(
-                db_session,
-                node_log_id=context.node_log_id,
-                pending_question=question_text,
-                pending_plan_text=plan_text,
-                pending_options=options,
+        awaiting_status = TaskStatus.PLAN_REVIEW if is_plan else TaskStatus.AWAITING_INPUT
+        resume_status: TaskStatus | None = None
+        # Регистрация — до первого изменения в БД: прерванный в любой момент
+        # ход (`cancel_decision_wait`) проходит через `finally` ниже. Статус
+        # возврата запоминается до перехода: отмена может прийти уже после
+        # коммита перехода, а лишний возврат безопасен — это compare-and-swap.
+        context.track_decision_wait()
+        try:
+            async with session_factory() as db_session:
+                await _mark_awaiting_decision(
+                    db_session,
+                    node_log_id=context.node_log_id,
+                    pending_question=question_text,
+                    pending_plan_text=plan_text,
+                    pending_options=options,
+                )
+                resume_status = await resumable_decision_status(
+                    db_session,
+                    task_id=context.task_id,
+                )
+                if resume_status is not None:
+                    await enter_decision_status(
+                        db_session,
+                        task_id=context.task_id,
+                        resume_status=resume_status,
+                        awaiting_status=awaiting_status,
+                    )
+            logger.info(
+                "awaiting_user_decision",
+                node_log_id=str(context.node_log_id),
+                tool_name=tool_name,
             )
-        logger.info(
-            "awaiting_user_decision",
-            node_log_id=str(context.node_log_id),
-            tool_name=tool_name,
-        )
-
-        resolution = await _wait_for_resolution(
-            session_factory=session_factory,
-            redis_client=redis_client,
-            task_id=context.task_id,
-            node_log_id=context.node_log_id,
-            timeout=decision_wait_timeout_seconds,
-        )
+            resolution = await _wait_for_resolution(
+                session_factory=session_factory,
+                redis_client=redis_client,
+                task_id=context.task_id,
+                node_log_id=context.node_log_id,
+                timeout=decision_wait_timeout_seconds,
+            )
+        finally:
+            # И после решения, и после таймаута, и при отмене хода (таймаут
+            # ноды, «Остановить» — `cancel_decision_wait`) задача не должна
+            # остаться в ожидании.
+            context.untrack_decision_wait()
+            if resume_status is not None:
+                async with session_factory() as db_session:
+                    await leave_decision_status(
+                        db_session,
+                        task_id=context.task_id,
+                        awaiting_status=awaiting_status,
+                        resume_status=resume_status,
+                    )
         if resolution is None:
             return PermissionResultDeny(message="Истекло время ожидания решения пользователя")
 

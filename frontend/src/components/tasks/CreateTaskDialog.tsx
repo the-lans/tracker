@@ -3,14 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input, Textarea } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { TaskRepositoryPicker } from "@/components/tasks/TaskRepositoryPicker";
-import { useLlmAccounts } from "@/hooks/useLlmAccounts";
+import { ParentTaskFields } from "@/components/tasks/ParentTaskFields";
+import { TaskFormFields } from "@/components/tasks/TaskFormFields";
+import { EMPTY_TASK_FORM, toTaskRequest, type TaskFormValues } from "@/components/tasks/taskForm.types";
 import { useCreateTask } from "@/hooks/useTasks";
 import { ApiError } from "@/lib/apiClient";
-import type { TaskRepositoryAttach } from "@/lib/types";
 
 export function CreateTaskDialog({
   open,
@@ -21,33 +18,23 @@ export function CreateTaskDialog({
 }) {
   const navigate = useNavigate();
   const createTask = useCreateTask();
-  const [code, setCode] = useState("");
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [guideUrl, setGuideUrl] = useState("");
-  const [llmAccountId, setLlmAccountId] = useState("");
-  const [repositories, setRepositories] = useState<TaskRepositoryAttach[]>([]);
-  const { data: llmAccounts } = useLlmAccounts();
+  const [values, setValues] = useState<TaskFormValues>(EMPTY_TASK_FORM);
+  const [parentTaskId, setParentTaskId] = useState("");
+  const [useParentSummary, setUseParentSummary] = useState(false);
 
   function reset() {
-    setCode("");
-    setTitle("");
-    setDescription("");
-    setGuideUrl("");
-    setLlmAccountId("");
-    setRepositories([]);
+    setValues(EMPTY_TASK_FORM);
+    setParentTaskId("");
+    setUseParentSummary(false);
   }
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     createTask.mutate(
       {
-        code,
-        title,
-        description,
-        guide_url: guideUrl || null,
-        llm_account_id: llmAccountId || null,
-        repositories,
+        ...toTaskRequest(values),
+        parent_task_id: parentTaskId || null,
+        use_parent_summary: useParentSummary,
       },
       {
         onSuccess: (task) => {
@@ -69,62 +56,18 @@ export function CreateTaskDialog({
           <DialogTitle>Новая задача</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-          <div>
-            <Label htmlFor="task-code">Код задачи</Label>
-            <Input
-              id="task-code"
-              placeholder="RR-10240"
-              value={code}
-              onChange={(event) => setCode(event.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <Label htmlFor="task-title">Название</Label>
-            <Input
-              id="task-title"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <Label htmlFor="task-description">Описание</Label>
-            <Textarea
-              id="task-description"
-              rows={4}
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <Label htmlFor="task-guide">Гайд (URL Confluence, опционально)</Label>
-            <Input
-              id="task-guide"
-              value={guideUrl}
-              onChange={(event) => setGuideUrl(event.target.value)}
-            />
-          </div>
-          <div>
-            <Label>LLM-аккаунт</Label>
-            <Select value={llmAccountId} onValueChange={setLlmAccountId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Выберите аккаунт" />
-              </SelectTrigger>
-              <SelectContent>
-                {(llmAccounts ?? []).map((account) => (
-                  <SelectItem key={account.id} value={account.id}>
-                    {account.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label>Репозитории</Label>
-            <TaskRepositoryPicker value={repositories} onChange={setRepositories} />
-          </div>
+          <TaskFormFields
+            value={values}
+            onChange={(patch) => setValues((prev) => ({ ...prev, ...patch }))}
+          />
+          <ParentTaskFields
+            parentTaskId={parentTaskId}
+            useParentSummary={useParentSummary}
+            onChange={(patch) => {
+              if (patch.parentTaskId !== undefined) setParentTaskId(patch.parentTaskId);
+              if (patch.useParentSummary !== undefined) setUseParentSummary(patch.useParentSummary);
+            }}
+          />
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>
               Отмена

@@ -76,7 +76,18 @@ async def sync_task_repository_merge_status(
 
 
 # Задачи с живой сессией: только у них конфликт разрешит агент (раздел 14).
-_REBASABLE_STATUSES = frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED})
+_REBASABLE_STATUSES = frozenset(
+    {
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.PAUSED,
+        TaskStatus.PLAN_REVIEW,
+        TaskStatus.AWAITING_INPUT,
+    },
+)
+# Из ожидания решения задача в `rebase_conflict` не переходит (раздел 14.1):
+# конфликт остаётся признаком в `task_repositories`, и воркер разберёт его в
+# ближайшей точке проверки, когда решение будет принято.
+_CONFLICT_STATUS_SOURCES = frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED})
 
 
 async def rebase_child_task_repositories_on_parent_merge(
@@ -143,6 +154,13 @@ async def rebase_child_task_repositories_on_parent_merge(
             # задачи в `failed` — его проверяет `services/rebase_resolution.py`.
             child_task_repository.merge_status = MergeStatus.CONFLICT
             await db_session.commit()
+            logger.warning(
+                "child_task_rebase_conflict",
+                task_id=str(child_task.id),
+                repository_id=str(repository.id),
+            )
+            if child_task.status not in _CONFLICT_STATUS_SOURCES:
+                continue
             try:
                 await transition_task_status(
                     db_session,
@@ -154,9 +172,4 @@ async def rebase_child_task_repositories_on_parent_merge(
                 # Воркер успел сменить статус (пауза, продолжение) — конфликт
                 # он разберёт по признаку в ближайшей точке проверки.
                 logger.info("child_task_rebase_conflict_status_changed", task_id=str(child_task.id))
-            logger.warning(
-                "child_task_rebase_conflict",
-                task_id=str(child_task.id),
-                repository_id=str(repository.id),
-            )
     return rebased_task_ids

@@ -1,9 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/apiClient";
 import type {
+  ActiveCeleryTask,
   AllowedEmail,
   AppLog,
   AppLogLevel,
+  NodeLogStatus,
+  NodeRun,
   PeriodicTask,
   PeriodicTaskUpdateRequest,
   User,
@@ -75,7 +78,15 @@ export function useRunPeriodicTaskNow() {
   });
 }
 
-export function useAppLogs(filters: { level?: AppLogLevel; source?: string; taskId?: string }) {
+export interface AppLogFilters {
+  level?: AppLogLevel;
+  source?: string;
+  taskId?: string;
+  createdFrom?: string;
+  createdTo?: string;
+}
+
+export function useAppLogs(filters: AppLogFilters) {
   return useQuery({
     queryKey: ["admin", "app-logs", filters],
     queryFn: () =>
@@ -83,7 +94,27 @@ export function useAppLogs(filters: { level?: AppLogLevel; source?: string; task
         level: filters.level,
         source: filters.source,
         task_id: filters.taskId,
+        created_from: filters.createdFrom,
+        created_to: filters.createdTo,
       }),
     refetchInterval: 15_000,
+  });
+}
+
+/** Раздел 13.4: сводка выполнения нод по всем задачам. */
+export function useNodeRuns(filters: { status?: NodeLogStatus }) {
+  return useQuery({
+    queryKey: ["admin", "node-runs", filters],
+    queryFn: () => api.get<NodeRun[]>("/monitoring/node-runs", { status: filters.status }),
+    refetchInterval: 15_000,
+  });
+}
+
+/** Раздел 15.5: активные Celery-задачи по всем пользователям. */
+export function useActiveCeleryTasks() {
+  return useQuery({
+    queryKey: ["admin", "celery-tasks"],
+    queryFn: () => api.get<ActiveCeleryTask[]>("/monitoring/celery-tasks"),
+    refetchInterval: 10_000,
   });
 }

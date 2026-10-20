@@ -27,6 +27,7 @@ from db.models.tasks import Task
 from db.models.users import User
 from db.session import get_session
 from services.errors import NotFoundError, ValidationError
+from services.manual_queue import render_freeform_prompt
 from services.template_context import render_for_task
 from services.templating import RenderScope, validate_template_variables
 
@@ -52,6 +53,12 @@ async def preview_template(
     task = await db_session.get(Task, body.task_id)
     if task is None:
         raise NotFoundError(f"Задача {body.task_id} не найдена")
+
+    if scope is RenderScope.FREEFORM:
+        # Раздел 8.2: предпросмотр показывает ровно то, что уйдёт в сессию.
+        validate_template_variables(body.text, scope=scope)
+        rendered = await render_freeform_prompt(db_session, task=task, text=body.text)
+        return TemplatePreviewResponse(rendered_text=rendered)
 
     history: list[NodeLog] = []
     if scope is RenderScope.PIPELINE:
