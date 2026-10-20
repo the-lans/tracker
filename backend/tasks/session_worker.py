@@ -53,6 +53,7 @@ from services.pipeline_orchestrator import CheckpointDecision, StopGuard, run_pi
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
 from services.remote_control import record_bridge_status
+from services.session_heartbeat import keep_session_heartbeat
 from services.session_lifecycle import plan_session_start
 from services.task_control import (
     TaskControlCommand,
@@ -380,12 +381,13 @@ async def _run_task_session_async(
             if not continuation:
                 # Команда, адресованная прошлому прогону, к этому не относится.
                 await clear_task_control(redis_client, task_id)
-            await _run_claimed_task(
-                db_session,
-                task=task,
-                redis_client=redis_client,
-                start_after_order_index=start_after_order_index,
-            )
+            async with keep_session_heartbeat(redis_client, task_id):
+                await _run_claimed_task(
+                    db_session,
+                    task=task,
+                    redis_client=redis_client,
+                    start_after_order_index=start_after_order_index,
+                )
         except Exception as exc:
             # Раздел 17.3: любая ошибка сессии переводит задачу в `failed`,
             # а не оставляет её в `in_progress` навсегда.

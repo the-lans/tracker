@@ -43,6 +43,7 @@ from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
 from services.manual_queue import enqueue_freeform_prompt_run
 from services.session_context import clear_task_session_context
+from services.session_heartbeat import is_session_alive
 from services.task_control import (
     TaskControlCommand,
     consume_bridge_reconnect,
@@ -995,3 +996,29 @@ class TestHistoryRetention:
 
         settings = json.loads((config_dir / "settings.json").read_text())
         assert settings["cleanupPeriodDays"] == DEFAULT_HISTORY_RETENTION_DAYS
+
+
+class TestSessionHeartbeat:
+    async def test_alive_during_run_cleared_after(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+    ) -> None:
+        """Раздел 6.6: мониторинг моста видит воркер по пульсу."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        observed: list[bool] = []
+
+        async def check_heartbeat() -> None:
+            observed.append(await is_session_alive(redis_client, task.id))
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(1),
+            on_query=check_heartbeat,
+        )
+
+        await _run_worker(task)
+
+        assert observed == [True]
+        assert not await is_session_alive(redis_client, task.id)
