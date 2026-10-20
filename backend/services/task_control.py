@@ -1,4 +1,5 @@
-"""Команды управления задачей: пауза, продолжение, остановка (раздел 7.3, 14.2 ТЗ),
+"""
+Команды управления задачей: пауза, продолжение, остановка (раздел 7.3, 14.2 ТЗ),
 переподключение моста `/remote-control` (раздел 6.5).
 
 API не владеет сессией задачи — ею владеет долгоживущий Celery-таск
@@ -110,9 +111,11 @@ async def consume_task_control(
 
 
 async def request_bridge_reconnect(redis_client: Redis, task_id: uuid.UUID) -> None:
-    """Кнопка «Переподключить удалённую сессию» (раздел 6.5): отдельный ключ,
+    """
+    Кнопка «Переподключить удалённую сессию» (раздел 6.5): отдельный ключ,
     а не команда в `task:{id}:control` — переподключение не отменяет
-    запрошенные пауза или остановка."""
+    запрошенные пауза или остановка.
+    """
     await redis_client.set(_bridge_reconnect_key(task_id), "1", ex=_COMMAND_TTL_SECONDS)
     logger.info("bridge_reconnect_requested", task_id=str(task_id))
     await publish_task_signal(redis_client, task_id)

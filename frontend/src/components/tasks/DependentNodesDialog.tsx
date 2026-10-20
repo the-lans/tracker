@@ -1,5 +1,5 @@
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
-import type { PendingNodeDisable } from "@/hooks/useDependentNodesGuard";
+import type { PendingNodeDisable } from "@/components/tasks/dependentNodes.types";
 
 /** Раздел 13.3, 15.2: предупреждение с указанием конкретных зависимых нод. */
 export function DependentNodesDialog({

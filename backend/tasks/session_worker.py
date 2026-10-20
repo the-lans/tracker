@@ -413,8 +413,10 @@ async def _summarize_parent_in_fork(
     parent: Task,
     repos_root: Path,
 ) -> None:
-    """Пересказ в ответвлении сессии свободного родителя: его история не
-    меняется, а процесс CLI живёт только на время одного хода."""
+    """
+    Пересказ в ответвлении сессии свободного родителя: его история не
+    меняется, а процесс CLI живёт только на время одного хода.
+    """
     assert parent.session_id is not None
     parent_root = task_root(repos_root, parent)
     # После очистки репозиториев родителя его папки может не быть, а resume
@@ -461,8 +463,10 @@ async def _obtain_parent_summary(
     redis_client: Redis,
     repos_root: Path,
 ) -> TaskParentSummary | None:
-    """Раздел 3.1 `use_parent_summary`: пересказ родителя до старта своей
-    сессии; `None` — задачу остановили, пока она ждала очередь родителя."""
+    """
+    Раздел 3.1 `use_parent_summary`: пересказ родителя до старта своей
+    сессии; `None` — задачу остановили, пока она ждала очередь родителя.
+    """
     summary = await get_or_request_parent_summary(db_session, child=task, redis_client=redis_client)
     if summary.delivered_at is not None:
         return summary

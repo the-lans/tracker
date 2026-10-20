@@ -29,6 +29,8 @@ from services.errors import ExternalServiceError
 
 logger = get_logger("git_ops")
 
+_HEAD_REF_PREFIX = "refs/heads/"
+
 _KEY_FILE_MODE = 0o600
 
 # Ребейз переписывает коммиты и требует committer-идентичность; в контейнере
@@ -127,7 +129,7 @@ async def clone_task_repository(
         )
         # `ls-remote` сравнивает шаблон с концом имени ссылки: без точной
         # проверки `archive/feature/RR-1` сошла бы за `feature/RR-1`.
-        branch_ref = f"refs/heads/{task_repository.branch_name}"
+        branch_ref = f"{_HEAD_REF_PREFIX}{task_repository.branch_name}"
         if any(line.split("\t")[-1] == branch_ref for line in remote_heads.splitlines()):
             await _run_git(
                 "fetch",

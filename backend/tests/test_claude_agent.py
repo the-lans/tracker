@@ -231,7 +231,7 @@ class TestReplaceClient:
         assert old.disconnected is True
         assert new.queries == ["после переподключения"]
 
-    async def test_keeps_old_process_when_connect_fails(self) -> None:
+    async def test_keeps_old_on_failure(self) -> None:
         class FailingClient(FakeClaudeAgentClient):
             async def connect(self) -> None:
                 raise RuntimeError("CLI не запустился")

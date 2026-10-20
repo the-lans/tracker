@@ -1,4 +1,5 @@
-"""Административный мониторинг (раздел 13.4, 15.5 ТЗ).
+"""
+Административный мониторинг (раздел 13.4, 15.5 ТЗ).
 
 - Сводка выполнения нод по всем задачам — отчётная выборка поверх
   `node_logs`, без дублирующей таблицы (раздел 13.4).
@@ -125,8 +126,10 @@ def _started_at(raw: object) -> datetime | None:
 
 
 def parse_active_celery_tasks(raw: InspectActiveResponse | None) -> list[ActiveCeleryTask]:
-    """Ответ `inspect().active()` — ``{воркер: [задача, ...]}``; `None` — ни
-    один воркер не ответил за отведённое время."""
+    """
+    Ответ `inspect().active()` — ``{воркер: [задача, ...]}``; `None` — ни
+    один воркер не ответил за отведённое время.
+    """
     tasks: list[ActiveCeleryTask] = []
     for worker, entries in sorted((raw or {}).items()):
         for entry in entries:

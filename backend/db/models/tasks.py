@@ -85,7 +85,8 @@ class TaskRepository(UUIDPrimaryKeyMixin, Base):
 
 
 class TaskParentSummary(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
-    """Пересказ истории родителя для дочерней задачи (`tasks.use_parent_summary`).
+    """
+    Пересказ истории родителя для дочерней задачи (`tasks.use_parent_summary`).
 
     Отдельный артефакт, а не реплика в `node_logs`: его составляет сессия
     родителя, а получает первым сообщением новая сессия дочерней задачи.

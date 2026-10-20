@@ -1,5 +1,7 @@
-"""Саммари родительской задачи при старте дочерней (`services/parent_summary.py`,
-`tasks/session_worker.py`; раздел 3.1 ТЗ, решение 2026-10-20)."""
+"""
+Саммари родительской задачи при старте дочерней (`services/parent_summary.py`,
+`tasks/session_worker.py`; раздел 3.1 ТЗ, решение 2026-10-20).
+"""
 
 from __future__ import annotations
 
@@ -138,7 +140,7 @@ async def _summary_of(db_session: AsyncSession, child: Task) -> TaskParentSummar
 
 
 class TestBusyParent:
-    async def test_summary_from_parent_queue_is_first_message(
+    async def test_queued_summary_delivered(
         self,
         db_session: AsyncSession,
         worker_env: WorkerEnv,
@@ -296,7 +298,7 @@ class TestIdleParent:
         await db_session.refresh(child)
         assert child.status is TaskStatus.DONE
 
-    async def test_without_session_child_starts_with_note(
+    async def test_no_session_note(
         self,
         db_session: AsyncSession,
         worker_env: WorkerEnv,

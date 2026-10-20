@@ -14,9 +14,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from db.models.enums import MergeStatus, RepositoryRole, TaskStatus, UserRole
+from db.models.enums import (
+    MergeStatus,
+    ParentSummaryStatus,
+    RepositoryRole,
+    TaskStatus,
+    UserRole,
+)
 from db.models.repositories import Repository, Template
-from db.models.tasks import Task, TaskRepository
+from db.models.tasks import Task, TaskParentSummary, TaskRepository
 from db.models.users import User
 from services.crypto import encrypt
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
@@ -307,3 +313,46 @@ class TestCleanupAndReclone:
 
         assert (tmp_path / task.code).exists()
         assert task.repo_cleaned_at is None
+
+
+class TestCleanupDuringParentSummary:
+    @pytest.mark.parametrize(
+        ("summary_status", "child_status", "allowed"),
+        [
+            (ParentSummaryStatus.PENDING, TaskStatus.IN_PROGRESS, False),
+            (ParentSummaryStatus.PENDING, TaskStatus.FAILED, True),
+            (ParentSummaryStatus.READY, TaskStatus.IN_PROGRESS, True),
+        ],
+        ids=["summary_running", "child_stopped", "summary_ready"],
+    )
+    async def test_parent_cleanup(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        summary_status: ParentSummaryStatus,
+        child_status: TaskStatus,
+        allowed: bool,
+    ) -> None:
+        """Пока сессия родителя пересказывает историю (ответвление работает в
+        его директории), очистка папки родителя запрещена."""
+        parent = await _make_task(db_session)
+        parent.status = TaskStatus.DONE
+        child = await _make_task(db_session)
+        child.status = child_status
+        db_session.add(
+            TaskParentSummary(
+                parent_task_id=parent.id,
+                child_task_id=child.id,
+                status=summary_status,
+            ),
+        )
+        await db_session.flush()
+        (tmp_path / parent.code).mkdir()
+
+        if allowed:
+            await cleanup_task_repositories(db_session, task=parent, repos_root=tmp_path)
+        else:
+            with pytest.raises(ConflictError, match="пересказывает"):
+                await cleanup_task_repositories(db_session, task=parent, repos_root=tmp_path)
+
+        assert (tmp_path / parent.code).exists() is not allowed

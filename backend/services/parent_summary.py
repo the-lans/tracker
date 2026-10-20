@@ -1,4 +1,5 @@
-"""Саммари родительской задачи при старте дочерней (`tasks.use_parent_summary`, раздел 3.1 ТЗ).
+"""
+Саммари родительской задачи при старте дочерней (`tasks.use_parent_summary`, раздел 3.1 ТЗ).
 
 Решение 2026-10-20: историю пересказывает сессия самого родителя — по
 запросу, когда стартует дочерняя задача. Пересказ сохраняется отдельным
@@ -150,8 +151,10 @@ async def get_or_request_parent_summary(
 
 
 async def _release_stuck_request(db_session: AsyncSession, summary: TaskParentSummary) -> None:
-    """Запрос в очереди родителя больше не выполнится — пересказ делается в
-    ответвлении сессии родителя (или недоступен, если сессии нет)."""
+    """
+    Запрос в очереди родителя больше не выполнится — пересказ делается в
+    ответвлении сессии родителя (или недоступен, если сессии нет).
+    """
     assert summary.manual_request_id is not None
     request = await db_session.get(
         TaskManualRequestQueue,
@@ -181,7 +184,8 @@ async def wait_for_parent_summary(
     redis_client: Redis,
     is_stop_requested: Callable[[], Awaitable[bool]],
 ) -> bool:
-    """Ждёт, пока очередь родителя выполнит пересказ; `False` — дочернюю
+    """
+    Ждёт, пока очередь родителя выполнит пересказ; `False` — дочернюю
     задачу остановили во время ожидания.
 
     После возврата `True` артефакт либо готов/недоступен, либо уже не связан
@@ -315,8 +319,10 @@ async def deliver_parent_summary(
     timeout_seconds: int,
     active_node_context: ActiveNodeContext | None,
 ) -> None:
-    """Первое сообщение новой сессии дочерней задачи; без пересказа — только
-    пометка в её ленте."""
+    """
+    Первое сообщение новой сессии дочерней задачи; без пересказа — только
+    пометка в её ленте.
+    """
     parent = await db_session.get(Task, summary.parent_task_id)
     node_log = NodeLog(
         task_id=child.id,

@@ -141,9 +141,11 @@ class TestStreamTaskEvents:
 
 
 class TestServeTaskEvents:
-    async def test_client_disconnect_releases_subscription(self, redis_client: Redis) -> None:
-        """Задача не меняется, отправлять нечего — закрытие вкладки всё равно
-        освобождает подписку Redis."""
+    async def test_disconnect_unsubscribes(self, redis_client: Redis) -> None:
+        """
+        Задача не меняется, отправлять нечего — закрытие вкладки всё равно
+        освобождает подписку Redis.
+        """
         task_id = uuid.uuid4()
         closed = asyncio.Event()
 

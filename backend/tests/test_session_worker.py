@@ -680,8 +680,10 @@ class TestQuestionDuringPausedPrompt:
         redis_client: Redis,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Раздел 14.2, 14.3: ручной промт на паузе спрашивает пользователя —
-        задача уходит в `awaiting_input` и возвращается на паузу."""
+        """
+        Раздел 14.2, 14.3: ручной промт на паузе спрашивает пользователя —
+        задача уходит в `awaiting_input` и возвращается на паузу.
+        """
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
         await _add_node(db_session, task, order_index=0)
         await _add_node(db_session, task, order_index=1)
@@ -740,7 +742,7 @@ class TestQuestionDuringPausedPrompt:
 
 
 class TestBridgeReconnect:
-    async def test_new_process_resumes_session_with_bridge(
+    async def test_resumes_with_bridge(
         self,
         db_session: AsyncSession,
         worker_env: WorkerEnv,
@@ -774,14 +776,16 @@ class TestBridgeReconnect:
         assert task.remote_control_status is RemoteControlStatus.CONNECTED
 
 
-    async def test_request_during_last_node_is_not_left_hanging(
+    async def test_last_node_request_dropped(
         self,
         db_session: AsyncSession,
         worker_env: WorkerEnv,
         redis_client: Redis,
     ) -> None:
-        """Точки между нодами больше не будет — запрос снимается вместе с
-        прогоном, статус не остаётся `reconnecting`."""
+        """
+        Точки между нодами больше не будет — запрос снимается вместе с
+        прогоном, статус не остаётся `reconnecting`.
+        """
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
         await _add_node(db_session, task, order_index=0)
 
@@ -842,9 +846,11 @@ def _isolation_header(options: ClaudeAgentOptions) -> str:
 
 
 class TestStatefulMcpIsolation:
-    """Раздел 21.2, сценарий 12 (решение 2026-10-20 — уровень backend): две
+    """
+    Раздел 21.2, сценарий 12 (решение 2026-10-20 — уровень backend): две
     задачи с одним MCP-сервером с состоянием получают каждая свою изоляцию
-    профиля; соблюдать её на стороне сервера — дело администратора (10.2)."""
+    профиля; соблюдать её на стороне сервера — дело администратора (10.2).
+    """
 
     @pytest.mark.parametrize(
         ("isolation_mode", "path_template"),
@@ -918,9 +924,11 @@ class TestNodeTimeoutWhileAwaitingDecision:
         worker_env: WorkerEnv,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Пользователь не принял план за `timeout_seconds` ноды: ход
+        """
+        Пользователь не принял план за `timeout_seconds` ноды: ход
         прерывается, ожидание решения в задаче SDK снимается, задача — `failed`,
-        а не висит в `plan_review` или в `in_progress` без воркера."""
+        а не висит в `plan_review` или в `in_progress` без воркера.
+        """
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
         plan_node = await _add_node(db_session, task, order_index=0, node_type=NodeType.PLAN_PROMPT)
         plan_node.prompt_template = "Составь план"

@@ -1,4 +1,5 @@
-"""Зависимые ноды при отключении (раздел 13.3, 15.2 ТЗ).
+"""
+Зависимые ноды при отключении (раздел 13.3, 15.2 ТЗ).
 
 Интерфейс обязан предупредить, если на вывод отключаемой ноды ссылается
 последующая активная нода. «Ссылается» здесь значит то же, что при
@@ -62,8 +63,10 @@ def _sources_of(
     preceding: Sequence[PipelineNodeRef],
     last_n: int | None,
 ) -> list[PipelineNodeRef]:
-    """Ноды, чей вывод подставится в ``{{node.<field>}}``; ``preceding`` —
-    включённые ноды до текущей, в порядке выполнения."""
+    """
+    Ноды, чей вывод подставится в ``{{node.<field>}}``; ``preceding`` —
+    включённые ноды до текущей, в порядке выполнения.
+    """
     if field == _LLM_OUTPUT_LAST_N:
         producers = [node for node in preceding if node.node_type in _LLM_OUTPUT_PRODUCERS]
         return producers[-last_n:] if last_n else []
@@ -78,7 +81,8 @@ def find_dependent_nodes(
     nodes: Sequence[PipelineNodeRef],
     target_node_id: uuid.UUID,
 ) -> list[PipelineNodeRef]:
-    """Последующие включённые ноды, которые берут вывод у ``target_node_id``.
+    """
+    Последующие включённые ноды, которые берут вывод у ``target_node_id``.
 
     Источник ищется так, будто отключаемая нода ещё включена: важна именно
     она, а не то, что переменная получит после отключения.

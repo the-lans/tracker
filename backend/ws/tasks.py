@@ -1,4 +1,5 @@
-"""WebSocket-канал задачи (раздел 15.2, 18.1 ТЗ): `/ws/tasks/{task_id}/status`.
+"""
+WebSocket-канал задачи (раздел 15.2, 18.1 ТЗ): `/ws/tasks/{task_id}/status`.
 
 Два вида событий в одном соединении:
 
@@ -87,8 +88,10 @@ async def stream_task_events(
 
 
 async def _wait_for_disconnect(websocket: WebSocket) -> None:
-    """Клиент ничего не присылает — читать нужно только ради сообщения о
-    закрытии: без него поток событий не узнал бы, что вкладку закрыли."""
+    """
+    Клиент ничего не присылает — читать нужно только ради сообщения о
+    закрытии: без него поток событий не узнал бы, что вкладку закрыли.
+    """
     while True:
         message = await websocket.receive()
         if message["type"] == "websocket.disconnect":
@@ -102,9 +105,11 @@ async def serve_task_events(
     redis_client: Redis,
     fetch_status: Callable[[uuid.UUID], Awaitable[TaskStatus | None]] = _fetch_status,
 ) -> None:
-    """Поток событий до удаления задачи или до закрытия сокета клиентом —
+    """
+    Поток событий до удаления задачи или до закрытия сокета клиентом —
     смотря что раньше; оставшаяся сторона отменяется, подписка Redis
-    закрывается в `stream_task_events`."""
+    закрывается в `stream_task_events`.
+    """
     streaming = asyncio.create_task(
         stream_task_events(
             websocket.send_json,

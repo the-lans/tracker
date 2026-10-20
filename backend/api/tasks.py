@@ -38,7 +38,6 @@ from api.schemas import (
 from db.models.enums import (
     ManualRequestStatus,
     NodeLogStatus,
-    RemoteControlStatus,
     TaskStatus,
 )
 from db.models.llm import LlmAccount
@@ -57,11 +56,11 @@ from services.manual_queue import (
 )
 from services.node_dependencies import find_task_node_dependents
 from services.plan_mode import encode_decision
+from services.remote_control import start_bridge_reconnect
 from services.session_context import clear_task_session_context
 from services.task_cleanup import cleanup_task_repositories
 from services.task_control import (
     TaskControlCommand,
-    request_bridge_reconnect,
     request_manual_stop,
     request_task_control,
 )
@@ -310,8 +309,10 @@ async def cleanup_repositories(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     _current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
-    """Раздел 14.3: удаление рабочей директории репозиториев — только вручную
-    и только в `done`/`failed`; пользовательские файлы не затрагиваются."""
+    """
+    Раздел 14.3: удаление рабочей директории репозиториев — только вручную
+    и только в `done`/`failed`; пользовательские файлы не затрагиваются.
+    """
     task = await _get_task_or_404(db_session, task_id)
     await cleanup_task_repositories(db_session, task=task, repos_root=resolve_repos_root())
     await db_session.refresh(task)
@@ -390,16 +391,15 @@ async def reconnect_remote_control(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     _current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    """Раздел 6.5: новая попытка поднять мост `/remote-control`. Сессией
+    """
+    Раздел 6.5: новая попытка поднять мост `/remote-control`. Сессией
     владеет воркер — он пересоздаст процесс CLI между ходами и обновит
-    `remote_control_status`; восстановление моста не гарантируется."""
+    `remote_control_status`; восстановление моста не гарантируется.
+    """
     task = await _get_task_or_404(db_session, task_id)
-    _require_status(task, SESSION_ACTIVE_STATUSES, "У задачи нет активной сессии")
-    task.remote_control_status = RemoteControlStatus.RECONNECTING
-    await db_session.commit()
     redis_client = _get_redis_client()
     try:
-        await request_bridge_reconnect(redis_client, task_id)
+        await start_bridge_reconnect(db_session, task=task, redis_client=redis_client)
     finally:
         await redis_client.aclose()
 

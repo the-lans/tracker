@@ -1,4 +1,5 @@
-"""E2E полного цикла задачи (раздел 21.1 ТЗ, решение 2026-10-20: уровень backend).
+"""
+E2E полного цикла задачи (раздел 21.1 ТЗ, решение 2026-10-20: уровень backend).
 
 Создание задачи → отключение части нод → автозапуск по расписанию →
 прохождение включённых нод, включая `plan_prompt` с решением пользователя →
@@ -143,8 +144,10 @@ class _User:
         await self.post(f"/manual-queue/{active['id']}/stop")
 
     async def accept_plan(self, *_args: Any, **_kwargs: Any) -> bool:
-        """Подменяет ожидание сигнала в `plan_mode`: пользователь видит
-        `plan_review` и выбирает вариант через API."""
+        """
+        Подменяет ожидание сигнала в `plan_mode`: пользователь видит
+        `plan_review` и выбирает вариант через API.
+        """
         task = await self.get("")
         self.statuses_at_plan_decision.append(task["status"])
         logs = await self.get("/node-logs")

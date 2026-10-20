@@ -2,12 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/lib/apiClient";
 import type { NodeDependent } from "@/lib/types";
-
-export interface PendingNodeDisable {
-  nodeName: string;
-  dependents: NodeDependent[];
-  proceed: () => void;
-}
+import type { PendingNodeDisable } from "@/components/tasks/dependentNodes.types";
 
 /** Раздел 13.3, 15.2: перед отключением ноды — предупреждение, если на её
  * вывод ссылаются последующие активные ноды. Отключить всё равно можно. */

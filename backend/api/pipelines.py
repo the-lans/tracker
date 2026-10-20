@@ -122,8 +122,10 @@ async def list_pipeline_node_dependents(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     _current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[NodeDependentResponse]:
-    """Раздел 13.3, 15.2: предупреждение при снятии чекбокса в окне выбора
-    пайплайна, пока `task_nodes` задачи ещё не созданы."""
+    """
+    Раздел 13.3, 15.2: предупреждение при снятии чекбокса в окне выбора
+    пайплайна, пока `task_nodes` задачи ещё не созданы.
+    """
     dependents = await find_pipeline_node_dependents(
         db_session,
         pipeline_id=pipeline_id,

@@ -564,8 +564,10 @@ class TestCancelDecisionWait:
         redis_client: Redis,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Воркер прерывает ход (таймаут ноды): ожидание в задаче-обработчике
-        SDK снимается, и статус возвращён к моменту, когда воркер продолжит."""
+        """
+        Воркер прерывает ход (таймаут ноды): ожидание в задаче-обработчике
+        SDK снимается, и статус возвращён к моменту, когда воркер продолжит.
+        """
         task, node_log = await _make_task_with_running_node_log(db_session)
         context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id)
         callback = build_can_use_tool_callback(
@@ -595,3 +597,38 @@ class TestCancelDecisionWait:
 
     async def test_nothing_to_cancel(self) -> None:
         await ActiveNodeContext().cancel_decision_wait()
+
+    async def test_cancel_during_status_change(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ход прерван, пока после перехода в `plan_review` отправляется
+        уведомление, — ожидание ещё не началось, но статус всё равно возвращён."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id)
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=redis_client,
+        )
+        notifying = asyncio.Event()
+
+        async def slow_notification(*_args: object, **_kwargs: object) -> None:
+            notifying.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr("services.task_status.notify_task_event", slow_notification)
+
+        async def sdk_handler() -> object:
+            return await callback("ExitPlanMode", {"plan": "p"}, _TEST_TOOL_CONTEXT)
+
+        handler = asyncio.create_task(sdk_handler())
+        await asyncio.wait_for(notifying.wait(), timeout=5)
+        monkeypatch.undo()
+
+        await context.cancel_decision_wait()
+
+        assert handler.cancelled()
+        assert await _status_of(db_session, task) is TaskStatus.IN_PROGRESS

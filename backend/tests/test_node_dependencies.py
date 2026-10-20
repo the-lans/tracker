@@ -48,7 +48,7 @@ class TestFindDependentNodes:
         assert _dependent_names([first, second, consumer], first) == []
         assert _dependent_names([first, second, consumer], second) == ["node-2"]
 
-    def test_disabled_closer_source_does_not_shadow(self) -> None:
+    def test_disabled_source_skipped(self) -> None:
         first = _node(0, NodeType.SCRIPT)
         disabled = _node(1, NodeType.SCRIPT, is_enabled=False)
         consumer = _node(2, NodeType.PLAIN_PROMPT, "{{node.script_output}}")

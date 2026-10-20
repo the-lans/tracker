@@ -1,4 +1,5 @@
-"""`deploy/install.sh` (раздел 20.2, 20.4 ТЗ) с заглушками внешних команд.
+"""
+`deploy/install.sh` (раздел 20.2, 20.4 ТЗ) с заглушками внешних команд.
 
 Настоящие Docker, git и сеть не нужны: `docker`, `git`, `curl`, `sudo` и
 пакетный менеджер подменены скриптами, которые пишут свои вызовы в журнал.
@@ -148,8 +149,9 @@ def _make_restore_dir(tmp_path: Path, *, skip: str | None = None) -> Path:
     return restore_dir
 
 
-def test_script_syntax() -> None:
-    subprocess.run(["bash", "-n", str(_INSTALL_SCRIPT)], check=True)
+class TestScriptSyntax:
+    def test_valid(self) -> None:
+        subprocess.run(["bash", "-n", str(_INSTALL_SCRIPT)], check=True)
 
 
 class TestRestore:
@@ -191,7 +193,7 @@ class TestRestore:
         assert env_file.read_text() == "SECRET_ENCRYPTION_KEY=старый-ключ\n"
 
     @pytest.mark.parametrize("missing", [".env", "user_files.tar.gz"])
-    def test_incomplete_transfer_stops_before_changes(
+    def test_incomplete_transfer(
         self,
         tmp_path: Path,
         stubs: Path,

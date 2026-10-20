@@ -132,8 +132,10 @@ class ActiveNodeContext:
         task_id: uuid.UUID,
         auto_accept_plan: bool = False,
     ) -> None:
-        """Каждый, кто начинает ход в сессии (нода, ручной запрос, разрешение
-        конфликта, пересказ), сообщает, к какой записи `node_logs` он относится."""
+        """
+        Каждый, кто начинает ход в сессии (нода, ручной запрос, разрешение
+        конфликта, пересказ), сообщает, к какой записи `node_logs` он относится.
+        """
         self.node_log_id = node_log_id
         self.task_id = task_id
         self.auto_accept_plan = auto_accept_plan
@@ -261,18 +263,17 @@ async def _wait_for_resolution(
 _DECISION_RESUMABLE_STATUSES = frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED})
 
 
-async def enter_decision_status(
+async def resumable_decision_status(
     db_session: AsyncSession,
     *,
     task_id: uuid.UUID,
-    awaiting_status: TaskStatus,
 ) -> TaskStatus | None:
     """
-    Раздел 14.3: переход в `plan_review`/`awaiting_input` на время ожидания.
+    Статус, в который задачу вернуть после решения; `None` — статус на время
+    ожидания не меняется.
 
-    Возвращает статус, в который задачу нужно вернуть после решения; `None`
-    — статус не менялся. Так бывает, если задача в `rebase_conflict`: её
-    конфликт разбирает воркер, а решение принимается и без смены статуса.
+    Так бывает, если задача в `rebase_conflict`: её конфликт разбирает
+    воркер, а решение принимается и без смены статуса.
     """
     task = await db_session.get(Task, task_id, populate_existing=True)
     if task is None or task.status not in _DECISION_RESUMABLE_STATUSES:
@@ -282,7 +283,17 @@ async def enter_decision_status(
             status=task.status if task is not None else None,
         )
         return None
-    resume_status = task.status
+    return task.status
+
+
+async def enter_decision_status(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    resume_status: TaskStatus,
+    awaiting_status: TaskStatus,
+) -> None:
+    """Раздел 14.3: переход в `plan_review`/`awaiting_input` на время ожидания."""
     try:
         await transition_task_status(
             db_session,
@@ -291,9 +302,9 @@ async def enter_decision_status(
             to_status=awaiting_status,
         )
     except ConflictError:
+        # Возврат после решения тогда не сработает по compare-and-swap —
+        # статус остаётся тем, что выставил другой процесс.
         logger.info("decision_status_changed_concurrently", task_id=str(task_id))
-        return None
-    return resume_status
 
 
 async def leave_decision_status(
@@ -353,7 +364,8 @@ def build_can_use_tool_callback(
     redis_client: Redis,
     decision_wait_timeout_seconds: float | None = None,
 ) -> CanUseTool:
-    """Раздел 9.2, 9.6: единый callback на весь жизненный цикл сессии.
+    """
+    Раздел 9.2, 9.6: единый callback на весь жизненный цикл сессии.
 
     Режим разрешений самой сессии переключает нода `plan_prompt`
     (`services/nodes/dispatch.py`); callback лишь записывает выбранный
@@ -387,27 +399,37 @@ def build_can_use_tool_callback(
             return PermissionResultAllow()
 
         awaiting_status = TaskStatus.PLAN_REVIEW if is_plan else TaskStatus.AWAITING_INPUT
-        async with session_factory() as db_session:
-            await _mark_awaiting_decision(
-                db_session,
-                node_log_id=context.node_log_id,
-                pending_question=question_text,
-                pending_plan_text=plan_text,
-                pending_options=options,
-            )
-            resume_status = await enter_decision_status(
-                db_session,
-                task_id=context.task_id,
-                awaiting_status=awaiting_status,
-            )
-        logger.info(
-            "awaiting_user_decision",
-            node_log_id=str(context.node_log_id),
-            tool_name=tool_name,
-        )
-
+        resume_status: TaskStatus | None = None
+        # Регистрация — до первого изменения в БД: прерванный в любой момент
+        # ход (`cancel_decision_wait`) проходит через `finally` ниже. Статус
+        # возврата запоминается до перехода: отмена может прийти уже после
+        # коммита перехода, а лишний возврат безопасен — это compare-and-swap.
         context.track_decision_wait()
         try:
+            async with session_factory() as db_session:
+                await _mark_awaiting_decision(
+                    db_session,
+                    node_log_id=context.node_log_id,
+                    pending_question=question_text,
+                    pending_plan_text=plan_text,
+                    pending_options=options,
+                )
+                resume_status = await resumable_decision_status(
+                    db_session,
+                    task_id=context.task_id,
+                )
+                if resume_status is not None:
+                    await enter_decision_status(
+                        db_session,
+                        task_id=context.task_id,
+                        resume_status=resume_status,
+                        awaiting_status=awaiting_status,
+                    )
+            logger.info(
+                "awaiting_user_decision",
+                node_log_id=str(context.node_log_id),
+                tool_name=tool_name,
+            )
             resolution = await _wait_for_resolution(
                 session_factory=session_factory,
                 redis_client=redis_client,
