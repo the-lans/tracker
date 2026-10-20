@@ -152,7 +152,7 @@ async def attach_task_codes(
     if not task_ids:
         return tasks
     rows = await db_session.execute(sa.select(Task.id, Task.code).where(Task.id.in_(task_ids)))
-    codes = dict(rows.tuples().all())
+    codes = {task_id: code for task_id, code in rows}
     return [
         ActiveCeleryTask(
             worker=task.worker,
