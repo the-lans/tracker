@@ -345,3 +345,18 @@ class TestCloneAfterCleanup:
         assert (second_clone / "work.txt").read_text() == "сделанная работа\n"
         current_branch = _run("git", "branch", "--show-current", cwd=second_clone).strip()
         assert current_branch == "feature/RR-00001"
+
+    async def test_similar_branch_name_is_not_reused(self, tmp_path: Path) -> None:
+        origin = _init_bare_origin(tmp_path)
+        _run("git", "branch", "archive/feature/RR-00001", "main", cwd=origin)
+        repository = _make_repository(git_url=str(origin))
+
+        target_dir = await clone_task_repository(
+            repository=repository,
+            task_repository=_make_task_repository(role=RepositoryRole.READ_WRITE),
+            task_code="RR-00001",
+            repos_root=tmp_path / "repos",
+        )
+
+        current_branch = _run("git", "branch", "--show-current", cwd=target_dir).strip()
+        assert current_branch == "feature/RR-00001"

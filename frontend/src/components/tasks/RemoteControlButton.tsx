@@ -5,8 +5,8 @@ import { ApiError } from "@/lib/apiClient";
 import { RemoteControlStatus, type Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-/** Раздел 6.3, 6.5: «Переподключить удалённую сессию» — доступна всегда,
- * акцент при разрыве. В `claude.ai/code` сессия только для просмотра:
+/** Раздел 6.3, 6.5: «Переподключить удалённую сессию» — доступна всегда
+ * (блокируется только на время самого запроса), акцент при разрыве. В `claude.ai/code` сессия только для просмотра:
  * вмешиваться в работу агента — через поля трекера. */
 export function RemoteControlButton({ task }: { task: Task }) {
   const reconnect = useReconnectRemoteControl(task.id);
@@ -26,7 +26,7 @@ export function RemoteControlButton({ task }: { task: Task }) {
     <button
       type="button"
       onClick={handleClick}
-      disabled={reconnect.isPending || reconnecting}
+      disabled={reconnect.isPending}
       title="В claude.ai/code сессия доступна для просмотра; отвечать агенту — через поля трекера"
       className={cn(
         "hidden items-center gap-2 rounded-md border px-3 py-2 text-[13px] font-bold disabled:opacity-60 sm:flex",

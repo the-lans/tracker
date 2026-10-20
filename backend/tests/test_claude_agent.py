@@ -245,3 +245,28 @@ class TestReplaceClient:
 
         assert old.disconnected is False
         assert old.queries == ["всё ещё работает"]
+
+
+class TestAbortHook:
+    async def test_runs_before_interrupt(self) -> None:
+        events: list[str] = []
+
+        class RecordingClient(FakeClaudeAgentClient):
+            async def interrupt(self) -> None:
+                events.append("interrupt")
+                await super().interrupt()
+
+        async def on_abort() -> None:
+            events.append("abort_hook")
+
+        client = RecordingClient(messages_per_query=[[make_result_message()]])
+        client.message_delay_seconds = 30
+        session = ClaudeCodeSession(client, on_abort=on_abort)
+        turn = asyncio.create_task(session.send_and_collect_text("долгий ход"))
+        await asyncio.sleep(0.05)
+        turn.cancel()
+        client.message_delay_seconds = 0
+
+        await session.abort_turn()
+
+        assert events == ["abort_hook", "interrupt"]

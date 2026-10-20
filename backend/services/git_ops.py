@@ -125,7 +125,10 @@ async def clone_task_repository(
             cwd=target_dir,
             env=env,
         )
-        if remote_heads.strip():
+        # `ls-remote` сравнивает шаблон с концом имени ссылки: без точной
+        # проверки `archive/feature/RR-1` сошла бы за `feature/RR-1`.
+        branch_ref = f"refs/heads/{task_repository.branch_name}"
+        if any(line.split("\t")[-1] == branch_ref for line in remote_heads.splitlines()):
             await _run_git(
                 "fetch",
                 "origin",

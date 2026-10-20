@@ -86,6 +86,48 @@ async def stream_task_events(
         await pubsub.aclose()  # type: ignore[no-untyped-call]
 
 
+async def _wait_for_disconnect(websocket: WebSocket) -> None:
+    """Клиент ничего не присылает — читать нужно только ради сообщения о
+    закрытии: без него поток событий не узнал бы, что вкладку закрыли."""
+    while True:
+        message = await websocket.receive()
+        if message["type"] == "websocket.disconnect":
+            return
+
+
+async def serve_task_events(
+    websocket: WebSocket,
+    *,
+    task_id: uuid.UUID,
+    redis_client: Redis,
+    fetch_status: Callable[[uuid.UUID], Awaitable[TaskStatus | None]] = _fetch_status,
+) -> None:
+    """Поток событий до удаления задачи или до закрытия сокета клиентом —
+    смотря что раньше; оставшаяся сторона отменяется, подписка Redis
+    закрывается в `stream_task_events`."""
+    streaming = asyncio.create_task(
+        stream_task_events(
+            websocket.send_json,
+            task_id=task_id,
+            redis_client=redis_client,
+            fetch_status=fetch_status,
+        ),
+    )
+    disconnected = asyncio.create_task(_wait_for_disconnect(websocket))
+    done, pending = await asyncio.wait(
+        {streaming, disconnected},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for remaining in pending:
+        remaining.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    if streaming in done:
+        streaming.result()
+        await websocket.close(code=_TASK_NOT_FOUND_CLOSE_CODE)
+        return
+    logger.info("ws_task_status_disconnected", task_id=str(task_id))
+
+
 @router.websocket("/ws/tasks/{task_id}/status")
 async def task_status_stream(websocket: WebSocket, task_id: uuid.UUID) -> None:
     token = websocket.query_params.get("token")
@@ -101,8 +143,7 @@ async def task_status_stream(websocket: WebSocket, task_id: uuid.UUID) -> None:
     await websocket.accept()
     redis_client = Redis.from_url(os.environ["REDIS_URL"])
     try:
-        await stream_task_events(websocket.send_json, task_id=task_id, redis_client=redis_client)
-        await websocket.close(code=_TASK_NOT_FOUND_CLOSE_CODE)
+        await serve_task_events(websocket, task_id=task_id, redis_client=redis_client)
     except WebSocketDisconnect:
         logger.info("ws_task_status_disconnected", task_id=str(task_id))
     finally:

@@ -555,3 +555,43 @@ class TestDecisionStatus:
 
         assert result.behavior == "allow"
         assert await _status_of(db_session, task) is TaskStatus.IN_PROGRESS
+
+
+class TestCancelDecisionWait:
+    async def test_restores_status_before_returning(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Воркер прерывает ход (таймаут ноды): ожидание в задаче-обработчике
+        SDK снимается, и статус возвращён к моменту, когда воркер продолжит."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id)
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=redis_client,
+        )
+        waiting_started = asyncio.Event()
+
+        async def wait_forever(*_args: object, **_kwargs: object) -> bool:
+            waiting_started.set()
+            await asyncio.Event().wait()
+            return False
+
+        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", wait_forever)
+
+        async def sdk_handler() -> object:
+            return await callback("ExitPlanMode", {"plan": "p"}, _TEST_TOOL_CONTEXT)
+
+        handler = asyncio.create_task(sdk_handler())
+        await asyncio.wait_for(waiting_started.wait(), timeout=5)
+
+        await context.cancel_decision_wait()
+
+        assert handler.cancelled()
+        assert await _status_of(db_session, task) is TaskStatus.IN_PROGRESS
+
+    async def test_nothing_to_cancel(self) -> None:
+        await ActiveNodeContext().cancel_decision_wait()

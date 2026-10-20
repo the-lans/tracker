@@ -62,8 +62,8 @@ from services.task_control import (
 )
 from services.task_signal import wait_for_task_signal
 from services.task_status import (
-    FAILABLE_STATUSES,
     fail_task_after_error,
+    fail_task_from_current_status,
     first_unfinished_order_index,
     transition_task_status,
 )
@@ -322,23 +322,35 @@ class _SessionControl:
 
 async def _fail_task(db_session: AsyncSession, task: Task, *, failed_order_index: int) -> None:
     """Сбой, остановка или неразрешённый конфликт — из того статуса, в
-    котором задача сейчас: пока шла нода, её могли поставить на паузу или
-    поймать конфликт ребейза (раздел 14.1)."""
-    await db_session.refresh(task)
-    if task.status not in FAILABLE_STATUSES:
-        logger.warning(
-            "task_not_failed_unexpected_status",
-            task_id=str(task.id),
-            status=task.status,
-        )
-        return
-    await transition_task_status(
+    котором задача сейчас (раздел 14.1)."""
+    await fail_task_from_current_status(
         db_session,
         task_id=task.id,
-        from_status=task.status,
-        to_status=TaskStatus.FAILED,
         failed_order_index=failed_order_index,
     )
+    await db_session.refresh(task)
+
+
+async def _settle_bridge_request(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    redis_client: Redis,
+) -> None:
+    """
+    Раздел 6.5: «Переподключить», нажатое во время последней ноды, воркер
+    выполнить уже не успеет — точки между нодами больше не будет.
+
+    Запрос снимается, а статус `reconnecting` не остаётся навсегда: процесса
+    сессии после прогона нет, мост закрыт.
+    """
+    requested = await consume_bridge_reconnect(redis_client, task_id)
+    task = await db_session.get(Task, task_id, populate_existing=True)
+    if task is None:
+        return
+    if requested or task.remote_control_status is RemoteControlStatus.RECONNECTING:
+        logger.info("bridge_reconnect_dropped_after_run", task_id=str(task_id))
+        await record_bridge_status(db_session, task=task, status=RemoteControlStatus.DISCONNECTED)
 
 
 async def _disconnect_quietly(session: ClaudeCodeSession) -> None:
@@ -379,7 +391,10 @@ async def _run_task_session_async(
             logger.exception("task_session_failed", task_id=str(task_id))
             await fail_task_after_error(db_session, task_id=task_id, error=exc)
         finally:
-            await redis_client.aclose()
+            try:
+                await _settle_bridge_request(db_session, task_id=task_id, redis_client=redis_client)
+            finally:
+                await redis_client.aclose()
 
 
 async def _claude_config_dir(db_session: AsyncSession, task: Task) -> str:
@@ -536,6 +551,7 @@ async def _run_claimed_task(
             enable_remote_control=start_plan.enable_remote_control,
         ),
         on_text_delta=build_output_publisher(redis_client, active_node_context),
+        on_abort=active_node_context.cancel_decision_wait,
     )
     control = _SessionControl(
         db_session=db_session,

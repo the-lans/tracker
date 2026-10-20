@@ -44,6 +44,9 @@ _TEXT_DELTA = "text_delta"
 
 # Получатель фрагментов ответа по мере генерации (раздел 15.2).
 TextDeltaHandler = Callable[[str], Awaitable[None]]
+# Вызывается при прерывании хода до `interrupt()` — чтобы снять то, что ход
+# успел начать вне самой сессии (ожидание решения пользователя).
+AbortHandler = Callable[[], Awaitable[None]]
 
 
 class ClaudeAgentClientProtocol(Protocol):
@@ -158,9 +161,11 @@ class ClaudeCodeSession:
         client: ClaudeAgentClientProtocol,
         *,
         on_text_delta: TextDeltaHandler | None = None,
+        on_abort: AbortHandler | None = None,
     ) -> None:
         self._client = client
         self._on_text_delta = on_text_delta
+        self._on_abort = on_abort
         self._lock = asyncio.Lock()
         self._session_id: str | None = None
         # Ход начат (`query()` отправлен), а его `ResultMessage` ещё не
@@ -226,6 +231,8 @@ class ClaudeCodeSession:
             if not self._turn_open:
                 logger.info("session_abort_skipped_no_open_turn")
                 return
+            if self._on_abort is not None:
+                await self._on_abort()
             await self._client.interrupt()
 
             async def drain() -> None:

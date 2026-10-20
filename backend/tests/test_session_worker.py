@@ -42,6 +42,7 @@ from services.manual_queue import enqueue_freeform_prompt_run
 from services.session_context import clear_task_session_context
 from services.task_control import (
     TaskControlCommand,
+    consume_bridge_reconnect,
     consume_task_control,
     read_task_control,
     request_bridge_reconnect,
@@ -773,6 +774,36 @@ class TestBridgeReconnect:
         assert task.remote_control_status is RemoteControlStatus.CONNECTED
 
 
+    async def test_request_during_last_node_is_not_left_hanging(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+    ) -> None:
+        """Точки между нодами больше не будет — запрос снимается вместе с
+        прогоном, статус не остаётся `reconnecting`."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+
+        async def user_presses_reconnect() -> None:
+            task.remote_control_status = RemoteControlStatus.RECONNECTING
+            await db_session.commit()
+            await request_bridge_reconnect(redis_client, task.id)
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(1),
+            on_query=user_presses_reconnect,
+        )
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert task.remote_control_status is RemoteControlStatus.DISCONNECTED
+        assert await consume_bridge_reconnect(redis_client, task.id) is False
+        assert len(worker_env.options) == 1
+
+
 class TestRestartAfterClearContext:
     async def test_opens_new_session_with_bridge(
         self,
@@ -878,3 +909,55 @@ class TestStatefulMcpIsolation:
         for task in tasks:
             await db_session.refresh(task)
             assert task.status is TaskStatus.DONE
+
+
+class TestNodeTimeoutWhileAwaitingDecision:
+    async def test_task_fails_instead_of_hanging(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Пользователь не принял план за `timeout_seconds` ноды: ход
+        прерывается, ожидание решения в задаче SDK снимается, задача — `failed`,
+        а не висит в `plan_review` или в `in_progress` без воркера."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        plan_node = await _add_node(db_session, task, order_index=0, node_type=NodeType.PLAN_PROMPT)
+        plan_node.prompt_template = "Составь план"
+        plan_node.timeout_seconds = 1
+        await db_session.flush()
+        sdk_handlers: list[asyncio.Task[Any]] = []
+
+        async def user_never_answers(*_args: Any, **_kwargs: Any) -> bool:
+            await asyncio.Event().wait()
+            return False
+
+        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_never_answers)
+
+        class HangingClient(FakeClaudeAgentClient):
+            async def interrupt(self) -> None:
+                self.message_delay_seconds = 0
+                await super().interrupt()
+
+        async def agent_exits_plan_mode() -> None:
+            can_use_tool = worker_env.options[0].can_use_tool
+            assert can_use_tool is not None
+            # Как в SDK: callback разрешений живёт в своей задаче, не в ходе.
+            sdk_handlers.append(
+                asyncio.ensure_future(
+                    can_use_tool("ExitPlanMode", {"plan": "1. Шаг"}, ToolPermissionContext()),
+                ),
+            )
+            worker_env.client.message_delay_seconds = 30
+
+        worker_env.client = HangingClient(
+            messages_per_query=_results(1),
+            on_query=agent_exits_plan_mode,
+        )
+
+        await asyncio.wait_for(_run_worker(task), timeout=30)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.FAILED
+        assert task.last_failed_order_index == 0
+        assert all(handler.done() for handler in sdk_handlers)

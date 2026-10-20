@@ -14,8 +14,11 @@ import shutil
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+import sqlalchemy as sa
+
 from app_logging.config import get_logger
 from db.models.enums import TaskStatus
+from db.models.tasks import Task
 from services.errors import ConflictError
 from services.task_workspace import task_root
 
@@ -23,8 +26,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from sqlalchemy.ext.asyncio import AsyncSession
-
-    from db.models.tasks import Task
 
 logger = get_logger("task_cleanup")
 
@@ -42,7 +43,16 @@ async def cleanup_task_repositories(
 
     Повторный вызов безопасен: отсутствующая директория — не ошибка.
     """
-    if task.status not in CLEANABLE_STATUSES:
+    # Строка задачи блокируется до коммита: «Перезапустить» ставит воркер в
+    # очередь, не меняя статус, — его захват (`UPDATE ... WHERE status`)
+    # дождётся конца очистки, и клонирование не пойдёт параллельно с удалением.
+    locked = await db_session.scalar(
+        sa.select(Task)
+        .where(Task.id == task.id)
+        .with_for_update()
+        .execution_options(populate_existing=True),
+    )
+    if locked is None or locked.status not in CLEANABLE_STATUSES:
         raise ConflictError("Очистить репозитории можно только у завершённой или упавшей задачи")
     root = task_root(repos_root, task)
     await asyncio.to_thread(shutil.rmtree, root, ignore_errors=True)

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -113,11 +113,17 @@ def decide_plan_auto_completion(*, auto_accept_plan: bool) -> PlanDecisionResult
 @dataclass
 class ActiveNodeContext:
     """Оркестратор выставляет перед каждым `query()` — единственный способ
-    сообщить callback'у, какая запись `node_logs` сейчас "текущая"."""
+    сообщить callback'у, какая запись `node_logs` сейчас "текущая".
+
+    Заодно контекст знает, какая задача-обработчик SDK сейчас ждёт решения
+    пользователя: SDK вызывает callback в своей задаче, и отмена хода
+    воркером (таймаут ноды, «Остановить») эту задачу сама не отменяет.
+    """
 
     node_log_id: uuid.UUID | None = None
     task_id: uuid.UUID | None = None
     auto_accept_plan: bool = False
+    _decision_wait: asyncio.Task[Any] | None = field(default=None, init=False, repr=False)
 
     def activate(
         self,
@@ -131,6 +137,28 @@ class ActiveNodeContext:
         self.node_log_id = node_log_id
         self.task_id = task_id
         self.auto_accept_plan = auto_accept_plan
+
+    def track_decision_wait(self) -> None:
+        self._decision_wait = asyncio.current_task()
+
+    def untrack_decision_wait(self) -> None:
+        if self._decision_wait is asyncio.current_task():
+            self._decision_wait = None
+
+    async def cancel_decision_wait(self) -> None:
+        """
+        Прерванный ход не должен оставлять задачу в ожидании решения.
+
+        Отменяет ожидание и дожидается его `finally`, который возвращает
+        статус задачи, — до того, как воркер решит, что делать с нодой дальше
+        (повтор, `failed`).
+        """
+        waiting = self._decision_wait
+        if waiting is None or waiting.done():
+            return
+        waiting.cancel()
+        await asyncio.wait({waiting})
+        logger.info("decision_wait_cancelled", node_log_id=str(self.node_log_id))
 
 
 def _extract_question_options(tool_input: dict[str, Any]) -> list[dict[str, str]]:
@@ -378,6 +406,7 @@ def build_can_use_tool_callback(
             tool_name=tool_name,
         )
 
+        context.track_decision_wait()
         try:
             resolution = await _wait_for_resolution(
                 session_factory=session_factory,
@@ -388,7 +417,9 @@ def build_can_use_tool_callback(
             )
         finally:
             # И после решения, и после таймаута, и при отмене хода (таймаут
-            # ноды, «Остановить») задача не должна остаться в ожидании.
+            # ноды, «Остановить» — `cancel_decision_wait`) задача не должна
+            # остаться в ожидании.
+            context.untrack_decision_wait()
             if resume_status is not None:
                 async with session_factory() as db_session:
                     await leave_decision_status(
