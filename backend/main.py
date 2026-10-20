@@ -13,7 +13,8 @@ from api.auth import router as auth_router
 from api.env_variables import router as env_variables_router
 from api.llm_accounts import router as llm_accounts_router
 from api.mcp_servers import router as mcp_servers_router
-from api.monitoring import router as monitoring_router
+from api.monitoring import monitoring_router
+from api.monitoring import router as app_logs_router
 from api.nodes import router as nodes_router
 from api.periodic_tasks import router as periodic_tasks_router
 from api.pipelines import router as pipelines_router
@@ -53,6 +54,7 @@ app.include_router(pipelines_router)
 app.include_router(nodes_router)
 app.include_router(users_router)
 app.include_router(periodic_tasks_router)
+app.include_router(app_logs_router)
 app.include_router(monitoring_router)
 app.include_router(push_router)
 app.include_router(ws_router)

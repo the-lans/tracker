@@ -545,6 +545,36 @@ class VapidPublicKeyResponse(BaseModel):
     public_key: str
 
 
+class NodeRunResponse(BaseModel):
+    """Раздел 13.4: строка сводки выполнения нод по всем задачам."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    node_log_id: uuid.UUID
+    task_id: uuid.UUID
+    task_code: str
+    node_id: uuid.UUID | None
+    node_name: str | None
+    trigger_type: NodeLogTriggerType
+    attempt_number: int
+    status: NodeLogStatus
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class ActiveCeleryTaskResponse(BaseModel):
+    """Раздел 15.5: активная Celery-задача на одном из воркеров."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    worker: str
+    celery_task_id: str
+    name: str
+    started_at: datetime | None
+    task_id: uuid.UUID | None
+    task_code: str | None
+
+
 class AppLogResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -541,6 +541,30 @@ export interface AppLog {
   created_at: string;
 }
 
+/** Раздел 13.4: строка сводки выполнения нод по всем задачам. */
+export interface NodeRun {
+  node_log_id: string;
+  task_id: string;
+  task_code: string;
+  node_id: string | null;
+  node_name: string | null;
+  trigger_type: NodeLogTriggerType;
+  attempt_number: number;
+  status: NodeLogStatus;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** Раздел 15.5: активная Celery-задача на одном из воркеров. */
+export interface ActiveCeleryTask {
+  worker: string;
+  celery_task_id: string;
+  name: string;
+  started_at: string | null;
+  task_id: string | null;
+  task_code: string | null;
+}
+
 export interface ApiErrorBody {
   error: {
     code: string;
