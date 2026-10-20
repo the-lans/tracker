@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Единственный скрипт установки трекера на новый сервер, запускаемый вручную
 # администратором (раздел 20.2, 20.3 ТЗ).
+#
+#   deploy/install.sh                     — новая установка
+#   deploy/install.sh --restore <каталог> — перенос на новый сервер (раздел
+#     20.4, docs/migration.md): в каталоге .env, дамп БД *.sql.gz,
+#     task_repos.tar.gz и user_files.tar.gz со старого сервера
 
 set -euo pipefail
 
@@ -8,26 +13,88 @@ REPO_URL="https://github.com/the-lans/tracker.git"
 INSTALL_DIR="${INSTALL_DIR:-/opt/tracker}"
 ENV_FILE="${INSTALL_DIR}/.env"
 ENV_EXAMPLE="${INSTALL_DIR}/.env.example"
+DOCKER_INSTALL_SCRIPT_URL="https://get.docker.com"
 # Заполняется step_prompt_critical_values, читается step_seed_data (раздел
 # 19.1 — курица и яйцо, см. scripts/seed_admin_allowlist.py).
 ADMIN_EMAIL=""
+# Каталог с архивами переноса; пусто — обычная установка.
+RESTORE_DIR=""
+RESTORE_DUMP=""
+# Архив -> точка монтирования volume в контейнере backend (docker-compose.yml).
+RESTORE_ARCHIVES=("task_repos:/data/repos" "user_files:/data/user-files")
 
 log() { echo "[install.sh] $*"; }
+
+die() {
+  log "Ошибка: $*"
+  exit 1
+}
+
+usage() {
+  echo "Использование: $0 [--restore <каталог с .env, *.sql.gz, task_repos.tar.gz, user_files.tar.gz>]"
+}
+
+parse_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --restore)
+        [ "$#" -ge 2 ] || { usage; exit 2; }
+        RESTORE_DIR="$2"
+        shift 2
+        ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *)
+        log "Неизвестный аргумент: $1"
+        usage
+        exit 2
+        ;;
+    esac
+  done
+}
+
+# Команда от root: скрипт обычно запускают от root, иначе — через sudo.
+as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+_install_compose_plugin() {
+  if command -v apt-get >/dev/null 2>&1; then
+    as_root apt-get update
+    as_root apt-get install -y docker-compose-plugin
+  elif command -v dnf >/dev/null 2>&1; then
+    as_root dnf install -y docker-compose-plugin
+  elif command -v yum >/dev/null 2>&1; then
+    as_root yum install -y docker-compose-plugin
+  else
+    die "не найден пакетный менеджер для установки docker-compose-plugin"
+  fi
+}
 
 # Шаг 1: проверка и установка Docker + Docker Compose plugin
 step_install_docker() {
   log "Шаг 1/11: проверка Docker и Docker Compose plugin"
   if ! command -v docker >/dev/null 2>&1; then
-    log "Docker не найден."
-    # TODO: установить Docker Engine по официальной инструкции для текущего
-    # дистрибутива (get.docker.com или пакетный менеджер) и завершить установку.
-    exit 1
+    # Официальный скрипт Docker ставит Engine вместе с плагином Compose
+    # для поддерживаемых дистрибутивов.
+    log "Docker не найден — установка через ${DOCKER_INSTALL_SCRIPT_URL}"
+    local installer
+    installer="$(mktemp)"
+    curl -fsSL "${DOCKER_INSTALL_SCRIPT_URL}" -o "${installer}"
+    as_root sh "${installer}"
+    rm -f "${installer}"
   fi
   if ! docker compose version >/dev/null 2>&1; then
-    log "Docker Compose plugin не найден."
-    # TODO: установить docker-compose-plugin.
-    exit 1
+    log "Docker Compose plugin не найден — установка пакета docker-compose-plugin"
+    _install_compose_plugin
   fi
+  docker compose version >/dev/null 2>&1 || die "Docker Compose plugin так и не стал доступен"
 }
 
 # Шаг 2: клонирование репозитория в целевую директорию
@@ -185,9 +252,57 @@ step_final_instructions() {
   log "После первого входа выполните: cd ${INSTALL_DIR} && docker compose run --rm backend python /app/scripts/seed_periodic_tasks.py"
 }
 
-main() {
-  step_install_docker
-  step_clone_repo
+# --- Восстановление на новом сервере (раздел 20.4, docs/migration.md) ---
+
+# До установки чего-либо: перенос без полного набора файлов бессмысленен.
+validate_restore_dir() {
+  [ -d "${RESTORE_DIR}" ] || die "каталог восстановления ${RESTORE_DIR} не найден"
+  RESTORE_DIR="$(cd "${RESTORE_DIR}" && pwd)"
+  [ -f "${RESTORE_DIR}/.env" ] || die "в ${RESTORE_DIR} нет .env со старого сервера"
+  local mapping archive
+  for mapping in "${RESTORE_ARCHIVES[@]}"; do
+    archive="${mapping%%:*}.tar.gz"
+    [ -f "${RESTORE_DIR}/${archive}" ] || die "в ${RESTORE_DIR} нет ${archive}"
+  done
+  # Имена дампов встроенного бэкапа содержат UTC-таймстамп — последний по
+  # имени и есть самый свежий.
+  RESTORE_DUMP="$(find "${RESTORE_DIR}" -maxdepth 1 -name '*.sql.gz' | sort | tail -n 1)"
+  [ -n "${RESTORE_DUMP}" ] || die "в ${RESTORE_DIR} нет дампа БД *.sql.gz"
+}
+
+# Ключи шифрования обязаны совпадать со старым сервером — иначе секреты в
+# БД не расшифруются (раздел 3.2, 19.4).
+step_restore_env() {
+  log "Восстановление: перенос .env"
+  if [ -f "${ENV_FILE}" ]; then
+    cp "${ENV_FILE}" "${ENV_FILE}.before-restore"
+    log "Прежний ${ENV_FILE} сохранён как ${ENV_FILE}.before-restore"
+  fi
+  cp "${RESTORE_DIR}/.env" "${ENV_FILE}"
+}
+
+# В пустую БД и до миграций: дамп содержит схему старого сервера, миграции
+# затем лишь доводят её до текущей версии кода.
+step_restore_database() {
+  log "Восстановление: дамп БД $(basename "${RESTORE_DUMP}")"
+  gzip -dc "${RESTORE_DUMP}" | (cd "${INSTALL_DIR}" \
+    && docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"')
+}
+
+# Тома монтирует сам сервис backend — имя compose-проекта знать не нужно.
+step_restore_volumes() {
+  local mapping archive target
+  for mapping in "${RESTORE_ARCHIVES[@]}"; do
+    archive="${mapping%%:*}.tar.gz"
+    target="${mapping#*:}"
+    log "Восстановление: ${archive} -> ${target}"
+    (cd "${INSTALL_DIR}" && docker compose run --rm --no-deps \
+      -v "${RESTORE_DIR}:/restore:ro" --entrypoint sh backend \
+      -c "find '${target}' -mindepth 1 -delete && tar xzf '/restore/${archive}' -C '${target}'")
+  done
+}
+
+run_install() {
   step_generate_env
   step_prompt_critical_values
   step_build_images
@@ -200,4 +315,34 @@ main() {
   log "Установка завершена"
 }
 
-main "$@"
+# Seed не нужен: пользователи, allowlist и periodic_tasks уже в дампе.
+run_restore() {
+  step_restore_env
+  step_build_images
+  step_start_infra
+  step_restore_database
+  step_restore_volumes
+  step_run_migrations
+  step_start_app_services
+  step_wait_tls
+  log "Восстановление завершено: откройте https://<DOMAIN> и войдите прежним аккаунтом администратора"
+}
+
+main() {
+  parse_args "$@"
+  if [ -n "${RESTORE_DIR}" ]; then
+    validate_restore_dir
+  fi
+  step_install_docker
+  step_clone_repo
+  if [ -n "${RESTORE_DIR}" ]; then
+    run_restore
+  else
+    run_install
+  fi
+}
+
+# Функции можно подключить через `source` (тест скрипта) без запуска установки.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
