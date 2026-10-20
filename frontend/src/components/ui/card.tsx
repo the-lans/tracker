@@ -17,7 +17,7 @@ export const CardTitle = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElemen
     <div
       ref={ref}
       className={cn(
-        "mb-2.5 flex items-center justify-between text-[12.5px] font-extrabold text-text-2",
+        "mb-2.5 flex items-center justify-between text-note font-extrabold text-text-2",
         className,
       )}
       {...props}

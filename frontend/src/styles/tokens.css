@@ -18,10 +18,13 @@
 
   --text: #181a24;
   --text-2: #63667a;
-  --text-3: #6a6d81;
+  --text-3: #5b5e72;
 
-  --accent: oklch(58% 0.19 265);
-  --accent-hov: oklch(50% 0.20 265);
+  --accent: oklch(53% 0.19 265);
+  --accent-hov: oklch(47% 0.20 265);
+  /* Текст на заливке акцентом и опасным цветом. */
+  --on-accent: #ffffff;
+  --on-danger: #ffffff;
   --accent-tint: oklch(95% 0.035 265);
   --accent-border: oklch(85% 0.08 265);
 
@@ -34,7 +37,7 @@
   --warning-border: oklch(85% 0.07 78);
   --warning-text: oklch(52% 0.14 78);
 
-  --danger: oklch(58% 0.19 25);
+  --danger: oklch(55% 0.19 25);
   --danger-tint: oklch(95% 0.035 25);
   --danger-text: oklch(54% 0.19 25);
 
@@ -48,6 +51,24 @@
 
   --font-ui: 'Manrope', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Аватар пользователя: одинаков в обеих темах. */
+  --avatar-from: #4f5fe0;
+  --avatar-to: #8b5cf0;
+
+  /* Вывод скрипта и блоки кода: в светлой теме — мягкая светлая подложка. */
+  --term-bg: #f6f7fb;
+  --term-border: #e3e5ee;
+  --term-fg: #2e3142;
+  --term-muted: #62667c;
+  --term-path: #1f7783;
+  --term-number: #95680f;
+  --term-string: #4d7a2b;
+  --term-keyword: #7650ad;
+  --term-comment: #6b6f84;
+  --term-error: #b24a45;
+  --term-warning: #93680f;
+  --term-success: #2f7a49;
 }
 
 :root[data-theme='dark'] {
@@ -58,10 +79,12 @@
 
   --text: #edecf5;
   --text-2: #9b9db3;
-  --text-3: #888bb0;
+  --text-3: #9396b8;
 
   --accent: oklch(72% 0.17 265);
   --accent-hov: oklch(78% 0.16 265);
+  --on-accent: #0f1120;
+  --on-danger: #1c0b0c;
   --accent-tint: oklch(28% 0.05 265);
   --accent-border: oklch(40% 0.09 265);
 
@@ -81,6 +104,19 @@
   --info: oklch(72% 0.14 245);
   --info-tint: oklch(26% 0.05 245);
   --info-text: var(--info);
+
+  --term-bg: #14151d;
+  --term-border: #262838;
+  --term-fg: #c9cbe0;
+  --term-muted: #8b8ea8;
+  --term-path: #86c8d0;
+  --term-number: #e2c08d;
+  --term-string: #b5cf95;
+  --term-keyword: #c3a8e6;
+  --term-comment: #80849a;
+  --term-error: #e8a09c;
+  --term-warning: #e3c88f;
+  --term-success: #9fd3a8;
 }
 
 /* Фирменный знак: восходящие узлы пайплайна (доменная метафора трекера) —

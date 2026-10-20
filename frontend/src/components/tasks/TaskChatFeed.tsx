@@ -1,12 +1,29 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { Maximize2, MessagesSquare, Minimize2 } from "lucide-react";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { NodeLogEntry } from "@/components/tasks/NodeLogEntry";
 import { Composer } from "@/components/tasks/Composer";
 import { Button } from "@/components/ui/button";
 import { useTaskOutputStream } from "@/hooks/useTaskStatusSocket";
-import { useTaskNodes } from "@/hooks/useTasks";
+import { useTaskLibraryPrompts, useTaskNodes } from "@/hooks/useTasks";
 import { cn } from "@/lib/utils";
-import type { NodeLog, TaskStatus } from "@/lib/types";
+import { TaskStatus, type NodeLog } from "@/lib/types";
+
+/** Пустая лента: что сделать, чтобы здесь появилась история. */
+const EMPTY_FEED: Record<"new" | "queued" | "other", { title: string; hint: string }> = {
+  new: {
+    title: "Задача ещё не запускалась",
+    hint: "Выберите пайплайн на вкладке «Обзор» и нажмите «Запустить» в шапке задачи. Здесь появятся промты, ответы агента и вывод скриптов.",
+  },
+  queued: {
+    title: "Задача в очереди на запуск",
+    hint: "Выполнение начнётся, когда освободится воркер. История появится здесь автоматически.",
+  },
+  other: {
+    title: "Записей пока нет",
+    hint: "Здесь появятся промты, ответы агента и вывод скриптов. Свободный промт можно отправить в поле ниже.",
+  },
+};
 
 export function TaskChatFeed({
   taskId,
@@ -22,7 +39,12 @@ export function TaskChatFeed({
   const [fullscreen, setFullscreen] = useState(false);
   const outputStream = useTaskOutputStream(taskId);
   const { data: taskNodes } = useTaskNodes(taskId, true);
-  const nodeNames = new Map((taskNodes ?? []).map((node) => [node.node_id, node.name]));
+  const { data: libraryPrompts } = useTaskLibraryPrompts(taskId);
+  // Имена нод пайплайна и промтов библиотеки — для заголовка записи в ленте.
+  const nodeNames = new Map([
+    ...(libraryPrompts ?? []).map((prompt): [string, string] => [prompt.node_id, prompt.name]),
+    ...(taskNodes ?? []).map((node): [string, string] => [node.node_id, node.name]),
+  ]);
   const feedRef = useRef<HTMLDivElement>(null);
   const previousLength = useRef(0);
 
@@ -36,22 +58,29 @@ export function TaskChatFeed({
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-1 flex-col bg-[#fdfdfe]",
-        fullscreen && "fixed inset-0 z-40 bg-bg",
+        "flex min-w-0 flex-1 flex-col bg-surface",
+        fullscreen && "fixed inset-0 z-40 overflow-auto bg-bg",
       )}
     >
-      <div className="flex items-center justify-between border-b border-border px-6 py-3.5">
+      <div className="flex items-center justify-between border-b border-border px-4 py-0.5 xl:px-6 xl:py-3.5">
         {header}
-        <Button variant="ghost" size="icon" onClick={() => setFullscreen((prev) => !prev)}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="ml-auto"
+          aria-label={fullscreen ? "Свернуть ленту" : "Развернуть ленту на весь экран"}
+          onClick={() => setFullscreen((prev) => !prev)}
+        >
           {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
         </Button>
       </div>
 
-      <div ref={feedRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-6 py-5">
+      <div ref={feedRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-6 py-5 short:flex-none short:gap-3 short:overflow-visible short:py-3">
         {nodeLogs.length === 0 && (
-          <div className="py-10 text-center text-[13px] text-text-3">
-            История выполнения появится здесь после запуска задачи
-          </div>
+          <EmptyState
+            icon={MessagesSquare}
+            {...EMPTY_FEED[taskStatus === TaskStatus.NEW || taskStatus === TaskStatus.QUEUED ? taskStatus : "other"]}
+          />
         )}
         {nodeLogs.map((log) => (
           <NodeLogEntry

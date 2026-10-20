@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, Search } from "lucide-react";
+import { ListTodo, Plus, Search, SearchX } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { NotificationBell } from "@/components/layout/NotificationBell";
 import { TaskCard } from "@/components/tasks/TaskCard";
@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { useTasks } from "@/hooks/useTasks";
 import { TaskStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 
 type FilterKey = "all" | "in_progress" | "awaiting" | "done" | "failed";
 
@@ -68,22 +70,23 @@ export function DashboardPage() {
   }, [tasks, filter, search]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className={PAGE_ROOT}>
       <PageHeader
         title="Дашборд"
         actions={
           <>
-            <div className="hidden items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-[13.5px] text-text-3 md:flex">
+            <label className="hidden min-h-11 items-center gap-2 rounded-md border border-border bg-surface-2 px-3 text-body-lg text-text-3 md:flex">
               <Search className="size-4" />
               <input
-                className="w-56 bg-transparent outline-none placeholder:text-text-3"
+                aria-label="Найти задачу по коду"
+                className="h-11 w-56 bg-transparent outline-none placeholder:text-text-3"
                 placeholder="Найти задачу по коду..."
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
-            </div>
+            </label>
             <NotificationBell />
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button aria-label="Новая задача" onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
               <span className="hidden sm:inline">Новая задача</span>
             </Button>
@@ -98,8 +101,8 @@ export function DashboardPage() {
             type="button"
             onClick={() => setFilter(filterDef.key)}
             className={cn(
-              "touch-target rounded-full bg-surface-2 px-3.5 py-1.5 text-[13px] font-bold text-text",
-              filter === filterDef.key && "bg-text text-white",
+              "touch-target rounded-full bg-surface-2 px-3.5 py-1.5 text-body font-bold text-text",
+              filter === filterDef.key && "bg-text text-bg",
             )}
           >
             {filterDef.label} · {counts[filterDef.key]}
@@ -107,11 +110,21 @@ export function DashboardPage() {
         ))}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto px-5 pb-8 lg:px-8">
+      <div className={PAGE_BODY}>
         {isLoading && <div className="py-10 text-center text-text-3">Загрузка задач…</div>}
-        {!isLoading && filtered.length === 0 && (
-          <div className="py-10 text-center text-text-3">Задачи не найдены</div>
-        )}
+        {!isLoading && filtered.length === 0 && ((tasks ?? []).length === 0 ? (
+          <EmptyState
+            icon={ListTodo}
+            title="Задач пока нет"
+            hint="Нажмите «+ Новая задача» вверху справа: укажите код RR-XXXXX, название, описание и репозитории. Затем на странице задачи выберите пайплайн и нажмите «Запустить»."
+          />
+        ) : (
+          <EmptyState
+            icon={SearchX}
+            title="Задачи не найдены"
+            hint="Выберите фильтр «Все» или измените код задачи в поиске."
+          />
+        ))}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {filtered.map((task) => (
             <TaskCard key={task.id} task={task} />

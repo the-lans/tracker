@@ -16,6 +16,7 @@ import { usePipelineNodeDependents, usePipelineNodes, usePipelines } from "@/hoo
 import { useBindPipeline } from "@/hooks/useTasks";
 import { ApiError } from "@/lib/apiClient";
 import type { NodeItem, Task } from "@/lib/types";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
 
 /** Раздел 1.2 (сценарий 2), 13.1: выбор пайплайна сразу с составом нод —
  * по умолчанию включены все, кроме нод с «пропуском по умолчанию». */
@@ -97,6 +98,20 @@ export function PipelinePickerDialog({
             ))}
           </SelectContent>
         </Select>
+        {pipelines && pipelines.length === 0 && (
+          <EmptyState
+            compact
+            title="Пайплайнов пока нет"
+            hint="Создайте пайплайн в разделе «Пайплайны» кнопкой «+ Пайплайн» и добавьте в него ноды, затем вернитесь сюда."
+          />
+        )}
+        {pipelineId && nodes && nodes.length === 0 && (
+          <EmptyState
+            compact
+            title="В этом пайплайне нет нод"
+            hint="Задаче нечего выполнять. Добавьте ноды в разделе «Пайплайны» кнопкой «+ Нода» или выберите другой пайплайн."
+          />
+        )}
         {orderedNodes.length > 0 && (
           <PipelineNodesChecklist
             nodes={orderedNodes}

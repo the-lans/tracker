@@ -29,8 +29,9 @@ export const DialogContent = forwardRef<
 ));
 DialogContent.displayName = "DialogContent";
 
+// pr-10 — место под кнопку закрытия: длинное описание не заходит под ✕.
 export const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("mb-4", className)} {...props} />
+  <div className={cn("mb-4 pr-10", className)} {...props} />
 );
 
 export const DialogTitle = forwardRef<
@@ -39,7 +40,7 @@ export const DialogTitle = forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn("text-[17px] font-extrabold text-text", className)}
+    className={cn("text-heading font-extrabold text-text", className)}
     {...props}
   />
 ));

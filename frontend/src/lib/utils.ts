@@ -1,5 +1,23 @@
 import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
+
+/** Типографическая шкала из index.css (`--text-*`) — чтобы `cn` не путал её с цветом текста. */
+export const FONT_SIZE_SCALE = [
+  "caption",
+  "meta",
+  "small",
+  "note",
+  "body",
+  "body-lg",
+  "lead",
+  "card-title",
+  "subtitle",
+  "title",
+  "heading",
+  "display",
+] as const;
+
+const twMerge = extendTailwindMerge({ extend: { theme: { text: [...FONT_SIZE_SCALE] } } });
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
@@ -38,4 +56,32 @@ export function initialsFromEmail(email: string): string {
     return (segments[0]![0]! + segments[1]![0]!).toUpperCase();
   }
   return namePart.slice(0, 2).toUpperCase();
+}
+
+/** Русская форма слова для числа: plural(5, ["минута", "минуты", "минут"]) → «минут». */
+export function plural(count: number, forms: [string, string, string]): string {
+  const mod100 = count % 100;
+  const mod10 = count % 10;
+  if (mod100 >= 11 && mod100 <= 14) return forms[2];
+  if (mod10 === 1) return forms[0];
+  if (mod10 >= 2 && mod10 <= 4) return forms[1];
+  return forms[2];
+}
+
+const INTERVAL_UNITS: Array<{ seconds: number; single: string; forms: [string, string, string] }> = [
+  { seconds: 7 * 86400, single: "каждую неделю", forms: ["неделю", "недели", "недель"] },
+  { seconds: 86400, single: "каждый день", forms: ["день", "дня", "дней"] },
+  { seconds: 3600, single: "каждый час", forms: ["час", "часа", "часов"] },
+  { seconds: 60, single: "каждую минуту", forms: ["минуту", "минуты", "минут"] },
+];
+
+/** Интервал периодической задачи словами: 300 → «каждые 5 минут», 604800 → «каждую неделю». */
+export function formatInterval(seconds: number): string {
+  for (const unit of INTERVAL_UNITS) {
+    if (seconds % unit.seconds !== 0) continue;
+    const count = seconds / unit.seconds;
+    if (count === 1) return unit.single;
+    return `${plural(count, ["каждую", "каждые", "каждые"])} ${count} ${plural(count, unit.forms)}`;
+  }
+  return `каждые ${seconds} ${plural(seconds, ["секунду", "секунды", "секунд"])}`;
 }

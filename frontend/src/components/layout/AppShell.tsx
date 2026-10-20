@@ -43,11 +43,11 @@ export function AppShell() {
       </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-3 lg:hidden">
+        <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-3 short:py-0 lg:hidden">
           <Button variant="ghost" size="icon" onClick={() => setMobileNavOpen(true)}>
             <Menu className="size-5" />
           </Button>
-          <h1 className="text-[16px] font-extrabold">
+          <h1 className="text-title font-extrabold">
             {TITLES[location.pathname] ?? "Tracker"}
           </h1>
         </header>

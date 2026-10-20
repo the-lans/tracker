@@ -13,9 +13,10 @@ import { BrandMark } from "@/components/layout/BrandMark";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { useAuth } from "@/stores/authStore";
 import { useAwaitingDecisionCount } from "@/hooks/useTasks";
-import { initialsFromEmail } from "@/lib/utils";
 import { UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { USER_ROLE_LABEL } from "@/lib/labels";
+import { UserAvatar } from "@/components/common/avatar/UserAvatar";
 
 interface NavItemDef {
   to: string;
@@ -43,7 +44,7 @@ function NavItem({ to, label, icon: Icon, badge }: NavItemDef) {
           <Icon className="size-[18px] shrink-0" />
           <span className="truncate">{label}</span>
           {Boolean(badge) && (
-            <span className="ml-auto rounded-full bg-danger px-[7px] py-px text-[11px] font-bold text-white">
+            <span className="ml-auto rounded-full bg-danger px-[7px] py-px text-caption font-bold text-on-danger">
               {badge}
             </span>
           )}
@@ -64,7 +65,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     >
       <div className="flex items-center gap-2.5 px-2 pb-[22px] pt-1.5">
         <BrandMark />
-        <span className="text-[16px] font-extrabold tracking-tight">Tracker</span>
+        <span className="text-title font-extrabold tracking-tight">Tracker</span>
       </div>
 
       <nav className="flex flex-col gap-0.5">
@@ -76,7 +77,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </nav>
 
       <div className="mb-4.5 mt-4 flex flex-col gap-0.5">
-        <div className="px-2.5 pb-1.5 pt-2.5 text-[11px] font-bold uppercase tracking-wider text-text-3">
+        <div className="px-2.5 pb-1.5 pt-2.5 text-caption font-bold uppercase tracking-wider text-text-3">
           Настройки
         </div>
         <NavItem to="/llm-accounts" label="LLM-аккаунты" icon={KeySquare} />
@@ -85,7 +86,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       {user?.role === UserRole.ADMIN && (
         <div className="flex flex-col gap-0.5">
-          <div className="px-2.5 pb-1.5 pt-2.5 text-[11px] font-bold uppercase tracking-wider text-text-3">
+          <div className="px-2.5 pb-1.5 pt-2.5 text-caption font-bold uppercase tracking-wider text-text-3">
             Администрирование
           </div>
           <NavItem to="/admin" label="Администрирование" icon={ShieldCheck} />
@@ -95,12 +96,10 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       <div className="mt-auto flex flex-col gap-2.5 border-t border-border pt-3">
         <ThemeToggle />
         <NavLink to="/profile" className="flex items-center gap-2.5 rounded-md p-1">
-          <div className="relative flex size-[34px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-[#4f5fe0] to-[#8b5cf0] text-[13.5px] font-extrabold text-white">
-            {user ? initialsFromEmail(user.email) : "?"}
-          </div>
+          <UserAvatar email={user?.email} />
           <div className="min-w-0">
-            <div className="truncate text-[13px] font-bold">{user?.email ?? "—"}</div>
-            <div className="text-[11.5px] text-text-3">{user?.role ?? ""}</div>
+            <div className="truncate text-body font-bold" title={user?.email}>{user?.email ?? "—"}</div>
+            <div className="text-meta text-text-3">{user ? USER_ROLE_LABEL[user.role] : ""}</div>
           </div>
         </NavLink>
       </div>

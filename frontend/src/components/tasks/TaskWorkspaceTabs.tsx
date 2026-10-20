@@ -7,7 +7,10 @@ const VIEWS: Array<{ value: WorkspaceView; label: string }> = [
   { value: "logs", label: "Логи" },
 ];
 
-/** Раздел 13.4, 15.2: переключатель правой панели страницы задачи. */
+/**
+ * Раздел 13.4, 15.2: переключатель правой панели страницы задачи. Только на
+ * широком экране — на узком те же разделы есть во вкладках верхнего уровня.
+ */
 export function TaskWorkspaceTabs({
   value,
   onChange,
@@ -16,7 +19,7 @@ export function TaskWorkspaceTabs({
   onChange: (value: WorkspaceView) => void;
 }) {
   return (
-    <div className="flex gap-4" role="tablist">
+    <div className="hidden gap-4 xl:flex" role="tablist">
       {VIEWS.map((view) => (
         <button
           key={view.value}
@@ -25,7 +28,7 @@ export function TaskWorkspaceTabs({
           aria-selected={value === view.value}
           onClick={() => onChange(view.value)}
           className={cn(
-            "text-[11px] font-extrabold uppercase tracking-wider text-text-3",
+            "touch-hit text-caption font-extrabold uppercase tracking-wider text-text-3",
             value === view.value && "text-accent",
           )}
         >

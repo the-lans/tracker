@@ -9,6 +9,7 @@ import { DialogFooter } from "@/components/ui/dialog";
 import { useCreateMcpServer, useUpdateMcpServer } from "@/hooks/useMcpServers";
 import { ApiError } from "@/lib/apiClient";
 import { McpAuthType, McpIsolationMode, type McpServer } from "@/lib/types";
+import { MCP_ISOLATION_LABEL } from "@/lib/labels";
 
 const REQUIRED_PATH_VARIABLE = "{{task.repos_path}}";
 
@@ -42,7 +43,7 @@ export function McpServerForm({
   // здесь же, до отправки на backend, который продублирует ту же проверку.
   const isolationError = hasStatefulResource
     ? isolationMode === "" || isolationMode === McpIsolationMode.NONE
-      ? "Выберите isolation_mode"
+      ? "Выберите режим изоляции"
       : isolationMode === McpIsolationMode.PER_TASK_DATA_DIR &&
           !isolationPathTemplate.includes(REQUIRED_PATH_VARIABLE)
         ? `isolation_path_template должен содержать ${REQUIRED_PATH_VARIABLE}`
@@ -88,9 +89,9 @@ export function McpServerForm({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={McpAuthType.NONE}>none</SelectItem>
-            <SelectItem value={McpAuthType.API_KEY}>api_key</SelectItem>
-            <SelectItem value={McpAuthType.BEARER_TOKEN}>bearer_token</SelectItem>
+            <SelectItem value={McpAuthType.NONE}>Без авторизации</SelectItem>
+            <SelectItem value={McpAuthType.API_KEY}>API-ключ</SelectItem>
+            <SelectItem value={McpAuthType.BEARER_TOKEN}>Bearer-токен</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -109,8 +110,8 @@ export function McpServerForm({
       )}
       <div className="flex items-center justify-between rounded-md border border-border p-3">
         <div>
-          <div className="text-[13px] font-bold">has_stateful_resource</div>
-          <div className="text-[11.5px] text-text-3">Сервер держит состояние между вызовами</div>
+          <div className="text-body font-bold">Ресурс с состоянием</div>
+          <div className="text-meta text-text-3">Сервер держит состояние между вызовами</div>
         </div>
         <Switch checked={hasStatefulResource} onCheckedChange={setHasStatefulResource} />
       </div>
@@ -126,14 +127,18 @@ export function McpServerForm({
                 <SelectValue placeholder="Выберите режим" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={McpIsolationMode.ISOLATED_FLAG}>isolated_flag</SelectItem>
-                <SelectItem value={McpIsolationMode.PER_TASK_DATA_DIR}>per_task_data_dir</SelectItem>
+                <SelectItem value={McpIsolationMode.ISOLATED_FLAG}>
+                  {MCP_ISOLATION_LABEL[McpIsolationMode.ISOLATED_FLAG]}
+                </SelectItem>
+                <SelectItem value={McpIsolationMode.PER_TASK_DATA_DIR}>
+                  {MCP_ISOLATION_LABEL[McpIsolationMode.PER_TASK_DATA_DIR]}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
           {isolationMode === McpIsolationMode.PER_TASK_DATA_DIR && (
             <div>
-              <Label htmlFor="mcp-path">isolation_path_template</Label>
+              <Label htmlFor="mcp-path">Шаблон пути профиля</Label>
               <Input
                 id="mcp-path"
                 placeholder="{{task.repos_path}}/.mcp-profiles/playwright"
@@ -142,7 +147,7 @@ export function McpServerForm({
               />
             </div>
           )}
-          {isolationError && <div className="text-[12px] text-danger-text">{isolationError}</div>}
+          {isolationError && <div className="text-small text-danger-text">{isolationError}</div>}
         </>
       )}
       <DialogFooter>

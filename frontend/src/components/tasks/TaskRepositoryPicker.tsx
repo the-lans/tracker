@@ -3,6 +3,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useRepositories } from "@/hooks/useRepositories";
 import { RepositoryRole, type TaskRepositoryAttach } from "@/lib/types";
+import { REPOSITORY_ROLE_LABEL } from "@/lib/labels";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
 
 const DEFAULT_BASE_BRANCH = "main";
 
@@ -37,13 +39,15 @@ export function TaskRepositoryPicker({
   }
 
   if (isLoading) {
-    return <div className="text-[12.5px] text-text-3">Загрузка репозиториев…</div>;
+    return <div className="text-note text-text-3">Загрузка репозиториев…</div>;
   }
   if (!repositories?.length) {
     return (
-      <div className="text-[12.5px] text-text-3">
-        Репозиториев пока нет — добавьте их в разделе «Репозитории».
-      </div>
+      <EmptyState
+        compact
+        title="Репозиториев пока нет"
+        hint="Подключите репозиторий в разделе «Репозитории» кнопкой «+ Репозиторий» (Git-адрес и deploy-ключ) — затем его можно будет выбрать здесь."
+      />
     );
   }
 
@@ -53,7 +57,7 @@ export function TaskRepositoryPicker({
         const attached = selected.get(repository.id);
         return (
           <div key={repository.id} className="rounded-lg border border-border px-2.5 py-2">
-            <label className="flex items-center gap-2.5 text-[13px] font-bold">
+            <label className="flex items-center gap-2.5 text-body font-bold">
               <Checkbox
                 checked={Boolean(attached)}
                 onCheckedChange={(checked) => toggle(repository.id, checked === true)}
@@ -70,8 +74,8 @@ export function TaskRepositoryPicker({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={RepositoryRole.READ_WRITE}>read-write</SelectItem>
-                    <SelectItem value={RepositoryRole.READ_ONLY}>read-only</SelectItem>
+                    <SelectItem value={RepositoryRole.READ_WRITE}>{REPOSITORY_ROLE_LABEL[RepositoryRole.READ_WRITE]}</SelectItem>
+                    <SelectItem value={RepositoryRole.READ_ONLY}>{REPOSITORY_ROLE_LABEL[RepositoryRole.READ_ONLY]}</SelectItem>
                   </SelectContent>
                 </Select>
                 <Input

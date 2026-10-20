@@ -13,7 +13,7 @@ export function ThemeToggle() {
         aria-pressed={theme === "light"}
         onClick={() => setTheme("light")}
         className={cn(
-          "flex size-[27px] items-center justify-center rounded-full text-text-3",
+          "flex size-11 items-center justify-center rounded-full text-text-3 xl:size-8",
           theme === "light" && "bg-surface text-accent shadow-sm",
         )}
       >
@@ -25,7 +25,7 @@ export function ThemeToggle() {
         aria-pressed={theme === "dark"}
         onClick={() => setTheme("dark")}
         className={cn(
-          "flex size-[27px] items-center justify-center rounded-full text-text-3",
+          "flex size-11 items-center justify-center rounded-full text-text-3 xl:size-8",
           theme === "dark" && "bg-surface text-accent shadow-sm",
         )}
       >

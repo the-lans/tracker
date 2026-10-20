@@ -4,6 +4,7 @@ import { Card, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DependentNodesDialog } from "@/components/tasks/DependentNodesDialog";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
+import { NODE_TYPE_LABEL } from "@/lib/labels";
 import { useDependentNodesGuard } from "@/hooks/useDependentNodesGuard";
 import {
   useSetTaskNodeEnabled,
@@ -18,6 +19,7 @@ import {
   type Task,
   type TaskNodeItem,
 } from "@/lib/types";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
 
 /** Раздел 13.2, 15.2: пояснение к блокировке чекбоксов нод. */
 function nodesHint(status: TaskStatus): string {
@@ -94,6 +96,13 @@ export function TaskNodesCard({
           )}
         </CardTitle>
         <div className="flex flex-col">
+          {taskNodes && taskNodes.length === 0 && (
+            <EmptyState
+              compact
+              title="В пайплайне нет нод"
+              hint="Пайплайн был пуст в момент привязки, поэтому задаче нечего выполнять. Добавьте ноды в разделе «Пайплайны» кнопкой «+ Нода» и создайте задачу заново."
+            />
+          )}
           {(taskNodes ?? []).map((taskNode) => {
             const done = successfulPipelineNodeIds.has(taskNode.node_id);
             const isCurrent = taskNode.node_id === currentNodeId;
@@ -104,7 +113,7 @@ export function TaskNodesCard({
                   "flex items-center gap-2.5 border-t border-border py-2 first:border-t-0",
                   isCurrent &&
                     "-mx-2 rounded-lg border-t-0 bg-accent-tint px-2",
-                  !taskNode.is_enabled && "opacity-50",
+                  !taskNode.is_enabled && "text-text-3",
                 )}
               >
                 <Checkbox
@@ -123,7 +132,7 @@ export function TaskNodesCard({
                   type={taskNode.node_type}
                   className="size-[15px] shrink-0 text-text-2"
                 />
-                <div className="flex-1 truncate text-[12.5px] font-bold">
+                <div className="min-w-0 flex-1 truncate text-note font-bold" title={taskNode.name}>
                   {taskNode.name}
                 </div>
                 {done ? (
@@ -132,15 +141,15 @@ export function TaskNodesCard({
                     aria-label="выполнено"
                   />
                 ) : (
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-text-3">
-                    {taskNode.node_type}
+                  <div className="text-caption font-bold uppercase tracking-wide text-text-3">
+                    {NODE_TYPE_LABEL[taskNode.node_type]}
                   </div>
                 )}
               </label>
             );
           })}
         </div>
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-text-3">
+        <div className="mt-2 flex items-center gap-1.5 text-caption text-text-3">
           <Lock className="size-3" />
           {nodesHint(task.status)}
         </div>

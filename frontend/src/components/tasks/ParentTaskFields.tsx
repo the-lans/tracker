@@ -41,7 +41,7 @@ export function ParentTaskFields({
           </SelectContent>
         </Select>
       </div>
-      <label className="flex items-center gap-2 text-[12.5px] text-text-2">
+      <label className="flex items-center gap-2 text-note text-text-2">
         <Checkbox
           checked={useParentSummary}
           disabled={!parentTaskId}

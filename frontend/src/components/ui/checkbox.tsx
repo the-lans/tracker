@@ -11,13 +11,13 @@ export const Checkbox = forwardRef<
     ref={ref}
     className={cn(
       // Зона нажатия 44px (как у `touch-target`) без раздувания самого квадрата.
-      "relative flex size-5 shrink-0 before:absolute before:-inset-3 before:content-[''] items-center justify-center rounded-[5px] border-[1.5px] border-text-3 bg-surface data-[state=checked]:border-success data-[state=checked]:bg-success disabled:opacity-40",
+      "relative flex size-5 shrink-0 before:absolute before:-inset-[14px] before:content-[''] items-center justify-center rounded-[5px] border-[1.5px] border-text-3 bg-surface data-[state=checked]:border-success data-[state=checked]:bg-success disabled:opacity-40",
       className,
     )}
     {...props}
   >
     <CheckboxPrimitive.Indicator>
-      <Check className="size-3.5 text-white" strokeWidth={3} />
+      <Check className="size-3.5 text-on-accent" strokeWidth={3} />
     </CheckboxPrimitive.Indicator>
   </CheckboxPrimitive.Root>
 ));

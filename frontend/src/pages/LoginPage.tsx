@@ -60,20 +60,20 @@ export function LoginPage() {
     <div className="flex h-dvh w-full flex-col items-center justify-center gap-6 bg-bg px-4">
       <div className="flex items-center gap-3">
         <BrandMark size={40} />
-        <span className="text-[22px] font-extrabold tracking-tight">Tracker</span>
+        <span className="text-display font-extrabold tracking-tight">Tracker</span>
       </div>
-      <p className="max-w-xs text-center text-[13.5px] text-text-2">
+      <p className="max-w-xs text-center text-body-lg text-text-2">
         Войдите с помощью учётной записи Google, разрешённой администратором.
       </p>
       {GOOGLE_CLIENT_ID ? (
         <div ref={buttonRef} />
       ) : (
-        <div className="max-w-sm rounded-lg border border-warning-border bg-warning-tint p-3 text-center text-[12.5px] text-warning-text">
+        <div className="max-w-sm rounded-lg border border-warning-border bg-warning-tint p-3 text-center text-note text-warning-text">
           Не задан VITE_GOOGLE_CLIENT_ID — вход через Google недоступен. Заполните переменную
           окружения (см. frontend/.env.example) и пересоберите фронтенд.
         </div>
       )}
-      {signingIn && <p className="text-[12.5px] text-text-3">Выполняется вход…</p>}
+      {signingIn && <p className="text-note text-text-3">Выполняется вход…</p>}
     </div>
   );
 }

@@ -21,6 +21,7 @@ import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { ApiError } from "@/lib/apiClient";
 import { formatDateTime } from "@/lib/utils";
 import { LibraryPromptRunStatus, type NodeItem, type Task } from "@/lib/types";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
 
 const RUN_STATUS_LABEL: Record<LibraryPromptRunStatus, string> = {
   [LibraryPromptRunStatus.NEVER_RUN]: "не запускался",
@@ -113,19 +114,23 @@ export function TaskLibraryPromptsCard({
                 <Square className="size-2.5" fill="currentColor" />
               </button>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[12.5px] font-bold">{prompt.name}</div>
+                <div className="truncate text-note font-bold" title={prompt.name}>{prompt.name}</div>
                 {prompt.last_run_at && (
-                  <div className="text-[10.5px] text-text-3">{formatDateTime(prompt.last_run_at)}</div>
+                  <div className="text-caption text-text-3">{formatDateTime(prompt.last_run_at)}</div>
                 )}
               </div>
-              <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10.5px] font-bold text-text-3">
+              <span className="rounded-full bg-surface-2 px-2 py-0.5 text-caption font-bold text-text-3">
                 {RUN_STATUS_LABEL[prompt.last_run_status]}
               </span>
             </div>
           );
         })}
         {prompts?.length === 0 && (
-          <div className="py-2 text-[12.5px] text-text-3">Промты из библиотеки не добавлены</div>
+          <EmptyState
+            compact
+            title="Промты из библиотеки не добавлены"
+            hint="Нажмите «+ Добавить промт из библиотеки» ниже — промт появится здесь, и его можно будет запускать в этой задаче кнопкой ▶."
+          />
         )}
       </div>
       <Button size="sm" variant="secondary" className="mt-2" onClick={() => setPickerOpen(true)}>
@@ -150,6 +155,13 @@ export function TaskLibraryPromptsCard({
               ))}
             </SelectContent>
           </Select>
+          {libraryNodes.length === 0 && (
+            <EmptyState
+              compact
+              title="В библиотеке пока нет промтов"
+              hint="Сохраните промт, слэш-команду или скрипт в разделе «Библиотека промтов» кнопкой «+ Промт» — после этого его можно будет добавить в задачу."
+            />
+          )}
           <DialogFooter>
             <Button variant="secondary" onClick={() => setPickerOpen(false)}>
               Отмена

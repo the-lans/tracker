@@ -7,6 +7,8 @@ import { Label } from "@/components/ui/label";
 import { useSystemSettings, useUpdateSystemSettings } from "@/hooks/useAdmin";
 import { ApiError } from "@/lib/apiClient";
 import type { SystemSettings } from "@/lib/types";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { SectionTitle } from "@/components/common/typography/SectionTitle";
 
 type NumericField =
   | "default_timeout_seconds"
@@ -93,14 +95,14 @@ export function SystemSettingsPanel() {
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="text-[12.5px] font-extrabold text-text-2">
+      <SectionTitle>
         Системные настройки
-      </div>
-      <Card className="text-[13px] text-text-2">
-        <div className="mb-3 text-[12px] text-text-3">
+      </SectionTitle>
+      <Card className="text-body text-text-2">
+        <div className="mb-3 text-small text-text-3">
           Значения подставляются в новые ноды; уже созданные ноды не меняются.
         </div>
-        {isLoading && <div className="text-text-3">Загрузка…</div>}
+        {isLoading && <LoadingState />}
         {settings && <SettingsForm initial={settings} />}
       </Card>
     </div>

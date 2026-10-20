@@ -9,7 +9,9 @@ export const Switch = forwardRef<
   <SwitchPrimitive.Root
     ref={ref}
     className={cn(
-      "touch-target relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-border bg-surface-2 transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent disabled:opacity-50",
+      // Трек остаётся 36×20, а зона нажатия расширена псевдоэлементом до 58×46
+      // (раздел 15.3) — `touch-target` растянул бы сам трек в круг.
+      "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border-[1.5px] border-text-3 bg-surface-2 transition-colors after:absolute after:-inset-x-3 after:-inset-y-[14px] after:content-[''] data-[state=checked]:border-accent data-[state=checked]:bg-accent disabled:opacity-50",
       className,
     )}
     {...props}

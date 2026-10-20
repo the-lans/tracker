@@ -36,19 +36,19 @@ export function NotificationBell() {
             "z-50 w-80 rounded-lg border border-border bg-surface p-2 shadow-xl",
           )}
         >
-          <div className="px-2 py-1.5 text-[12px] font-bold text-text-2">
+          <div className="px-2 py-1.5 text-small font-bold text-text-2">
             Ожидают решения ({count})
           </div>
           {awaitingTasks.length === 0 && (
-            <div className="px-2 py-3 text-[13px] text-text-3">Нет задач, ожидающих решения</div>
+            <div className="px-2 py-3 text-body text-text-3">Нет задач, ожидающих решения</div>
           )}
           {awaitingTasks.slice(0, 8).map((task) => (
             <DropdownMenu.Item key={task.id} asChild>
               <Link
                 to={`/tasks/${task.id}`}
-                className="block rounded-md px-2 py-2 text-[13px] font-semibold text-text hover:bg-surface-2"
+                className="block rounded-md px-2 py-2 text-body font-semibold text-text hover:bg-surface-2"
               >
-                <span className="mr-2 font-mono text-[11px] text-text-3">{task.code}</span>
+                <span className="mr-2 font-mono text-caption text-text-3">{task.code}</span>
                 {task.title}
               </Link>
             </DropdownMenu.Item>

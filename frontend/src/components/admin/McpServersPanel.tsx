@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CircleCheck, CircleX, Plus, Trash2 } from "lucide-react";
+import { CircleCheck, CircleX, Plus, Server } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,12 @@ import { McpServerForm } from "@/components/admin/McpServerForm";
 import { useDeleteMcpServer, useMcpServers } from "@/hooks/useMcpServers";
 import { ApiError } from "@/lib/apiClient";
 import type { McpServer } from "@/lib/types";
+import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
+import { EditButton } from "@/components/common/actions/EditButton";
+import { MCP_ISOLATION_LABEL } from "@/lib/labels";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { SectionTitle } from "@/components/common/typography/SectionTitle";
 
 export function McpServersPanel() {
   const { data: servers, isLoading } = useMcpServers();
@@ -18,12 +24,19 @@ export function McpServersPanel() {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <div className="text-[12.5px] font-extrabold text-text-2">MCP-серверы</div>
+        <SectionTitle>MCP-серверы</SectionTitle>
         <Button size="sm" onClick={() => setDialogServer("new")}>
           <Plus className="size-3.5" /> Сервер
         </Button>
       </div>
-      {isLoading && <div className="text-text-3">Загрузка…</div>}
+      {isLoading && <LoadingState />}
+      {!isLoading && (servers ?? []).length === 0 && (
+        <EmptyState
+          icon={Server}
+          title="MCP-серверов пока нет"
+          hint="Нажмите «+ Сервер» выше и укажите адрес. Подключённый сервер добавляется в шаблон — тогда агент в задачах получает его инструменты."
+        />
+      )}
       {(servers ?? []).map((server) => (
         <Card key={server.id} className="flex items-center gap-3">
           {server.is_healthy ? (
@@ -31,25 +44,26 @@ export function McpServersPanel() {
           ) : (
             <CircleX className="size-4 shrink-0 text-danger" />
           )}
-          <button className="min-w-0 flex-1 text-left" onClick={() => setDialogServer(server)}>
-            <div className="truncate font-bold">{server.name}</div>
-            <div className="truncate text-[12px] text-text-3">{server.url}</div>
-          </button>
-          {server.has_stateful_resource && (
-            <Badge tone="warning">{server.isolation_mode}</Badge>
-          )}
-          <button
-            type="button"
-            onClick={() =>
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-bold" title={server.name}>{server.name}</div>
+            <div className="truncate text-small text-text-3" title={server.url}>{server.url}</div>
+            {server.has_stateful_resource && (
+              <Badge tone="warning" className="mt-1">
+                {server.isolation_mode ? MCP_ISOLATION_LABEL[server.isolation_mode] : "изоляция не выбрана"}
+              </Badge>
+            )}
+          </div>
+          <EditButton name={server.name} onClick={() => setDialogServer(server)} />
+          <ConfirmDeleteButton
+            kind="MCP-сервер"
+            name={server.name}
+            pending={deleteServer.isPending}
+            onConfirm={() =>
               deleteServer.mutate(server.id, {
                 onError: (error) =>
                   toast.error(error instanceof ApiError ? error.message : "Не удалось удалить"),
-              })
-            }
-            className="touch-target flex items-center justify-center text-text-3 hover:text-danger"
-          >
-            <Trash2 className="size-4" />
-          </button>
+              })}
+          />
         </Card>
       ))}
 

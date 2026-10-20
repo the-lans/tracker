@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { Copy, Eraser, FolderX } from "lucide-react";
 import { toast } from "sonner";
-import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { ConfirmDialog } from "@/components/common/dialogs/ConfirmDialog";
 import { DuplicateTaskDialog } from "@/components/tasks/DuplicateTaskDialog";
-import { HEADER_BUTTON } from "@/components/tasks/headerButton";
+import { HEADER_BUTTON } from "@/styles/classes";
 import { useCleanupRepositories, useClearContext } from "@/hooks/useTasks";
 import { ApiError } from "@/lib/apiClient";
 import { TaskStatus, type Task } from "@/lib/types";
+import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
 
 type PendingAction = "cleanup" | "clear-context" | null;
 
@@ -46,24 +47,42 @@ export function TaskLifecycleActions({ task }: { task: Task }) {
   return (
     <>
       {task.status === TaskStatus.FAILED && (
-        <button type="button" className={HEADER_BUTTON} onClick={() => setPending("clear-context")}>
+        <button
+          type="button"
+          className={HEADER_BUTTON}
+          aria-label="Очистить контекст"
+          title="Очистить контекст"
+          onClick={() => setPending("clear-context")}
+        >
           <Eraser className="size-3.5" />
-          <span className="hidden sm:inline">Очистить контекст</span>
+          <ButtonLabel>Очистить контекст</ButtonLabel>
         </button>
       )}
       {isTerminal && !task.repo_cleaned_at && (
-        <button type="button" className={HEADER_BUTTON} onClick={() => setPending("cleanup")}>
+        <button
+          type="button"
+          className={HEADER_BUTTON}
+          aria-label="Очистить репозитории"
+          title="Очистить репозитории"
+          onClick={() => setPending("cleanup")}
+        >
           <FolderX className="size-3.5" />
-          <span className="hidden sm:inline">Очистить репозитории</span>
+          <ButtonLabel>Очистить репозитории</ButtonLabel>
         </button>
       )}
       {isTerminal && task.repo_cleaned_at && (
-        <span className="hidden text-[12px] text-text-3 sm:inline">Репозитории очищены</span>
+        <span className="hidden text-small text-text-3 sm:inline">Репозитории очищены</span>
       )}
       {task.status === TaskStatus.DONE && (
-        <button type="button" className={HEADER_BUTTON} onClick={() => setDuplicateOpen(true)}>
+        <button
+          type="button"
+          className={HEADER_BUTTON}
+          aria-label="Дублировать"
+          title="Дублировать"
+          onClick={() => setDuplicateOpen(true)}
+        >
           <Copy className="size-3.5" />
-          <span className="hidden sm:inline">Дублировать</span>
+          <ButtonLabel>Дублировать</ButtonLabel>
         </button>
       )}
 

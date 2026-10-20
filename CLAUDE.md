@@ -114,7 +114,12 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               админка (раздел 15.5), Web Push (public/service-worker.js,
               src/lib/push.ts, раздел 18.1); Dockerfile + nginx.conf —
               продовый образ (сборка на Node, раздача nginx с SPA-фолбэком
-              на index.html для клиентских маршрутов)
+              на index.html для клиентских маршрутов). Общие элементы — по
+              типам: components/ui (примитивы), components/common/{actions,
+              avatar,dialogs,feedback,typography}, components/layout;
+              styles/tokens.css + index.css — токены (цвета, шкала шрифтов
+              text-caption…text-display), styles/classes.ts — общие наборы
+              классов; lib/labels.ts — все подписи и цвета статусов
 deploy/
   caddy/     — конфигурация reverse-proxy (handle_path /api/* — срезает
               префикс перед проксированием на backend)

@@ -4,6 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { TaskRepositoryPicker } from "@/components/tasks/TaskRepositoryPicker";
 import { useLlmAccounts } from "@/hooks/useLlmAccounts";
 import type { TaskFormValues } from "@/components/tasks/taskForm.types";
+import { EmptyState } from "@/components/common/feedback/EmptyState";
 
 /** Поля задачи: код, название, описание, гайд, LLM-аккаунт, репозитории. */
 export function TaskFormFields({
@@ -68,6 +69,13 @@ export function TaskFormFields({
             ))}
           </SelectContent>
         </Select>
+        {llmAccounts && llmAccounts.length === 0 && (
+          <EmptyState
+            compact
+            title="LLM-аккаунтов пока нет"
+            hint="Без аккаунта Claude задачу не запустить. Добавьте его в разделе «LLM-аккаунты» кнопкой «+ Аккаунт»."
+          />
+        )}
       </div>
       <div>
         <Label>Репозитории</Label>
