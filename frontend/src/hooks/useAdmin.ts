@@ -19,8 +19,12 @@ const USERS_KEY = ["admin", "users"] as const;
 const ALLOWED_EMAILS_KEY = ["admin", "allowed-emails"] as const;
 const PERIODIC_TASKS_KEY = ["admin", "periodic-tasks"] as const;
 
-export function useUsers() {
-  return useQuery({ queryKey: USERS_KEY, queryFn: () => api.get<User[]>("/users") });
+export function useUsers(options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: USERS_KEY,
+    queryFn: () => api.get<User[]>("/users"),
+    enabled: options.enabled ?? true,
+  });
 }
 
 export function useUpdateUser(userId: string) {

@@ -1,7 +1,8 @@
 import { LogOut } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ActiveSessionsCard } from "@/components/profile/ActiveSessionsCard";
-import { Card, CardTitle } from "@/components/ui/card";
+import { SshKeyCard } from "@/components/profile/SshKeyCard";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/stores/authStore";
 import { USER_ROLE_LABEL } from "@/lib/labels";
@@ -25,15 +26,7 @@ export function ProfilePage() {
             </div>
           </Card>
 
-          <Card>
-            <CardTitle>SSH-ключ для sshfs</CardTitle>
-            <div className="text-body text-text-3">
-              {/* Провижининг ОС-пользователей и ключей вынесен за периметр проекта
-                  (раздел 15.1 ТЗ, docs/implementation_plan.md). */}
-              Ключ для доступа к файлам задач по sshfs выдаёт администратор сервера. Чтобы
-              получить или заменить ключ, обратитесь к нему.
-            </div>
-          </Card>
+          <SshKeyCard />
 
           <ActiveSessionsCard />
 

@@ -3,7 +3,7 @@ import { BookOpen } from "lucide-react";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { NODE_TYPE_LABEL } from "@/lib/labels";
 import { useNodes } from "@/hooks/useNodes";
-import { useLibraryUsage } from "@/hooks/useAdmin";
+import { useLibraryUsage, useUsers } from "@/hooks/useAdmin";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
@@ -14,7 +14,9 @@ import { SectionTitle } from "@/components/common/typography/SectionTitle";
 export function PromptLibraryPanel() {
   const { data: nodes, isLoading } = useNodes({ libraryOnly: true, includeArchived: true });
   const { data: usage } = useLibraryUsage();
+  const { data: users } = useUsers();
   const usageByNode = new Map((usage ?? []).map((item) => [item.node_id, item.task_count]));
+  const emailByUser = new Map((users ?? []).map((user) => [user.id, user.email]));
 
   return (
     <div className="flex flex-col gap-2">
@@ -36,6 +38,7 @@ export function PromptLibraryPanel() {
             <div className="mt-0.5 flex flex-wrap gap-x-3 text-caption text-text-3">
               <span className="font-bold uppercase">{NODE_TYPE_LABEL[node.node_type]}</span>
               <span>в {usageByNode.get(node.id) ?? 0} задачах</span>
+              <span className="truncate">автор: {emailByUser.get(node.created_by) ?? "—"}</span>
               {node.is_archived && <span>архивирован</span>}
             </div>
           </div>

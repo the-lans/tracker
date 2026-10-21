@@ -9,9 +9,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { DialogFooter } from "@/components/ui/dialog";
 import { useCreateTemplate, useUpdateTemplate } from "@/hooks/useTemplates";
 import { useMcpServers } from "@/hooks/useMcpServers";
-import { useAuth } from "@/stores/authStore";
 import { ApiError } from "@/lib/apiClient";
-import { UserRole, type Template } from "@/lib/types";
+import type { Template } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 
 interface FileRow {
@@ -31,12 +30,8 @@ export function TemplateForm({
   onSaved: () => void;
   onCancel: () => void;
 }) {
-  const { user } = useAuth();
-  const isAdmin = user?.role === UserRole.ADMIN;
-  // GET /mcp-servers admin-only — для не-admin список серверов недоступен
-  // (реальное расхождение прав доступа между api/templates.py и
-  // api/mcp_servers.py, см. итоговый отчёт по Этапу 13).
-  const { data: mcpServers } = useMcpServers({ enabled: isAdmin });
+  // Раздел 10.5, 19.2: список серверов читает любой пользователь, меняет — только admin.
+  const { data: mcpServers } = useMcpServers();
   const createTemplate = useCreateTemplate();
   const updateTemplate = useUpdateTemplate(template?.id ?? "");
 
@@ -58,8 +53,7 @@ export function TemplateForm({
     );
     const onError = (error: unknown) =>
       toast.error(error instanceof ApiError ? error.message : "Не удалось сохранить шаблон");
-    // Не-admin не видит серверы: пустой список стёр бы привязки, поэтому он не отправляется.
-    const mcp = isAdmin ? { mcp_server_ids: mcpServerIds } : {};
+    const mcp = { mcp_server_ids: mcpServerIds };
     if (template) {
       updateTemplate.mutate({ name, files: filesRecord, ...mcp }, { onSuccess: onSaved, onError });
     } else {
@@ -127,36 +121,30 @@ export function TemplateForm({
 
         <Card>
           <CardTitle>MCP-серверы шаблона</CardTitle>
-          {isAdmin ? (
-            <div className="flex flex-col gap-1.5">
-              {(mcpServers ?? []).map((server) => (
-                <label key={server.id} className="flex items-center gap-2 text-body">
-                  <Checkbox
-                    checked={mcpServerIds.includes(server.id)}
-                    onCheckedChange={(checked) =>
-                      setMcpServerIds((prev) =>
-                        checked === true
-                          ? [...prev, server.id]
-                          : prev.filter((id) => id !== server.id),
-                      )
-                    }
-                  />
-                  {server.name}
-                </label>
-              ))}
-              {(mcpServers ?? []).length === 0 && (
-                <EmptyState
-                  compact
-                  title="MCP-серверов пока нет"
-                  hint="Подключите сервер в «Администрирование → MCP-серверы» кнопкой «+ Сервер», затем отметьте его здесь."
+          <div className="flex flex-col gap-1.5">
+            {(mcpServers ?? []).map((server) => (
+              <label key={server.id} className="flex items-center gap-2 text-body">
+                <Checkbox
+                  checked={mcpServerIds.includes(server.id)}
+                  onCheckedChange={(checked) =>
+                    setMcpServerIds((prev) =>
+                      checked === true
+                        ? [...prev, server.id]
+                        : prev.filter((id) => id !== server.id),
+                    )
+                  }
                 />
-              )}
-            </div>
-          ) : (
-            <div className="text-small text-text-3">
-              Выбор MCP-серверов требует роли admin (см. /mcp-servers)
-            </div>
-          )}
+                {server.name}
+              </label>
+            ))}
+            {(mcpServers ?? []).length === 0 && (
+              <EmptyState
+                compact
+                title="MCP-серверов пока нет"
+                hint="Серверы подключает администратор в «Администрирование → MCP-серверы». После этого отметьте нужные здесь."
+              />
+            )}
+          </div>
         </Card>
       </div>
       <DialogFooter>

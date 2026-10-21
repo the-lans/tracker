@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Archive, ArchiveRestore, Plus, Workflow } from "lucide-react";
+import { Plus, Workflow } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,9 @@ import {
 } from "@/hooks/usePipelines";
 import { ApiError } from "@/lib/apiClient";
 import type { Pipeline } from "@/lib/types";
+import { ArchiveToggleButton } from "@/components/common/actions/ArchiveToggleButton";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
+import { OwnerLabel } from "@/components/common/avatar/OwnerLabel";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
@@ -32,9 +34,11 @@ import { LoadingState } from "@/components/common/feedback/LoadingState";
 function PipelineArchiveToggle({ pipeline }: { pipeline: Pipeline }) {
   const updatePipeline = useUpdatePipeline(pipeline.id);
   return (
-    <button
-      type="button"
-      onClick={() =>
+    <ArchiveToggleButton
+      name={pipeline.name}
+      archived={pipeline.is_archived}
+      pending={updatePipeline.isPending}
+      onToggle={() =>
         updatePipeline.mutate(
           { is_archived: !pipeline.is_archived },
           {
@@ -43,11 +47,7 @@ function PipelineArchiveToggle({ pipeline }: { pipeline: Pipeline }) {
           },
         )
       }
-      className="touch-target flex items-center justify-center text-text-3 hover:text-text"
-      aria-label={pipeline.is_archived ? "Разархивировать" : "Архивировать"}
-    >
-      {pipeline.is_archived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}
-    </button>
+    />
   );
 }
 
@@ -121,6 +121,7 @@ export function PipelinesPage() {
                     архивирован
                   </Badge>
                 )}
+                <OwnerLabel ownerId={pipeline.created_by} />
               </Link>
               <PipelineArchiveToggle pipeline={pipeline} />
               <ConfirmDeleteButton
