@@ -47,6 +47,12 @@ fi
 if [ "$1 $2 $3" = "compose exec -T" ]; then
   cat > "$STUB_DIR/psql-input"
 fi
+case "$*" in
+  *seed_periodic_tasks*) [ -f "$STUB_DIR/fail-seed" ] && exit 1 ;;
+esac
+if [ "$1" = "version" ]; then
+  cat "$STUB_DIR/engine-version" 2>/dev/null || echo "27.3.1"
+fi
 exit 0
 """
 _LOGGING_STUB = """#!/bin/sh
@@ -142,7 +148,12 @@ def _make_restore_dir(tmp_path: Path, *, skip: str | None = None) -> Path:
     for name, write in files.items():
         if name != skip:
             write(restore_dir / name)
-    for archive in ("task_repos.tar.gz", "user_files.tar.gz", "log_archive.tar.gz"):
+    for archive in (
+        "task_repos.tar.gz",
+        "user_files.tar.gz",
+        "log_archive.tar.gz",
+        "claude_accounts.tar.gz",
+    ):
         if archive != skip:
             with tarfile.open(restore_dir / archive, "w:gz"):
                 pass
@@ -180,6 +191,7 @@ class TestRestore:
             "task_repos.tar.gz",
             "user_files.tar.gz",
             "log_archive.tar.gz",
+            "claude_accounts.tar.gz",
             "docker compose run --rm backend alembic upgrade head",
             "docker compose up -d backend worker beat frontend caddy backup",
         ]
@@ -193,7 +205,10 @@ class TestRestore:
         env_file = install_dir / ".env"
         assert env_file.read_text() == "SECRET_ENCRYPTION_KEY=старый-ключ\n"
 
-    @pytest.mark.parametrize("missing", [".env", "user_files.tar.gz", "log_archive.tar.gz"])
+    @pytest.mark.parametrize(
+        "missing",
+        [".env", "user_files.tar.gz", "log_archive.tar.gz"],
+    )
     def test_incomplete_transfer(
         self,
         tmp_path: Path,
@@ -214,6 +229,29 @@ class TestRestore:
         assert result.returncode != 0
         assert missing in result.stdout
         assert _calls(stubs) == []
+
+    def test_without_claude_accounts(
+        self,
+        tmp_path: Path,
+        stubs: Path,
+        install_dir: Path,
+    ) -> None:
+        """Перенос с сервера прежней версии: volume `claude_accounts` там ещё не было."""
+        restore_dir = _make_restore_dir(tmp_path, skip="claude_accounts.tar.gz")
+
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--restore",
+            str(restore_dir),
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "claude_accounts.tar.gz нет в переносе" in result.stdout
+        docker_calls = [call for call in _calls(stubs) if call.startswith("docker")]
+        assert any("log_archive.tar.gz" in call for call in docker_calls)
+        assert not any("claude_accounts.tar.gz" in call for call in docker_calls)
 
     def test_unknown_argument(self, stubs: Path, install_dir: Path) -> None:
         result = _run_bash(
@@ -251,3 +289,52 @@ class TestInstallDocker:
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert "apt-get install -y docker-compose-plugin" in _calls(stubs)
+
+
+class TestDockerEngineVersion:
+    """Раздел 20.2 п. 1: `volume-subpath` script-нод требует Docker Engine 26+."""
+
+    @pytest.mark.parametrize(
+        ("version", "ok"),
+        [("26.0.0", True), ("29.5.2", True), ("25.0.5", False), ("garbage", False)],
+        ids=["min", "new", "old", "unparsable"],
+    )
+    def test_check(self, stubs: Path, install_dir: Path, version: str, ok: bool) -> None:
+        (stubs / "engine-version").write_text(f"{version}\n")
+
+        result = _run_bash(
+            f'source "{_INSTALL_SCRIPT}" && step_install_docker',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert (result.returncode == 0) is ok, result.stdout + result.stderr
+        if not ok:
+            assert "Docker Engine" in result.stdout + result.stderr
+
+
+class TestSeedData:
+    """Раздел 20.2 п. 8: начальные данные — до первого входа администратора."""
+
+    def _run(self, stubs: Path, install_dir: Path) -> subprocess.CompletedProcess[str]:
+        return _run_bash(
+            f'source "{_INSTALL_SCRIPT}" && ADMIN_EMAIL=admin@example.com step_seed_data',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+    def test_seeds_both(self, stubs: Path, install_dir: Path) -> None:
+        result = self._run(stubs, install_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        calls = _calls(stubs)
+        assert any("seed_admin_allowlist.py admin@example.com" in call for call in calls)
+        assert any("seed_periodic_tasks.py" in call for call in calls)
+        assert "после первого входа" not in result.stdout
+
+    def test_periodic_seed_failure_stops_install(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "fail-seed").touch()
+
+        result = self._run(stubs, install_dir)
+
+        assert result.returncode != 0
