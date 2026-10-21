@@ -20,8 +20,7 @@ class Pipeline(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     __tablename__ = "pipelines"
 
     name: Mapped[str] = mapped_column(sa.String)
-    # Не из таблицы ТЗ 3.1: прямое следствие правила 3.2 "вместо удаления —
-    # архивация", применённого к пайплайну, используемому хотя бы задачей.
+    # Раздел 3.1, 3.2: используемый задачей пайплайн вместо удаления архивируется.
     is_archived: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     # Раздел 19.2: пайплайн — личный, `user` видит и меняет только свои.
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), index=True)
@@ -68,14 +67,11 @@ class Node(UUIDPrimaryKeyMixin, Base):
     guide_url: Mapped[str | None] = mapped_column(sa.String)
     is_skipped: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     is_library_item: Mapped[bool] = mapped_column(sa.Boolean)
-    # Не из таблицы ТЗ 3.1: раздел 5 упоминает переменную
-    # `{{node.llm_output_last_n}}` с "параметром N, задаваемым в конфигурации
-    # ноды", но не называет само поле — это оно. NULL — переменная не
-    # настроена для ноды (использование в шаблоне этой ноды не проходит
-    # валидацию сохранения).
+    # Раздел 3.1, 5: параметр N переменной `{{node.llm_output_last_n}}`. NULL —
+    # переменная не настроена для ноды (использование в шаблоне этой ноды не
+    # проходит валидацию сохранения).
     llm_output_last_n: Mapped[int | None] = mapped_column(sa.Integer)
-    # Не из таблицы ТЗ 3.1: то же следствие правила 3.2, что и у Pipeline,
-    # применённое к системному промту библиотеки.
+    # Раздел 3.1, 3.2: архивация системного промта библиотеки.
     is_archived: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     # Раздел 19.2: у ноды пайплайна — автор пайплайна, у промта библиотеки —
     # тот, кто его создал; доступ к любой ноде проверяется по этому полю.

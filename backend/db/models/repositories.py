@@ -33,12 +33,9 @@ class Template(UUIDPrimaryKeyMixin, Base):
 
 
 class TemplateMcpServer(Base):
-    """Связь многие-ко-многим для `templates.mcp_server_ids` (3.1).
-
-    ТЗ описывает поле как "array of FK → mcp_servers" внутри таблицы
-    `templates`; реализовано как отдельная association-таблица — тот же
-    факт связи, но с honest FK-целостностью, которую сырой массив UUID не
-    даёт бесплатно.
+    """
+    Связь многие-ко-многим для `templates.mcp_server_ids` (раздел 3.1): в
+    отличие от массива UUID, у каждой ссылки есть настоящий внешний ключ.
     """
 
     __tablename__ = "template_mcp_servers"
