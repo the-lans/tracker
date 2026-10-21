@@ -924,8 +924,10 @@ class TestStatefulMcpIsolation:
 
         headers = [_isolation_header(options) for options in worker_env.options]
         if isolation_mode is McpIsolationMode.PER_TASK_DATA_DIR:
+            # Профиль — внутри настоящей директории задачи (раздел 10.2, 10.3).
             assert headers == [
-                f"tracker/repos/{task.code}/.mcp-profiles/playwright" for task in tasks
+                f"{(worker_env.repos_root / task.code).resolve()}/.mcp-profiles/playwright"
+                for task in tasks
             ]
         else:
             assert headers == ["ephemeral", "ephemeral"]

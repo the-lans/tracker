@@ -26,7 +26,7 @@ from app_logging.config import get_logger
 from db.models.enums import McpAuthType, McpIsolationMode
 from services.crypto import decrypt
 from services.mcp_validation import validate_isolation_path_template
-from services.template_context import REPOS_PATH_TEMPLATE
+from services.task_workspace import task_repos_path
 from services.templating import render_template
 
 if TYPE_CHECKING:
@@ -55,7 +55,7 @@ def render_isolation_path(
     подстановки — безобидный, но не нужный артефакт рендеринга.
     """
     context = {
-        "task.repos_path": REPOS_PATH_TEMPLATE.format(code=task.code),
+        "task.repos_path": task_repos_path(task),
         "mcp_server.name": mcp_server.name,
     }
     rendered = render_template(isolation_path_template, context)

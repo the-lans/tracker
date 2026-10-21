@@ -56,7 +56,10 @@ def _global_env_variable(key: str, plaintext_value: str) -> EnvVariable:
 
 async def test_build_task_context_maps_fields_and_computes_repos_path(
     db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Раздел 5: `{{task.repos_path}}` — абсолютный путь директории задачи."""
+    monkeypatch.setenv("TRACKER_REPOS_ROOT", "/data/repos")
     task = await _make_task(db_session)
 
     context = build_task_context(task)
@@ -64,7 +67,7 @@ async def test_build_task_context_maps_fields_and_computes_repos_path(
     assert context["task.code"] == task.code
     assert context["task.title"] == "Починить баг"
     assert context["task.status"] == "in_progress"
-    assert context["task.repos_path"] == f"tracker/repos/{task.code}/"
+    assert context["task.repos_path"] == f"/data/repos/{task.code}/"
 
 
 async def test_build_session_context_uses_task_session_id(db_session: AsyncSession) -> None:

@@ -26,11 +26,11 @@ from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from services.crypto import decrypt
 from services.errors import ValidationError
+from services.task_workspace import task_repos_path
 from services.templating import VARIABLE_PATTERN, render_template
 
 logger = get_logger("template_context")
 
-REPOS_PATH_TEMPLATE = "tracker/repos/{code}/"
 
 # Раздел 11.4: системные настройки интеграции (решение №5 плана) в
 # script-контейнер не передаются — иначе скрипт любой задачи видел бы общий
@@ -68,7 +68,7 @@ def build_task_context(task: Task) -> dict[str, str]:
         "task.scheduled_start_at": _stringify(task.scheduled_start_at),
         "task.auto_start_enabled": _stringify(task.auto_start_enabled),
         "task.created_at": _stringify(task.created_at),
-        "task.repos_path": REPOS_PATH_TEMPLATE.format(code=task.code),
+        "task.repos_path": task_repos_path(task),
     }
     return context
 

@@ -54,6 +54,15 @@ def task_root(repos_root: Path, task: Task) -> Path:
     return repos_root / task.code
 
 
+def task_repos_path(task: Task) -> str:
+    """
+    `{{task.repos_path}}` (раздел 5): абсолютный путь директории репозиториев
+    задачи на сервере — та же директория, с которой работают git и
+    script-ноды, с завершающим "/".
+    """
+    return f"{task_root(resolve_repos_root(), task).resolve()}/"
+
+
 def build_branch_name(task_code: str) -> str:
     """Рабочая ветка репозитория задачи — ``feature/RR-XXXXX`` (раздел 3.1)."""
     return f"feature/{task_code}"
