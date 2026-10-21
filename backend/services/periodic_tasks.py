@@ -54,6 +54,16 @@ def compute_next_run_at(periodic_task: PeriodicTask, *, now: datetime) -> dateti
     return croniter(periodic_task.crontab_expression, now).get_next(ret_type=type(now))  # type: ignore[no-any-return]
 
 
+async def mark_periodic_task_running(
+    db_session: AsyncSession,
+    *,
+    periodic_task: PeriodicTask,
+) -> None:
+    """Раздел 3.1, 15.5: пока задача выполняется, её статус — `running`."""
+    periodic_task.last_run_status = PeriodicRunStatus.RUNNING
+    await db_session.commit()
+
+
 async def record_periodic_task_run(
     db_session: AsyncSession,
     *,

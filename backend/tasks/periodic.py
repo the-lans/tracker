@@ -39,7 +39,7 @@ from services.autostart import run_scheduled_autostart_check
 from services.llm_accounts import restore_expired_rate_limits
 from services.log_rotation import resolve_archive_root, rotate_node_logs
 from services.manual_queue import expire_stale_manual_queue_requests
-from services.periodic_tasks import record_periodic_task_run
+from services.periodic_tasks import mark_periodic_task_running, record_periodic_task_run
 from services.remote_control import check_task_bridge
 from services.task_workspace import resolve_repos_root
 from services.template_context import resolve_global_env_value
@@ -68,6 +68,7 @@ async def _run_periodic_async(name: str, body: Callable[[AsyncSession], Awaitabl
             return
 
         ran_at = datetime.now(UTC)
+        await mark_periodic_task_running(db_session, periodic_task=periodic_task)
         status = PeriodicRunStatus.SUCCESS
         try:
             await body(db_session)
