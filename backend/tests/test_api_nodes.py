@@ -67,8 +67,9 @@ async def test_library_prompt_rejects_node_variables(authed_client: AsyncClient)
 async def test_pipeline_node_rejects_unknown_task_variable(
     authed_client: AsyncClient,
     db_session: AsyncSession,
+    current_user: User,
 ) -> None:
-    pipeline = Pipeline(id=uuid.uuid4(), name="P")
+    pipeline = Pipeline(id=uuid.uuid4(), name="P", created_by=current_user.id)
     db_session.add(pipeline)
     await db_session.flush()
 
@@ -89,12 +90,14 @@ async def test_pipeline_node_rejects_unknown_task_variable(
 async def test_pipeline_node_allows_script_output_after_script_node(
     authed_client: AsyncClient,
     db_session: AsyncSession,
+    current_user: User,
 ) -> None:
-    pipeline = Pipeline(id=uuid.uuid4(), name="P2")
+    pipeline = Pipeline(id=uuid.uuid4(), name="P2", created_by=current_user.id)
     db_session.add(pipeline)
     await db_session.flush()
     db_session.add(
         Node(
+            created_by=current_user.id,
             pipeline_id=pipeline.id,
             order_index=0,
             name="Скрипт",
@@ -125,6 +128,7 @@ async def test_delete_library_prompt_used_by_task_is_rejected(
     current_user: User,
 ) -> None:
     node = Node(
+        created_by=current_user.id,
         name="Используемый промт",
         node_type=NodeType.PLAIN_PROMPT,
         prompt_template="x",
@@ -157,12 +161,14 @@ class TestLibraryUsage:
         admin_user: User,
     ) -> None:
         used = Node(
+            created_by=admin_user.id,
             name="Используемый",
             node_type=NodeType.PLAIN_PROMPT,
             prompt_template="x",
             is_library_item=True,
         )
         unused = Node(
+            created_by=admin_user.id,
             name="Свободный",
             node_type=NodeType.PLAIN_PROMPT,
             prompt_template="x",

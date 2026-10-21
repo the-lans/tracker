@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.dependencies import require_admin
+from api.dependencies import get_current_user, require_admin
 from api.schemas import McpServerCreateRequest, McpServerResponse, McpServerUpdateRequest
 from db.models.mcp import McpServer
 from db.models.users import User
@@ -60,8 +60,12 @@ async def create_mcp_server(
 @router.get("", response_model=list[McpServerResponse])
 async def list_mcp_servers(
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _admin: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[McpServer]:
+    """
+    Раздел 10.5, 19.2: список нужен любому пользователю для выбора серверов
+    в своём шаблоне; в ответе нет данных авторизации. Изменения — только `admin`.
+    """
     stmt = sa.select(McpServer).order_by(McpServer.name)
     return list((await db_session.execute(stmt)).scalars().all())
 
@@ -70,7 +74,7 @@ async def list_mcp_servers(
 async def get_mcp_server(
     mcp_server_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _admin: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(get_current_user)],
 ) -> McpServer:
     return await _get_mcp_server_or_404(db_session, mcp_server_id)
 

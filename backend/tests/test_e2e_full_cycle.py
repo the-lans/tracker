@@ -35,6 +35,7 @@ from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline
 from db.models.repositories import Repository
 from db.models.tasks import Task
+from db.models.users import User
 from services.autostart import run_scheduled_autostart_check
 from services.crypto import encrypt
 from services.plan_mode import PlanDecisionOption
@@ -61,8 +62,11 @@ _HANGING_TURN_DELAY_SECONDS = 30
 _STOP_PRESS_DELAY_SECONDS = 0.3
 
 
-async def _make_pipeline(db_session: AsyncSession) -> tuple[Pipeline, dict[str, Node]]:
-    pipeline = Pipeline(name=f"e2e-{uuid.uuid4().hex[:6]}", is_archived=False)
+async def _make_pipeline(
+    db_session: AsyncSession,
+    owner_id: uuid.UUID,
+) -> tuple[Pipeline, dict[str, Node]]:
+    pipeline = Pipeline(name=f"e2e-{uuid.uuid4().hex[:6]}", is_archived=False, created_by=owner_id)
     db_session.add(pipeline)
     await db_session.flush()
     specs = [
@@ -73,6 +77,7 @@ async def _make_pipeline(db_session: AsyncSession) -> tuple[Pipeline, dict[str, 
     ]
     nodes = {
         name: Node(
+            created_by=owner_id,
             pipeline_id=pipeline.id,
             order_index=order_index,
             name=name,
@@ -92,8 +97,9 @@ async def _make_pipeline(db_session: AsyncSession) -> tuple[Pipeline, dict[str, 
     return pipeline, nodes
 
 
-async def _make_library_node(db_session: AsyncSession) -> Node:
+async def _make_library_node(db_session: AsyncSession, owner_id: uuid.UUID) -> Node:
     node = Node(
+        created_by=owner_id,
         name="Стиль кода",
         description="Проверка стиля",
         node_type=NodeType.PLAIN_PROMPT,
@@ -164,6 +170,7 @@ class TestFullCycle:
     async def test_task_reaches_done(
         self,
         authed_client: AsyncClient,
+        current_user: User,
         db_session: AsyncSession,
         worker_env: WorkerEnv,
         tmp_path: Path,
@@ -171,8 +178,8 @@ class TestFullCycle:
     ) -> None:
         origin = init_bare_origin(tmp_path)
         repository = await _make_repository(db_session, origin)
-        pipeline, nodes = await _make_pipeline(db_session)
-        library_node = await _make_library_node(db_session)
+        pipeline, nodes = await _make_pipeline(db_session, current_user.id)
+        library_node = await _make_library_node(db_session, current_user.id)
 
         # 1. Создание задачи с репозиторием.
         code = f"RR-{uuid.uuid4().hex[:5]}"

@@ -45,6 +45,11 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.usefixtures("redis_container")
 
 
+def _owner(task_body: dict[str, Any]) -> uuid.UUID:
+    """Автор задачи — и автор пайплайнов/промтов, которые к ней привязывает тест."""
+    return uuid.UUID(task_body["created_by"])
+
+
 async def _create_task(
     client: AsyncClient,
     *,
@@ -111,10 +116,11 @@ async def test_bind_pipeline_atomically_creates_task_nodes(
     db_session: AsyncSession,
 ) -> None:
     task_body = await _create_task(authed_client)
-    pipeline = Pipeline(name="Демо-пайплайн")
+    pipeline = Pipeline(name="Демо-пайплайн", created_by=_owner(task_body))
     db_session.add(pipeline)
     await db_session.flush()
     node_a = Node(
+        created_by=_owner(task_body),
         pipeline_id=pipeline.id,
         order_index=0,
         name="Шаг 1",
@@ -123,6 +129,7 @@ async def test_bind_pipeline_atomically_creates_task_nodes(
         is_library_item=False,
     )
     node_b = Node(
+        created_by=_owner(task_body),
         pipeline_id=pipeline.id,
         order_index=1,
         name="Шаг 2",
@@ -147,7 +154,7 @@ async def test_bind_pipeline_rejects_empty_pipeline(
     db_session: AsyncSession,
 ) -> None:
     task_body = await _create_task(authed_client)
-    empty_pipeline = Pipeline(name="Пустой пайплайн")
+    empty_pipeline = Pipeline(name="Пустой пайплайн", created_by=_owner(task_body))
     db_session.add(empty_pipeline)
     await db_session.flush()
 
@@ -168,11 +175,12 @@ async def test_bind_pipeline_rejects_task_not_in_new_status(
     assert task is not None
     task.status = TaskStatus.DONE
     await db_session.flush()
-    pipeline = Pipeline(name="Пайплайн")
+    pipeline = Pipeline(name="Пайплайн", created_by=_owner(task_body))
     db_session.add(pipeline)
     await db_session.flush()
     db_session.add(
         Node(
+            created_by=_owner(task_body),
             pipeline_id=pipeline.id,
             order_index=0,
             name="Шаг",
@@ -366,6 +374,7 @@ async def test_add_and_run_library_prompt(
 ) -> None:
     task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
     node = Node(
+        created_by=_owner(task_body),
         name="Библиотечный промт",
         node_type=NodeType.PLAIN_PROMPT,
         prompt_template="Сделай X",
@@ -678,12 +687,17 @@ async def _bind_pipeline_with_nodes(
     task_body: dict[str, Any],
     count: int,
 ) -> list[dict[str, Any]]:
-    pipeline = Pipeline(name=f"p-{uuid.uuid4().hex[:6]}", is_archived=False)
+    pipeline = Pipeline(
+        name=f"p-{uuid.uuid4().hex[:6]}",
+        is_archived=False,
+        created_by=_owner(task_body),
+    )
     db_session.add(pipeline)
     await db_session.flush()
     for order_index in range(count):
         db_session.add(
             Node(
+                created_by=_owner(task_body),
                 pipeline_id=pipeline.id,
                 order_index=order_index,
                 name=f"node-{order_index}",
@@ -781,6 +795,7 @@ async def _add_library_prompt(
     task_body: dict[str, Any],
 ) -> str:
     node = Node(
+        created_by=_owner(task_body),
         name="Ревью кода",
         node_type=NodeType.PLAIN_PROMPT,
         prompt_template="Сделай ревью",
@@ -882,9 +897,12 @@ async def test_stop_button_interrupts_processing_request(
     assert late.status_code == 409
 
 
-async def _make_script_pipeline(db_session: AsyncSession) -> tuple[Pipeline, list[Node]]:
+async def _make_script_pipeline(
+    db_session: AsyncSession,
+    owner_id: uuid.UUID,
+) -> tuple[Pipeline, list[Node]]:
     """Скрипт, его потребитель и нода, пропускаемая по умолчанию."""
-    pipeline = Pipeline(name=f"p-{uuid.uuid4().hex[:6]}", is_archived=False)
+    pipeline = Pipeline(name=f"p-{uuid.uuid4().hex[:6]}", is_archived=False, created_by=owner_id)
     db_session.add(pipeline)
     await db_session.flush()
     specs = [
@@ -894,6 +912,7 @@ async def _make_script_pipeline(db_session: AsyncSession) -> tuple[Pipeline, lis
     ]
     nodes = [
         Node(
+            created_by=owner_id,
             pipeline_id=pipeline.id,
             order_index=order_index,
             name=name,
@@ -928,7 +947,7 @@ class TestBindPipelineNodeSelection:
         expected: list[bool],
     ) -> None:
         task_body = await _create_task(authed_client)
-        pipeline, nodes = await _make_script_pipeline(db_session)
+        pipeline, nodes = await _make_script_pipeline(db_session, _owner(task_body))
         body: dict[str, Any] = {"pipeline_id": str(pipeline.id)}
         if disabled is not None:
             body["disabled_node_ids"] = [str(nodes[index].id) for index in disabled]
@@ -945,7 +964,7 @@ class TestBindPipelineNodeSelection:
         db_session: AsyncSession,
     ) -> None:
         task_body = await _create_task(authed_client)
-        pipeline, _nodes = await _make_script_pipeline(db_session)
+        pipeline, _nodes = await _make_script_pipeline(db_session, _owner(task_body))
 
         response = await authed_client.post(
             f"/tasks/{task_body['id']}/pipeline",
@@ -964,7 +983,7 @@ class TestNodeDependents:
         db_session: AsyncSession,
     ) -> None:
         task_body = await _create_task(authed_client)
-        pipeline, _nodes = await _make_script_pipeline(db_session)
+        pipeline, _nodes = await _make_script_pipeline(db_session, _owner(task_body))
         await authed_client.post(
             f"/tasks/{task_body['id']}/pipeline",
             json={"pipeline_id": str(pipeline.id)},
@@ -986,11 +1005,12 @@ class TestNodeDependents:
     async def test_pipeline_node(
         self,
         authed_client: AsyncClient,
+        current_user: User,
         db_session: AsyncSession,
         enabled: list[int],
         expected: list[str],
     ) -> None:
-        pipeline, nodes = await _make_script_pipeline(db_session)
+        pipeline, nodes = await _make_script_pipeline(db_session, current_user.id)
 
         response = await authed_client.post(
             f"/pipelines/{pipeline.id}/dependents",
@@ -1006,9 +1026,10 @@ class TestNodeDependents:
     async def test_unknown_node_is_404(
         self,
         authed_client: AsyncClient,
+        current_user: User,
         db_session: AsyncSession,
     ) -> None:
-        pipeline, _nodes = await _make_script_pipeline(db_session)
+        pipeline, _nodes = await _make_script_pipeline(db_session, current_user.id)
 
         response = await authed_client.post(
             f"/pipelines/{pipeline.id}/dependents",
@@ -1165,6 +1186,7 @@ class TestDuplicateTask:
         source = await db_session.get(Task, uuid.UUID(source_body["id"]))
         assert source is not None
         library_node = Node(
+            created_by=source.created_by,
             name="lib",
             node_type=NodeType.PLAIN_PROMPT,
             prompt_template="x",

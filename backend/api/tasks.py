@@ -54,7 +54,14 @@ from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from db.session import get_session
+from services.access import (
+    get_node_for_user,
+    get_pipeline_for_user,
+    get_task_for_user,
+    owner_filter,
+)
 from services.errors import ConflictError, NotFoundError, ValidationError
+from services.integrity import ensure_library_prompt_attachable
 from services.manual_queue import (
     cancel_manual_request,
     enqueue_freeform_prompt_run,
@@ -94,11 +101,9 @@ def _get_redis_client() -> Redis:
     return Redis.from_url(os.environ["REDIS_URL"])
 
 
-async def _get_task_or_404(db_session: AsyncSession, task_id: uuid.UUID) -> Task:
-    task = await db_session.get(Task, task_id)
-    if task is None:
-        raise NotFoundError(f"Задача {task_id} не найдена")
-    return task
+async def _get_task_or_404(db_session: AsyncSession, task_id: uuid.UUID, user: User) -> Task:
+    """Раздел 19.2: чужая задача для `user` неотличима от несуществующей."""
+    return await get_task_for_user(db_session, task_id, user=user)
 
 
 _ACTIVE_REQUEST_STATUSES = (ManualRequestStatus.QUEUED, ManualRequestStatus.PROCESSING)
@@ -151,6 +156,9 @@ async def create_task(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
     """Раздел 1.2 (сценарий 1): задача сразу с репозиториями и LLM-аккаунтом."""
+    if body.parent_task_id is not None:
+        # Раздел 19.2: родителем может быть только доступная пользователю задача.
+        await _get_task_or_404(db_session, body.parent_task_id, current_user)
     draft = _draft_from_request(
         body,
         parent_task_id=body.parent_task_id,
@@ -167,7 +175,7 @@ async def duplicate_task_endpoint(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
     """Раздел 14.2: «Дублировать задачу» из `done`."""
-    source = await _get_task_or_404(db_session, task_id)
+    source = await _get_task_or_404(db_session, task_id, current_user)
     return await duplicate_task(
         db_session,
         source=source,
@@ -181,11 +189,11 @@ async def update_task(
     task_id: uuid.UUID,
     body: TaskUpdateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
     """Раздел 12.1, 15.2: автозапуск и поля задачи — пока задача `new`;
     ``auto_accept_plan`` — в любой момент до `done`."""
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     changes = body.model_dump(exclude_unset=True)
     auto_accept_plan = changes.pop("auto_accept_plan", None)
     if changes and task.status is not TaskStatus.NEW:
@@ -208,9 +216,9 @@ async def update_task(
 async def list_task_repositories(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[TaskRepository]:
-    await _get_task_or_404(db_session, task_id)
+    await _get_task_or_404(db_session, task_id, current_user)
     pairs = await load_task_repositories(db_session, task_id)
     return [task_repository for task_repository, _ in pairs]
 
@@ -218,10 +226,14 @@ async def list_task_repositories(
 @router.get("", response_model=list[TaskResponse])
 async def list_tasks(
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
     status_filter: TaskStatus | None = None,
 ) -> list[Task]:
-    stmt = sa.select(Task).order_by(Task.created_at.desc())
+    stmt = (
+        sa.select(Task)
+        .where(owner_filter(Task.created_by, current_user))
+        .order_by(Task.created_at.desc())
+    )
     if status_filter is not None:
         stmt = stmt.where(Task.status == status_filter)
     return list((await db_session.execute(stmt)).scalars().all())
@@ -230,10 +242,15 @@ async def list_tasks(
 @router.get("/awaiting-count", response_model=AwaitingDecisionCountResponse)
 async def get_awaiting_decision_count(
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> AwaitingDecisionCountResponse:
-    """Раздел 18.3: постоянный счётчик задач, ожидающих решения."""
+    """
+    Раздел 18.3: постоянный счётчик задач, ожидающих решения. Считаются
+    только собственные задачи — и у `admin` (решение №16 плана): решение по
+    чужой задаче принимает её автор, которому и приходит push.
+    """
     stmt = sa.select(sa.func.count()).where(
+        Task.created_by == current_user.id,
         Task.status.in_((TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW)),
     )
     count = (await db_session.execute(stmt)).scalar_one()
@@ -253,9 +270,9 @@ async def list_my_active_sessions(
 async def get_task(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
-    return await _get_task_or_404(db_session, task_id)
+    return await _get_task_or_404(db_session, task_id, current_user)
 
 
 @router.post("/{task_id}/pipeline", response_model=TaskResponse)
@@ -263,11 +280,12 @@ async def bind_pipeline(
     task_id: uuid.UUID,
     body: BindPipelineRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
     """Раздел 3.1, правило 10 CLAUDE.md: создание `task_nodes` и обновление
     `tasks.pipeline_id` — атомарно, в одной транзакции."""
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
+    await get_pipeline_for_user(db_session, body.pipeline_id, user=current_user)
     await bind_pipeline_to_task(
         db_session,
         task=task,
@@ -289,12 +307,12 @@ async def bind_pipeline(
 async def start_task(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
     """Раздел 12.2: "тот же процесс запуска, что и ручная кнопка «Выполнить»" —
     `new -> queued`, затем Celery-таск, владеющий сессией, подхватывает
     задачу асинхронно (`tasks/session_worker.py`)."""
-    await _get_task_or_404(db_session, task_id)
+    await _get_task_or_404(db_session, task_id, current_user)
     await ensure_no_repository_env_conflicts(db_session, task_id=task_id)
     updated = await transition_task_status(
         db_session,
@@ -311,12 +329,12 @@ async def start_task(
 async def restart_task(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
     """Раздел 14.2: «Перезапустить с текущей ноды» — упавшая нода выполняется
     заново, предшествующие ей — нет. Сессия продолжается по сохранённому
     `session_id` (раздел 6.1)."""
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     if task.status is not TaskStatus.FAILED or task.last_failed_order_index is None:
         raise ValidationError("Перезапуск доступен только для задачи в статусе failed")
     await ensure_no_repository_env_conflicts(db_session, task_id=task_id)
@@ -332,13 +350,13 @@ async def restart_task(
 async def cleanup_repositories(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
     """
     Раздел 14.3: удаление рабочей директории репозиториев — только вручную
     и только в `done`/`failed`; пользовательские файлы не затрагиваются.
     """
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     await cleanup_task_repositories(db_session, task=task, repos_root=resolve_repos_root())
     await db_session.refresh(task)
     return task
@@ -348,10 +366,10 @@ async def cleanup_repositories(
 async def clear_context(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
     """Раздел 14.2: «очистить контекст» в `failed` — перезапуск начнёт новую сессию."""
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     await clear_task_session_context(db_session, task=task)
     await db_session.refresh(task)
     return task
@@ -369,11 +387,11 @@ async def _send_task_control(task_id: uuid.UUID, command: TaskControlCommand) ->
 async def pause_task(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     """Раздел 14.2 «Приостановить»: текущая нода дорабатывает, следующая
     не начинается — статус `paused` выставит воркер, владеющий сессией."""
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     _require_status(
         task,
         frozenset({TaskStatus.IN_PROGRESS}),
@@ -386,9 +404,9 @@ async def pause_task(
 async def resume_task(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     _require_status(task, frozenset({TaskStatus.PAUSED}), "Задача не на паузе")
     await _send_task_control(task_id, TaskControlCommand.RESUME)
 
@@ -397,11 +415,11 @@ async def resume_task(
 async def stop_task(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     """Раздел 14.2 «Остановить»: текущее обращение к сессии прерывается,
     задача переходит в `failed` и перезапускается штатной кнопкой."""
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     _require_status(
         task,
         frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
@@ -414,14 +432,14 @@ async def stop_task(
 async def reconnect_remote_control(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     """
     Раздел 6.5: новая попытка поднять мост `/remote-control`. Сессией
     владеет воркер — он пересоздаст процесс CLI между ходами и обновит
     `remote_control_status`; восстановление моста не гарантируется.
     """
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     redis_client = _get_redis_client()
     try:
         await start_bridge_reconnect(db_session, task=task, redis_client=redis_client)
@@ -433,13 +451,13 @@ async def reconnect_remote_control(
 async def cancel_queued_task(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
     """Раздел 14.2 «Отменить постановку»: `queued -> new`. Celery-таск,
     уже стоящий в очереди, проиграет compare-and-swap захвата и ничего не
     сделает. Автозапуск выключается — иначе ближайшая проверка расписания
     (раздел 12.2) поставила бы задачу в очередь снова."""
-    await _get_task_or_404(db_session, task_id)
+    await _get_task_or_404(db_session, task_id, current_user)
     try:
         updated = await transition_task_status(
             db_session,
@@ -458,9 +476,9 @@ async def cancel_queued_task(
 async def list_nodes_of_task(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[TaskNodeResponse]:
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     return [
         TaskNodeResponse.model_validate(view) for view in await list_task_nodes(db_session, task)
     ]
@@ -472,10 +490,10 @@ async def update_task_node(
     task_node_id: uuid.UUID,
     body: TaskNodeUpdateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> TaskNodeResponse:
     """Раздел 13.1, 13.2 (правило 11 CLAUDE.md)."""
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     await set_task_node_enabled(
         db_session,
         task=task,
@@ -494,10 +512,10 @@ async def list_task_node_dependents(
     task_id: uuid.UUID,
     task_node_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[NodeDependentResponse]:
     """Раздел 13.3, 15.2: кого затронет отключение ноды — для предупреждения."""
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     dependents = await find_task_node_dependents(
         db_session,
         task=task,
@@ -510,7 +528,7 @@ async def list_task_node_dependents(
 async def list_node_logs(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
     node_id: uuid.UUID | None = None,
     status: NodeLogStatus | None = None,
     trigger_type: NodeLogTriggerType | None = None,
@@ -519,7 +537,7 @@ async def list_node_logs(
     Раздел 13.4: история выполнения — лента и вкладка «Логи» с фильтрами
     по ноде, статусу и источнику.
     """
-    await _get_task_or_404(db_session, task_id)
+    await _get_task_or_404(db_session, task_id, current_user)
     stmt = (
         sa.select(NodeLog)
         .where(NodeLog.task_id == task_id)
@@ -537,13 +555,13 @@ async def submit_decision(
     task_id: uuid.UUID,
     body: DecisionRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     """Раздел 9.6: один и тот же путь для решения по плану И для ответа на
     обычный уточняющий вопрос — атомарно записывает решение и будит
     ожидающий Celery-таск через Redis pub/sub (раздел 9.6, "asyncio.Event/
     эквивалент")."""
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     node_log = await db_session.get(NodeLog, body.node_log_id)
     if node_log is None or node_log.task_id != task.id:
         raise NotFoundError(f"Запись node_logs {body.node_log_id} не найдена у этой задачи")
@@ -567,7 +585,7 @@ async def submit_freeform_prompt(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> ManualRequestResponse:
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     _require_status(task, SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
     request = await enqueue_freeform_prompt_run(
         db_session,
@@ -590,10 +608,9 @@ async def add_library_prompt(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> TaskLibraryPrompt:
-    await _get_task_or_404(db_session, task_id)
-    node = await db_session.get(Node, body.node_id)
-    if node is None:
-        raise NotFoundError(f"Промт {body.node_id} не найден")
+    await _get_task_or_404(db_session, task_id, current_user)
+    node = await get_node_for_user(db_session, body.node_id, user=current_user)
+    ensure_library_prompt_attachable(node)
     task_library_prompt = TaskLibraryPrompt(
         task_id=task_id,
         node_id=body.node_id,
@@ -616,7 +633,7 @@ async def run_library_prompt(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> ManualRequestResponse:
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     _require_status(task, SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
     task_library_prompt = await db_session.get(TaskLibraryPrompt, task_library_prompt_id)
     if task_library_prompt is None or task_library_prompt.task_id != task_id:
@@ -639,10 +656,10 @@ async def run_library_prompt(
 async def list_library_prompts_of_task(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[TaskLibraryPromptListItem]:
     """Раздел 7.3, 15.2: таблица системных промтов задачи."""
-    await _get_task_or_404(db_session, task_id)
+    await _get_task_or_404(db_session, task_id, current_user)
     stmt = (
         sa.select(TaskLibraryPrompt, Node)
         .join(Node, Node.id == TaskLibraryPrompt.node_id)
@@ -683,10 +700,10 @@ async def list_library_prompts_of_task(
 async def list_active_manual_requests(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[TaskManualRequestQueue]:
     """Раздел 15.2: индикатор «В очереди» — запросы, ещё не завершённые."""
-    await _get_task_or_404(db_session, task_id)
+    await _get_task_or_404(db_session, task_id, current_user)
     stmt = (
         sa.select(TaskManualRequestQueue)
         .where(
@@ -703,11 +720,11 @@ async def stop_manual_request(
     task_id: uuid.UUID,
     request_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     """Кнопка ■ (раздел 7.3): для `queued` — отмена из очереди, для
     выполняющегося запроса — прерывание силами воркера."""
-    await _get_task_or_404(db_session, task_id)
+    await _get_task_or_404(db_session, task_id, current_user)
     request = await db_session.get(TaskManualRequestQueue, request_id)
     if request is None or request.task_id != task_id:
         raise NotFoundError(f"Запрос {request_id} не найден у этой задачи")
@@ -728,9 +745,9 @@ async def cancel_manual_queue_request(
     task_id: uuid.UUID,
     request_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    await _get_task_or_404(db_session, task_id)
+    await _get_task_or_404(db_session, task_id, current_user)
     request = await db_session.get(TaskManualRequestQueue, request_id)
     if request is None or request.task_id != task_id:
         raise NotFoundError(f"Запрос {request_id} не найден у этой задачи")
@@ -749,10 +766,10 @@ async def _publish_signal(task_id: uuid.UUID) -> None:
 async def list_env_variables_of_task(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[TaskEnvVariable]:
     """Раздел 15.2: переменные в зоне статичных данных задачи."""
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     return await list_task_env_variables(db_session, task)
 
 
@@ -765,9 +782,9 @@ async def create_env_variable_of_task(
     task_id: uuid.UUID,
     body: TaskEnvVariableCreateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> TaskEnvVariable:
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     return await create_task_env_variable(
         db_session,
         task=task,
@@ -785,9 +802,9 @@ async def update_env_variable_of_task(
     variable_id: uuid.UUID,
     body: TaskEnvVariableUpdateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> TaskEnvVariable:
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     return await update_task_env_variable(
         db_session,
         task=task,
@@ -801,9 +818,9 @@ async def delete_env_variable_of_task(
     task_id: uuid.UUID,
     variable_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     await delete_task_env_variable(db_session, task=task, variable_id=variable_id)
 
 
@@ -815,9 +832,9 @@ async def reveal_env_variable_of_task(
     task_id: uuid.UUID,
     variable_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> EnvVariableRevealResponse:
     """Правило 8: значение — только по явному запросу «Показать»."""
-    task = await _get_task_or_404(db_session, task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
     value = await reveal_task_env_variable(db_session, task=task, variable_id=variable_id)
     return EnvVariableRevealResponse(value=value)

@@ -23,6 +23,8 @@ class Pipeline(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     # Не из таблицы ТЗ 3.1: прямое следствие правила 3.2 "вместо удаления —
     # архивация", применённого к пайплайну, используемому хотя бы задачей.
     is_archived: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    # Раздел 19.2: пайплайн — личный, `user` видит и меняет только свои.
+    created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), index=True)
 
 
 class Node(UUIDPrimaryKeyMixin, Base):
@@ -75,6 +77,9 @@ class Node(UUIDPrimaryKeyMixin, Base):
     # Не из таблицы ТЗ 3.1: то же следствие правила 3.2, что и у Pipeline,
     # применённое к системному промту библиотеки.
     is_archived: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    # Раздел 19.2: у ноды пайплайна — автор пайплайна, у промта библиотеки —
+    # тот, кто его создал; доступ к любой ноде проверяется по этому полю.
+    created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), index=True)
 
 
 class TaskNode(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

@@ -27,7 +27,8 @@ from db.models.enums import NodeType
 from db.models.pipelines import Node
 from db.models.users import User
 from db.session import get_session
-from services.errors import NotFoundError, ValidationError
+from services.access import get_node_for_user, get_pipeline_for_user, owner_filter
+from services.errors import ValidationError
 from services.integrity import count_library_prompt_usage, ensure_node_deletable
 from services.system_settings import resolve_node_execution_defaults
 from services.templating import RenderScope, validate_template_variables
@@ -38,11 +39,25 @@ router = APIRouter(prefix="/nodes", tags=["nodes"])
 _LIBRARY_FORBIDDEN_NODE_TYPES = frozenset({NodeType.CLEAR_CONTEXT, NodeType.PLAN_PROMPT})
 
 
-async def _get_node_or_404(db_session: AsyncSession, node_id: uuid.UUID) -> Node:
-    node = await db_session.get(Node, node_id)
-    if node is None:
-        raise NotFoundError(f"Нода/промт {node_id} не найден")
-    return node
+async def _get_node_or_404(db_session: AsyncSession, node_id: uuid.UUID, user: User) -> Node:
+    """Раздел 19.2: чужая нода/промт для `user` неотличимы от несуществующих."""
+    return await get_node_for_user(db_session, node_id, user=user)
+
+
+async def _node_owner_id(
+    db_session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID | None,
+    user: User,
+) -> uuid.UUID:
+    """
+    Автор новой ноды: у ноды пайплайна — автор пайплайна (доступ к нему
+    проверяется здесь же), у промта библиотеки — создающий пользователь.
+    """
+    if pipeline_id is None:
+        return user.id
+    pipeline = await get_pipeline_for_user(db_session, pipeline_id, user=user)
+    return pipeline.created_by
 
 
 async def _preceding_node_types(
@@ -97,8 +112,9 @@ async def _validate_node_prompt(
 async def create_node(
     body: NodeCreateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Node:
+    created_by = await _node_owner_id(db_session, pipeline_id=body.pipeline_id, user=current_user)
     await _validate_node_prompt(
         db_session,
         pipeline_id=body.pipeline_id,
@@ -132,6 +148,7 @@ async def create_node(
         is_skipped=body.is_skipped,
         is_library_item=body.pipeline_id is None,
         llm_output_last_n=body.llm_output_last_n,
+        created_by=created_by,
     )
     db_session.add(node)
     await db_session.commit()
@@ -141,11 +158,11 @@ async def create_node(
 @router.get("", response_model=list[NodeResponse])
 async def list_nodes(
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
     library_only: bool = False,
     include_archived: bool = False,
 ) -> list[Node]:
-    stmt = sa.select(Node).order_by(Node.name)
+    stmt = sa.select(Node).where(owner_filter(Node.created_by, current_user)).order_by(Node.name)
     if library_only:
         stmt = stmt.where(Node.is_library_item == True)  # noqa: E712
     if not include_archived:
@@ -169,9 +186,9 @@ async def list_library_usage(
 async def get_node(
     node_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Node:
-    return await _get_node_or_404(db_session, node_id)
+    return await _get_node_or_404(db_session, node_id, current_user)
 
 
 @router.patch("/{node_id}", response_model=NodeResponse)
@@ -179,9 +196,9 @@ async def update_node(
     node_id: uuid.UUID,
     body: NodeUpdateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Node:
-    node = await _get_node_or_404(db_session, node_id)
+    node = await _get_node_or_404(db_session, node_id, current_user)
     if body.order_index is not None:
         node.order_index = body.order_index
     if body.name is not None:
@@ -230,11 +247,11 @@ async def update_node(
 async def delete_node(
     node_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     """Правило 9 CLAUDE.md/раздел 3.2: системный промт, привязанный хотя бы
     к одной задаче, нельзя удалить — только заархивировать."""
-    node = await _get_node_or_404(db_session, node_id)
+    node = await _get_node_or_404(db_session, node_id, current_user)
     await ensure_node_deletable(db_session, node_id)
     await db_session.delete(node)
     await db_session.commit()

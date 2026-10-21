@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from claude_agent_sdk import AssistantMessage, RateLimitInfo, TextBlock
+from claude_agent_sdk import AssistantMessage, ProcessError, RateLimitInfo, TextBlock
 
 from clients.claude_agent import (
     REMOTE_CONTROL_EXTRA_ARG,
@@ -20,6 +20,7 @@ from clients.claude_agent import (
 )
 from tests.fakes import (
     FakeClaudeAgentClient,
+    make_assistant_error,
     make_rate_limit_event,
     make_result_message,
     make_text_delta,
@@ -95,6 +96,35 @@ async def test_send_and_collect_text_reports_error_result() -> None:
     turn = await session.send_and_collect_text("do something risky")
 
     assert turn.is_error is True
+
+
+class TestAssistantError:
+    @pytest.mark.parametrize(
+        ("messages", "expected"),
+        [
+            ([make_assistant_error("authentication_failed")], "authentication_failed"),
+            (
+                [make_assistant_error("rate_limit"), make_assistant_error("billing_error")],
+                "billing_error",
+            ),
+            ([], None),
+        ],
+        ids=["single", "last_wins", "no_error"],
+    )
+    async def test_reported(
+        self,
+        messages: list[AssistantMessage],
+        expected: str | None,
+    ) -> None:
+        """Раздел 17.3: тип ошибки ассистента доходит до классификатора сбоев."""
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[[*messages, make_result_message(is_error=True)]],
+        )
+        session = ClaudeCodeSession(fake)
+
+        turn = await session.send_and_collect_text("x")
+
+        assert turn.assistant_error == expected
 
 
 async def test_send_and_collect_text_raises_without_result_message() -> None:
@@ -292,3 +322,36 @@ class TestRateLimitHook:
         await session.send_and_collect_text("ход")
 
         assert received == ["rejected"]
+
+
+class TestCrashedTurn:
+    """Раздел 17.3: после падения процесса CLI хода больше нет."""
+
+    async def test_abort_skips_interrupt(self) -> None:
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[],
+            failures_per_query={0: ProcessError("CLI упал", exit_code=1)},
+        )
+        session = ClaudeCodeSession(fake)
+
+        with pytest.raises(ProcessError):
+            await session.send_and_collect_text("x")
+        await session.abort_turn(drain_timeout_seconds=5)
+
+        assert fake.interrupted is False
+
+    async def test_replacement_closes_open_turn(self) -> None:
+        old = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        old.message_delay_seconds = 5
+        replacement = FakeClaudeAgentClient(messages_per_query=[])
+        session = ClaudeCodeSession(old)
+        turn = asyncio.ensure_future(session.send_and_collect_text("x"))
+        await asyncio.sleep(0.05)
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+
+        await session.replace_client(replacement)
+        await session.abort_turn(drain_timeout_seconds=5)
+
+        assert replacement.interrupted is False

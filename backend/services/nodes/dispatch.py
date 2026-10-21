@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from clients.claude_agent import ClaudeCodeSession
 from db.models.enums import NodeLogStatus, NodeType
 from db.models.logs import NodeLog
+from services.failure_classification import is_transient_assistant_error
 from services.nodes.script import ScriptExecutionResult, run_script_node
 from services.template_context import render_for_task
 
@@ -73,11 +74,19 @@ async def resolve_node_prompt_or_none(
 
 @dataclass(frozen=True, slots=True)
 class NodeExecutionOutcome:
+    """
+    ``is_transient`` (раздел 17.3) — имеет ли смысл повтор неуспешной попытки;
+    ``session_lost`` — процесс CLI упал, и перед повтором сессию нужно
+    переподключить.
+    """
+
     success: bool
     llm_output_text: str | None = None
     script_stdout: str | None = None
     script_exit_code: int | None = None
     error_message: str | None = None
+    is_transient: bool = True
+    session_lost: bool = False
 
 
 async def execute_llm_node(claude_session: ClaudeCodeSession, prompt: str) -> NodeExecutionOutcome:
@@ -88,6 +97,7 @@ async def execute_llm_node(claude_session: ClaudeCodeSession, prompt: str) -> No
             success=False,
             llm_output_text=turn.text,
             error_message=turn.result.result or "Сессия вернула ошибку",
+            is_transient=is_transient_assistant_error(turn.assistant_error),
         )
     return NodeExecutionOutcome(success=True, llm_output_text=turn.text)
 

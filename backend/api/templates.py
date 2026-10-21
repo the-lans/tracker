@@ -14,16 +14,19 @@ from api.schemas import TemplateCreateRequest, TemplateResponse, TemplateUpdateR
 from db.models.repositories import Template, TemplateMcpServer
 from db.models.users import User
 from db.session import get_session
-from services.errors import ConflictError, NotFoundError
+from services.access import get_template_for_user, owner_filter
+from services.errors import ConflictError
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 
 
-async def _get_template_or_404(db_session: AsyncSession, template_id: uuid.UUID) -> Template:
-    template = await db_session.get(Template, template_id)
-    if template is None:
-        raise NotFoundError(f"Шаблон {template_id} не найден")
-    return template
+async def _get_template_or_404(
+    db_session: AsyncSession,
+    template_id: uuid.UUID,
+    user: User,
+) -> Template:
+    """Раздел 19.2: чужой шаблон для `user` неотличим от несуществующего."""
+    return await get_template_for_user(db_session, template_id, user=user)
 
 
 async def _mcp_server_ids(db_session: AsyncSession, template_id: uuid.UUID) -> list[uuid.UUID]:
@@ -39,6 +42,7 @@ async def _to_response(db_session: AsyncSession, template: Template) -> Template
         name=template.name,
         files=template.files,
         mcp_server_ids=await _mcp_server_ids(db_session, template.id),
+        created_by=template.created_by,
     )
 
 
@@ -61,9 +65,14 @@ async def _replace_mcp_server_links(
 async def create_template(
     body: TemplateCreateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> TemplateResponse:
-    template = Template(id=uuid.uuid4(), name=body.name, files=body.files)
+    template = Template(
+        id=uuid.uuid4(),
+        name=body.name,
+        files=body.files,
+        created_by=current_user.id,
+    )
     db_session.add(template)
     await db_session.flush()
     await _replace_mcp_server_links(
@@ -78,9 +87,13 @@ async def create_template(
 @router.get("", response_model=list[TemplateResponse])
 async def list_templates(
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[TemplateResponse]:
-    stmt = sa.select(Template).order_by(Template.name)
+    stmt = (
+        sa.select(Template)
+        .where(owner_filter(Template.created_by, current_user))
+        .order_by(Template.name)
+    )
     templates = list((await db_session.execute(stmt)).scalars().all())
     return [await _to_response(db_session, template) for template in templates]
 
@@ -89,9 +102,9 @@ async def list_templates(
 async def get_template(
     template_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> TemplateResponse:
-    template = await _get_template_or_404(db_session, template_id)
+    template = await _get_template_or_404(db_session, template_id, current_user)
     return await _to_response(db_session, template)
 
 
@@ -100,9 +113,9 @@ async def update_template(
     template_id: uuid.UUID,
     body: TemplateUpdateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> TemplateResponse:
-    template = await _get_template_or_404(db_session, template_id)
+    template = await _get_template_or_404(db_session, template_id, current_user)
     if body.name is not None:
         template.name = body.name
     if body.files is not None:
@@ -121,9 +134,9 @@ async def update_template(
 async def delete_template(
     template_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    template = await _get_template_or_404(db_session, template_id)
+    template = await _get_template_or_404(db_session, template_id, current_user)
     await db_session.delete(template)
     try:
         await db_session.commit()

@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Protocol
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ClaudeSDKError,
     RateLimitEvent,
     RateLimitInfo,
     ResultMessage,
@@ -135,15 +136,23 @@ class SessionTurnResult:
     """Результат одного обращения к сессии — текст ответа плюс сырой `ResultMessage`.
 
     Классификация "временный сбой vs постоянный" (раздел 17.3) — решение
-    вызывающего кода (оркестратор нод, этап 6), а не этого клиента: здесь
-    только добросовестно передаётся то, что вернул SDK.
+    вызывающего кода (`services/failure_classification.py`), а не этого
+    клиента: здесь только добросовестно передаётся то, что вернул SDK, —
+    в том числе тип ошибки последнего `AssistantMessage` хода.
     """
 
-    __slots__ = ("result", "text")
+    __slots__ = ("assistant_error", "result", "text")
 
-    def __init__(self, *, text: str, result: ResultMessage) -> None:
+    def __init__(
+        self,
+        *,
+        text: str,
+        result: ResultMessage,
+        assistant_error: str | None = None,
+    ) -> None:
         self.text = text
         self.result = result
+        self.assistant_error = assistant_error
 
     @property
     def is_error(self) -> bool:
@@ -204,6 +213,8 @@ class ClaudeCodeSession:
             await client.connect()
             previous = self._client
             self._client = client
+            # Незавершённый ход (если был) ушёл вместе со старым процессом.
+            self._turn_open = False
             try:
                 await previous.disconnect()
             except Exception:  # noqa: BLE001 — старый процесс уже не нужен, сбой вторичен
@@ -271,20 +282,31 @@ class ClaudeCodeSession:
         async with self._lock:
             logger.info("session_query_started", prompt_length=len(prompt))
             self._turn_open = True
-            await self._client.query(prompt)
-            text_parts: list[str] = []
-            result: ResultMessage | None = None
-            async for message in self._client.receive_response():
-                if isinstance(message, StreamEvent):
-                    await self._forward_text_delta(message)
-                if isinstance(message, RateLimitEvent) and self._on_rate_limit is not None:
-                    await self._on_rate_limit(message.rate_limit_info)
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            text_parts.append(block.text)
-                if isinstance(message, ResultMessage):
-                    result = message
+            try:
+                await self._client.query(prompt)
+                text_parts: list[str] = []
+                result: ResultMessage | None = None
+                assistant_error: str | None = None
+                async for message in self._client.receive_response():
+                    if isinstance(message, StreamEvent):
+                        await self._forward_text_delta(message)
+                    if isinstance(message, RateLimitEvent) and self._on_rate_limit is not None:
+                        await self._on_rate_limit(message.rate_limit_info)
+                    if isinstance(message, AssistantMessage):
+                        if message.error is not None:
+                            assistant_error = message.error
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                text_parts.append(block.text)
+                    if isinstance(message, ResultMessage):
+                        result = message
+            except ClaudeSDKError:
+                # Процесс CLI упал посреди хода: хвоста ответа уже не будет, и
+                # `abort_turn` не должен ждать его у нового процесса (раздел 17.3).
+                # Отмена корутины (остановка, таймаут) флаг не трогает — после
+                # неё хвост вычитывает `abort_turn`.
+                self._turn_open = False
+                raise
             self._turn_open = False
             if result is None:
                 error_message = "Сессия завершила приём сообщений без ResultMessage"
@@ -293,9 +315,14 @@ class ClaudeCodeSession:
             logger.info(
                 "session_query_finished",
                 is_error=result.is_error,
+                assistant_error=assistant_error,
                 session_id=result.session_id,
             )
-            return SessionTurnResult(text="".join(text_parts), result=result)
+            return SessionTurnResult(
+                text="".join(text_parts),
+                result=result,
+                assistant_error=assistant_error,
+            )
 
     async def _forward_text_delta(self, message: StreamEvent) -> None:
         if self._on_text_delta is None:

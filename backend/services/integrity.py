@@ -15,6 +15,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import TaskStatus
+from db.models.pipelines import Node
 from db.models.prompts import TaskLibraryPrompt
 from db.models.tasks import Task, TaskRepository
 from services.errors import ConflictError
@@ -69,3 +70,9 @@ async def count_library_prompt_usage(db_session: AsyncSession) -> list[tuple[uui
         .group_by(TaskLibraryPrompt.node_id)
     )
     return [(node_id, int(count)) for node_id, count in (await db_session.execute(stmt)).all()]
+
+
+def ensure_library_prompt_attachable(node: Node) -> None:
+    """Раздел 3.2, 7.2: архивный промт остаётся у прежних задач, но новым не выдаётся."""
+    if node.is_archived:
+        raise ConflictError("Промт в архиве — добавить его в задачу нельзя")

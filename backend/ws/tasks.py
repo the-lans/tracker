@@ -31,7 +31,9 @@ from app_logging.config import get_logger
 from db.models.enums import TaskStatus
 from db.models.tasks import Task
 from db.session import async_session_factory
+from services.access import authorize_task_stream
 from services.auth_tokens import InvalidSessionTokenError, verify_session_token
+from services.errors import NotFoundError, UnauthorizedError
 from services.output_stream import output_channel_name
 
 router = APIRouter()
@@ -133,6 +135,18 @@ async def serve_task_events(
     logger.info("ws_task_status_disconnected", task_id=str(task_id))
 
 
+async def _access_denied_close_code(*, user_id: uuid.UUID, task_id: uuid.UUID) -> int | None:
+    """Раздел 19.2: канал задачи — только для активного автора задачи или `admin`."""
+    async with async_session_factory() as db_session:
+        try:
+            await authorize_task_stream(db_session, user_id=user_id, task_id=task_id)
+        except UnauthorizedError:
+            return _UNAUTHORIZED_CLOSE_CODE
+        except NotFoundError:
+            return _TASK_NOT_FOUND_CLOSE_CODE
+    return None
+
+
 @router.websocket("/ws/tasks/{task_id}/status")
 async def task_status_stream(websocket: WebSocket, task_id: uuid.UUID) -> None:
     token = websocket.query_params.get("token")
@@ -140,9 +154,13 @@ async def task_status_stream(websocket: WebSocket, task_id: uuid.UUID) -> None:
         await websocket.close(code=_UNAUTHORIZED_CLOSE_CODE)
         return
     try:
-        verify_session_token(token)
+        user_id = verify_session_token(token)
     except InvalidSessionTokenError:
         await websocket.close(code=_UNAUTHORIZED_CLOSE_CODE)
+        return
+    close_code = await _access_denied_close_code(user_id=user_id, task_id=task_id)
+    if close_code is not None:
+        await websocket.close(code=close_code)
         return
 
     await websocket.accept()

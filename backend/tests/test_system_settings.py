@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
 
 import pytest
@@ -40,6 +41,7 @@ def _node(
     docker_image: str | None = None,
 ) -> Node:
     return Node(
+        created_by=uuid.uuid4(),
         name="n",
         node_type=node_type,
         script_language=language,
