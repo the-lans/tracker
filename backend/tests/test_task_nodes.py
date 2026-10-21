@@ -27,8 +27,10 @@ async def _make_task_with_nodes(
     node_count: int = 3,
 ) -> tuple[Task, list[TaskNode]]:
     user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    pipeline = Pipeline(name="p", is_archived=False)
-    db_session.add_all([user, pipeline])
+    db_session.add(user)
+    await db_session.flush()
+    pipeline = Pipeline(name="p", is_archived=False, created_by=user.id)
+    db_session.add(pipeline)
     await db_session.flush()
     task = Task(
         code=f"RR-{uuid.uuid4().hex[:5]}",
@@ -44,6 +46,7 @@ async def _make_task_with_nodes(
     task_nodes = []
     for order_index in range(node_count):
         node = Node(
+            created_by=user.id,
             pipeline_id=pipeline.id,
             order_index=order_index,
             name=f"node-{order_index}",

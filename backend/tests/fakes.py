@@ -7,8 +7,16 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 
-from claude_agent_sdk import Message, RateLimitEvent, RateLimitInfo, ResultMessage, StreamEvent
-from claude_agent_sdk.types import RateLimitStatus
+from claude_agent_sdk import (
+    AssistantMessage,
+    Message,
+    RateLimitEvent,
+    RateLimitInfo,
+    ResultMessage,
+    StreamEvent,
+    TextBlock,
+)
+from claude_agent_sdk.types import AssistantMessageError, RateLimitStatus
 
 
 def make_result_message(*, is_error: bool = False, session_id: str = "sess-1") -> ResultMessage:
@@ -21,6 +29,11 @@ def make_result_message(*, is_error: bool = False, session_id: str = "sess-1") -
         session_id=session_id,
         result="итоговый результат" if not is_error else None,
     )
+
+
+def make_assistant_error(error: AssistantMessageError, text: str = "") -> AssistantMessage:
+    """Сообщение ассистента с типом ошибки, как его присылает CLI (раздел 17.3)."""
+    return AssistantMessage(content=[TextBlock(text=text)], model="claude", error=error)
 
 
 def make_text_delta(text: str, *, parent_tool_use_id: str | None = None) -> StreamEvent:
@@ -51,6 +64,8 @@ class FakeClaudeAgentClient:
 
     ``messages_per_query`` — список последовательностей сообщений, по одной
     на каждый ожидаемый вызов `query()`, в порядке вызовов.
+    ``failures_per_query`` — исключение, которым «падает процесс CLI» при
+    чтении ответа на вызов `query()` с данным номером (с нуля).
     """
 
     def __init__(
@@ -58,8 +73,10 @@ class FakeClaudeAgentClient:
         messages_per_query: list[list[Message]],
         *,
         on_query: Callable[[], Awaitable[None]] | None = None,
+        failures_per_query: dict[int, Exception] | None = None,
     ) -> None:
         self._messages_per_query = messages_per_query
+        self._failures_per_query = failures_per_query or {}
         # Симулирует побочный эффект callback'а разрешений SDK (раздел 9.6),
         # который в реальности мутирует БД ВНУТРИ обработки одного query() —
         # используется тестами `plan_prompt` (см. `test_nodes_dispatch.py`).
@@ -101,6 +118,9 @@ class FakeClaudeAgentClient:
         следующему чтению — ровно та ситуация, ради которой существует
         `ClaudeCodeSession.abort_turn`.
         """
+        failure = self._failures_per_query.get(len(self.queries) - 1)
+        if failure is not None:
+            raise failure
         self.concurrent_calls += 1
         self.max_observed_concurrency = max(self.max_observed_concurrency, self.concurrent_calls)
         try:

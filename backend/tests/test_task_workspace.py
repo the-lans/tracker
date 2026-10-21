@@ -34,6 +34,7 @@ from services.task_workspace import (
     push_task_workspace,
     write_template_files,
 )
+from tests.factories import make_user
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -101,7 +102,8 @@ async def _attach_repository(
 
 
 async def _make_template(db_session: AsyncSession, files: dict[str, object]) -> Template:
-    template = Template(name=f"tpl-{uuid.uuid4().hex[:6]}", files=files)
+    owner = await make_user(db_session)
+    template = Template(name=f"tpl-{uuid.uuid4().hex[:6]}", files=files, created_by=owner.id)
     db_session.add(template)
     await db_session.flush()
     return template

@@ -18,6 +18,7 @@ import uuid
 from typing import Any
 
 import pytest
+import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from redis.asyncio import Redis
 from starlette.websockets import WebSocketDisconnect
@@ -27,7 +28,12 @@ from db.models.tasks import Task
 from db.models.users import User
 from db.session import async_session_factory
 from services.output_stream import output_channel_name, publish_output_delta
-from ws.tasks import _fetch_status, serve_task_events, stream_task_events
+from ws.tasks import (
+    _access_denied_close_code,
+    _fetch_status,
+    serve_task_events,
+    stream_task_events,
+)
 
 
 def test_rejects_connection_without_token() -> None:
@@ -184,3 +190,58 @@ class TestServeTaskEvents:
         await asyncio.wait_for(serving, timeout=5)
 
         assert dict(await redis_client.pubsub_numsub(channel))[channel.encode()] == 0
+
+
+class TestAccessDeniedCloseCode:
+    """Раздел 19.2: канал задачи — только для активного автора или `admin`."""
+
+    @pytest.mark.parametrize(
+        ("viewer_is_owner", "viewer_active", "expected"),
+        [(True, True, None), (False, True, 4404), (True, False, 4401)],
+        ids=["owner", "stranger", "blocked"],
+    )
+    async def test_close_code(
+        self,
+        run_migrations: None,
+        viewer_is_owner: bool,
+        viewer_active: bool,
+        expected: int | None,
+    ) -> None:
+        owner_id, stranger_id, task_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        async with async_session_factory() as session:
+            session.add_all(
+                [
+                    User(
+                        id=owner_id,
+                        email=f"{owner_id}@example.com",
+                        role=UserRole.USER,
+                        is_active=viewer_active,
+                    ),
+                    User(
+                        id=stranger_id,
+                        email=f"{stranger_id}@example.com",
+                        role=UserRole.USER,
+                        is_active=True,
+                    ),
+                ],
+            )
+            await session.commit()
+            session.add(
+                Task(
+                    id=task_id,
+                    code=f"RR-{task_id.hex[:8]}",
+                    title="t",
+                    description="",
+                    created_by=owner_id,
+                ),
+            )
+            await session.commit()
+
+        viewer_id = owner_id if viewer_is_owner else stranger_id
+        try:
+            assert await _access_denied_close_code(user_id=viewer_id, task_id=task_id) == expected
+        finally:
+            async with async_session_factory() as session:
+                await session.execute(sa.delete(Task).where(Task.id == task_id))
+                await session.execute(sa.delete(User).where(User.id.in_([owner_id, stranger_id])))
+                await session.commit()

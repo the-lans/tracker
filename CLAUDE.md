@@ -86,9 +86,10 @@ peerDependencies`) — апгрейд до TS 7 ждёт апгрейда это
 backend/
   api/       — HTTP-эндпоинты, валидация входных данных, сериализация ответов
               (auth, tasks, repositories, templates, preview, llm_accounts,
-              env_variables, mcp_servers, pipelines, nodes, users,
+              env_variables, mcp_servers, pipelines, nodes, users, profile,
               periodic_tasks, monitoring, push)
-  services/  — бизнес-логика: пайплайны, сессии, git-операции (min. 85% test coverage)
+  services/  — бизнес-логика: пайплайны, сессии, git-операции (min. 85% test coverage);
+              access.py — владение записями «своё или admin» (раздел 19.2)
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
               (db/session.py — engine/session из DATABASE_URL)
   clients/   — обёртки над Claude Agent SDK, GitLab API, MCP-серверами
@@ -107,6 +108,7 @@ backend/
               alembic/env.py из DATABASE_URL, а не сам alembic.ini
   tests/     — pytest (test_*.py, плоско; conftest.py поднимает Postgres и
               Redis в Docker, fakes.py — фейки Claude Agent SDK,
+              factories.py — общие тестовые записи (автор, эталонные SSH-ключи),
               worker_support.py — обвязка воркера сессии для его тестов и E2E)
 frontend/    — React SPA: дашборд, страница задачи (обзор + диалог),
               конструктор пайплайна/библиотека, CRUD-страницы

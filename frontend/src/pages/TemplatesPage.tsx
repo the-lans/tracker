@@ -11,6 +11,7 @@ import { ApiError } from "@/lib/apiClient";
 import type { Template } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { EditButton } from "@/components/common/actions/EditButton";
+import { OwnerLabel } from "@/components/common/avatar/OwnerLabel";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
@@ -68,6 +69,7 @@ export function TemplatesPage() {
               <div className="text-small text-text-3">
                 {fileCountLabel(Object.keys(template.files).length)}
               </div>
+              <OwnerLabel ownerId={template.created_by} />
             </Card>
           ))}
         </div>

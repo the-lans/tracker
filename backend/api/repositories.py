@@ -16,6 +16,7 @@ from api.schemas import RepositoryCreateRequest, RepositoryResponse, RepositoryU
 from db.models.repositories import Repository
 from db.models.users import User
 from db.session import get_session
+from services.access import get_template_for_user
 from services.crypto import encrypt
 from services.errors import ConflictError, NotFoundError
 from services.integrity import ensure_repository_deletable
@@ -34,8 +35,10 @@ async def _get_repository_or_404(db_session: AsyncSession, repository_id: uuid.U
 async def create_repository(
     body: RepositoryCreateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Repository:
+    if body.default_template_id is not None:
+        await get_template_for_user(db_session, body.default_template_id, user=current_user)
     repository = Repository(
         id=uuid.uuid4(),
         name=body.name,
@@ -71,14 +74,22 @@ async def update_repository(
     repository_id: uuid.UUID,
     body: RepositoryUpdateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Repository:
     repository = await _get_repository_or_404(db_session, repository_id)
     if body.name is not None:
         repository.name = body.name
     if body.git_url is not None:
         repository.git_url = body.git_url
-    if body.default_template_id is not None:
+    if (
+        "default_template_id" in body.model_fields_set
+        and body.default_template_id != repository.default_template_id
+    ):
+        # Решение №16 плана: `user` выбирает шаблон по умолчанию только среди
+        # своих; уже назначенный чужой шаблон сохраняется без проверки, а
+        # явный `null` снимает шаблон.
+        if body.default_template_id is not None:
+            await get_template_for_user(db_session, body.default_template_id, user=current_user)
         repository.default_template_id = body.default_template_id
     if body.deploy_key is not None:
         repository.deploy_key_encrypted = encrypt(body.deploy_key)

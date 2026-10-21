@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus } from "lucide-react";
+import { Copy, KeyRound, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -15,12 +15,41 @@ import {
   useUsers,
 } from "@/hooks/useAdmin";
 import { ApiError } from "@/lib/apiClient";
+import { copyText } from "@/lib/textExport";
 import { UserRole, type User } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { USER_ROLE_LABEL } from "@/lib/labels";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
+
+/**
+ * Раздел 15.1, 15.5: ключ sshfs пользователя. До появления `User-Provisioner`
+ * администратор ставит его на сервер вручную (решение №16 плана).
+ */
+function SshKeyLine({ user }: { user: User }) {
+  if (user.ssh_public_key === null) {
+    return <div className="text-meta text-text-3">SSH-ключ не добавлен</div>;
+  }
+  const publicKey = user.ssh_public_key;
+  return (
+    <div className="flex min-w-0 items-center gap-1 text-meta text-text-3">
+      <KeyRound className="size-3.5 shrink-0" />
+      <span className="truncate font-mono" title={publicKey}>
+        {user.ssh_key_fingerprint}
+      </span>
+      <button
+        type="button"
+        className="touch-target flex shrink-0 items-center justify-center hover:text-accent"
+        aria-label={`Копировать SSH-ключ ${user.email}`}
+        title="Копировать ключ"
+        onClick={() => copyText(publicKey)}
+      >
+        <Copy className="size-3.5" />
+      </button>
+    </div>
+  );
+}
 
 function UserRow({ user }: { user: User }) {
   const updateUser = useUpdateUser(user.id);
@@ -31,7 +60,10 @@ function UserRow({ user }: { user: User }) {
         <div className="truncate font-bold" title={user.email}>{user.email}</div>
         <div className="text-meta text-text-3">
           {new Date(user.created_at).toLocaleDateString("ru-RU")}
+          {" · Linux-логин: "}
+          {user.os_username ?? "не назначен"}
         </div>
+        <SshKeyLine user={user} />
       </div>
       <Select
         value={user.role}
@@ -101,6 +133,10 @@ export function UsersPanel() {
             <Plus className="size-3.5" /> Добавить
           </Button>
         </CardTitle>
+        <div className="mb-1 text-small text-text-3">
+          Удалённый из списка e-mail блокирует учётную запись при ближайшей ежедневной проверке;
+          Linux-логин пользователя после этого нужно заблокировать на сервере вручную.
+        </div>
         <div className="flex flex-col">
           {(allowedEmails ?? []).length === 0 && (
             <EmptyState

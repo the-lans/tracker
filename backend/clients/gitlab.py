@@ -20,6 +20,18 @@ logger = get_logger("gitlab_client")
 _API_BASE_PATH = "/api/v4"
 _SERVER_ERROR_THRESHOLD = 500
 _CLIENT_ERROR_THRESHOLD = 400
+# Раздел 17.3: таймаут запроса и упор в лимит — временные, хотя это 4xx.
+_TRANSIENT_CLIENT_STATUSES = frozenset({httpx.codes.REQUEST_TIMEOUT, httpx.codes.TOO_MANY_REQUESTS})
+# Неверный или просроченный токен — сбой настройки всей интеграции, а не
+# конкретного репозитория (токен один на систему, решение №5 плана).
+_ACCESS_DENIED_STATUSES = frozenset({httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN})
+
+
+class GitlabAccessDeniedError(ExternalServiceError):
+    """GitLab отклонил токен (401/403): повтор по другим репозиториям бесполезен."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, is_transient=False)
 
 
 def project_path_from_git_url(git_url: str) -> str:
@@ -54,10 +66,14 @@ class GitlabClient:
             message = f"Сетевая ошибка обращения к GitLab: {exc}"
             raise ExternalServiceError(message, is_transient=True) from exc
 
-        if response.status_code >= _SERVER_ERROR_THRESHOLD:
-            message = f"GitLab вернул {response.status_code} для {path}"
+        status = response.status_code
+        if status >= _SERVER_ERROR_THRESHOLD or status in _TRANSIENT_CLIENT_STATUSES:
+            message = f"GitLab вернул {status} для {path}"
             raise ExternalServiceError(message, is_transient=True)
-        if response.status_code >= _CLIENT_ERROR_THRESHOLD:
+        if status in _ACCESS_DENIED_STATUSES:
+            message = f"GitLab отклонил токен API ({status})"
+            raise GitlabAccessDeniedError(message)
+        if status >= _CLIENT_ERROR_THRESHOLD:
             message = f"GitLab вернул {response.status_code} для {path}: {response.text}"
             raise ExternalServiceError(message, is_transient=False)
         return response.json()

@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from clients.gitlab import GitlabClient, project_path_from_git_url
+from clients.gitlab import GitlabAccessDeniedError, GitlabClient, project_path_from_git_url
 from services.errors import ExternalServiceError
 
 
@@ -89,3 +89,33 @@ async def test_network_failure_raises_transient_external_service_error() -> None
         await client.get_latest_merge_request_state(project_path="group/project", source_branch="x")
 
     assert exc_info.value.is_transient is True
+
+
+class TestStatusClassification:
+    """Раздел 17.3: какие ответы GitLab временные, какие — постоянные."""
+
+    @pytest.mark.parametrize(
+        ("status", "transient"),
+        [(408, True), (429, True), (502, True), (404, False), (422, False)],
+    )
+    async def test_transient_flag(self, status: int, transient: bool) -> None:
+        client = _client_with_handler(
+            httpx.MockTransport(lambda request: httpx.Response(status, text="ошибка")),
+        )
+
+        with pytest.raises(ExternalServiceError) as exc_info:
+            await client.get_latest_merge_request_state(project_path="g/p", source_branch="x")
+
+        assert exc_info.value.is_transient is transient
+        assert not isinstance(exc_info.value, GitlabAccessDeniedError)
+
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_rejected_token(self, status: int) -> None:
+        client = _client_with_handler(
+            httpx.MockTransport(lambda request: httpx.Response(status, text="401 Unauthorized")),
+        )
+
+        with pytest.raises(GitlabAccessDeniedError) as exc_info:
+            await client.get_latest_merge_request_state(project_path="g/p", source_branch="x")
+
+        assert exc_info.value.is_transient is False

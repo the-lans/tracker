@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 import sqlalchemy as sa
-from claude_agent_sdk import ClaudeAgentOptions, PermissionResultAllow
+from claude_agent_sdk import ClaudeAgentOptions, PermissionResultAllow, ProcessError
 from claude_agent_sdk.types import ToolPermissionContext
 
 from clients.claude_agent import REMOTE_CONTROL_EXTRA_ARG
@@ -41,9 +41,11 @@ from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.repositories import Repository, Template, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
+from services import task_status as task_status_module
 from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
 from services.manual_queue import enqueue_freeform_prompt_run
+from services.notifications import NotificationEvent
 from services.plan_mode import PlanDecisionOption, encode_decision
 from services.session_context import clear_task_session_context
 from services.session_heartbeat import is_session_alive
@@ -58,7 +60,13 @@ from services.task_control import (
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name
 from tasks import session_worker
-from tests.fakes import FakeClaudeAgentClient, make_rate_limit_event, make_result_message
+from tests.factories import make_user
+from tests.fakes import (
+    FakeClaudeAgentClient,
+    make_assistant_error,
+    make_rate_limit_event,
+    make_result_message,
+)
 from tests.worker_support import GIT_AUTHOR_ARGS, WorkerEnv, init_bare_origin, run_command
 
 if TYPE_CHECKING:
@@ -76,8 +84,10 @@ async def _make_task(
     origin: Path | None = None,
 ) -> Task:
     user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    pipeline = Pipeline(name="p", is_archived=False)
-    db_session.add_all([user, pipeline])
+    db_session.add(user)
+    await db_session.flush()
+    pipeline = Pipeline(name="p", is_archived=False, created_by=user.id)
+    db_session.add(pipeline)
     await db_session.flush()
     task = Task(
         code=f"RR-{uuid.uuid4().hex[:5]}",
@@ -118,6 +128,7 @@ async def _add_node(
     node_type: NodeType = NodeType.PLAIN_PROMPT,
 ) -> Node:
     node = Node(
+        created_by=task.created_by,
         pipeline_id=task.pipeline_id,
         order_index=order_index,
         name=f"node-{order_index}",
@@ -886,7 +897,8 @@ class TestStatefulMcpIsolation:
             isolation_mode=isolation_mode,
             isolation_path_template=path_template,
         )
-        template = Template(name=f"tpl-{uuid.uuid4().hex[:6]}", files={})
+        owner = await make_user(db_session)
+        template = Template(name=f"tpl-{uuid.uuid4().hex[:6]}", files={}, created_by=owner.id)
         db_session.add_all([server, template])
         await db_session.flush()
         db_session.add(TemplateMcpServer(template_id=template.id, mcp_server_id=server.id))
@@ -1184,3 +1196,58 @@ class TestAllNodeTypesPipeline:
         assert nodes[2].id not in node_ids
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
+
+
+class TestFailureKinds:
+    """Раздел 17.3 на уровне воркера задачи."""
+
+    async def test_permanent_fails_task(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        events: list[NotificationEvent] = []
+
+        async def record(_db: AsyncSession, *, event: NotificationEvent, **_: object) -> None:
+            events.append(event)
+
+        monkeypatch.setattr(task_status_module, "notify_task_event", record)
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        node = await _add_node(db_session, task, order_index=0)
+        node.max_retries = 3
+        failing_turn: list[Message] = [
+            make_assistant_error("authentication_failed"),
+            make_result_message(is_error=True, session_id="sess-worker"),
+        ]
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=[failing_turn] * 3)
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.FAILED
+        assert len(worker_env.client.queries) == 1
+        assert NotificationEvent.FAILED in events
+
+    async def test_crashed_cli_resumes_same_session(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        node = await _add_node(db_session, task, order_index=1)
+        node.max_retries = 2
+        crashed = FakeClaudeAgentClient(
+            messages_per_query=_results(1),
+            failures_per_query={1: ProcessError("CLI упал", exit_code=1)},
+        )
+        replacement = FakeClaudeAgentClient(messages_per_query=_results(1))
+        worker_env.queued_clients = [crashed, replacement]
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert replacement.queries == ["шаг 1"]
+        assert worker_env.options[-1].resume == "sess-worker"

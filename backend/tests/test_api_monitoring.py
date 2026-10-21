@@ -86,7 +86,12 @@ class TestNodeRuns:
     ) -> None:
         task = await _make_task(db_session, f"RR-{uuid.uuid4().hex[:6]}")
         other = await _make_task(db_session, f"RR-{uuid.uuid4().hex[:6]}")
-        node = Node(name="Сборка", node_type=NodeType.PLAIN_PROMPT, is_library_item=True)
+        node = Node(
+            name="Сборка",
+            node_type=NodeType.PLAIN_PROMPT,
+            is_library_item=True,
+            created_by=task.created_by,
+        )
         db_session.add(node)
         await db_session.flush()
         db_session.add_all(

@@ -47,12 +47,13 @@ async def _make_task(db_session: AsyncSession, *, status: TaskStatus = TaskStatu
 async def _add_enabled_node(db_session: AsyncSession, task: Task, *, order_index: int) -> Node:
     pipeline = await db_session.get(Pipeline, task.pipeline_id) if task.pipeline_id else None
     if pipeline is None:
-        pipeline = Pipeline(name="p", is_archived=False)
+        pipeline = Pipeline(name="p", is_archived=False, created_by=task.created_by)
         db_session.add(pipeline)
         await db_session.flush()
         task.pipeline_id = pipeline.id
         await db_session.flush()
     node = Node(
+        created_by=task.created_by,
         pipeline_id=pipeline.id,
         order_index=order_index,
         name=f"n{order_index}",

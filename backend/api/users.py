@@ -19,6 +19,7 @@ from api.schemas import (
 from db.models.users import AllowedEmail, User
 from db.session import get_session
 from services.errors import ConflictError, NotFoundError
+from services.users import ensure_allowed_email_deletable
 
 router = APIRouter(tags=["admin-users"])
 
@@ -106,5 +107,6 @@ async def delete_allowed_email(
     allowed_email = await db_session.get(AllowedEmail, allowed_email_id)
     if allowed_email is None:
         raise NotFoundError(f"Запись allowed_emails {allowed_email_id} не найдена")
+    await ensure_allowed_email_deletable(db_session, allowed_email)
     await db_session.delete(allowed_email)
     await db_session.commit()

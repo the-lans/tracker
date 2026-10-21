@@ -36,7 +36,7 @@ async def _make_task(db_session: AsyncSession) -> Task:
     user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
     db_session.add(user)
     await db_session.flush()
-    pipeline = Pipeline(name="p", is_archived=False)
+    pipeline = Pipeline(name="p", is_archived=False, created_by=user.id)
     db_session.add(pipeline)
     await db_session.flush()
     task = Task(
@@ -55,6 +55,7 @@ async def _make_task(db_session: AsyncSession) -> Task:
 async def test_resolve_node_prompt_renders_plain_prompt_template(db_session: AsyncSession) -> None:
     task = await _make_task(db_session)
     node = Node(
+        created_by=task.created_by,
         pipeline_id=task.pipeline_id,
         order_index=0,
         name="n",
@@ -77,6 +78,7 @@ async def test_resolve_node_prompt_returns_slash_command_literally_unmodified(
     task = await _make_task(db_session)
     literal_invocation = "/review {{task.code}} $ARGUMENTS"
     node = Node(
+        created_by=task.created_by,
         pipeline_id=task.pipeline_id,
         order_index=0,
         name="n",
@@ -100,6 +102,7 @@ async def test_resolve_node_prompt_raises_when_slash_command_missing_invocation(
 ) -> None:
     task = await _make_task(db_session)
     node = Node(
+        created_by=task.created_by,
         pipeline_id=task.pipeline_id,
         order_index=0,
         name="n",
@@ -119,6 +122,7 @@ async def test_resolve_node_prompt_raises_when_plain_prompt_missing_template(
 ) -> None:
     task = await _make_task(db_session)
     node = Node(
+        created_by=task.created_by,
         pipeline_id=task.pipeline_id,
         order_index=0,
         name="n",
@@ -179,6 +183,7 @@ async def test_execute_llm_node_with_timeout_interrupts_and_fails_on_timeout() -
 
 async def test_execute_script_node_returns_success_outcome(tmp_path: Path) -> None:
     node = Node(
+        created_by=uuid.uuid4(),
         name="n",
         node_type=NodeType.SCRIPT,
         script_language=ScriptLanguage.PYTHON,
@@ -197,6 +202,7 @@ async def test_execute_script_node_returns_success_outcome(tmp_path: Path) -> No
 
 async def test_execute_script_node_returns_failure_outcome_on_nonzero_exit(tmp_path: Path) -> None:
     node = Node(
+        created_by=uuid.uuid4(),
         name="n",
         node_type=NodeType.SCRIPT,
         script_language=ScriptLanguage.PYTHON,
@@ -214,6 +220,7 @@ async def test_execute_script_node_returns_failure_outcome_on_nonzero_exit(tmp_p
 
 async def test_execute_script_node_raises_when_missing_content(tmp_path: Path) -> None:
     node = Node(
+        created_by=uuid.uuid4(),
         name="n",
         node_type=NodeType.SCRIPT,
         timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
@@ -227,6 +234,7 @@ async def test_execute_script_node_raises_when_missing_content(tmp_path: Path) -
 
 async def test_execute_node_dispatches_script_type_to_docker(tmp_path: Path) -> None:
     node = Node(
+        created_by=uuid.uuid4(),
         name="n",
         node_type=NodeType.SCRIPT,
         script_language=ScriptLanguage.PYTHON,
@@ -251,6 +259,7 @@ async def test_execute_node_dispatches_script_type_to_docker(tmp_path: Path) -> 
 
 async def test_execute_node_raises_when_llm_node_has_no_prompt(tmp_path: Path) -> None:
     node = Node(
+        created_by=uuid.uuid4(),
         name="n",
         node_type=NodeType.PLAIN_PROMPT,
         timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
@@ -360,6 +369,7 @@ async def test_execute_node_dispatches_plan_prompt_type(
 ) -> None:
     _task, node_log = await _make_task_with_node_log(db_session)
     node = Node(
+        created_by=uuid.uuid4(),
         name="n",
         node_type=NodeType.PLAN_PROMPT,
         timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
@@ -395,6 +405,7 @@ async def test_execute_node_plan_prompt_requires_db_session_and_node_log_id(
     tmp_path: Path,
 ) -> None:
     node = Node(
+        created_by=uuid.uuid4(),
         name="n",
         node_type=NodeType.PLAN_PROMPT,
         timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
@@ -434,6 +445,7 @@ class TestScriptRunnerImage:
 
         monkeypatch.setattr(dispatch, "run_script_node", fake_run)
         node = Node(
+            created_by=uuid.uuid4(),
             name="n",
             node_type=NodeType.SCRIPT,
             script_language=ScriptLanguage.BASH,

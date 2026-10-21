@@ -14,19 +14,27 @@ from pathlib import Path
 
 import httpx
 import pytest
+import sqlalchemy as sa
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.gitlab import GitlabClient
-from db.models.enums import MergeStatus, RepositoryRole, TaskStatus, UserRole
+from db.models.enums import AppLogLevel, MergeStatus, RepositoryRole, TaskStatus, UserRole
+from db.models.logs import AppLog
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
+from services import gitlab_sync as gitlab_sync_module
 from services.crypto import encrypt
 from services.git_ops import clone_task_repository
 from services.gitlab_sync import (
+    ACCESS_DENIED_KEY,
+    permanent_failure_key,
     rebase_child_task_repositories_on_parent_merge,
+    sync_merge_statuses,
     sync_task_repository_merge_status,
 )
+from services.notifications import NotificationEvent
 
 _GIT_AUTHOR_ARGS = ["-c", "user.email=test@example.com", "-c", "user.name=Test"]
 
@@ -490,3 +498,178 @@ async def test_rebase_skips_children_without_live_session(
     assert child_task_repository.base_branch == "main"
     await db_session.refresh(child_task)
     assert child_task.status is child_status
+
+
+class TestSyncFailures:
+    """Раздел 17.3: временный сбой не прерывает цикл, постоянный — уведомление без повторов."""
+
+    async def _row(
+        self,
+        db_session: AsyncSession,
+        *,
+        branch: str,
+    ) -> tuple[TaskRepository, Repository, Task]:
+        user = await _make_user(db_session)
+        task = await _make_task(db_session, created_by=user.id)
+        repository = _make_repository(git_url=f"git@gitlab.example.com:g/{branch}.git")
+        db_session.add(repository)
+        await db_session.flush()
+        task_repository = TaskRepository(
+            task_id=task.id,
+            repository_id=repository.id,
+            role=RepositoryRole.READ_WRITE,
+            branch_name=f"feature/{branch}",
+            base_branch="main",
+            merge_status=MergeStatus.PUSHED,
+        )
+        db_session.add(task_repository)
+        await db_session.flush()
+        return task_repository, repository, task
+
+    def _client(self, status_by_project: dict[str, int]) -> tuple[GitlabClient, list[str]]:
+        requested: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            project = next(name for name in status_by_project if name in str(request.url))
+            requested.append(project)
+            status = status_by_project[project]
+            if status == httpx.codes.OK:
+                return httpx.Response(status, json=[{"state": "merged"}])
+            return httpx.Response(status, text="ошибка")
+
+        client = GitlabClient(
+            base_url="https://gitlab.example.com",
+            token="secret",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+        return client, requested
+
+    @pytest.fixture
+    def pushes(self, monkeypatch: pytest.MonkeyPatch) -> list[tuple[NotificationEvent, uuid.UUID]]:
+        sent: list[tuple[NotificationEvent, uuid.UUID]] = []
+
+        async def record(
+            _db: AsyncSession,
+            *,
+            event: NotificationEvent,
+            task: Task,
+            **_: object,
+        ) -> None:
+            sent.append((event, task.id))
+
+        monkeypatch.setattr(gitlab_sync_module, "notify_task_event", record)
+        return sent
+
+    async def test_transient_keeps_loop(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        pushes: list[tuple[NotificationEvent, uuid.UUID]],
+    ) -> None:
+        broken = await self._row(db_session, branch="broken")
+        healthy = await self._row(db_session, branch="healthy")
+        client, _requested = self._client({"broken": 503, "healthy": 200})
+
+        await sync_merge_statuses(
+            db_session,
+            rows=[broken, healthy],
+            gitlab_client=client,
+            redis_client=redis_client,
+        )
+
+        assert healthy[0].merge_status is MergeStatus.MERGED
+        assert broken[0].merge_status is MergeStatus.PUSHED
+        assert pushes == []
+        assert not await redis_client.exists(permanent_failure_key(broken[0].id))
+
+    async def test_permanent_notifies_once(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        pushes: list[tuple[NotificationEvent, uuid.UUID]],
+    ) -> None:
+        row = await self._row(db_session, branch="gone")
+        client, requested = self._client({"gone": 404})
+
+        for _ in range(2):
+            await sync_merge_statuses(
+                db_session,
+                rows=[row],
+                gitlab_client=client,
+                redis_client=redis_client,
+            )
+
+        assert requested == ["gone"]
+        assert pushes == [(NotificationEvent.GITLAB_SYNC_FAILED, row[2].id)]
+        logs = (
+            await db_session.execute(
+                sa.select(AppLog).where(
+                    AppLog.task_id == row[2].id,
+                    AppLog.level == AppLogLevel.ERROR,
+                ),
+            )
+        ).scalars().all()
+        assert len(logs) == 1
+
+    async def test_retries_after_pause_expires(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        pushes: list[tuple[NotificationEvent, uuid.UUID]],
+    ) -> None:
+        row = await self._row(db_session, branch="fixed")
+        failing, _ = self._client({"fixed": 410})
+        await sync_merge_statuses(
+            db_session,
+            rows=[row],
+            gitlab_client=failing,
+            redis_client=redis_client,
+        )
+        await redis_client.delete(permanent_failure_key(row[0].id))
+        working, requested = self._client({"fixed": 200})
+
+        await sync_merge_statuses(
+            db_session,
+            rows=[row],
+            gitlab_client=working,
+            redis_client=redis_client,
+        )
+
+        assert requested == ["fixed"]
+        assert row[0].merge_status is MergeStatus.MERGED
+
+    async def test_rejected_token(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        pushes: list[tuple[NotificationEvent, uuid.UUID]],
+    ) -> None:
+        """Токен один на систему: администратору — одна запись, авторам — ничего."""
+        await redis_client.delete(ACCESS_DENIED_KEY)
+        first = await self._row(db_session, branch="first")
+        second = await self._row(db_session, branch="second")
+        client, requested = self._client({"first": 401, "second": 401})
+        try:
+            for _ in range(2):
+                await sync_merge_statuses(
+                    db_session,
+                    rows=[first, second],
+                    gitlab_client=client,
+                    redis_client=redis_client,
+                )
+
+            assert requested == ["first"]
+            assert pushes == []
+            assert await redis_client.exists(ACCESS_DENIED_KEY)
+            assert not await redis_client.exists(permanent_failure_key(first[0].id))
+            logs = (
+                await db_session.execute(
+                    sa.select(AppLog).where(
+                        AppLog.source == "periodic.sync_gitlab_merge_status",
+                        AppLog.message.contains("GITLAB_TOKEN"),
+                    ),
+                )
+            ).scalars().all()
+            assert len(logs) == 1
+        finally:
+            await redis_client.delete(ACCESS_DENIED_KEY)

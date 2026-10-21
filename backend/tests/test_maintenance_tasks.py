@@ -15,7 +15,6 @@ from db.models.users import User
 from services.crypto import encrypt
 from services.maintenance_tasks import (
     check_mcp_server_health,
-    deprovision_inactive_users,
     find_node_logs_eligible_for_rotation,
     find_tasks_awaiting_input_beyond_threshold,
     find_tasks_needing_cleanup_reminder,
@@ -241,10 +240,6 @@ async def test_health_check_all_mcp_servers_updates_is_healthy(db_session: Async
 
 def test_revoke_stale_sshfs_keys_is_a_noop() -> None:
     revoke_stale_sshfs_keys()  # не должно бросать исключений
-
-
-def test_deprovision_inactive_users_is_a_noop() -> None:
-    deprovision_inactive_users()  # не должно бросать исключений
 
 
 def test_purge_orphaned_playwright_processes_is_a_noop() -> None:

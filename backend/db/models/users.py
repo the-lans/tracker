@@ -25,6 +25,9 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         default=UserRole.USER,
     )
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    # Раздел 15.1: публичный ключ sshfs-доступа (не секрет — правило 8 не
+    # применяется); на сервер его ставит администратор (решение №16 плана).
+    ssh_public_key: Mapped[str | None] = mapped_column(sa.Text)
 
 
 class AllowedEmail(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

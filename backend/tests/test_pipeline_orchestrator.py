@@ -2,8 +2,17 @@ import asyncio
 import uuid
 from pathlib import Path
 
+import pytest
 import sqlalchemy as sa
-from claude_agent_sdk import AssistantMessage, TextBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    CLIConnectionError,
+    CLINotFoundError,
+    Message,
+    ProcessError,
+    TextBlock,
+)
+from claude_agent_sdk.types import AssistantMessageError
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +30,7 @@ from services.pipeline_orchestrator import (
 )
 from services.plan_mode import ActiveNodeContext
 from services.task_control import TaskControlCommand, request_task_control
-from tests.fakes import FakeClaudeAgentClient, make_result_message
+from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
 
@@ -30,7 +39,7 @@ async def _make_task_with_pipeline(db_session: AsyncSession) -> Task:
     user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
     db_session.add(user)
     await db_session.flush()
-    pipeline = Pipeline(name="p", is_archived=False)
+    pipeline = Pipeline(name="p", is_archived=False, created_by=user.id)
     db_session.add(pipeline)
     await db_session.flush()
     task = Task(
@@ -64,6 +73,7 @@ async def _add_node(
         "is_skipped": False,
         "is_library_item": False,
         "is_archived": False,
+        "created_by": task.created_by,
     }
     defaults.update(node_kwargs)
     node = Node(**defaults)
@@ -485,3 +495,157 @@ async def test_stop_during_node_marks_it_stopped_without_retry(
     assert fake.interrupted is True
     logs = await _node_logs_for(db_session, task.id)
     assert [log.status for log in logs] == [NodeLogStatus.STOPPED]
+
+
+class TestFailureKinds:
+    """Раздел 17.3: временный сбой повторяется, постоянный — нет."""
+
+    async def _task_with_node(self, db_session: AsyncSession, *, max_retries: int = 3) -> Task:
+        task = await _make_task_with_pipeline(db_session)
+        await _add_node(
+            db_session,
+            task,
+            order_index=0,
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="шаг",
+            max_retries=max_retries,
+            retry_base_delay_seconds=0,
+        )
+        return task
+
+    @pytest.mark.parametrize(
+        ("assistant_error", "expected_attempts"),
+        [
+            ("authentication_failed", 1),
+            ("billing_error", 1),
+            ("rate_limit", 3),
+            ("server_error", 3),
+        ],
+    )
+    async def test_assistant_error(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        assistant_error: AssistantMessageError,
+        expected_attempts: int,
+    ) -> None:
+        task = await self._task_with_node(db_session)
+        failing_turn: list[Message] = [
+            make_assistant_error(assistant_error),
+            make_result_message(is_error=True),
+        ]
+        fake = FakeClaudeAgentClient(messages_per_query=[failing_turn] * 3)
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+        )
+
+        assert outcome.completed is False
+        assert len(fake.queries) == expected_attempts
+        logs = await _node_logs_for(db_session, task.id)
+        assert [log.status for log in logs] == [NodeLogStatus.FAILED] * expected_attempts
+
+    async def test_crash_recovered(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await self._task_with_node(db_session)
+        crashed = FakeClaudeAgentClient(
+            messages_per_query=[],
+            failures_per_query={0: ProcessError("CLI упал", exit_code=1)},
+        )
+        replacement = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        session = ClaudeCodeSession(crashed)
+        recoveries: list[str] = []
+
+        async def recover() -> None:
+            recoveries.append("recovered")
+            await session.replace_client(replacement)
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=session,
+            repos_path=tmp_path,
+            recover_session=recover,
+        )
+
+        assert outcome.completed is True
+        assert recoveries == ["recovered"]
+        assert replacement.connected is True
+        logs = await _node_logs_for(db_session, task.id)
+        assert [log.status for log in logs] == [NodeLogStatus.FAILED, NodeLogStatus.SUCCESS]
+
+    async def test_missing_cli_is_not_retried(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await self._task_with_node(db_session)
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[],
+            failures_per_query={0: CLINotFoundError("claude не найден")},
+        )
+
+        async def recover() -> None:
+            pytest.fail("постоянный сбой не должен переподключать сессию")
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            recover_session=recover,
+        )
+
+        assert outcome.completed is False
+        assert len(fake.queries) == 1
+
+    async def test_crash_without_recovery_fails_node(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await self._task_with_node(db_session)
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[],
+            failures_per_query={0: ProcessError("CLI упал", exit_code=1)},
+        )
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+        )
+
+        assert outcome.completed is False
+        assert len(fake.queries) == 1
+
+    async def test_failed_recovery_propagates(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await self._task_with_node(db_session)
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[],
+            failures_per_query={0: ProcessError("CLI упал", exit_code=1)},
+        )
+
+        async def recover() -> None:
+            message = "не удалось поднять процесс"
+            raise CLIConnectionError(message)
+
+        with pytest.raises(CLIConnectionError):
+            await run_pipeline(
+                db_session,
+                task=task,
+                claude_session=ClaudeCodeSession(fake),
+                repos_path=tmp_path,
+                recover_session=recover,
+            )

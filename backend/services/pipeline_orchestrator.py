@@ -18,11 +18,13 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
+from claude_agent_sdk import ClaudeSDKError
 
 from app_logging.config import get_logger
 from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, TaskNode
+from services.failure_classification import is_transient_sdk_exception
 from services.nodes.clear_context import ensure_clear_context_allowed
 from services.nodes.dispatch import (
     NodeExecutionOutcome,
@@ -44,6 +46,10 @@ if TYPE_CHECKING:
     from services.plan_mode import ActiveNodeContext
 
 logger = get_logger("pipeline_orchestrator")
+
+# Переподключение сессии после падения процесса CLI (раздел 17.3): её
+# передаёт владелец сессии — воркер задачи (правило 16 CLAUDE.md).
+type SessionRecovery = Callable[[], Awaitable[None]]
 
 
 def compute_retry_delay_seconds(attempt_number: int, base_delay_seconds: int) -> float:
@@ -142,6 +148,7 @@ async def run_pipeline_node_with_retry(
     repos_path: Path,
     active_node_context: ActiveNodeContext | None = None,
     stop_guard: StopGuard | None = None,
+    recover_session: SessionRecovery | None = None,
 ) -> NodeRunOutcome:
     """Одна нода пайплайна, с retry (раздел 11.7).
 
@@ -185,20 +192,23 @@ async def run_pipeline_node_with_retry(
                 auto_accept_plan=task.auto_accept_plan,
             )
 
-        outcome = await run_node_execution(
-            execute_node(
-                node,
-                prompt=prompt,
+        outcome = await _run_attempt(
+            run_node_execution(
+                execute_node(
+                    node,
+                    prompt=prompt,
+                    claude_session=claude_session,
+                    repos_path=repos_path,
+                    timeout_seconds=node.timeout_seconds,
+                    db_session=db_session,
+                    node_log_id=node_log.id,
+                    runner_image=await resolve_runner_image(db_session, node),
+                ),
+                node_type=node.node_type,
                 claude_session=claude_session,
-                repos_path=repos_path,
-                timeout_seconds=node.timeout_seconds,
-                db_session=db_session,
-                node_log_id=node_log.id,
-                runner_image=await resolve_runner_image(db_session, node),
+                stop_guard=stop_guard,
             ),
-            node_type=node.node_type,
-            claude_session=claude_session,
-            stop_guard=stop_guard,
+            node_id=node.id,
         )
 
         _remember_session_id(task, claude_session)
@@ -217,6 +227,17 @@ async def run_pipeline_node_with_retry(
         if outcome.success:
             logger.info("node_succeeded", node_id=str(node.id), attempt=attempt)
             return NodeRunOutcome(node_log=node_log, success=True)
+
+        if not outcome.is_transient or (outcome.session_lost and recover_session is None):
+            # Раздел 17.3: постоянный сбой повтором не лечится — задача
+            # сразу уходит в `failed` с уведомлением автора.
+            logger.warning(
+                "node_failed_permanent",
+                node_id=str(node.id),
+                attempt=attempt,
+                error=outcome.error_message,
+            )
+            return NodeRunOutcome(node_log=node_log, success=False)
 
         if attempt >= node.max_retries:
             logger.warning(
@@ -240,7 +261,30 @@ async def run_pipeline_node_with_retry(
             error=outcome.error_message,
         )
         await asyncio.sleep(delay)
+        if outcome.session_lost and recover_session is not None:
+            # Сбой переподключения уходит выше: воркер переведёт задачу в
+            # `failed` (`services/task_status.py::fail_task_after_error`).
+            await recover_session()
+            logger.info("session_recovered_for_retry", node_id=str(node.id), attempt=attempt)
         attempt += 1
+
+
+async def _run_attempt(
+    execution: Awaitable[NodeExecutionOutcome | None],
+    *,
+    node_id: uuid.UUID,
+) -> NodeExecutionOutcome | None:
+    """Исключение SDK посреди хода — неуспешная попытка, а не падение прогона."""
+    try:
+        return await execution
+    except ClaudeSDKError as exc:
+        logger.exception("node_session_failed", node_id=str(node_id))
+        return NodeExecutionOutcome(
+            success=False,
+            error_message=f"Сбой сессии Claude Code: {exc}",
+            is_transient=is_transient_sdk_exception(exc),
+            session_lost=True,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +312,7 @@ async def run_pipeline(
     active_node_context: ActiveNodeContext | None = None,
     checkpoint: Checkpoint | None = None,
     stop_guard: StopGuard | None = None,
+    recover_session: SessionRecovery | None = None,
 ) -> PipelineRunOutcome:
     """Итерирует `task_nodes` в порядке `order_index` (раздел 13.3).
 
@@ -276,7 +321,8 @@ async def run_pipeline(
     `clear_context` или перезапуска с точки сбоя ("Перезапустить с текущей
     ноды", раздел 14.2): ноды с ``order_index <= start_after_order_index``
     уже имеют зафиксированную историю и повторно не выполняются.
-    ``active_node_context``/``stop_guard`` — см. `run_pipeline_node_with_retry`.
+    ``active_node_context``/``stop_guard``/``recover_session`` — см.
+    `run_pipeline_node_with_retry`.
     ``checkpoint`` вызывается перед каждой включённой нодой; `STOP`
     завершает прогон до её выполнения.
     """
@@ -341,6 +387,7 @@ async def run_pipeline(
             repos_path=repos_path,
             active_node_context=active_node_context,
             stop_guard=stop_guard,
+            recover_session=recover_session,
         )
         if not outcome.success:
             return PipelineRunOutcome(

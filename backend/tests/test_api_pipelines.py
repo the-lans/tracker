@@ -44,7 +44,7 @@ async def test_delete_pipeline_used_by_task_is_rejected(
     db_session: AsyncSession,
     current_user: User,
 ) -> None:
-    pipeline = Pipeline(id=uuid.uuid4(), name="Используемый")
+    pipeline = Pipeline(id=uuid.uuid4(), name="Используемый", created_by=current_user.id)
     db_session.add(pipeline)
     await db_session.flush()
     task = Task(

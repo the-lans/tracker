@@ -38,7 +38,8 @@ async def _make_task(session: AsyncSession, *, created_by: uuid.UUID, status: Ta
 
 
 async def test_ensure_pipeline_deletable_allows_unused_pipeline(db_session: AsyncSession) -> None:
-    pipeline = Pipeline(name="пайплайн")
+    user = await _make_user(db_session)
+    pipeline = Pipeline(name="пайплайн", created_by=user.id)
     db_session.add(pipeline)
     await db_session.flush()
 
@@ -49,7 +50,7 @@ async def test_ensure_pipeline_deletable_rejects_pipeline_used_by_task(
     db_session: AsyncSession,
 ) -> None:
     user = await _make_user(db_session)
-    pipeline = Pipeline(name="пайплайн")
+    pipeline = Pipeline(name="пайплайн", created_by=user.id)
     db_session.add(pipeline)
     await db_session.flush()
     task = await _make_task(db_session, created_by=user.id, status=TaskStatus.NEW)
@@ -61,7 +62,9 @@ async def test_ensure_pipeline_deletable_rejects_pipeline_used_by_task(
 
 
 async def test_ensure_node_deletable_allows_unused_library_prompt(db_session: AsyncSession) -> None:
+    user = await _make_user(db_session)
     node = Node(
+        created_by=user.id,
         name="промт",
         node_type=NodeType.PLAIN_PROMPT,
         is_library_item=True,
@@ -76,6 +79,7 @@ async def test_ensure_node_deletable_allows_unused_library_prompt(db_session: As
 async def test_ensure_node_deletable_rejects_node_used_by_task(db_session: AsyncSession) -> None:
     user = await _make_user(db_session)
     node = Node(
+        created_by=user.id,
         name="промт",
         node_type=NodeType.PLAIN_PROMPT,
         is_library_item=True,

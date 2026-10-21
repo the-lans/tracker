@@ -19,6 +19,7 @@ from api.nodes import router as nodes_router
 from api.periodic_tasks import router as periodic_tasks_router
 from api.pipelines import router as pipelines_router
 from api.preview import router as preview_router
+from api.profile import router as profile_router
 from api.push import router as push_router
 from api.repositories import router as repositories_router
 from api.system_settings import router as system_settings_router
@@ -54,6 +55,7 @@ app.include_router(mcp_servers_router)
 app.include_router(pipelines_router)
 app.include_router(nodes_router)
 app.include_router(users_router)
+app.include_router(profile_router)
 app.include_router(periodic_tasks_router)
 app.include_router(app_logs_router)
 app.include_router(monitoring_router)

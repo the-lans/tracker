@@ -27,6 +27,9 @@ class Template(UUIDPrimaryKeyMixin, Base):
     name: Mapped[str] = mapped_column(sa.String)
     # Дерево файлов шаблона (CLAUDE.md, .claude/commands/*.md, .claude/settings.json).
     files: Mapped[JsonValue] = mapped_column(JSONB)
+    # Раздел 19.2: шаблон — личный; шаблон репозитория по умолчанию при этом
+    # применяется к задачам любого пользователя (решение №16 плана).
+    created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), index=True)
 
 
 class TemplateMcpServer(Base):

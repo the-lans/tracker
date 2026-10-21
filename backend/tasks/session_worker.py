@@ -177,6 +177,16 @@ class _SessionControl:
     # Новый процесс CLI, продолжающий сессию с данным `session_id` с флагом
     # `--remote-control` (раздел 6.5).
     bridge_client_factory: Callable[[str], ClaudeAgentClientProtocol]
+    # Новый процесс CLI с прежними флагами — после падения процесса посреди
+    # ноды (раздел 17.3: временный сбой повторяется в той же сессии).
+    recovery_client_factory: Callable[[str], ClaudeAgentClientProtocol]
+
+    async def recover_session(self) -> None:
+        session_id = self.claude_session.session_id or self.task.session_id
+        if session_id is None:
+            message = "Процесс CLI упал до первого ответа — продолжать нечего"
+            raise RuntimeError(message)
+        await self.claude_session.replace_client(self.recovery_client_factory(session_id))
 
     async def process_manual_queue(self) -> None:
         await process_manual_queue_once(
@@ -589,6 +599,10 @@ async def _run_claimed_task(
             resume_session_id=session_id,
             enable_remote_control=True,
         ),
+        recovery_client_factory=lambda session_id: make_client(
+            resume_session_id=session_id,
+            enable_remote_control=start_plan.enable_remote_control,
+        ),
     )
     await session.connect()
     if start_plan.enable_remote_control:
@@ -619,6 +633,7 @@ async def _run_claimed_task(
                 active_node_context=active_node_context,
                 checkpoint=control.checkpoint,
                 stop_guard=StopGuard(redis_client=redis_client, task_id=task.id),
+                recover_session=control.recover_session,
             )
         if outcome is not None and outcome.completed:
             # Пайплайн пройден, но сессия ещё жива: конфликт ребейза и

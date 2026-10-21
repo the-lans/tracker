@@ -67,10 +67,12 @@ async def _make_task(db_session: AsyncSession) -> tuple[Task, uuid.UUID]:
 async def _make_library_node(
     db_session: AsyncSession,
     *,
+    created_by: uuid.UUID,
     node_type: NodeType = NodeType.PLAIN_PROMPT,
     prompt_template: str | None = "библиотечный промт",
 ) -> Node:
     node = Node(
+        created_by=created_by,
         name="library-node",
         node_type=node_type,
         prompt_template=prompt_template if node_type is NodeType.PLAIN_PROMPT else None,
@@ -94,7 +96,7 @@ async def _node_logs_for(db_session: AsyncSession, task_id: uuid.UUID) -> list[N
 
 async def test_enqueue_library_prompt_run_creates_queued_request(db_session: AsyncSession) -> None:
     task, user_id = await _make_task(db_session)
-    node = await _make_library_node(db_session)
+    node = await _make_library_node(db_session, created_by=user_id)
     task_library_prompt = TaskLibraryPrompt(task_id=task.id, node_id=node.id, added_by=user_id)
     db_session.add(task_library_prompt)
     await db_session.flush()
@@ -117,7 +119,12 @@ async def test_enqueue_library_prompt_run_rejects_forbidden_node_types(
     node_type: NodeType,
 ) -> None:
     task, user_id = await _make_task(db_session)
-    node = await _make_library_node(db_session, node_type=node_type, prompt_template=None)
+    node = await _make_library_node(
+        db_session,
+        created_by=user_id,
+        node_type=node_type,
+        prompt_template=None,
+    )
     task_library_prompt = TaskLibraryPrompt(task_id=task.id, node_id=node.id, added_by=user_id)
     db_session.add(task_library_prompt)
     await db_session.flush()
@@ -219,7 +226,7 @@ async def test_process_manual_queue_once_runs_library_prompt_and_updates_status(
     redis_client: Redis,
 ) -> None:
     task, user_id = await _make_task(db_session)
-    node = await _make_library_node(db_session)
+    node = await _make_library_node(db_session, created_by=user_id)
     task_library_prompt = TaskLibraryPrompt(task_id=task.id, node_id=node.id, added_by=user_id)
     db_session.add(task_library_prompt)
     await db_session.flush()
@@ -254,7 +261,7 @@ async def test_process_manual_queue_once_marks_library_prompt_failed_on_error(
     redis_client: Redis,
 ) -> None:
     task, user_id = await _make_task(db_session)
-    node = await _make_library_node(db_session)
+    node = await _make_library_node(db_session, created_by=user_id)
     task_library_prompt = TaskLibraryPrompt(task_id=task.id, node_id=node.id, added_by=user_id)
     db_session.add(task_library_prompt)
     await db_session.flush()
@@ -430,7 +437,7 @@ async def _enqueue_library_run(
     db_session: AsyncSession,
 ) -> tuple[Task, TaskLibraryPrompt, TaskManualRequestQueue]:
     task, user_id = await _make_task(db_session)
-    node = await _make_library_node(db_session)
+    node = await _make_library_node(db_session, created_by=user_id)
     task_library_prompt = TaskLibraryPrompt(task_id=task.id, node_id=node.id, added_by=user_id)
     db_session.add(task_library_prompt)
     await db_session.flush()

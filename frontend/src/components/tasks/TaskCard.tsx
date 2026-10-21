@@ -7,6 +7,7 @@ import { useStartTask } from "@/hooks/useTasks";
 import { formatRelativeShort } from "@/lib/utils";
 import { ApiError } from "@/lib/apiClient";
 import { TaskStatus, type Task } from "@/lib/types";
+import { OwnerLabel } from "@/components/common/avatar/OwnerLabel";
 
 export function TaskCard({ task }: { task: Task }) {
   const meta = TASK_STATUS_META[task.status];
@@ -41,6 +42,7 @@ export function TaskCard({ task }: { task: Task }) {
         {task.title}
       </Link>
       {subtitle && <div className="text-xs text-text-3">{subtitle}</div>}
+      <OwnerLabel ownerId={task.created_by} />
       <div className="mt-0.5 flex items-center gap-2 border-t border-border pt-2.5">
         <span className="text-xs font-bold text-text-2">{formatRelativeShort(task.updated_at)}</span>
         {task.status === TaskStatus.NEW && (

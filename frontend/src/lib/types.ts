@@ -165,6 +165,13 @@ export interface User {
   role: UserRole;
   is_active: boolean;
   created_at: string;
+  /** Раздел 15.1: публичный ключ sshfs — ставит на сервер администратор. */
+  ssh_public_key: string | null;
+  ssh_key_fingerprint: string | null;
+}
+
+export interface SshKeyUpdateRequest {
+  public_key: string;
 }
 
 export interface UserUpdateRequest {
@@ -201,6 +208,7 @@ export interface Task {
   auto_start_enabled: boolean;
   last_failed_order_index: number | null;
   repo_cleaned_at: string | null;
+  created_by: string;
   created_at: string;
   updated_at: string;
 }
@@ -356,6 +364,7 @@ export interface Pipeline {
   id: string;
   name: string;
   is_archived: boolean;
+  created_by: string;
 }
 
 export interface NodeItem {
@@ -378,6 +387,7 @@ export interface NodeItem {
   is_library_item: boolean;
   llm_output_last_n: number | null;
   is_archived: boolean;
+  created_by: string;
 }
 
 export interface NodeCreateRequest {
@@ -428,6 +438,7 @@ export interface Template {
   name: string;
   files: TemplateFileTree;
   mcp_server_ids: string[];
+  created_by: string;
 }
 
 export interface TemplateCreateRequest {

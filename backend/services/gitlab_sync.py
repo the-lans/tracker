@@ -1,6 +1,16 @@
 """Синхронизация с GitLab (раздел 16.2 ТЗ): `sync_gitlab_merge_status`,
 `rebase_child_branches_on_parent_merge`.
 
+Раздел 17.3: временный сбой GitLab API (сеть, 5xx, 408, 429) не прерывает
+цикл по остальным репозиториям и повторяется на следующем запуске;
+постоянный сбой репозитория (прочие 4xx) пишется в `app_logs`, автор задачи
+получает уведомление, а репозиторий пропускается на
+`PERMANENT_FAILURE_COOLDOWN_SECONDS` — без бесполезных повторов и повторных
+уведомлений. Отклонённый токен (401/403) — сбой всей интеграции: цикл
+прерывается, ошибка пишется в `app_logs` один раз для администратора, и
+синхронизация ставится на ту же паузу целиком. После паузы — новая попытка:
+администратор мог исправить токен или путь проекта.
+
 `closed` (MR закрыт без слияния) намеренно не отображается ни в одно из
 значений `task_repositories.merge_status` (`not_pushed`/`pushed`/`merged`/
 `conflict`) — схема раздела 3.1 не выделяет под это состояние отдельного
@@ -17,22 +27,29 @@ from typing import TYPE_CHECKING
 import sqlalchemy as sa
 
 from app_logging.config import get_logger
-from clients.gitlab import project_path_from_git_url
-from db.models.enums import MergeStatus, TaskStatus
+from clients.gitlab import GitlabAccessDeniedError, project_path_from_git_url
+from db.models.enums import AppLogLevel, MergeStatus, TaskStatus
+from db.models.logs import AppLog
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
-from services.errors import ConflictError
+from services.errors import ConflictError, ExternalServiceError
 from services.git_ops import RebaseConflictError, rebase_onto_base_branch
+from services.notifications import NotificationEvent, notify_task_event
 from services.task_status import transition_task_status
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
+    from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from clients.gitlab import GitlabClient
 
 logger = get_logger("gitlab_sync")
+
+PERMANENT_FAILURE_COOLDOWN_SECONDS = 24 * 60 * 60
+_SYNC_LOG_SOURCE = "periodic.sync_gitlab_merge_status"
 
 _GITLAB_STATE_TO_MERGE_STATUS: dict[str, MergeStatus] = {
     "merged": MergeStatus.MERGED,
@@ -73,6 +90,118 @@ async def sync_task_repository_merge_status(
         new_status=new_status,
     )
     return new_status
+
+
+ACCESS_DENIED_KEY = "gitlab-sync:access-denied"
+
+
+def permanent_failure_key(task_repository_id: uuid.UUID) -> str:
+    return f"gitlab-sync:permanent:{task_repository_id}"
+
+
+async def _report_access_denied(
+    db_session: AsyncSession,
+    *,
+    redis_client: Redis,
+    error: GitlabAccessDeniedError,
+) -> None:
+    """Токен один на систему — сообщается администратору, а не авторам задач."""
+    logger.error("gitlab_sync_access_denied", error=error.message)
+    # SET NX: запись одна за паузу, даже если два запуска пересеклись (правило 12).
+    first_report = await redis_client.set(
+        ACCESS_DENIED_KEY,
+        "1",
+        nx=True,
+        ex=PERMANENT_FAILURE_COOLDOWN_SECONDS,
+    )
+    if first_report:
+        db_session.add(
+            AppLog(
+                level=AppLogLevel.ERROR,
+                source=_SYNC_LOG_SOURCE,
+                message=(
+                    f"{error.message}: синхронизация статусов MR приостановлена на сутки. "
+                    "Проверьте переменную GITLAB_TOKEN"
+                ),
+                context={},
+            ),
+        )
+        await db_session.commit()
+
+
+async def _report_permanent_failure(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    task_repository: TaskRepository,
+    error: ExternalServiceError,
+) -> None:
+    db_session.add(
+        AppLog(
+            level=AppLogLevel.ERROR,
+            source=_SYNC_LOG_SOURCE,
+            message=f"Постоянный сбой GitLab API: {error.message}",
+            context={"task_repository_id": str(task_repository.id)},
+            task_id=task.id,
+        ),
+    )
+    await db_session.commit()
+    await notify_task_event(
+        db_session,
+        event=NotificationEvent.GITLAB_SYNC_FAILED,
+        task=task,
+        detail=f"{task.code}: {error.message}",
+    )
+
+
+async def sync_merge_statuses(
+    db_session: AsyncSession,
+    *,
+    rows: Sequence[tuple[TaskRepository, Repository, Task]],
+    gitlab_client: GitlabClient,
+    redis_client: Redis,
+) -> None:
+    """Раздел 16.2 + 17.3: `sync_gitlab_merge_status` по всем репозиториям задач."""
+    if await redis_client.exists(ACCESS_DENIED_KEY):
+        logger.info("gitlab_sync_paused_access_denied")
+        return
+    for task_repository, repository, task in rows:
+        key = permanent_failure_key(task_repository.id)
+        if await redis_client.exists(key):
+            continue
+        try:
+            await sync_task_repository_merge_status(
+                db_session,
+                task_repository=task_repository,
+                repository=repository,
+                gitlab_client=gitlab_client,
+            )
+        except GitlabAccessDeniedError as exc:
+            await _report_access_denied(db_session, redis_client=redis_client, error=exc)
+            return
+        except ExternalServiceError as exc:
+            # Ошибка — ответ GitLab до каких-либо изменений в БД: откатывать нечего.
+            if exc.is_transient:
+                logger.warning(
+                    "gitlab_sync_transient_failure",
+                    task_repository_id=str(task_repository.id),
+                    error=exc.message,
+                )
+                continue
+            logger.error(
+                "gitlab_sync_permanent_failure",
+                task_repository_id=str(task_repository.id),
+                error=exc.message,
+            )
+            # SET NX: уведомление уходит один раз за паузу, даже если два
+            # запуска задачи пересеклись (правило 12 CLAUDE.md).
+            if await redis_client.set(key, "1", nx=True, ex=PERMANENT_FAILURE_COOLDOWN_SECONDS):
+                await _report_permanent_failure(
+                    db_session,
+                    task=task,
+                    task_repository=task_repository,
+                    error=exc,
+                )
 
 
 # Задачи с живой сессией: только у них конфликт разрешит агент (раздел 14).

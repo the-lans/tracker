@@ -23,10 +23,10 @@ from api.dependencies import get_current_user
 from api.schemas import TemplatePreviewRequest, TemplatePreviewResponse
 from db.models.enums import NodeLogTriggerType
 from db.models.logs import NodeLog
-from db.models.tasks import Task
 from db.models.users import User
 from db.session import get_session
-from services.errors import NotFoundError, ValidationError
+from services.access import get_task_for_user
+from services.errors import ValidationError
 from services.manual_queue import render_freeform_prompt
 from services.template_context import render_for_task
 from services.templating import RenderScope, validate_template_variables
@@ -40,7 +40,7 @@ _SCOPE_BY_VALUE = {scope.value: scope for scope in RenderScope}
 async def preview_template(
     body: TemplatePreviewRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    _current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> TemplatePreviewResponse:
     scope = _SCOPE_BY_VALUE.get(body.scope)
     if scope is None:
@@ -50,9 +50,7 @@ async def preview_template(
         validate_template_variables(body.text, scope=scope)
         return TemplatePreviewResponse(rendered_text=body.text)
 
-    task = await db_session.get(Task, body.task_id)
-    if task is None:
-        raise NotFoundError(f"Задача {body.task_id} не найдена")
+    task = await get_task_for_user(db_session, body.task_id, user=current_user)
 
     if scope is RenderScope.FREEFORM:
         # Раздел 8.2: предпросмотр показывает ровно то, что уйдёт в сессию.

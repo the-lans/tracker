@@ -32,9 +32,9 @@ from db.models.enums import (
 from db.models.logs import AppLog
 from db.models.periodic import PeriodicTask
 from db.models.repositories import Repository
-from db.models.tasks import TaskRepository
+from db.models.tasks import Task, TaskRepository
 from db.session import async_session_factory
-from services import gitlab_sync, maintenance_tasks
+from services import gitlab_sync, maintenance_tasks, users
 from services.autostart import run_scheduled_autostart_check
 from services.llm_accounts import restore_expired_rate_limits
 from services.log_rotation import resolve_archive_root, rotate_node_logs
@@ -158,22 +158,29 @@ def sync_gitlab_merge_status() -> None:
         if gitlab_client is None:
             return
         stmt = (
-            sa.select(TaskRepository, Repository)
+            sa.select(TaskRepository, Repository, Task)
             .join(Repository, Repository.id == TaskRepository.repository_id)
+            .join(Task, Task.id == TaskRepository.task_id)
             .where(
                 TaskRepository.role == RepositoryRole.READ_WRITE,
                 TaskRepository.merge_status != MergeStatus.NOT_PUSHED,
                 TaskRepository.merge_status != MergeStatus.MERGED,
             )
         )
-        rows = (await db_session.execute(stmt)).all()
-        for task_repository, repository in rows:
-            await gitlab_sync.sync_task_repository_merge_status(
+        rows = [
+            (task_repository, repository, task)
+            for task_repository, repository, task in (await db_session.execute(stmt)).all()
+        ]
+        redis_client = Redis.from_url(os.environ["REDIS_URL"])
+        try:
+            await gitlab_sync.sync_merge_statuses(
                 db_session,
-                task_repository=task_repository,
-                repository=repository,
+                rows=rows,
                 gitlab_client=gitlab_client,
+                redis_client=redis_client,
             )
+        finally:
+            await redis_client.aclose()
 
     _run_periodic("sync_gitlab_merge_status", body)
 
@@ -249,8 +256,9 @@ def health_check_mcp_servers() -> None:
 
 @celery_app.task(name="deprovision_inactive_users")
 def deprovision_inactive_users() -> None:
-    async def body(_db_session: AsyncSession) -> None:
-        maintenance_tasks.deprovision_inactive_users()
+    async def body(db_session: AsyncSession) -> None:
+        deprovisioned = await users.deprovision_inactive_users(db_session)
+        logger.info("inactive_users_deprovisioned", count=len(deprovisioned))
 
     _run_periodic("deprovision_inactive_users", body)
 

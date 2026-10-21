@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from db.models.enums import (
     AppLogLevel,
@@ -30,6 +30,7 @@ from db.models.enums import (
     TaskStatus,
     UserRole,
 )
+from services.ssh_keys import MAX_PUBLIC_KEY_LENGTH, fingerprint_of_public_key
 
 
 class AwaitingDecisionCountResponse(BaseModel):
@@ -111,6 +112,7 @@ class TaskResponse(BaseModel):
     auto_start_enabled: bool
     last_failed_order_index: int | None
     repo_cleaned_at: datetime | None
+    created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
 
@@ -267,6 +269,7 @@ class TemplateResponse(BaseModel):
     name: str
     files: dict[str, Any]
     mcp_server_ids: list[uuid.UUID]
+    created_by: uuid.UUID
 
 
 # --- LLM-аккаунты (раздел 3.1) ------------------------------------------
@@ -402,6 +405,7 @@ class PipelineResponse(BaseModel):
     id: uuid.UUID
     name: str
     is_archived: bool
+    created_by: uuid.UUID
 
 
 class NodeCreateRequest(BaseModel):
@@ -469,6 +473,7 @@ class NodeResponse(BaseModel):
     is_library_item: bool
     llm_output_last_n: int | None
     is_archived: bool
+    created_by: uuid.UUID
 
 
 class TemplatePreviewRequest(BaseModel):
@@ -498,6 +503,20 @@ class UserResponse(BaseModel):
     role: UserRole
     is_active: bool
     created_at: datetime
+    # Раздел 15.1, 15.5: публичный ключ sshfs и его отпечаток — и в профиле,
+    # и в «Пользователях» (ключ на сервер ставит администратор).
+    ssh_public_key: str | None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def ssh_key_fingerprint(self) -> str | None:
+        if self.ssh_public_key is None:
+            return None
+        return fingerprint_of_public_key(self.ssh_public_key)
+
+
+class SshKeyUpdateRequest(BaseModel):
+    public_key: str = Field(max_length=MAX_PUBLIC_KEY_LENGTH)
 
 
 class UserUpdateRequest(BaseModel):

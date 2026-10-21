@@ -77,7 +77,7 @@ async def _make_parent(
 
 
 async def _make_child(db_session: AsyncSession, user: User, parent: Task) -> Task:
-    pipeline = Pipeline(name="p", is_archived=False)
+    pipeline = Pipeline(name="p", is_archived=False, created_by=user.id)
     db_session.add(pipeline)
     await db_session.flush()
     child = Task(
@@ -93,6 +93,7 @@ async def _make_child(db_session: AsyncSession, user: User, parent: Task) -> Tas
     db_session.add(child)
     await db_session.flush()
     node = Node(
+        created_by=user.id,
         pipeline_id=pipeline.id,
         order_index=0,
         name="node-0",

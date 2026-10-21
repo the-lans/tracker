@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 from db.models.enums import McpAuthType, McpIsolationMode
+from db.models.mcp import McpServer
+from services.crypto import encrypt
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _create(client: AsyncClient, **overrides: Any) -> dict[str, Any]:
@@ -83,7 +89,58 @@ async def test_update_to_stateful_without_isolation_mode_is_rejected(
     assert response.status_code == 422
 
 
-async def test_non_admin_cannot_list_mcp_servers(authed_client: AsyncClient) -> None:
-    response = await authed_client.get("/mcp-servers")
+class TestUserAccess:
+    """Раздел 10.5, 19.2: `user` выбирает серверы для своего шаблона, но не меняет их."""
 
-    assert response.status_code == 403
+    async def _server(self, db_session: AsyncSession) -> McpServer:
+        server = McpServer(
+            name=f"mcp-{uuid.uuid4().hex[:6]}",
+            url="http://localhost:8931",
+            auth_type=McpAuthType.BEARER_TOKEN,
+            auth_config_encrypted=encrypt("secret-token"),
+            is_healthy=True,
+            has_stateful_resource=False,
+        )
+        db_session.add(server)
+        await db_session.flush()
+        return server
+
+    async def test_reads_without_secrets(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        server = await self._server(db_session)
+
+        listed = await authed_client.get("/mcp-servers")
+        single = await authed_client.get(f"/mcp-servers/{server.id}")
+
+        assert listed.status_code == 200
+        assert str(server.id) in [item["id"] for item in listed.json()]
+        assert single.status_code == 200
+        assert "secret-token" not in listed.text + single.text
+        assert "auth_config" not in single.json()
+
+    @pytest.mark.parametrize(
+        ("method", "with_id", "payload"),
+        [
+            ("post", False, {"name": "x", "url": "http://x", "auth_type": "none"}),
+            ("patch", True, {"name": "y"}),
+            ("delete", True, None),
+        ],
+        ids=["create", "update", "delete"],
+    )
+    async def test_cannot_modify(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        method: str,
+        with_id: bool,
+        payload: dict[str, Any] | None,
+    ) -> None:
+        server = await self._server(db_session)
+        url = f"/mcp-servers/{server.id}" if with_id else "/mcp-servers"
+
+        response = await authed_client.request(method.upper(), url, json=payload)
+
+        assert response.status_code == 403
