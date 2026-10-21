@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 export type WorkspaceView = "dialogue" | "logs";
 
 const VIEWS: Array<{ value: WorkspaceView; label: string }> = [
-  { value: "dialogue", label: "Выполнение" },
+  { value: "dialogue", label: "Диалог" },
   { value: "logs", label: "Логи" },
 ];
 

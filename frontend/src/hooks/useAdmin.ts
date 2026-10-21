@@ -88,6 +88,8 @@ export interface AppLogFilters {
   level?: AppLogLevel;
   source?: string;
   taskId?: string;
+  /** Раздел 15.5: задача по коду RR-XXXXX. */
+  taskCode?: string;
   createdFrom?: string;
   createdTo?: string;
 }
@@ -100,6 +102,7 @@ export function useAppLogs(filters: AppLogFilters) {
         level: filters.level,
         source: filters.source,
         task_id: filters.taskId,
+        task_code: filters.taskCode,
         created_from: filters.createdFrom,
         created_to: filters.createdTo,
       }),

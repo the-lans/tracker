@@ -19,13 +19,17 @@ function dayBoundary(value: string, endOfDay: boolean): string | undefined {
   return date.toISOString();
 }
 
-/** Раздел 15.5: `app_logs` с фильтрами по уровню и дате. */
+/** Раздел 15.5, 17.2: `app_logs` с фильтрами по уровню, источнику, задаче и дате. */
 export function AppLogsSection() {
   const [level, setLevel] = useState<AppLogLevel | "all">("all");
+  const [source, setSource] = useState("");
+  const [taskCode, setTaskCode] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const { data: logs, isLoading } = useAppLogs({
     level: level === "all" ? undefined : level,
+    source: source.trim() || undefined,
+    taskCode: taskCode.trim() || undefined,
     createdFrom: dayBoundary(dateFrom, false),
     createdTo: dayBoundary(dateTo, true),
   });
@@ -35,6 +39,20 @@ export function AppLogsSection() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SectionTitle>app_logs</SectionTitle>
         <div className="flex flex-wrap items-center gap-2">
+          <Input
+            aria-label="Источник"
+            placeholder="Источник"
+            className="w-40"
+            value={source}
+            onChange={(event) => setSource(event.target.value)}
+          />
+          <Input
+            aria-label="Задача"
+            placeholder="Задача (RR-…)"
+            className="w-40"
+            value={taskCode}
+            onChange={(event) => setTaskCode(event.target.value)}
+          />
           <Input
             type="date"
             aria-label="С даты"
@@ -83,7 +101,7 @@ export function AppLogsSection() {
         <EmptyState
           compact
           title="Записей в журнале нет"
-          hint="Измените уровень, задачу или диапазон дат в фильтрах выше."
+          hint="Измените уровень, источник, задачу или диапазон дат в фильтрах выше."
         />
       )}
     </section>

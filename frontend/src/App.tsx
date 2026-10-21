@@ -37,10 +37,10 @@ export function App() {
                   <Route path="templates" element={<TemplatesPage />} />
                   <Route path="repositories" element={<RepositoriesPage />} />
                   <Route path="llm-accounts" element={<LlmAccountsPage />} />
-                  <Route path="env-variables" element={<EnvVariablesPage />} />
                   <Route path="profile" element={<ProfilePage />} />
                   <Route element={<AdminRoute />}>
                     <Route path="admin" element={<AdminPage />} />
+                    <Route path="env-variables" element={<EnvVariablesPage />} />
                   </Route>
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Route>
