@@ -29,6 +29,7 @@ from services.nodes.clear_context import ensure_clear_context_allowed
 from services.nodes.dispatch import (
     NodeExecutionOutcome,
     execute_node,
+    record_sdk_failure,
     resolve_node_prompt_or_none,
     resolve_script_env_or_none,
 )
@@ -46,7 +47,8 @@ if TYPE_CHECKING:
     from db.models.tasks import Task
     from services.plan_mode import ActiveNodeContext
 
-logger = get_logger("pipeline_orchestrator")
+_LOG_SOURCE = "pipeline_orchestrator"
+logger = get_logger(_LOG_SOURCE)
 
 # Переподключение сессии после падения процесса CLI (раздел 17.3): её
 # передаёт владелец сессии — воркер задачи (правило 16 CLAUDE.md).
@@ -211,12 +213,16 @@ async def run_pipeline_node_with_retry(
                 stop_guard=stop_guard,
             ),
             node_id=node.id,
+            claude_session=claude_session,
         )
 
         _remember_session_id(task, claude_session)
         node_log.finished_at = datetime.now(UTC)
         if outcome is None:
             node_log.status = NodeLogStatus.STOPPED
+            if node.node_type is not NodeType.SCRIPT:
+                # Раздел 6.4: полученная до остановки часть ответа не теряется.
+                node_log.llm_output_text = claude_session.take_partial_turn_text()
             await db_session.commit()
             logger.info("node_stopped_by_user", node_id=str(node.id), attempt=attempt)
             return NodeRunOutcome(node_log=node_log, success=False, stopped=True)
@@ -225,6 +231,7 @@ async def run_pipeline_node_with_retry(
         node_log.script_exit_code = outcome.script_exit_code
         node_log.status = NodeLogStatus.SUCCESS if outcome.success else NodeLogStatus.FAILED
         await db_session.commit()
+        await record_sdk_failure(outcome, task_id=task.id, node_id=node.id, source=_LOG_SOURCE)
 
         if outcome.success:
             logger.info("node_succeeded", node_id=str(node.id), attempt=attempt)
@@ -275,14 +282,19 @@ async def _run_attempt(
     execution: Awaitable[NodeExecutionOutcome | None],
     *,
     node_id: uuid.UUID,
+    claude_session: ClaudeCodeSession,
 ) -> NodeExecutionOutcome | None:
-    """Исключение SDK посреди хода — неуспешная попытка, а не падение прогона."""
+    """
+    Исключение SDK посреди хода — неуспешная попытка, а не падение прогона;
+    полученная до сбоя часть ответа сохраняется (раздел 6.4).
+    """
     try:
         return await execution
     except ClaudeSDKError as exc:
         logger.exception("node_session_failed", node_id=str(node_id))
         return NodeExecutionOutcome(
             success=False,
+            llm_output_text=claude_session.take_partial_turn_text(),
             error_message=f"Сбой сессии Claude Code: {exc}",
             is_transient=is_transient_sdk_exception(exc),
             session_lost=True,

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
-from claude_agent_sdk import Message
+from claude_agent_sdk import AssistantMessage, Message, TextBlock
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,7 +45,7 @@ from services.task_control import (
     request_manual_stop,
     request_task_control,
 )
-from tests.fakes import FakeClaudeAgentClient, make_result_message
+from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
 _LIBRARY_PROMPT_TEXT = "библиотечный промт"
@@ -556,6 +556,86 @@ class TestLibraryScriptEnv:
 
         logs = await _node_logs_for(db_session, task.id)
         assert (logs[0].script_stdout or "").strip() == "из задачи"
+
+
+class TestSdkFailureLogged:
+    """Раздел 17.2: постоянная ошибка SDK у промта из библиотеки — в `app_logs`."""
+
+    async def test_permanent_error(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        logged: list[object] = []
+
+        async def record(**kwargs: object) -> None:
+            logged.append(kwargs["task_id"])
+
+        monkeypatch.setattr("services.nodes.dispatch.write_app_log", record)
+        task, _task_library_prompt, _request = await _enqueue_library_run(db_session)
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    make_assistant_error("authentication_failed"),
+                    make_result_message(is_error=True),
+                ],
+            ],
+        )
+
+        await process_manual_queue_once(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            redis_client=redis_client,
+        )
+
+        assert logged == [task.id]
+
+
+class TestStopKeepsPartialReply:
+    """Раздел 6.4: полученная до «■ Остановить» часть ответа не теряется."""
+
+    async def test_library_prompt(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        redis_client: Redis,
+    ) -> None:
+        task, _task_library_prompt, request = await _enqueue_library_run(db_session)
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    AssistantMessage(content=[TextBlock(text="успел ответить")], model="claude"),
+                    make_result_message(),
+                ],
+            ],
+        )
+        fake.message_delay_seconds = 1.0
+
+        async def press_stop() -> None:
+            await asyncio.sleep(1.5)
+            await request_manual_stop(redis_client, task.id, request.id)
+            fake.message_delay_seconds = 0
+
+        presser = asyncio.ensure_future(press_stop())
+        await asyncio.wait_for(
+            process_manual_queue_once(
+                db_session,
+                task=task,
+                claude_session=ClaudeCodeSession(fake),
+                repos_path=tmp_path,
+                redis_client=redis_client,
+            ),
+            timeout=10,
+        )
+        await presser
+
+        [log] = await _node_logs_for(db_session, task.id)
+        assert log.status is NodeLogStatus.STOPPED
+        assert log.llm_output_text == "успел ответить"
 
 
 @pytest.mark.parametrize("stop_whole_task", [False, True])
