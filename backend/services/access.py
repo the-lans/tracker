@@ -1,11 +1,11 @@
 """
 Владение записями (раздел 19.2 ТЗ, решение №16 плана реализации).
 
-Задачи, пайплайны (с их нодами), промты библиотеки и шаблоны — личные:
-`user` видит и меняет только записи со своим `created_by`, `admin` — все.
-Чужая запись неотличима от несуществующей (404): ответ не раскрывает, что
-она есть. Репозитории, LLM-аккаунты и переменные окружения — общие и здесь
-не проверяются.
+Задачи, пайплайны (с их нодами), промты библиотеки, шаблоны и LLM-аккаунты
+(решение №17) — личные: `user` видит и меняет только записи со своим
+`created_by`, `admin` — все. Чужая запись неотличима от несуществующей (404):
+ответ не раскрывает, что она есть. Репозитории и переменные окружения —
+общие и здесь не проверяются.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import sqlalchemy as sa
 
 from db.models.enums import UserRole
+from db.models.llm import LlmAccount
 from db.models.pipelines import Node, Pipeline
 from db.models.repositories import Template
 from db.models.tasks import Task
@@ -26,7 +27,8 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import InstrumentedAttribute
 
-OwnedModel = type[Task] | type[Pipeline] | type[Node] | type[Template]
+OwnedRecord = Task | Pipeline | Node | Template | LlmAccount
+OwnedModel = type[Task] | type[Pipeline] | type[Node] | type[Template] | type[LlmAccount]
 
 
 def is_admin(user: User) -> bool:
@@ -40,7 +42,7 @@ def owner_filter(column: InstrumentedAttribute[uuid.UUID], user: User) -> sa.Col
     return column == user.id
 
 
-def can_access(record: Task | Pipeline | Node | Template, user: User) -> bool:
+def can_access(record: OwnedRecord, user: User) -> bool:
     return is_admin(user) or record.created_by == user.id
 
 
@@ -52,7 +54,7 @@ async def _get_owned(
     user: User,
     label: str,
 ) -> Any:
-    record: Task | Pipeline | Node | Template | None = await db_session.get(model, record_id)
+    record: OwnedRecord | None = await db_session.get(model, record_id)
     if record is None or not can_access(record, user):
         raise NotFoundError(f"{label} {record_id} не найден(а)")
     return record
@@ -98,6 +100,37 @@ async def get_template_for_user(
         label="Шаблон",
     )
     return template
+
+
+async def get_llm_account_for_user(
+    db_session: AsyncSession,
+    llm_account_id: uuid.UUID,
+    *,
+    user: User,
+) -> LlmAccount:
+    llm_account: LlmAccount = await _get_owned(
+        db_session,
+        LlmAccount,
+        llm_account_id,
+        user=user,
+        label="LLM-аккаунт",
+    )
+    return llm_account
+
+
+async def ensure_llm_account_of_owner(
+    db_session: AsyncSession,
+    llm_account_id: uuid.UUID,
+    *,
+    owner_id: uuid.UUID,
+) -> None:
+    """
+    Раздел 19.2: LLM-аккаунт задачи — только один из аккаунтов её автора,
+    в том числе когда задачу создаёт или меняет `admin`.
+    """
+    llm_account = await db_session.get(LlmAccount, llm_account_id)
+    if llm_account is None or llm_account.created_by != owner_id:
+        raise NotFoundError(f"LLM-аккаунт {llm_account_id} не найден у автора задачи")
 
 
 async def authorize_task_stream(

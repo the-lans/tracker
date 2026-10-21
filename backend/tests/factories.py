@@ -6,8 +6,10 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import UserRole
+from db.models.enums import LlmAccountStatus, UserRole
+from db.models.llm import LlmAccount
 from db.models.users import User
+from services.llm_accounts import DEFAULT_ACCOUNTS_ROOT
 
 # Сгенерированы `ssh-keygen` только для тестов; отпечатки — вывод `ssh-keygen -lf`.
 SAMPLE_ED25519_BODY = "AAAAC3NzaC1lZDI1NTE5AAAAIMO38aJ53W0R6XWxn4RcBQx6yBRrPornlkBe44lO/nsV"
@@ -31,3 +33,22 @@ async def make_user(db_session: AsyncSession, *, role: UserRole = UserRole.USER)
     db_session.add(user)
     await db_session.flush()
     return user
+
+
+async def make_llm_account(
+    db_session: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    claude_config_dir: str | None = None,
+    status: LlmAccountStatus = LlmAccountStatus.ACTIVE,
+) -> LlmAccount:
+    """LLM-аккаунт пользователя (раздел 19.2): путь уникален, если не задан явно."""
+    account = LlmAccount(
+        label="main",
+        claude_config_dir=claude_config_dir or f"{DEFAULT_ACCOUNTS_ROOT}/{uuid.uuid4().hex}",
+        status=status,
+        created_by=owner_id,
+    )
+    db_session.add(account)
+    await db_session.flush()
+    return account

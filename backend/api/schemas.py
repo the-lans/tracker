@@ -294,6 +294,7 @@ class LlmAccountResponse(BaseModel):
     label: str
     claude_config_dir: str
     status: LlmAccountStatus
+    created_by: uuid.UUID
 
 
 # --- Переменные окружения (раздел 3.1, 5, 19.4) -------------------------

@@ -1,10 +1,11 @@
-"""CRUD `nodes` (раздел 3.1, 3.2, 5.1, 7.2 ТЗ) — нода пайплайна и промт
+"""
+CRUD `nodes` (раздел 3.1, 3.2, 5.1, 7.2 ТЗ) — нода пайплайна и промт
 библиотеки одной сущностью (см. `db/models/pipelines.py::Node`).
 
-Раздел 5.1: недоступная переменная шаблона — ошибка валидации СОХРАНЕНИЯ,
-а не рантайм-сбой, поэтому `prompt_template` прогоняется через
-`services.templating.validate_template_variables` здесь же, при
-создании/редактировании ноды.
+Раздел 5.1: недоступная переменная шаблона — ошибка валидации СОХРАНЕНИЯ, а
+не рантайм-сбой. После каждого изменения состава пайплайна весь пайплайн
+перепроверяется до коммита (`services/pipeline_validation.py`): ошибка
+откатывает изменение.
 """
 
 from __future__ import annotations
@@ -23,21 +24,15 @@ from api.schemas import (
     NodeResponse,
     NodeUpdateRequest,
 )
-from db.models.enums import NodeType
 from db.models.pipelines import Node
 from db.models.users import User
 from db.session import get_session
 from services.access import get_node_for_user, get_pipeline_for_user, owner_filter
-from services.errors import ValidationError
 from services.integrity import count_library_prompt_usage, ensure_node_deletable
+from services.pipeline_validation import validate_node_shape, validate_pipeline_templates
 from services.system_settings import resolve_node_execution_defaults
-from services.templating import RenderScope, validate_template_variables
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
-
-# Раздел 7.2: типы, бессмысленные для библиотеки (разовые пайплайн-действия).
-_LIBRARY_FORBIDDEN_NODE_TYPES = frozenset({NodeType.CLEAR_CONTEXT, NodeType.PLAN_PROMPT})
-
 
 async def _get_node_or_404(db_session: AsyncSession, node_id: uuid.UUID, user: User) -> Node:
     """Раздел 19.2: чужая нода/промт для `user` неотличимы от несуществующих."""
@@ -60,52 +55,18 @@ async def _node_owner_id(
     return pipeline.created_by
 
 
-async def _preceding_node_types(
+async def _validate_and_flush(
     db_session: AsyncSession,
+    node: Node,
     *,
-    pipeline_id: uuid.UUID,
-    order_index: int | None,
-) -> list[NodeType]:
-    if order_index is None:
-        return []
-    stmt = sa.select(Node.node_type).where(
-        Node.pipeline_id == pipeline_id,
-        Node.order_index < order_index,
-    )
-    return list((await db_session.execute(stmt)).scalars().all())
-
-
-async def _validate_node_prompt(
-    db_session: AsyncSession,
-    *,
-    pipeline_id: uuid.UUID | None,
-    order_index: int | None,
-    node_type: NodeType,
-    prompt_template: str | None,
-    llm_output_last_n: int | None,
+    check_description: bool = True,
 ) -> None:
-    if node_type is NodeType.PLAN_PROMPT and pipeline_id is None:
-        raise ValidationError("plan_prompt допустим только внутри пайплайна (раздел 9.5 ТЗ)")
-    if pipeline_id is None and node_type in _LIBRARY_FORBIDDEN_NODE_TYPES:
-        raise ValidationError(
-            f"Тип ноды {node_type} недопустим для библиотеки промтов (раздел 7.2 ТЗ)",
-        )
-    if prompt_template is None:
-        return
-    if pipeline_id is not None:
-        preceding_types = await _preceding_node_types(
-            db_session,
-            pipeline_id=pipeline_id,
-            order_index=order_index,
-        )
-        validate_template_variables(
-            prompt_template,
-            scope=RenderScope.PIPELINE,
-            preceding_node_types=preceding_types,
-            current_node_llm_output_last_n=llm_output_last_n,
-        )
-    else:
-        validate_template_variables(prompt_template, scope=RenderScope.LIBRARY)
+    """Проверка ноды и — для ноды пайплайна — всего пайплайна в новом составе."""
+    validate_node_shape(node, check_description=check_description)
+    db_session.add(node)
+    await db_session.flush()
+    if node.pipeline_id is not None:
+        await validate_pipeline_templates(db_session, node.pipeline_id)
 
 
 @router.post("", response_model=NodeResponse, status_code=201)
@@ -115,14 +76,6 @@ async def create_node(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Node:
     created_by = await _node_owner_id(db_session, pipeline_id=body.pipeline_id, user=current_user)
-    await _validate_node_prompt(
-        db_session,
-        pipeline_id=body.pipeline_id,
-        order_index=body.order_index,
-        node_type=body.node_type,
-        prompt_template=body.prompt_template,
-        llm_output_last_n=body.llm_output_last_n,
-    )
     defaults = await resolve_node_execution_defaults(
         db_session,
         timeout_seconds=body.timeout_seconds,
@@ -150,7 +103,7 @@ async def create_node(
         llm_output_last_n=body.llm_output_last_n,
         created_by=created_by,
     )
-    db_session.add(node)
+    await _validate_and_flush(db_session, node)
     await db_session.commit()
     return node
 
@@ -230,13 +183,10 @@ async def update_node(
     if body.llm_output_last_n is not None:
         node.llm_output_last_n = body.llm_output_last_n
 
-    await _validate_node_prompt(
+    await _validate_and_flush(
         db_session,
-        pipeline_id=node.pipeline_id,
-        order_index=node.order_index,
-        node_type=node.node_type,
-        prompt_template=node.prompt_template,
-        llm_output_last_n=node.llm_output_last_n,
+        node,
+        check_description=body.description is not None,
     )
     await db_session.commit()
     await db_session.refresh(node)
@@ -252,6 +202,11 @@ async def delete_node(
     """Правило 9 CLAUDE.md/раздел 3.2: системный промт, привязанный хотя бы
     к одной задаче, нельзя удалить — только заархивировать."""
     node = await _get_node_or_404(db_session, node_id, current_user)
-    await ensure_node_deletable(db_session, node_id)
+    await ensure_node_deletable(db_session, node)
+    pipeline_id = node.pipeline_id
     await db_session.delete(node)
+    await db_session.flush()
+    if pipeline_id is not None:
+        # Раздел 5.1: удалённая нода могла быть источником `{{node.*}}` следующих.
+        await validate_pipeline_templates(db_session, pipeline_id)
     await db_session.commit()

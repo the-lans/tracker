@@ -37,14 +37,20 @@ from db.models.enums import TaskStatus
 from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.tasks import Task
+from services.notifications import NotificationEvent, notify_task_event
 
 if TYPE_CHECKING:
+    from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger("maintenance_tasks")
 
 DEFAULT_STALE_WORKTREE_THRESHOLD_DAYS = 14
 DEFAULT_AWAITING_INPUT_THRESHOLD = timedelta(hours=4)
+# Раздел 16.2: напоминание о директории — не чаще раза в неделю на задачу,
+# о решении — не чаще раза за порог ожидания.
+CLEANUP_REMINDER_INTERVAL = timedelta(days=7)
+AWAITING_DECISION_REMINDER_INTERVAL = DEFAULT_AWAITING_INPUT_THRESHOLD
 DEFAULT_ORPHANED_CONTAINER_GRACE_PERIOD = timedelta(minutes=10)
 _MCP_HEALTH_CHECK_TIMEOUT_SECONDS = 5.0
 
@@ -78,6 +84,72 @@ async def find_tasks_awaiting_input_beyond_threshold(
         Task.updated_at < cutoff,
     )
     return list((await db_session.execute(stmt)).scalars().all())
+
+
+def cleanup_reminder_key(task_id: uuid.UUID) -> str:
+    return f"reminder:cleanup:{task_id}"
+
+
+def awaiting_decision_reminder_key(task_id: uuid.UUID) -> str:
+    return f"reminder:awaiting:{task_id}"
+
+
+async def _remind_once(
+    db_session: AsyncSession,
+    *,
+    redis_client: Redis,
+    task: Task,
+    key: str,
+    interval: timedelta,
+    event: NotificationEvent,
+) -> bool:
+    """`SET NX` с TTL: повторный запуск в пределах интервала push не шлёт (раздел 17.4)."""
+    if not await redis_client.set(key, "1", nx=True, ex=int(interval.total_seconds())):
+        return False
+    await notify_task_event(db_session, event=event, task=task)
+    return True
+
+
+async def send_cleanup_reminders(
+    db_session: AsyncSession,
+    *,
+    redis_client: Redis,
+    now: datetime,
+) -> list[uuid.UUID]:
+    """Раздел 16.2: `cleanup_stale_worktrees` — напоминание автору задачи."""
+    reminded: list[uuid.UUID] = []
+    for task in await find_tasks_needing_cleanup_reminder(db_session, now=now):
+        if await _remind_once(
+            db_session,
+            redis_client=redis_client,
+            task=task,
+            key=cleanup_reminder_key(task.id),
+            interval=CLEANUP_REMINDER_INTERVAL,
+            event=NotificationEvent.CLEANUP_REMINDER,
+        ):
+            reminded.append(task.id)
+    return reminded
+
+
+async def send_awaiting_decision_reminders(
+    db_session: AsyncSession,
+    *,
+    redis_client: Redis,
+    now: datetime,
+) -> list[uuid.UUID]:
+    """Раздел 16.2: `detect_awaiting_input_timeout` — повторное уведомление автору."""
+    reminded: list[uuid.UUID] = []
+    for task in await find_tasks_awaiting_input_beyond_threshold(db_session, now=now):
+        if await _remind_once(
+            db_session,
+            redis_client=redis_client,
+            task=task,
+            key=awaiting_decision_reminder_key(task.id),
+            interval=AWAITING_DECISION_REMINDER_INTERVAL,
+            event=NotificationEvent.AWAITING_DECISION_REMINDER,
+        ):
+            reminded.append(task.id)
+    return reminded
 
 
 async def find_tasks_requiring_remote_control_check(db_session: AsyncSession) -> list[Task]:

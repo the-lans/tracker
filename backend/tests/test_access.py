@@ -11,6 +11,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import NodeType, TaskStatus, UserRole
+from db.models.llm import LlmAccount
 from db.models.pipelines import Node, Pipeline
 from db.models.repositories import Template
 from db.models.tasks import Task
@@ -18,6 +19,8 @@ from db.models.users import User
 from db.session import async_session_factory
 from services.access import (
     authorize_task_stream,
+    ensure_llm_account_of_owner,
+    get_llm_account_for_user,
     get_node_for_user,
     get_pipeline_for_user,
     get_task_for_user,
@@ -25,12 +28,15 @@ from services.access import (
     owner_filter,
 )
 from services.errors import NotFoundError, UnauthorizedError
-from tests.factories import make_user
+from tests.factories import make_llm_account, make_user
 
 Getter = Callable[..., Awaitable[Any]]
 
 
-def _make_record(kind: str, owner_id: uuid.UUID) -> Task | Pipeline | Node | Template:
+def _make_record(
+    kind: str,
+    owner_id: uuid.UUID,
+) -> Task | Pipeline | Node | Template | LlmAccount:
     if kind == "task":
         return Task(
             code=f"RR-{uuid.uuid4().hex[:5]}",
@@ -49,6 +55,12 @@ def _make_record(kind: str, owner_id: uuid.UUID) -> Task | Pipeline | Node | Tem
             is_library_item=True,
             created_by=owner_id,
         )
+    if kind == "llm_account":
+        return LlmAccount(
+            label="main",
+            claude_config_dir=f"/home/svc/{uuid.uuid4().hex}",
+            created_by=owner_id,
+        )
     return Template(name="tpl", files={}, created_by=owner_id)
 
 
@@ -57,6 +69,7 @@ _GETTERS: dict[str, Getter] = {
     "pipeline": get_pipeline_for_user,
     "node": get_node_for_user,
     "template": get_template_for_user,
+    "llm_account": get_llm_account_for_user,
 }
 
 
@@ -94,6 +107,24 @@ class TestGetForUser:
 
         with pytest.raises(NotFoundError):
             await _GETTERS[kind](db_session, uuid.uuid4(), user=user)
+
+
+class TestEnsureLlmAccountOfOwner:
+    async def test_owner_account(self, db_session: AsyncSession) -> None:
+        owner = await make_user(db_session)
+        account = await make_llm_account(db_session, owner_id=owner.id)
+
+        await ensure_llm_account_of_owner(db_session, account.id, owner_id=owner.id)
+
+    @pytest.mark.parametrize("case", ["foreign", "missing"])
+    async def test_rejects(self, db_session: AsyncSession, case: str) -> None:
+        owner = await make_user(db_session)
+        other = await make_user(db_session, role=UserRole.ADMIN)
+        account = await make_llm_account(db_session, owner_id=other.id)
+        account_id = account.id if case == "foreign" else uuid.uuid4()
+
+        with pytest.raises(NotFoundError):
+            await ensure_llm_account_of_owner(db_session, account_id, owner_id=owner.id)
 
 
 class TestOwnerFilter:

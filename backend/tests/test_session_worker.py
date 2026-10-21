@@ -34,7 +34,6 @@ from db.models.enums import (
     TaskStatus,
     UserRole,
 )
-from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.pipelines import Node, Pipeline, TaskNode
@@ -60,7 +59,7 @@ from services.task_control import (
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name
 from tasks import session_worker
-from tests.factories import make_user
+from tests.factories import make_llm_account, make_user
 from tests.fakes import (
     FakeClaudeAgentClient,
     make_assistant_error,
@@ -998,10 +997,12 @@ class TestHistoryRetention:
     ) -> None:
         """Раздел 6.4: CLI не должен удалить историю, пока задача существует."""
         config_dir = tmp_path / "llm-account"
-        account = LlmAccount(label="main", claude_config_dir=str(config_dir))
-        db_session.add(account)
-        await db_session.flush()
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        account = await make_llm_account(
+            db_session,
+            owner_id=task.created_by,
+            claude_config_dir=str(config_dir),
+        )
         task.llm_account_id = account.id
         await _add_node(db_session, task, order_index=0)
         worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
@@ -1046,10 +1047,12 @@ class TestRateLimitEvents:
         tmp_path: Path,
     ) -> None:
         """Раздел 16.2: CLI сообщил об упоре в лимит — аккаунт задачи `rate_limited`."""
-        account = LlmAccount(label="main", claude_config_dir=str(tmp_path / "acc"))
-        db_session.add(account)
-        await db_session.flush()
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        account = await make_llm_account(
+            db_session,
+            owner_id=task.created_by,
+            claude_config_dir=str(tmp_path / "acc"),
+        )
         task.llm_account_id = account.id
         await _add_node(db_session, task, order_index=0)
         worker_env.client = FakeClaudeAgentClient(

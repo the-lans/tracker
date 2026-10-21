@@ -30,6 +30,7 @@ from services.nodes.dispatch import (
     NodeExecutionOutcome,
     execute_node,
     resolve_node_prompt_or_none,
+    resolve_script_env_or_none,
 )
 from services.system_settings import resolve_runner_image
 from services.task_control import TaskControlCommand, read_task_control, run_stoppable
@@ -203,6 +204,7 @@ async def run_pipeline_node_with_retry(
                     db_session=db_session,
                     node_log_id=node_log.id,
                     runner_image=await resolve_runner_image(db_session, node),
+                    script_env=await resolve_script_env_or_none(db_session, node=node, task=task),
                 ),
                 node_type=node.node_type,
                 claude_session=claude_session,

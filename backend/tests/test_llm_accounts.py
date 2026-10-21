@@ -12,6 +12,7 @@ from claude_agent_sdk.types import RateLimitStatus
 from db.models.enums import LlmAccountStatus
 from db.models.llm import LlmAccount
 from services.llm_accounts import record_rate_limit, restore_expired_rate_limits
+from tests.factories import make_llm_account, make_user
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,10 +21,8 @@ _RESETS_AT = datetime(2026, 10, 20, 18, 0, tzinfo=UTC)
 
 
 async def _account(db_session: AsyncSession, status: LlmAccountStatus) -> LlmAccount:
-    account = LlmAccount(label="main", claude_config_dir="/tmp/acc", status=status)
-    db_session.add(account)
-    await db_session.flush()
-    return account
+    owner = await make_user(db_session)
+    return await make_llm_account(db_session, owner_id=owner.id, status=status)
 
 
 class TestRecordRateLimit:

@@ -17,11 +17,20 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.claude_agent import ClaudeCodeSession
-from db.models.enums import NodeLogStatus, NodeType, ScriptLanguage, TaskStatus, UserRole
+from db.models.enums import (
+    EnvVariableScope,
+    NodeLogStatus,
+    NodeType,
+    ScriptLanguage,
+    TaskStatus,
+    UserRole,
+)
+from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
 from db.models.users import User
+from services.crypto import encrypt
 from services.pipeline_orchestrator import (
     CheckpointDecision,
     StopGuard,
@@ -319,6 +328,53 @@ async def test_run_pipeline_executes_script_node_in_docker(
     logs = await _node_logs_for(db_session, task.id)
     assert logs[0].script_exit_code == 0
     assert "из оркестратора" in (logs[0].script_stdout or "")
+
+
+class TestScriptEnv:
+    """Раздел 11.4: переменные задачи — в контейнер, системный токен GitLab — нет."""
+
+    async def test_without_gitlab_token(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        db_session.add_all(
+            [
+                TaskEnvVariable(
+                    task_id=task.id,
+                    key="API_URL",
+                    value_encrypted=encrypt("из задачи"),
+                ),
+                EnvVariable(
+                    key="GITLAB_TOKEN",
+                    value_encrypted=encrypt("секрет"),
+                    scope=EnvVariableScope.GLOBAL,
+                ),
+            ],
+        )
+        await _add_node(
+            db_session,
+            task,
+            order_index=0,
+            node_type=NodeType.SCRIPT,
+            script_language=ScriptLanguage.PYTHON,
+            script_content=(
+                "import os\nprint(os.environ['API_URL'], os.environ.get('GITLAB_TOKEN'))"
+            ),
+        )
+        session = ClaudeCodeSession(FakeClaudeAgentClient(messages_per_query=[]))
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=session,
+            repos_path=tmp_path,
+        )
+
+        assert outcome.completed is True
+        logs = await _node_logs_for(db_session, task.id)
+        assert (logs[0].script_stdout or "").strip() == "из задачи None"
 
 
 async def test_run_pipeline_executes_plan_prompt_node_with_active_node_context(

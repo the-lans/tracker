@@ -25,6 +25,7 @@ from services.template_context import (
     ensure_no_repository_env_conflicts,
     render_for_task,
     resolve_env_value,
+    resolve_task_env,
 )
 
 
@@ -259,3 +260,55 @@ class TestRepositoryEnvVariables:
             await resolve_env_value(db_session, task_id=task.id, key="API_URL")
         with pytest.raises(ValidationError, match="API_URL"):
             await ensure_no_repository_env_conflicts(db_session, task_id=task.id)
+
+
+class TestResolveTaskEnv:
+    """Раздел 11.4: переменные окружения script-контейнера."""
+
+    async def test_levels_override_in_order(self, db_session: AsyncSession) -> None:
+        task = await _make_task(db_session)
+        db_session.add_all(
+            [
+                _global_env_variable("API_URL", "global"),
+                _global_env_variable("ONLY_GLOBAL", "g"),
+                TaskEnvVariable(task_id=task.id, key="API_URL", value_encrypted=encrypt("task")),
+            ],
+        )
+        await db_session.flush()
+        await _attach_repository_variable(
+            db_session,
+            task,
+            repository_name="backend",
+            key="ONLY_GLOBAL",
+            value="repository",
+        )
+
+        env = await resolve_task_env(db_session, task_id=task.id)
+
+        assert env == {"API_URL": "task", "ONLY_GLOBAL": "repository"}
+
+    @pytest.mark.parametrize(
+        "key",
+        ["GITLAB_URL", "GITLAB_TOKEN", "1BAD", "WITH-DASH", "SPACE KEY"],
+        ids=["gitlab_url", "gitlab_token", "leading_digit", "dash", "space"],
+    )
+    async def test_skips_key(self, db_session: AsyncSession, key: str) -> None:
+        task = await _make_task(db_session)
+        db_session.add(TaskEnvVariable(task_id=task.id, key=key, value_encrypted=encrypt("x")))
+        await db_session.flush()
+
+        assert key not in await resolve_task_env(db_session, task_id=task.id)
+
+    async def test_conflict_between_repositories(self, db_session: AsyncSession) -> None:
+        task = await _make_task(db_session)
+        for name in ("backend", "frontend"):
+            await _attach_repository_variable(
+                db_session,
+                task,
+                repository_name=name,
+                key="API_URL",
+                value=name,
+            )
+
+        with pytest.raises(ValidationError, match="API_URL"):
+            await resolve_task_env(db_session, task_id=task.id)

@@ -15,8 +15,9 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import TaskStatus
-from db.models.pipelines import Node
-from db.models.prompts import TaskLibraryPrompt
+from db.models.logs import NodeLog
+from db.models.pipelines import Node, Pipeline, TaskNode
+from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task, TaskRepository
 from services.errors import ConflictError
 
@@ -35,17 +36,33 @@ async def ensure_pipeline_deletable(session: AsyncSession, pipeline_id: uuid.UUI
         )
 
 
-async def ensure_node_deletable(session: AsyncSession, node_id: uuid.UUID) -> None:
-    """Запрещает удаление системного промта, привязанного хотя бы к одной задаче."""
-    stmt = (
-        sa.select(TaskLibraryPrompt.id)
-        .where(TaskLibraryPrompt.node_id == node_id)
-        .limit(1)
+async def _node_is_referenced(session: AsyncSession, node_id: uuid.UUID) -> bool:
+    """Нода привязана к задаче, выполнялась в ней или ждёт в очереди её ручных запросов."""
+    references = (
+        sa.select(TaskLibraryPrompt.id).where(TaskLibraryPrompt.node_id == node_id),
+        sa.select(TaskNode.id).where(TaskNode.node_id == node_id),
+        sa.select(NodeLog.id).where(NodeLog.node_id == node_id),
+        sa.select(TaskManualRequestQueue.id).where(TaskManualRequestQueue.node_id == node_id),
     )
-    if (await session.execute(stmt)).first() is not None:
+    stmt = sa.select(sa.exists(sa.union_all(*references).subquery().select()))
+    return bool(await session.scalar(stmt))
+
+
+async def ensure_node_deletable(session: AsyncSession, node: Node) -> None:
+    """
+    Раздел 3.2: ноду, которую использует хотя бы одна задача (привязка,
+    история выполнения, очередь), удалить нельзя. Промт библиотеки вместо
+    этого архивируется, нода пайплайна — пропускается по умолчанию.
+    """
+    if not await _node_is_referenced(session, node.id):
+        return
+    if node.pipeline_id is None:
         raise ConflictError(
-            "Системный промт привязан хотя бы к одной задаче — вместо удаления доступна архивация",
+            "Системный промт используется задачей — вместо удаления доступна архивация",
         )
+    raise ConflictError(
+        "Нода используется задачей — удалить её нельзя, включите «Пропуск по умолчанию»",
+    )
 
 
 async def ensure_repository_deletable(session: AsyncSession, repository_id: uuid.UUID) -> None:
@@ -63,6 +80,13 @@ async def ensure_repository_deletable(session: AsyncSession, repository_id: uuid
         raise ConflictError("Репозиторий привязан к активной задаче")
 
 
+async def ensure_llm_account_deletable(session: AsyncSession, llm_account_id: uuid.UUID) -> None:
+    """Раздел 3.2: LLM-аккаунт, выбранный хотя бы у одной задачи, удалить нельзя."""
+    stmt = sa.select(Task.id).where(Task.llm_account_id == llm_account_id).limit(1)
+    if (await session.execute(stmt)).first() is not None:
+        raise ConflictError("LLM-аккаунт выбран у задачи — удалить его нельзя")
+
+
 async def count_library_prompt_usage(db_session: AsyncSession) -> list[tuple[uuid.UUID, int]]:
     """Раздел 15.5: число задач, к которым привязан каждый промт библиотеки."""
     stmt = (
@@ -76,3 +100,9 @@ def ensure_library_prompt_attachable(node: Node) -> None:
     """Раздел 3.2, 7.2: архивный промт остаётся у прежних задач, но новым не выдаётся."""
     if node.is_archived:
         raise ConflictError("Промт в архиве — добавить его в задачу нельзя")
+
+
+def ensure_pipeline_attachable(pipeline: Pipeline) -> None:
+    """Раздел 3.2: архивный пайплайн к задаче не привязывается."""
+    if pipeline.is_archived:
+        raise ConflictError("Пайплайн архивирован — разархивируйте его или выберите другой")

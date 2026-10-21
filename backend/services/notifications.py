@@ -23,8 +23,9 @@ if TYPE_CHECKING:
 
 class NotificationEvent(StrEnum):
     """
-    Раздел 18.2 — семь событий, требующих обязательного уведомления, и
-    постоянный сбой GitLab API (раздел 17.3).
+    Раздел 18.2 — события, требующие обязательного уведомления: семь
+    исходных, постоянный сбой GitLab API (раздел 17.3) и напоминания
+    периодических задач (раздел 16.2).
     """
 
     AWAITING_DECISION = "awaiting_decision"  # awaiting_input ИЛИ plan_review
@@ -36,6 +37,9 @@ class NotificationEvent(StrEnum):
     MANUAL_QUEUE_REQUEST_EXPIRED = "manual_queue_request_expired"
     # Раздел 17.3: постоянный сбой GitLab API — уведомление без повторов.
     GITLAB_SYNC_FAILED = "gitlab_sync_failed"
+    # Раздел 16.2: `cleanup_stale_worktrees` и `detect_awaiting_input_timeout`.
+    CLEANUP_REMINDER = "cleanup_reminder"
+    AWAITING_DECISION_REMINDER = "awaiting_decision_reminder"
 
 
 _TITLES: dict[NotificationEvent, str] = {
@@ -47,6 +51,8 @@ _TITLES: dict[NotificationEvent, str] = {
     NotificationEvent.LIBRARY_PROMPT_FAILED: "Промт библиотеки завершился с ошибкой",
     NotificationEvent.MANUAL_QUEUE_REQUEST_EXPIRED: "Запрос из очереди отменён по таймауту",
     NotificationEvent.GITLAB_SYNC_FAILED: "Не удалось получить статус MR из GitLab",
+    NotificationEvent.CLEANUP_REMINDER: "Пора очистить директорию репозиториев",
+    NotificationEvent.AWAITING_DECISION_REMINDER: "Задача всё ещё ждёт решения",
 }
 
 

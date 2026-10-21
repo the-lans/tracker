@@ -22,7 +22,7 @@ import sqlalchemy as sa
 from redis.asyncio import Redis
 
 from app_logging.config import get_logger
-from clients.gitlab import GitlabClient
+from clients.gitlab import GITLAB_TOKEN_ENV_KEY, GITLAB_URL_ENV_KEY, GitlabClient
 from db.models.enums import (
     AppLogLevel,
     MergeStatus,
@@ -52,9 +52,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger("tasks.periodic")
-
-_GITLAB_URL_ENV_KEY = "GITLAB_URL"
-_GITLAB_TOKEN_ENV_KEY = "GITLAB_TOKEN"
 
 
 async def _get_periodic_task(db_session: AsyncSession, name: str) -> PeriodicTask | None:
@@ -121,11 +118,16 @@ def check_llm_account_limits() -> None:
 @celery_app.task(name="cleanup_stale_worktrees")
 def cleanup_stale_worktrees() -> None:
     async def body(db_session: AsyncSession) -> None:
-        stale = await maintenance_tasks.find_tasks_needing_cleanup_reminder(
-            db_session,
-            now=datetime.now(UTC),
-        )
-        logger.info("stale_worktrees_found", count=len(stale))
+        redis_client = Redis.from_url(os.environ["REDIS_URL"])
+        try:
+            reminded = await maintenance_tasks.send_cleanup_reminders(
+                db_session,
+                redis_client=redis_client,
+                now=datetime.now(UTC),
+            )
+        finally:
+            await redis_client.aclose()
+        logger.info("cleanup_reminders_sent", count=len(reminded))
 
     _run_periodic("cleanup_stale_worktrees", body)
 
@@ -133,18 +135,23 @@ def cleanup_stale_worktrees() -> None:
 @celery_app.task(name="detect_awaiting_input_timeout")
 def detect_awaiting_input_timeout() -> None:
     async def body(db_session: AsyncSession) -> None:
-        overdue = await maintenance_tasks.find_tasks_awaiting_input_beyond_threshold(
-            db_session,
-            now=datetime.now(UTC),
-        )
-        logger.info("awaiting_input_timeouts_found", count=len(overdue))
+        redis_client = Redis.from_url(os.environ["REDIS_URL"])
+        try:
+            reminded = await maintenance_tasks.send_awaiting_decision_reminders(
+                db_session,
+                redis_client=redis_client,
+                now=datetime.now(UTC),
+            )
+        finally:
+            await redis_client.aclose()
+        logger.info("awaiting_decision_reminders_sent", count=len(reminded))
 
     _run_periodic("detect_awaiting_input_timeout", body)
 
 
 async def _build_gitlab_client(db_session: AsyncSession) -> GitlabClient | None:
-    base_url = await resolve_global_env_value(db_session, key=_GITLAB_URL_ENV_KEY)
-    token = await resolve_global_env_value(db_session, key=_GITLAB_TOKEN_ENV_KEY)
+    base_url = await resolve_global_env_value(db_session, key=GITLAB_URL_ENV_KEY)
+    token = await resolve_global_env_value(db_session, key=GITLAB_TOKEN_ENV_KEY)
     if base_url is None or token is None:
         logger.warning("gitlab_credentials_not_configured")
         return None

@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import NodeType
@@ -22,6 +23,7 @@ async def test_create_library_prompt(authed_client: AsyncClient) -> None:
         "/nodes",
         json={
             "name": "Ревью PR",
+            "description": "Проверка кода перед ревью",
             "node_type": NodeType.PLAIN_PROMPT.value,
             "prompt_template": "Проверь код на соответствие стандартам",
         },
@@ -56,12 +58,14 @@ async def test_library_prompt_rejects_node_variables(authed_client: AsyncClient)
         "/nodes",
         json={
             "name": "Ссылается на предыдущую ноду",
+            "description": "назначение",
             "node_type": NodeType.PLAIN_PROMPT.value,
             "prompt_template": "{{node.script_output}}",
         },
     )
 
     assert response.status_code == 422
+    assert "node" in response.json()["error"]["message"]
 
 
 async def test_pipeline_node_rejects_unknown_task_variable(
@@ -204,3 +208,199 @@ class TestLibraryUsage:
 
     async def test_admin_only(self, authed_client: AsyncClient) -> None:
         assert (await authed_client.get("/nodes/library-usage")).status_code == 403
+
+
+async def _pipeline_script_then_consumer(
+    db_session: AsyncSession,
+    owner_id: uuid.UUID,
+) -> tuple[Pipeline, Node, Node]:
+    """Скрипт (0) и нода (1), подставляющая его вывод."""
+    pipeline = Pipeline(id=uuid.uuid4(), name="P3", created_by=owner_id)
+    db_session.add(pipeline)
+    await db_session.flush()
+    script = Node(
+        created_by=owner_id,
+        pipeline_id=pipeline.id,
+        order_index=0,
+        name="Скрипт",
+        node_type=NodeType.SCRIPT,
+        script_content="echo hi",
+        is_library_item=False,
+    )
+    consumer = Node(
+        created_by=owner_id,
+        pipeline_id=pipeline.id,
+        order_index=1,
+        name="Потребитель",
+        node_type=NodeType.PLAIN_PROMPT,
+        prompt_template="Результат: {{node.script_output}}",
+        is_library_item=False,
+    )
+    db_session.add_all([script, consumer])
+    await db_session.flush()
+    return pipeline, script, consumer
+
+
+class TestWholePipelineValidation:
+    """Раздел 5.1: после изменения состава пайплайна проверяются все его ноды."""
+
+    async def test_delete_source_rejected(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        _pipeline, script, _consumer = await _pipeline_script_then_consumer(
+            db_session,
+            current_user.id,
+        )
+
+        response = await authed_client.delete(f"/nodes/{script.id}")
+
+        assert response.status_code == 422
+        assert "Потребитель" in response.json()["error"]["message"]
+
+    async def test_reorder_breaking_reference_rejected(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        _pipeline, script, _consumer = await _pipeline_script_then_consumer(
+            db_session,
+            current_user.id,
+        )
+
+        response = await authed_client.patch(f"/nodes/{script.id}", json={"order_index": 5})
+
+        assert response.status_code == 422
+        assert "Потребитель" in response.json()["error"]["message"]
+
+    async def test_harmless_change_allowed(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        _pipeline, script, _consumer = await _pipeline_script_then_consumer(
+            db_session,
+            current_user.id,
+        )
+
+        response = await authed_client.patch(f"/nodes/{script.id}", json={"name": "Сборка"})
+
+        assert response.status_code == 200
+
+    async def test_insert_before_consumer_allowed(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        pipeline, _script, _consumer = await _pipeline_script_then_consumer(
+            db_session,
+            current_user.id,
+        )
+
+        response = await authed_client.post(
+            "/nodes",
+            json={
+                "pipeline_id": str(pipeline.id),
+                "order_index": 2,
+                "name": "Итог",
+                "node_type": NodeType.PLAIN_PROMPT.value,
+                "prompt_template": "{{node.llm_output}}",
+            },
+        )
+
+        assert response.status_code == 201
+
+
+class TestLibraryDescription:
+    """Раздел 3.1, 15.4: описание промта библиотеки обязательно."""
+
+    @pytest.mark.parametrize("description", [None, "", "   "], ids=["missing", "empty", "blank"])
+    async def test_create_rejected(
+        self,
+        authed_client: AsyncClient,
+        description: str | None,
+    ) -> None:
+        response = await authed_client.post(
+            "/nodes",
+            json={
+                "name": "Без описания",
+                "description": description,
+                "node_type": NodeType.PLAIN_PROMPT.value,
+                "prompt_template": "x",
+            },
+        )
+
+        assert response.status_code == 422
+        assert "Описание" in response.json()["error"]["message"]
+
+    async def test_clearing_rejected(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        node = Node(
+            created_by=current_user.id,
+            name="Промт",
+            description="было",
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="x",
+            is_library_item=True,
+        )
+        db_session.add(node)
+        await db_session.flush()
+
+        response = await authed_client.patch(f"/nodes/{node.id}", json={"description": " "})
+
+        assert response.status_code == 422
+
+    async def test_legacy_prompt_can_be_archived(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        """Промт, заведённый до правила, не застревает: архивация проходит."""
+        node = Node(
+            created_by=current_user.id,
+            name="Старый",
+            description=None,
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="x",
+            is_library_item=True,
+        )
+        db_session.add(node)
+        await db_session.flush()
+
+        response = await authed_client.patch(f"/nodes/{node.id}", json={"is_archived": True})
+
+        assert response.status_code == 200
+        assert response.json()["is_archived"] is True
+
+    async def test_pipeline_node_without_description(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        pipeline = Pipeline(id=uuid.uuid4(), name="P4", created_by=current_user.id)
+        db_session.add(pipeline)
+        await db_session.flush()
+
+        response = await authed_client.post(
+            "/nodes",
+            json={
+                "pipeline_id": str(pipeline.id),
+                "order_index": 0,
+                "name": "Шаг",
+                "node_type": NodeType.PLAIN_PROMPT.value,
+                "prompt_template": "x",
+            },
+        )
+
+        assert response.status_code == 201
