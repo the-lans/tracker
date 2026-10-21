@@ -81,7 +81,10 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           Настройки
         </div>
         <NavItem to="/llm-accounts" label="LLM-аккаунты" icon={KeySquare} />
-        <NavItem to="/env-variables" label="Переменные окружения" icon={Variable} />
+        {/* Раздел 1.2 п. 11, 15.1: переменные окружения ведёт администратор. */}
+        {user?.role === UserRole.ADMIN && (
+          <NavItem to="/env-variables" label="Переменные окружения" icon={Variable} />
+        )}
       </div>
 
       {user?.role === UserRole.ADMIN && (

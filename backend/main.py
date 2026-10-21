@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import traceback
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -26,13 +27,17 @@ from api.system_settings import router as system_settings_router
 from api.tasks import router as tasks_router
 from api.templates import router as templates_router
 from api.users import router as users_router
+from app_logging.app_logs import write_app_log
 from app_logging.config import configure_logging, get_logger
+from db.models.enums import AppLogLevel
 from db.session import engine
 from services.errors import AppError
 from ws.tasks import router as ws_router
 
 configure_logging()
 logger = get_logger("main")
+
+_API_LOG_SOURCE = "api"
 
 
 @asynccontextmanager
@@ -95,6 +100,19 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         error_message=str(exc),
         request_id=request_id,
         path=request.url.path,
+    )
+    # Раздел 17.2, 17.3: `request_id` из ответа находит запись в `app_logs`.
+    await write_app_log(
+        level=AppLogLevel.ERROR,
+        source=_API_LOG_SOURCE,
+        message=f"Необработанное исключение {type(exc).__name__}: {exc}",
+        context={
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "error_type": type(exc).__name__,
+            "traceback": "".join(traceback.format_exception(exc)),
+        },
     )
     return JSONResponse(
         status_code=500,

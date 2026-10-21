@@ -3,6 +3,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TaskRepositoryPicker } from "@/components/tasks/TaskRepositoryPicker";
 import { useLlmAccounts } from "@/hooks/useLlmAccounts";
+import { useAuth } from "@/stores/authStore";
 import type { TaskFormValues } from "@/components/tasks/taskForm.types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 
@@ -14,7 +15,10 @@ export function TaskFormFields({
   value: TaskFormValues;
   onChange: (patch: Partial<TaskFormValues>) => void;
 }) {
-  const { data: llmAccounts } = useLlmAccounts();
+  const { user } = useAuth();
+  const { data: allLlmAccounts } = useLlmAccounts();
+  // Раздел 19.2: у задачи — только аккаунт её автора; `admin` видит и чужие.
+  const llmAccounts = allLlmAccounts?.filter((account) => account.created_by === user?.id);
 
   return (
     <>
@@ -73,7 +77,7 @@ export function TaskFormFields({
           <EmptyState
             compact
             title="LLM-аккаунтов пока нет"
-            hint="Без аккаунта Claude задачу не запустить. Добавьте его в разделе «LLM-аккаунты» кнопкой «+ Аккаунт»."
+            hint="Без аккаунта Claude задачу не запустить. Добавьте свой аккаунт в разделе «LLM-аккаунты» кнопкой «+ Аккаунт»."
           />
         )}
       </div>

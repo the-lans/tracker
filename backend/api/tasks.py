@@ -46,22 +46,21 @@ from db.models.enums import (
     TaskStatus,
 )
 from db.models.env_vars import TaskEnvVariable
-from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.pipelines import Node
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
-from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from db.session import get_session
 from services.access import (
+    ensure_llm_account_of_owner,
     get_node_for_user,
     get_pipeline_for_user,
     get_task_for_user,
     owner_filter,
 )
 from services.errors import ConflictError, NotFoundError, ValidationError
-from services.integrity import ensure_library_prompt_attachable
+from services.integrity import ensure_library_prompt_attachable, ensure_pipeline_attachable
 from services.manual_queue import (
     cancel_manual_request,
     enqueue_freeform_prompt_run,
@@ -112,16 +111,6 @@ _ACTIVE_REQUEST_STATUSES = (ManualRequestStatus.QUEUED, ManualRequestStatus.PROC
 def _require_status(task: Task, allowed: frozenset[TaskStatus], message: str) -> None:
     if task.status not in allowed:
         raise ConflictError(message)
-
-
-async def _ensure_exists(
-    db_session: AsyncSession,
-    model: type[LlmAccount] | type[Repository],
-    entity_id: uuid.UUID,
-    label: str,
-) -> None:
-    if await db_session.get(model, entity_id) is None:
-        raise NotFoundError(f"{label} {entity_id} не найден")
 
 
 def _draft_from_request(
@@ -201,7 +190,12 @@ async def update_task(
     if auto_accept_plan is not None and task.status is TaskStatus.DONE:
         raise ValidationError("Задача уже завершена")
     if changes.get("llm_account_id") is not None:
-        await _ensure_exists(db_session, LlmAccount, changes["llm_account_id"], "LLM-аккаунт")
+        # Раздел 19.2: аккаунт автора задачи, даже если меняет `admin`.
+        await ensure_llm_account_of_owner(
+            db_session,
+            changes["llm_account_id"],
+            owner_id=task.created_by,
+        )
 
     for field, value in changes.items():
         setattr(task, field, value)
@@ -285,7 +279,8 @@ async def bind_pipeline(
     """Раздел 3.1, правило 10 CLAUDE.md: создание `task_nodes` и обновление
     `tasks.pipeline_id` — атомарно, в одной транзакции."""
     task = await _get_task_or_404(db_session, task_id, current_user)
-    await get_pipeline_for_user(db_session, body.pipeline_id, user=current_user)
+    pipeline = await get_pipeline_for_user(db_session, body.pipeline_id, user=current_user)
+    ensure_pipeline_attachable(pipeline)
     await bind_pipeline_to_task(
         db_session,
         task=task,

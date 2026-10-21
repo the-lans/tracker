@@ -89,7 +89,9 @@ backend/
               env_variables, mcp_servers, pipelines, nodes, users, profile,
               periodic_tasks, monitoring, push)
   services/  — бизнес-логика: пайплайны, сессии, git-операции (min. 85% test coverage);
-              access.py — владение записями «своё или admin» (раздел 19.2)
+              access.py — владение записями «своё или admin» (раздел 19.2),
+              включая LLM-аккаунты; pipeline_validation.py — проверка ноды и
+              всего пайплайна при сохранении (раздел 5.1)
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
               (db/session.py — engine/session из DATABASE_URL)
   clients/   — обёртки над Claude Agent SDK, GitLab API, MCP-серверами
@@ -100,7 +102,8 @@ backend/
   ws/        — WebSocket-обработчики real-time уведомлений (tasks.py —
               `/ws/tasks/{task_id}/status`: смена статуса и потоковый вывод
               ответа LLM, разделы 15.2, 18.1)
-  app_logging/ — конфигурация structlog и запись в app_logs (не "logging" —
+  app_logging/ — конфигурация structlog (config.py) и запись в app_logs
+              вне транзакции вызывающего кода (app_logs.py) (не "logging" —
               так называется модуль stdlib, вложенный пакет с этим именем
               внутри backend/ его перекрывает)
   alembic.ini — конфиг Alembic (async); script_location указывает на
@@ -108,7 +111,7 @@ backend/
               alembic/env.py из DATABASE_URL, а не сам alembic.ini
   tests/     — pytest (test_*.py, плоско; conftest.py поднимает Postgres и
               Redis в Docker, fakes.py — фейки Claude Agent SDK,
-              factories.py — общие тестовые записи (автор, эталонные SSH-ключи),
+              factories.py — общие тестовые записи (автор, LLM-аккаунт, эталонные SSH-ключи),
               worker_support.py — обвязка воркера сессии для его тестов и E2E)
 frontend/    — React SPA: дашборд, страница задачи (обзор + диалог),
               конструктор пайплайна/библиотека, CRUD-страницы
@@ -234,6 +237,15 @@ cd backend && alembic revision --autogenerate -m "описание измене�
 cd backend && alembic upgrade head
 ```
 
+### Вход в Claude для LLM-аккаунта (раздел 19.5)
+Пользователь заводит аккаунт с каталогом внутри `/data/claude-accounts`
+(volume `claude_accounts` worker'а), затем администратор входит в Claude в
+этом каталоге — команда `claude` есть в образе backend/worker:
+```bash
+docker compose exec -e CLAUDE_CONFIG_DIR=/data/claude-accounts/<каталог> worker claude auth login
+docker compose exec -e CLAUDE_CONFIG_DIR=/data/claude-accounts/<каталог> worker claude auth status
+```
+
 ### Проверка claude-agent-sdk
 ```bash
 backend/.venv/bin/python scripts/verify_sdk.py
@@ -285,8 +297,10 @@ Postgres с проброшенным портом — см. `docker-compose.yml`
    каких обстоятельствах.
 4. **Script-ноды — без сети и без лишних привилегий.** Контейнер запускается
    без сетевого доступа (без исключений), монтируется только директория
-   репозиториев текущей задачи (read-write), обязательны лимиты CPU/памяти,
-   `--privileged` не используется.
+   репозиториев текущей задачи (read-write; из контейнера worker — подпутём
+   volume, найденного через `docker inspect`), обязательны лимиты CPU/памяти,
+   `--privileged` не используется. Переменные задачи передаются, кроме
+   системных `GITLAB_URL`/`GITLAB_TOKEN`.
 5. **Очистка рабочей директории репозиториев — только вручную и только в
    терминальном статусе** (`done`/`failed`). Автоматическое удаление
    запрещено.
@@ -308,8 +322,10 @@ Postgres с проброшенным портом — см. `docker-compose.yml`
     `PATCH /tasks/{id}/nodes/{task_node_id}`).
 12. **Celery-задачи обязаны быть идемпотентными**: проверка текущего
     состояния перед изменением, распределённая блокировка Redis (`SET NX` +
-    TTL) для критичных операций (пуш в Git, push-уведомления, обработка
-    очереди).
+    TTL) для критичных операций (пуш в Git, обработка очереди).
+    Push-уведомление отправляется только после фиксации однократного
+    изменения состояния (compare-and-swap статуса и т. п.), а событие,
+    которое может повториться, — под ключом `SET NX` с TTL (ТЗ 17.4).
 13. **Покрытие тестами `backend/services/`** — не ниже 85%.
 14. **Переход в `done`** невозможен, пока хотя бы одна включённая нода
     пайплайна не имеет записи `node_logs` со статусом `success`.

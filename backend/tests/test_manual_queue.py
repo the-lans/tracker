@@ -17,14 +17,17 @@ from db.models.enums import (
     NodeLogStatus,
     NodeLogTriggerType,
     NodeType,
+    ScriptLanguage,
     TaskStatus,
     UserRole,
 )
+from db.models.env_vars import TaskEnvVariable
 from db.models.logs import NodeLog
 from db.models.pipelines import Node
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from db.models.users import User
+from services.crypto import encrypt
 from services.distributed_lock import acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
 from services.manual_queue import (
@@ -411,6 +414,39 @@ async def test_expire_stale_manual_queue_requests_cancels_old_queued(
     assert fresh.status is ManualRequestStatus.QUEUED
 
 
+class TestExpireStaleRequests:
+    """Раздел 17.4: повторный запуск отмены уже отменённый запрос не трогает."""
+
+    async def test_notifies_once(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        notified: list[uuid.UUID] = []
+
+        async def record(_db: AsyncSession, *, task: Task, **_kwargs: object) -> None:
+            notified.append(task.id)
+
+        monkeypatch.setattr("services.manual_queue.notify_task_event", record)
+        task, user_id = await _make_task(db_session)
+        stale = await enqueue_freeform_prompt_run(
+            db_session,
+            task_id=task.id,
+            raw_prompt_text="старый",
+            requested_by=user_id,
+        )
+        stale.requested_at = datetime.now(UTC) - timedelta(hours=2)
+        await db_session.flush()
+        older_than = datetime.now(UTC) - timedelta(hours=1)
+
+        first = await expire_stale_manual_queue_requests(db_session, older_than=older_than)
+        second = await expire_stale_manual_queue_requests(db_session, older_than=older_than)
+
+        assert first == [stale.id]
+        assert second == []
+        assert notified == [task.id]
+
+
 async def test_expire_stale_manual_queue_requests_ignores_non_queued(
     db_session: AsyncSession,
 ) -> None:
@@ -476,6 +512,50 @@ async def test_library_prompt_is_marked_running_while_executing(
 
     assert seen == [LibraryPromptRunStatus.RUNNING]
     assert task_library_prompt.last_run_status is LibraryPromptRunStatus.SUCCESS
+
+
+class TestLibraryScriptEnv:
+    """Раздел 11.4: переменные задачи — и в скрипт из библиотеки."""
+
+    async def test_gets_task_env(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        redis_client: Redis,
+    ) -> None:
+        task, user_id = await _make_task(db_session)
+        node = await _make_library_node(db_session, created_by=user_id, node_type=NodeType.SCRIPT)
+        node.script_language = ScriptLanguage.PYTHON
+        node.script_content = "import os\nprint(os.environ['API_URL'])"
+        task_library_prompt = TaskLibraryPrompt(task_id=task.id, node_id=node.id, added_by=user_id)
+        db_session.add_all(
+            [
+                task_library_prompt,
+                TaskEnvVariable(
+                    task_id=task.id,
+                    key="API_URL",
+                    value_encrypted=encrypt("из задачи"),
+                ),
+            ],
+        )
+        await db_session.flush()
+        await enqueue_library_prompt_run(
+            db_session,
+            task_library_prompt=task_library_prompt,
+            node=node,
+            requested_by=user_id,
+        )
+
+        await process_manual_queue_once(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(FakeClaudeAgentClient(messages_per_query=[])),
+            repos_path=tmp_path,
+            redis_client=redis_client,
+        )
+
+        logs = await _node_logs_for(db_session, task.id)
+        assert (logs[0].script_stdout or "").strip() == "из задачи"
 
 
 @pytest.mark.parametrize("stop_whole_task", [False, True])

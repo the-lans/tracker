@@ -52,6 +52,51 @@ async def _make_task(db_session: AsyncSession, code: str) -> Task:
     return task
 
 
+class TestAppLogTaskAndSourceFilter:
+    """Раздел 15.5, 17.2: фильтр по задаче (код RR-XXXXX) и источнику."""
+
+    async def test_by_task_code_and_source(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task = await _make_task(db_session, "RR-31001")
+        other = await _make_task(db_session, "RR-31002")
+        db_session.add_all(
+            [
+                AppLog(
+                    level=AppLogLevel.ERROR,
+                    source="autostart",
+                    message="своя",
+                    context={},
+                    task_id=task.id,
+                ),
+                AppLog(
+                    level=AppLogLevel.ERROR,
+                    source="session_worker",
+                    message="другой источник",
+                    context={},
+                    task_id=task.id,
+                ),
+                AppLog(
+                    level=AppLogLevel.ERROR,
+                    source="autostart",
+                    message="чужая",
+                    context={},
+                    task_id=other.id,
+                ),
+            ],
+        )
+        await db_session.flush()
+
+        response = await admin_client.get(
+            "/app-logs",
+            params={"task_code": " RR-31001 ", "source": "autostart"},
+        )
+
+        assert [entry["message"] for entry in response.json()] == ["своя"]
+
+
 class TestAppLogDateFilter:
     async def test_period(self, admin_client: AsyncClient, db_session: AsyncSession) -> None:
         now = datetime.now(UTC)

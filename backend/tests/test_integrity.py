@@ -3,9 +3,18 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import NodeType, RepositoryRole, TaskStatus, UserRole
-from db.models.pipelines import Node, Pipeline
-from db.models.prompts import TaskLibraryPrompt
+from db.models.enums import (
+    ManualRequestType,
+    NodeLogStatus,
+    NodeLogTriggerType,
+    NodeType,
+    RepositoryRole,
+    TaskStatus,
+    UserRole,
+)
+from db.models.logs import NodeLog
+from db.models.pipelines import Node, Pipeline, TaskNode
+from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
@@ -61,40 +70,95 @@ async def test_ensure_pipeline_deletable_rejects_pipeline_used_by_task(
         await ensure_pipeline_deletable(db_session, pipeline.id)
 
 
-async def test_ensure_node_deletable_allows_unused_library_prompt(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
+async def _make_node(
+    session: AsyncSession,
+    *,
+    created_by: uuid.UUID,
+    in_pipeline: bool,
+) -> Node:
+    pipeline_id = None
+    if in_pipeline:
+        pipeline = Pipeline(name="п", is_archived=False, created_by=created_by)
+        session.add(pipeline)
+        await session.flush()
+        pipeline_id = pipeline.id
     node = Node(
-        created_by=user.id,
-        name="промт",
+        created_by=created_by,
+        pipeline_id=pipeline_id,
+        order_index=0 if in_pipeline else None,
+        name="нода",
         node_type=NodeType.PLAIN_PROMPT,
-        is_library_item=True,
+        is_library_item=not in_pipeline,
         is_archived=False,
     )
-    db_session.add(node)
-    await db_session.flush()
+    session.add(node)
+    await session.flush()
+    return node
 
-    await ensure_node_deletable(db_session, node.id)
 
-
-async def test_ensure_node_deletable_rejects_node_used_by_task(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
-    node = Node(
-        created_by=user.id,
-        name="промт",
-        node_type=NodeType.PLAIN_PROMPT,
-        is_library_item=True,
-        is_archived=False,
+def _reference(kind: str, *, task: Task, node: Node, user_id: uuid.UUID) -> object:
+    if kind == "library_prompt":
+        return TaskLibraryPrompt(task_id=task.id, node_id=node.id, added_by=user_id)
+    if kind == "task_node":
+        return TaskNode(task_id=task.id, node_id=node.id, order_index=0)
+    if kind == "node_log":
+        return NodeLog(
+            task_id=task.id,
+            node_id=node.id,
+            trigger_type=NodeLogTriggerType.PIPELINE,
+            attempt_number=1,
+            status=NodeLogStatus.SUCCESS,
+        )
+    return TaskManualRequestQueue(
+        task_id=task.id,
+        request_type=ManualRequestType.LIBRARY_PROMPT,
+        node_id=node.id,
+        requested_by=user_id,
     )
-    db_session.add(node)
-    await db_session.flush()
-    task = await _make_task(db_session, created_by=user.id, status=TaskStatus.NEW)
-    db_session.add(
-        TaskLibraryPrompt(task_id=task.id, node_id=node.id, added_by=user.id),
-    )
-    await db_session.flush()
 
-    with pytest.raises(ConflictError):
-        await ensure_node_deletable(db_session, node.id)
+
+class TestEnsureNodeDeletable:
+    """Раздел 3.2: ноду, которую использует задача, удалить нельзя."""
+
+    @pytest.mark.parametrize("in_pipeline", [False, True], ids=["library", "pipeline"])
+    async def test_unused(self, db_session: AsyncSession, in_pipeline: bool) -> None:
+        user = await _make_user(db_session)
+        node = await _make_node(db_session, created_by=user.id, in_pipeline=in_pipeline)
+
+        await ensure_node_deletable(db_session, node)
+
+    @pytest.mark.parametrize(
+        ("kind", "in_pipeline", "hint"),
+        [
+            ("library_prompt", False, "архивация"),
+            ("queue", False, "архивация"),
+            ("node_log", False, "архивация"),
+            ("task_node", True, "Пропуск по умолчанию"),
+            ("node_log", True, "Пропуск по умолчанию"),
+        ],
+        ids=[
+            "library_attached",
+            "library_queued",
+            "library_ran",
+            "pipeline_snapshot",
+            "pipeline_ran",
+        ],
+    )
+    async def test_used(
+        self,
+        db_session: AsyncSession,
+        kind: str,
+        in_pipeline: bool,
+        hint: str,
+    ) -> None:
+        user = await _make_user(db_session)
+        node = await _make_node(db_session, created_by=user.id, in_pipeline=in_pipeline)
+        task = await _make_task(db_session, created_by=user.id, status=TaskStatus.NEW)
+        db_session.add(_reference(kind, task=task, node=node, user_id=user.id))
+        await db_session.flush()
+
+        with pytest.raises(ConflictError, match=hint):
+            await ensure_node_deletable(db_session, node)
 
 
 @pytest.mark.parametrize(

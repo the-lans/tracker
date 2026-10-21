@@ -17,6 +17,12 @@ from services.errors import ExternalServiceError
 
 logger = get_logger("gitlab_client")
 
+# Решение №5 плана: адрес и токен GitLab — глобальные `env_variables` с этими
+# ключами. Это настройки интеграции, в script-контейнеры они не передаются
+# (раздел 11.4 ТЗ).
+GITLAB_URL_ENV_KEY = "GITLAB_URL"
+GITLAB_TOKEN_ENV_KEY = "GITLAB_TOKEN"
+
 _API_BASE_PATH = "/api/v4"
 _SERVER_ERROR_THRESHOLD = 500
 _CLIENT_ERROR_THRESHOLD = 400

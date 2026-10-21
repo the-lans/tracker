@@ -49,6 +49,9 @@ services:
       # "tracker/repos" от текущей рабочей директории процесса, никак не
       # связанный с примонтированным /data/repos.
       TRACKER_REPOS_ROOT: /data/repos
+      # Раздел 19.5: каталоги конфигурации LLM-аккаунтов (claude auth login)
+      # — только внутри этого корня, volume claude_accounts ниже.
+      CLAUDE_ACCOUNTS_ROOT: /data/claude-accounts
       # Раздел 16.2: архив ротированной истории `node_logs` (rotate_task_logs).
       TRACKER_LOG_ARCHIVE_ROOT: /data/log-archive
       # Раздел 6.4: срок хранения истории сессий Claude Code (cleanupPeriodDays).
@@ -58,6 +61,7 @@ services:
       - user_files:/data/user-files
       # Через backend `install.sh --restore` распаковывает архивы всех volume.
       - log_archive:/data/log-archive
+      - claude_accounts:/data/claude-accounts
       # Раздел 20.5: доступ Celery worker/backend к Docker-демону хоста для запуска
       # script-нод и раннеров — задокументированный компромисс, без --privileged.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -84,6 +88,7 @@ services:
     environment: *backend_env
     volumes:
       - task_repos:/data/repos
+      - claude_accounts:/data/claude-accounts
       - user_files:/data/user-files
       - log_archive:/data/log-archive
       - /var/run/docker.sock:/var/run/docker.sock
@@ -166,6 +171,8 @@ volumes:
   # и пользовательские файлы задач — именованные Docker-volumes, раздельный жизненный цикл.
   task_repos:
   user_files:
+  # Раздел 6.4, 19.5: входы в Claude и история сессий LLM-аккаунтов.
+  claude_accounts:
   # Раздел 16.2: сжатые JSONL-архивы истории `node_logs`, переносятся вместе
   # с остальными данными (docs/migration.md).
   log_archive:

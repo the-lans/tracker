@@ -22,7 +22,6 @@ from db.models.enums import (
     TaskStatus,
 )
 from db.models.env_vars import TaskEnvVariable
-from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
@@ -37,6 +36,7 @@ from services.task_control import (
     read_task_control,
 )
 from services.task_signal import wait_for_task_signal
+from tests.factories import make_llm_account
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -164,6 +164,39 @@ async def test_bind_pipeline_rejects_empty_pipeline(
     )
 
     assert response.status_code == 422
+
+
+class TestBindArchivedPipeline:
+    """Раздел 3.2: архивный пайплайн к задаче не привязывается."""
+
+    async def test_rejected(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        archived = Pipeline(name="Архивный", is_archived=True, created_by=_owner(task_body))
+        db_session.add(archived)
+        await db_session.flush()
+        db_session.add(
+            Node(
+                created_by=_owner(task_body),
+                pipeline_id=archived.id,
+                order_index=0,
+                name="шаг",
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template="x",
+                is_library_item=False,
+            ),
+        )
+        await db_session.flush()
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/pipeline",
+            json={"pipeline_id": str(archived.id)},
+        )
+
+        assert response.status_code == 409
 
 
 async def test_bind_pipeline_rejects_task_not_in_new_status(
@@ -457,11 +490,10 @@ async def _make_repository(db_session: AsyncSession, name: str = "backend") -> R
 async def test_create_task_attaches_repositories_and_llm_account(
     authed_client: AsyncClient,
     db_session: AsyncSession,
+    current_user: User,
 ) -> None:
     repository = await _make_repository(db_session)
-    llm_account = LlmAccount(label="main", claude_config_dir="/home/svc/.claude")
-    db_session.add(llm_account)
-    await db_session.flush()
+    llm_account = await make_llm_account(db_session, owner_id=current_user.id)
 
     response = await authed_client.post(
         "/tasks",
@@ -1248,6 +1280,58 @@ class TestDuplicateTask:
         assert list(variables) == ["API_URL"]
         [attached] = (await authed_client.get(f"/tasks/{copy['id']}/repositories")).json()
         assert attached["branch_name"] == "feature/RR-30001"
+
+    async def test_archived_pipeline_rejected(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        """Раздел 3.2: архивный пайплайн к новой задаче не привязывается."""
+        source = await self._done_source(authed_client, db_session)
+        pipeline = await db_session.get(Pipeline, source.pipeline_id)
+        assert pipeline is not None
+        pipeline.is_archived = True
+        await db_session.flush()
+
+        response = await authed_client.post(
+            f"/tasks/{source.id}/duplicate",
+            json={"code": "RR-30003", "title": "t", "description": "d"},
+        )
+
+        assert response.status_code == 409
+        assert "архив" in response.json()["error"]["message"]
+
+    async def test_archived_prompts_skipped(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        source = await self._done_source(authed_client, db_session)
+        archived = Node(
+            created_by=source.created_by,
+            name="старый",
+            description="в архиве",
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="x",
+            is_library_item=True,
+            is_archived=True,
+        )
+        db_session.add(archived)
+        await db_session.flush()
+        db_session.add(
+            TaskLibraryPrompt(task_id=source.id, node_id=archived.id, added_by=source.created_by),
+        )
+        await db_session.flush()
+
+        response = await authed_client.post(
+            f"/tasks/{source.id}/duplicate",
+            json={"code": "RR-30004", "title": "t", "description": "d"},
+        )
+
+        assert response.status_code == 201, response.text
+        copy_id = response.json()["id"]
+        prompts = (await authed_client.get(f"/tasks/{copy_id}/library-prompts")).json()
+        assert [prompt["name"] for prompt in prompts] == ["lib"]
 
     async def test_requires_done(self, authed_client: AsyncClient) -> None:
         source = await _create_task(authed_client)

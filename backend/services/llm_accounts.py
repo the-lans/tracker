@@ -1,5 +1,6 @@
 """
-Статус лимитов LLM-аккаунта (раздел 16.2 ТЗ, `check_llm_account_limits`).
+Статус лимитов LLM-аккаунта (раздел 16.2 ТЗ, `check_llm_account_limits`) и
+уникальность его конфигурационной директории (раздел 19.5).
 
 Отдельного API для опроса лимитов у Claude Agent SDK нет, но CLI сам
 присылает в поток сессии `RateLimitEvent` со статусом и временем сброса
@@ -9,6 +10,8 @@
 
 from __future__ import annotations
 
+import os
+import posixpath
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -18,6 +21,7 @@ import sqlalchemy as sa
 from app_logging.config import get_logger
 from db.models.enums import LlmAccountStatus
 from db.models.llm import LlmAccount
+from services.errors import ConflictError, ValidationError
 
 if TYPE_CHECKING:
     from claude_agent_sdk import RateLimitInfo
@@ -26,6 +30,9 @@ if TYPE_CHECKING:
 logger = get_logger("llm_accounts")
 
 _REJECTED = "rejected"
+_ACCOUNTS_ROOT_ENV_VAR = "CLAUDE_ACCOUNTS_ROOT"
+# Volume `claude_accounts` в контейнере worker (docker-compose.yml).
+DEFAULT_ACCOUNTS_ROOT = "/data/claude-accounts"
 
 
 async def record_rate_limit(
@@ -80,3 +87,36 @@ async def restore_expired_rate_limits(
     if restored:
         logger.info("llm_account_rate_limits_restored", account_ids=[str(i) for i in restored])
     return restored
+
+
+def accounts_root() -> str:
+    return posixpath.normpath(os.environ.get(_ACCOUNTS_ROOT_ENV_VAR, DEFAULT_ACCOUNTS_ROOT))
+
+
+def _overlaps(path: str, other: str) -> bool:
+    return path == other or path.startswith(f"{other}/") or other.startswith(f"{path}/")
+
+
+async def validated_config_dir(
+    db_session: AsyncSession,
+    claude_config_dir: str,
+    *,
+    exclude_account_id: uuid.UUID | None = None,
+) -> str:
+    """
+    Раздел 19.5: каталог аккаунта — внутри корня ``CLAUDE_ACCOUNTS_ROOT`` и не
+    пересекается с каталогами других аккаунтов. Путь нормализуется, иначе
+    `/a/.claude/` и `/a//.claude` обходили бы сравнение. Возвращает путь,
+    который нужно сохранить.
+    """
+    root = accounts_root()
+    path = posixpath.normpath(claude_config_dir.strip())
+    if not path.startswith(f"{root}/"):
+        raise ValidationError(f"Каталог конфигурации должен лежать внутри {root}")
+    stmt = sa.select(LlmAccount.claude_config_dir)
+    if exclude_account_id is not None:
+        stmt = stmt.where(LlmAccount.id != exclude_account_id)
+    for other in (await db_session.execute(stmt)).scalars():
+        if _overlaps(path, posixpath.normpath(other)):
+            raise ConflictError(f"Каталог {path} пересекается с каталогом другого LLM-аккаунта")
+    return path

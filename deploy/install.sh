@@ -5,7 +5,8 @@
 #   deploy/install.sh                     — новая установка
 #   deploy/install.sh --restore <каталог> — перенос на новый сервер (раздел
 #     20.4, docs/migration.md): в каталоге .env, дамп БД *.sql.gz,
-#     task_repos.tar.gz, user_files.tar.gz и log_archive.tar.gz со старого сервера
+#     task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz и claude_accounts.tar.gz
+#     со старого сервера
 
 set -euo pipefail
 
@@ -14,6 +15,9 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/tracker}"
 ENV_FILE="${INSTALL_DIR}/.env"
 ENV_EXAMPLE="${INSTALL_DIR}/.env.example"
 DOCKER_INSTALL_SCRIPT_URL="https://get.docker.com"
+# Раздел 20.2 п. 1: script-ноды монтируют подпуть volume (`volume-subpath`,
+# services/nodes/script.py) — он появился в Docker Engine 26.
+MIN_DOCKER_ENGINE_MAJOR=26
 # Заполняется step_prompt_critical_values, читается step_seed_data (раздел
 # 19.1 — курица и яйцо, см. scripts/seed_admin_allowlist.py).
 ADMIN_EMAIL=""
@@ -26,6 +30,10 @@ RESTORE_ARCHIVES=(
   "user_files:/data/user-files"
   "log_archive:/data/log-archive"
 )
+# Необязательные: на сервере прежней версии такого volume ещё не было.
+RESTORE_OPTIONAL_ARCHIVES=(
+  "claude_accounts:/data/claude-accounts"
+)
 
 log() { echo "[install.sh] $*"; }
 
@@ -35,7 +43,7 @@ die() {
 }
 
 usage() {
-  echo "Использование: $0 [--restore <каталог с .env, *.sql.gz, task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz>]"
+  echo "Использование: $0 [--restore <каталог с .env, *.sql.gz, task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz, claude_accounts.tar.gz>]"
 }
 
 parse_args() {
@@ -99,6 +107,20 @@ step_install_docker() {
     _install_compose_plugin
   fi
   docker compose version >/dev/null 2>&1 || die "Docker Compose plugin так и не стал доступен"
+  _check_docker_engine_version
+}
+
+_check_docker_engine_version() {
+  local version major
+  version="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" \
+    || die "Docker Engine недоступен: не удалось узнать версию (запущен ли демон Docker?)"
+  major="${version%%.*}"
+  case "${major}" in
+    '' | *[!0-9]*) die "Не удалось разобрать версию Docker Engine: '${version}'" ;;
+  esac
+  if [ "${major}" -lt "${MIN_DOCKER_ENGINE_MAJOR}" ]; then
+    die "Нужен Docker Engine ${MIN_DOCKER_ENGINE_MAJOR} или новее, установлен ${version} — обновите Docker"
+  fi
 }
 
 # Шаг 2: клонирование репозитория в целевую директорию
@@ -229,14 +251,10 @@ step_seed_data() {
   ( cd "${INSTALL_DIR}" \
     && docker compose run --rm backend python /app/scripts/seed_admin_allowlist.py "${ADMIN_EMAIL}" )
 
-  # periodic_tasks (раздел 16.2), в отличие от allowed_emails, требует уже
-  # СУЩЕСТВУЮЩЕГО пользователя-администратора (updated_by — FK на users) —
-  # первый вход через Google OAuth ещё не выполнен на этом шаге ни разу,
-  # поэтому этот под-шаг откладывается: администратор перезапускает
-  # команду вручную после первого входа (см. шаг 11/step_final_instructions).
+  # periodic_tasks (раздел 16.2): записи создаются системой (updated_by =
+  # NULL, раздел 3.1), администратор для этого не нужен.
   ( cd "${INSTALL_DIR}" \
-    && docker compose run --rm backend python /app/scripts/seed_periodic_tasks.py ) \
-    || log "Seed periodic_tasks пропущен — повторите вручную после первого входа администратора: docker compose run --rm backend python /app/scripts/seed_periodic_tasks.py"
+    && docker compose run --rm backend python /app/scripts/seed_periodic_tasks.py )
 }
 
 # Шаг 9: старт прикладных сервисов
@@ -253,7 +271,8 @@ step_wait_tls() {
 # Шаг 11: первый вход администратора
 step_final_instructions() {
   log "Шаг 11/11: откройте https://<DOMAIN> и войдите через Google OAuth (${ADMIN_EMAIL}) — первый пользователь автоматически получит роль admin"
-  log "После первого входа выполните: cd ${INSTALL_DIR} && docker compose run --rm backend python /app/scripts/seed_periodic_tasks.py"
+  # Раздел 19.5: вход в Claude выполняется в каталоге уже заведённого LLM-аккаунта.
+  log "Вход в Claude для LLM-аккаунта (после того как пользователь завёл его в разделе «LLM-аккаунты»): cd ${INSTALL_DIR} && docker compose exec -e CLAUDE_CONFIG_DIR=<каталог аккаунта> worker claude auth login"
 }
 
 # --- Восстановление на новом сервере (раздел 20.4, docs/migration.md) ---
@@ -296,9 +315,13 @@ step_restore_database() {
 # Тома монтирует сам сервис backend — имя compose-проекта знать не нужно.
 step_restore_volumes() {
   local mapping archive target
-  for mapping in "${RESTORE_ARCHIVES[@]}"; do
+  for mapping in "${RESTORE_ARCHIVES[@]}" "${RESTORE_OPTIONAL_ARCHIVES[@]}"; do
     archive="${mapping%%:*}.tar.gz"
     target="${mapping#*:}"
+    if [ ! -f "${RESTORE_DIR}/${archive}" ]; then
+      log "Восстановление: ${archive} нет в переносе — пропуск"
+      continue
+    fi
     log "Восстановление: ${archive} -> ${target}"
     (cd "${INSTALL_DIR}" && docker compose run --rm --no-deps \
       -v "${RESTORE_DIR}:/restore:ro" --entrypoint sh backend \

@@ -467,6 +467,8 @@ export interface LlmAccount {
   label: string;
   claude_config_dir: string;
   status: LlmAccountStatus;
+  /** Раздел 19.2: владелец аккаунта — тот, кто его завёл. */
+  created_by: string;
 }
 
 export interface LlmAccountCreateRequest {

@@ -2,9 +2,12 @@ import asyncio
 import subprocess
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
+import pytest
 import sqlalchemy as sa
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import McpAuthType, NodeLogStatus, NodeLogTriggerType, TaskStatus, UserRole
@@ -12,9 +15,12 @@ from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.tasks import Task
 from db.models.users import User
+from services import maintenance_tasks
 from services.crypto import encrypt
 from services.maintenance_tasks import (
+    awaiting_decision_reminder_key,
     check_mcp_server_health,
+    cleanup_reminder_key,
     find_node_logs_eligible_for_rotation,
     find_tasks_awaiting_input_beyond_threshold,
     find_tasks_needing_cleanup_reminder,
@@ -23,7 +29,10 @@ from services.maintenance_tasks import (
     purge_orphaned_docker_containers,
     purge_orphaned_playwright_processes,
     revoke_stale_sshfs_keys,
+    send_awaiting_decision_reminders,
+    send_cleanup_reminders,
 )
+from services.notifications import NotificationEvent
 
 
 async def _make_task(db_session: AsyncSession, *, status: TaskStatus) -> Task:
@@ -301,3 +310,59 @@ async def test_find_node_logs_eligible_for_rotation_excludes_non_terminal_task(
     eligible = await find_node_logs_eligible_for_rotation(db_session, now=now, threshold_days=90)
 
     assert node_log.id not in eligible
+
+
+@pytest.mark.parametrize(
+    ("status", "age", "send", "key_of", "event"),
+    [
+        (
+            TaskStatus.DONE,
+            timedelta(days=30),
+            send_cleanup_reminders,
+            cleanup_reminder_key,
+            NotificationEvent.CLEANUP_REMINDER,
+        ),
+        (
+            TaskStatus.PLAN_REVIEW,
+            timedelta(hours=5),
+            send_awaiting_decision_reminders,
+            awaiting_decision_reminder_key,
+            NotificationEvent.AWAITING_DECISION_REMINDER,
+        ),
+    ],
+    ids=["cleanup", "awaiting_decision"],
+)
+class TestReminders:
+    """Раздел 16.2: напоминание автору — не чаще раза за интервал (ключ Redis)."""
+
+    async def test_once_per_interval(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+        status: TaskStatus,
+        age: timedelta,
+        send: Any,
+        key_of: Any,
+        event: NotificationEvent,
+    ) -> None:
+        sent: list[tuple[NotificationEvent, uuid.UUID]] = []
+
+        async def record(_db: AsyncSession, *, event: NotificationEvent, task: Task) -> None:
+            sent.append((event, task.id))
+
+        monkeypatch.setattr(maintenance_tasks, "notify_task_event", record)
+        now = datetime.now(UTC)
+        task = await _make_task(db_session, status=status)
+        await _set_updated_at(db_session, task, now - age)
+
+        first = await send(db_session, redis_client=redis_client, now=now)
+        repeated = await send(db_session, redis_client=redis_client, now=now)
+        await redis_client.delete(key_of(task.id))
+        after_interval = await send(db_session, redis_client=redis_client, now=now)
+
+        assert task.id in first
+        assert task.id not in repeated
+        assert task.id in after_interval
+        assert sent.count((event, task.id)) == 2
+        assert await redis_client.ttl(key_of(task.id)) > 0

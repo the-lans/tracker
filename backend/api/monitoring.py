@@ -18,6 +18,7 @@ from api.dependencies import require_admin
 from api.schemas import ActiveCeleryTaskResponse, AppLogResponse, NodeRunResponse
 from db.models.enums import AppLogLevel, NodeLogStatus, NodeLogTriggerType
 from db.models.logs import AppLog
+from db.models.tasks import Task
 from db.models.users import User
 from db.session import get_session
 from services.monitoring import (
@@ -45,6 +46,7 @@ async def list_app_logs(
     level: AppLogLevel | None = None,
     source: str | None = None,
     task_id: uuid.UUID | None = None,
+    task_code: str | None = None,
     created_from: datetime | None = None,
     created_to: datetime | None = None,
     limit: int = _DEFAULT_LIMIT,
@@ -56,6 +58,9 @@ async def list_app_logs(
         stmt = stmt.where(AppLog.source == source)
     if task_id is not None:
         stmt = stmt.where(AppLog.task_id == task_id)
+    if task_code:
+        # Раздел 15.5: в интерфейсе задачу ищут по коду RR-XXXXX, а не по UUID.
+        stmt = stmt.join(Task, Task.id == AppLog.task_id).where(Task.code == task_code.strip())
     if created_from is not None:
         stmt = stmt.where(AppLog.created_at >= created_from)
     if created_to is not None:

@@ -14,9 +14,9 @@ from typing import TYPE_CHECKING
 import sqlalchemy as sa
 
 from db.models.enums import RepositoryRole
-from db.models.llm import LlmAccount
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
+from services.access import ensure_llm_account_of_owner
 from services.errors import ConflictError, NotFoundError, ValidationError
 from services.task_workspace import build_branch_name
 
@@ -45,7 +45,7 @@ class TaskDraft:
 
 async def _ensure_exists(
     db_session: AsyncSession,
-    model: type[LlmAccount] | type[Repository] | type[Task],
+    model: type[Repository] | type[Task],
     entity_id: uuid.UUID,
     label: str,
 ) -> None:
@@ -53,14 +53,24 @@ async def _ensure_exists(
         raise NotFoundError(f"{label} {entity_id} не найден")
 
 
-async def _validate_draft(db_session: AsyncSession, draft: TaskDraft) -> None:
+async def _validate_draft(
+    db_session: AsyncSession,
+    draft: TaskDraft,
+    *,
+    created_by: uuid.UUID,
+) -> None:
     repository_ids = [attached.repository_id for attached in draft.repositories]
     if len(set(repository_ids)) != len(repository_ids):
         raise ValidationError("Репозиторий указан у задачи больше одного раза")
     for repository_id in repository_ids:
         await _ensure_exists(db_session, Repository, repository_id, "Репозиторий")
     if draft.llm_account_id is not None:
-        await _ensure_exists(db_session, LlmAccount, draft.llm_account_id, "LLM-аккаунт")
+        # Раздел 19.2: только аккаунт автора — и при дублировании задачи.
+        await ensure_llm_account_of_owner(
+            db_session,
+            draft.llm_account_id,
+            owner_id=created_by,
+        )
     if draft.use_parent_summary and draft.parent_task_id is None:
         raise ValidationError("Саммари родителя требует выбранной родительской задачи")
     if draft.parent_task_id is not None:
@@ -80,7 +90,7 @@ async def add_task_with_repositories(
     Добавляет задачу и её репозитории в сессию БД без коммита — вызывающий
     код может дописать связанные данные в ту же транзакцию.
     """
-    await _validate_draft(db_session, draft)
+    await _validate_draft(db_session, draft, created_by=created_by)
     task = Task(
         id=uuid.uuid4(),
         code=draft.code,

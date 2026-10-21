@@ -45,7 +45,8 @@ class PeriodicTask(UUIDPrimaryKeyMixin, Base):
         pg_enum(PeriodicRunStatus, name="periodic_run_status"),
     )
     next_run_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
-    updated_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"))
+    # NULL — запись создана системой при установке (раздел 3.1, 20.2 п. 8).
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("users.id"))
     updated_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         server_default=sa.func.now(),

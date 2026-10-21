@@ -309,7 +309,12 @@ class TestNodes:
     ) -> None:
         response = await authed_client.post(
             "/nodes",
-            json={"name": "промт", "node_type": "plain_prompt", "prompt_template": "x"},
+            json={
+                "name": "промт",
+                "description": "назначение",
+                "node_type": "plain_prompt",
+                "prompt_template": "x",
+            },
         )
 
         assert response.status_code == 201

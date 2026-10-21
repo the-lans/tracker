@@ -18,9 +18,10 @@ from db.models.enums import NodeLogStatus, NodeType
 from db.models.logs import NodeLog
 from services.failure_classification import is_transient_assistant_error
 from services.nodes.script import ScriptExecutionResult, run_script_node
-from services.template_context import render_for_task
+from services.template_context import render_for_task, resolve_task_env
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,6 +71,18 @@ async def resolve_node_prompt_or_none(
     if node.node_type is NodeType.SCRIPT:
         return None
     return await resolve_node_prompt(db_session, node=node, task=task, history=history)
+
+
+async def resolve_script_env_or_none(
+    db_session: AsyncSession,
+    *,
+    node: Node,
+    task: Task,
+) -> dict[str, str] | None:
+    """Переменные окружения задачи — только для `script`-нод (раздел 11.4)."""
+    if node.node_type is not NodeType.SCRIPT:
+        return None
+    return await resolve_task_env(db_session, task_id=task.id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,12 +142,14 @@ async def execute_script_node(
     *,
     repos_path: Path,
     runner_image: str | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> NodeExecutionOutcome:
     """
     Выполняет `script` в изолированном Docker-контейнере (раздел 11.4, 19.3).
 
     ``runner_image`` — образ, выбранный вызывающим кодом при запуске
-    (`services/system_settings.py::resolve_runner_image`).
+    (`services/system_settings.py::resolve_runner_image`); ``env`` —
+    переменные окружения задачи (`services/template_context.py::resolve_task_env`).
     """
     if node.script_content is None or node.script_language is None:
         message = "У ноды script не заполнены script_content/script_language"
@@ -145,6 +160,7 @@ async def execute_script_node(
         docker_image=runner_image or node.docker_image,
         repos_path=repos_path,
         timeout_seconds=node.timeout_seconds,
+        env=env,
     )
     success = result.exit_code == 0 and not result.timed_out
     error_message = None
@@ -211,6 +227,7 @@ async def execute_node(
     db_session: AsyncSession | None = None,
     node_log_id: uuid.UUID | None = None,
     runner_image: str | None = None,
+    script_env: Mapping[str, str] | None = None,
 ) -> NodeExecutionOutcome:
     """Единая точка диспетчеризации по `node_type` (раздел 11.1: "тип ноды
     определяет способ выполнения, но не создаёт отдельную сущность").
@@ -224,7 +241,12 @@ async def execute_node(
     `services/pipeline_orchestrator.py` передаёт эти аргументы).
     """
     if node.node_type is NodeType.SCRIPT:
-        return await execute_script_node(node, repos_path=repos_path, runner_image=runner_image)
+        return await execute_script_node(
+            node,
+            repos_path=repos_path,
+            runner_image=runner_image,
+            env=script_env,
+        )
     if prompt is None:
         message = f"Для ноды типа {node.node_type} не передан prompt"
         raise ValueError(message)

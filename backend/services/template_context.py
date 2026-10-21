@@ -1,20 +1,24 @@
-"""Сборка контекста рендеринга из уже загруженных ORM-объектов (раздел 5 ТЗ).
+"""
+Сборка контекста рендеринга из уже загруженных ORM-объектов (раздел 5 ТЗ).
 
 Не открывает сессию БД самостоятельно (правило C плана реализации) —
-принимает уже полученные вызывающим кодом объекты; единственное исключение —
-``resolve_env_value``, которому для приоритета "задача > репозиторий > глобально" нужно
-обратиться к двум таблицам, и явная передача обеих выборок в каждый вызов
-была бы менее читаемой, чем передача сессии.
+принимает уже полученные вызывающим кодом объекты; исключения —
+``resolve_env_value`` и ``resolve_task_env``, которым для приоритета "задача >
+репозиторий > глобально" нужно обратиться к двум таблицам, и явная передача
+обеих выборок в каждый вызов была бы менее читаемой, чем передача сессии.
 """
 
 from __future__ import annotations
 
+import re
 import uuid
 from enum import Enum
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app_logging.config import get_logger
+from clients.gitlab import GITLAB_TOKEN_ENV_KEY, GITLAB_URL_ENV_KEY
 from db.models.enums import EnvVariableScope
 from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.logs import NodeLog
@@ -24,7 +28,16 @@ from services.crypto import decrypt
 from services.errors import ValidationError
 from services.templating import VARIABLE_PATTERN, render_template
 
+logger = get_logger("template_context")
+
 REPOS_PATH_TEMPLATE = "tracker/repos/{code}/"
+
+# Раздел 11.4: системные настройки интеграции (решение №5 плана) в
+# script-контейнер не передаются — иначе скрипт любой задачи видел бы общий
+# токен GitLab и мог записать его в файл репозитория.
+SCRIPT_EXCLUDED_ENV_KEYS = frozenset({GITLAB_URL_ENV_KEY, GITLAB_TOKEN_ENV_KEY})
+# То же имя переменной, что и у `{{env.VAR_NAME}}` (`services/templating.py`).
+_ENV_KEY_PATTERN = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
 
 def _stringify(value: object) -> str:
@@ -190,6 +203,45 @@ async def resolve_env_value(session: AsyncSession, *, task_id: uuid.UUID, key: s
     if repository_value is not None:
         return repository_value
     return await resolve_global_env_value(session, key=key)
+
+
+async def resolve_task_env(session: AsyncSession, *, task_id: uuid.UUID) -> dict[str, str]:
+    """
+    Раздел 11.4: переменные окружения script-контейнера — все переменные
+    задачи в порядке раздела 5 (глобальные, затем репозитории задачи, затем
+    уровень задачи — каждый следующий перекрывает предыдущий), кроме
+    системных ``SCRIPT_EXCLUDED_ENV_KEYS`` и ключей, которые нельзя передать
+    как имя переменной окружения.
+    """
+    await ensure_no_repository_env_conflicts(session, task_id=task_id)
+    global_rows = (
+        await session.execute(
+            sa.select(EnvVariable.key, EnvVariable.value_encrypted).where(
+                EnvVariable.scope == EnvVariableScope.GLOBAL,
+            ),
+        )
+    ).all()
+    repository_rows = [
+        (variable.key, variable.value_encrypted)
+        for variable, _ in (await session.execute(_repository_env_stmt(task_id))).all()
+    ]
+    task_rows = (
+        await session.execute(
+            sa.select(TaskEnvVariable.key, TaskEnvVariable.value_encrypted).where(
+                TaskEnvVariable.task_id == task_id,
+            ),
+        )
+    ).all()
+
+    env: dict[str, str] = {}
+    for key, value_encrypted in [*global_rows, *repository_rows, *task_rows]:
+        if key in SCRIPT_EXCLUDED_ENV_KEYS:
+            continue
+        if not _ENV_KEY_PATTERN.fullmatch(key):
+            logger.warning("script_env_key_skipped", task_id=str(task_id), key=key)
+            continue
+        env[key] = decrypt(value_encrypted)
+    return env
 
 
 async def render_for_task(

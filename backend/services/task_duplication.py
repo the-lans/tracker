@@ -5,6 +5,10 @@
 исходной задачи — снимок пайплайна с отметками включённых нод, переменные
 окружения задачи и системные промты. История, сессия, статусы, родитель и
 автозапуск не переносятся: это новая задача, а не продолжение старой.
+
+Раздел 3.2: архивное к новой задаче не привязывается — архивный пайплайн
+источника отклоняет дублирование (409), архивные промты в копию не
+переносятся.
 """
 
 from __future__ import annotations
@@ -18,9 +22,10 @@ import sqlalchemy as sa
 from app_logging.config import get_logger
 from db.models.enums import TaskStatus
 from db.models.env_vars import TaskEnvVariable
-from db.models.pipelines import TaskNode
+from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskLibraryPrompt
 from services.errors import ConflictError
+from services.integrity import ensure_pipeline_attachable
 from services.task_creation import add_task_with_repositories
 
 if TYPE_CHECKING:
@@ -65,7 +70,11 @@ async def _copy_library_prompts(
     target: Task,
     added_by: uuid.UUID,
 ) -> None:
-    stmt = sa.select(TaskLibraryPrompt).where(TaskLibraryPrompt.task_id == source.id)
+    stmt = (
+        sa.select(TaskLibraryPrompt)
+        .join(Node, Node.id == TaskLibraryPrompt.node_id)
+        .where(TaskLibraryPrompt.task_id == source.id, Node.is_archived == False)  # noqa: E712
+    )
     now = datetime.now(UTC)
     for prompt in (await db_session.execute(stmt)).scalars().all():
         db_session.add(
@@ -88,6 +97,10 @@ async def duplicate_task(
     """Новая задача и все копируемые данные — одной транзакцией (правило 10)."""
     if source.status is not TaskStatus.DONE:
         raise ConflictError("Дублировать можно только выполненную задачу")
+    if source.pipeline_id is not None:
+        pipeline = await db_session.get(Pipeline, source.pipeline_id)
+        if pipeline is not None:
+            ensure_pipeline_attachable(pipeline)
     task = await add_task_with_repositories(db_session, draft=draft, created_by=created_by)
     task.pipeline_id = source.pipeline_id
     await _copy_task_nodes(db_session, source=source, target=task)

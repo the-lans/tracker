@@ -1,7 +1,7 @@
 """Первичное заполнение таблицы `periodic_tasks` (раздел 16.2 ТЗ: "seed").
 
-Запуск (после первого входа администратора — раздел 19.1: первый
-зарегистрированный пользователь получает роль admin):
+Запуск — на шаге 8 `deploy/install.sh`, до первого входа администратора
+(раздел 20.2): записи создаются системой, `updated_by = NULL` (раздел 3.1).
 
     backend/.venv/bin/python scripts/seed_periodic_tasks.py
 
@@ -23,9 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 import sqlalchemy as sa  # noqa: E402
 
 from app_logging.config import configure_logging, get_logger  # noqa: E402
-from db.models.enums import PeriodicScheduleType, UserRole  # noqa: E402
+from db.models.enums import PeriodicScheduleType  # noqa: E402
 from db.models.periodic import PeriodicTask  # noqa: E402
-from db.models.users import User  # noqa: E402
 from db.session import async_session_factory  # noqa: E402
 
 configure_logging()
@@ -141,17 +140,6 @@ _SEED_TASKS: list[tuple[str, str, str, str, int]] = [
 
 async def _seed() -> None:
     async with async_session_factory() as db_session:
-        admin = await db_session.scalar(
-            sa.select(User).where(User.role == UserRole.ADMIN).order_by(User.created_at).limit(1),
-        )
-        if admin is None:
-            logger.error("no_admin_user_found")
-            message = (
-                "В системе ещё нет ни одного администратора (раздел 19.1) — "
-                "выполните первый вход через Google OAuth, затем повторите запуск."
-            )
-            raise RuntimeError(message)
-
         created = 0
         for name, display_name, description, task_path, interval_seconds in _SEED_TASKS:
             existing = await db_session.scalar(
@@ -171,7 +159,8 @@ async def _seed() -> None:
                     schedule_type=PeriodicScheduleType.INTERVAL,
                     interval_seconds=interval_seconds,
                     is_enabled=True,
-                    updated_by=admin.id,
+                    # Создано системой при установке (раздел 3.1).
+                    updated_by=None,
                 ),
             )
             created += 1

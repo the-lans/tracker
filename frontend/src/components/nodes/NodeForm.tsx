@@ -333,7 +333,7 @@ export function NodeForm({
         <Button
           type="button"
           onClick={handleSave}
-          disabled={!name || isPending}
+          disabled={!name || (mode === "library" && !node && !description.trim()) || isPending}
         >
           Сохранить
         </Button>

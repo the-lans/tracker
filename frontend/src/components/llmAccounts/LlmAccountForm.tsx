@@ -57,10 +57,16 @@ export function LlmAccountForm({
           <Label htmlFor="llm-dir">Каталог конфигурации Claude</Label>
           <Input
             id="llm-dir"
-            placeholder="/home/svc-claude-1/.claude"
+            placeholder="/data/claude-accounts/my-account"
             value={configDir}
             onChange={(e) => setConfigDir(e.target.value)}
           />
+          <p className="mt-1 text-meta text-text-3">
+            Каталог внутри <code className="font-mono">/data/claude-accounts</code>, не
+            пересекается с каталогами других аккаунтов. Сохраните аккаунт и попросите
+            администратора выполнить в этом каталоге вход в Claude
+            {" "}(<code className="font-mono">claude auth login</code>).
+          </p>
         </div>
         {account && (
           <div className="flex items-center justify-between gap-3 rounded-md border border-border p-3">

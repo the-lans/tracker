@@ -12,6 +12,7 @@ import { ApiError } from "@/lib/apiClient";
 import type { LlmAccount } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { EditButton } from "@/components/common/actions/EditButton";
+import { OwnerLabel } from "@/components/common/avatar/OwnerLabel";
 import { LLM_ACCOUNT_STATUS_LABEL, LLM_ACCOUNT_STATUS_TONE } from "@/lib/labels";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
@@ -38,7 +39,7 @@ export function LlmAccountsPage() {
           <EmptyState
             icon={KeyRound}
             title="LLM-аккаунтов пока нет"
-            hint="Без аккаунта Claude задачи не запустятся. Нажмите «+ Аккаунт» вверху справа и укажите каталог конфигурации Claude, в котором уже выполнен вход."
+            hint="Без аккаунта Claude задачи не запустятся. Нажмите «+ Аккаунт» вверху справа, укажите каталог внутри /data/claude-accounts и попросите администратора выполнить в нём вход в Claude."
           />
         )}
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -65,6 +66,7 @@ export function LlmAccountsPage() {
               <div className="truncate font-mono text-small text-text-3" title={account.claude_config_dir}>
                 {account.claude_config_dir}
               </div>
+              <OwnerLabel ownerId={account.created_by} />
               <Badge tone={LLM_ACCOUNT_STATUS_TONE[account.status]} className="self-start">
                 {LLM_ACCOUNT_STATUS_LABEL[account.status]}
               </Badge>

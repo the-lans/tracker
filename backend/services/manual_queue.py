@@ -42,6 +42,7 @@ from services.nodes.dispatch import (
     execute_llm_node_with_timeout,
     execute_node,
     resolve_node_prompt_or_none,
+    resolve_script_env_or_none,
 )
 from services.notifications import NotificationEvent, notify_task_event
 from services.parent_summary import run_parent_summary_request
@@ -253,6 +254,7 @@ async def _run_library_prompt(
             repos_path=repos_path,
             timeout_seconds=node.timeout_seconds,
             runner_image=await resolve_runner_image(db_session, node),
+            script_env=await resolve_script_env_or_none(db_session, node=node, task=task),
         ),
         node_type=node.node_type,
         claude_session=claude_session,
@@ -480,38 +482,44 @@ async def expire_stale_manual_queue_requests(
     *,
     older_than: datetime,
 ) -> list[uuid.UUID]:
-    """Раздел 16.2: `expire_stale_manual_queue_requests`.
+    """
+    Раздел 16.2: `expire_stale_manual_queue_requests`.
 
     Отменяет запросы, зависшие в `queued` дольше разумного порога —
     ``older_than`` уже вычислен вызывающим кодом (периодической задачей,
-    её Celery-обёртка) как "сейчас минус порог". Уведомление пользователя
-    (раздел 16.2: "с уведомлением пользователя", раздел 18.2) —
-    отправляется здесь же, автору задачи каждого отменённого запроса.
+    её Celery-обёртка) как "сейчас минус порог".
+
+    Раздел 17.4: перевод `queued -> cancelled` — один `UPDATE ... RETURNING`
+    с условием на текущий статус. Если два запуска пересеклись (ручной
+    «Запустить сейчас» поверх расписания), запрос отменит и уведомит автора
+    только один из них.
     """
-    stmt = sa.select(TaskManualRequestQueue).where(
-        TaskManualRequestQueue.status == ManualRequestStatus.QUEUED,
-        TaskManualRequestQueue.requested_at < older_than,
+    stmt = (
+        sa.update(TaskManualRequestQueue)
+        .where(
+            TaskManualRequestQueue.status == ManualRequestStatus.QUEUED,
+            TaskManualRequestQueue.requested_at < older_than,
+        )
+        .values(status=ManualRequestStatus.CANCELLED, processed_at=datetime.now(UTC))
+        .returning(TaskManualRequestQueue.id, TaskManualRequestQueue.task_id)
+        .execution_options(synchronize_session="fetch")
     )
-    stale_requests = list((await db_session.execute(stmt)).scalars().all())
-    expired_ids: list[uuid.UUID] = []
-    for request in stale_requests:
-        request.status = ManualRequestStatus.CANCELLED
-        request.processed_at = datetime.now(UTC)
-        expired_ids.append(request.id)
+    expired = list((await db_session.execute(stmt)).all())
+    if not expired:
+        return []
+    await db_session.commit()
+    for request_id, task_id in expired:
         logger.info(
             "manual_queue_request_expired",
-            request_id=str(request.id),
-            task_id=str(request.task_id),
+            request_id=str(request_id),
+            task_id=str(task_id),
         )
-    if expired_ids:
-        await db_session.commit()
-        for request in stale_requests:
-            task = await db_session.get(Task, request.task_id)
-            if task is not None:
-                await notify_task_event(
-                    db_session,
-                    event=NotificationEvent.MANUAL_QUEUE_REQUEST_EXPIRED,
-                    task=task,
-                    detail=f"{task.code}: запрос из очереди отменён по таймауту ожидания",
-                )
-    return expired_ids
+        task = await db_session.get(Task, task_id)
+        if task is not None:
+            await notify_task_event(
+                db_session,
+                event=NotificationEvent.MANUAL_QUEUE_REQUEST_EXPIRED,
+                task=task,
+                detail=f"{task.code}: запрос из очереди отменён по таймауту ожидания",
+            )
+    return [request_id for request_id, _ in expired]
