@@ -45,6 +45,7 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | redis-py | 8.1.0 |
 | structlog | 26.1.0 |
 | claude-agent-sdk | 0.2.168 |
+| asyncssh | 2.24.1* (SFTP-шлюз, раздел 19.6) |
 | PostgreSQL | 15+ |
 | pytest / pytest-asyncio | 9.1.1 / 1.4.0* |
 | ruff | 0.17.1 |
@@ -91,14 +92,22 @@ backend/
   services/  — бизнес-логика: пайплайны, сессии, git-операции (min. 85% test coverage);
               access.py — владение записями «своё или admin» (раздел 19.2),
               включая LLM-аккаунты; pipeline_validation.py — проверка ноды и
-              всего пайплайна при сохранении (раздел 5.1)
+              всего пайплайна при сохранении (раздел 5.1); task_artifacts.py —
+              артефакты задачи в volume user_files и проверка пути
+              resolve_inside (раздел 14.3); sftp_access.py — правила входа и
+              видимости задач SFTP-шлюза (раздел 19.6)
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
               (db/session.py — engine/session из DATABASE_URL)
   clients/   — обёртки над Claude Agent SDK, GitLab API, MCP-серверами
   tasks/     — Celery-приложение и задачи: celery_app.py, session_worker.py
               (долгоживущая сессия задачи), periodic.py / periodic_scheduler.py
-  docker-entrypoint.sh — применяет alembic-миграции перед стартом
-              backend/worker/beat
+  docker-entrypoint.sh — применяет alembic-миграции и создаёт роль БД
+              SFTP-шлюза перед стартом backend/worker/beat
+  sftp_gateway/ — SFTP-шлюз (сервис `sftp`, `python -m sftp_gateway`):
+              asyncssh-сервер, вход по ключу (auth.py), виртуальная ФС
+              /<код>/repos (только чтение) и /<код>/artifacts (filesystem.py),
+              ключ хоста (host_key.py), роль БД tracker_sftp (db_role.py,
+              вызывается из docker-entrypoint.sh)
   ws/        — WebSocket-обработчики real-time уведомлений (tasks.py —
               `/ws/tasks/{task_id}/status`: смена статуса и потоковый вывод
               ответа LLM, разделы 15.2, 18.1)
@@ -133,7 +142,8 @@ deploy/
               backup.sh (pg_dump + ротация по POSTGRES_BACKUP_RETENTION_DAYS)
   install.sh — единственный скрипт установки по разделу 20.2 ТЗ;
               `--restore <каталог>` — перенос на новый сервер (раздел 20.4):
-              дамп БД и архивы volume task_repos, user_files, log_archive
+              дамп БД и архивы volume task_repos, user_files, log_archive,
+              claude_accounts, sftp_host_keys
 runners/
   tracker-runner-python/ — Docker-образ раннера для script-нод (Python)
   tracker-runner-bash/   — Docker-образ раннера для script-нод (Bash)
@@ -246,6 +256,14 @@ docker compose exec -e CLAUDE_CONFIG_DIR=/data/claude-accounts/<каталог> 
 docker compose exec -e CLAUDE_CONFIG_DIR=/data/claude-accounts/<каталог> worker claude auth status
 ```
 
+### Доступ к файлам задач по SFTP (раздел 19.6)
+Администратор назначает пользователю логин SFTP (`os_username`) в разделе
+«Пользователи», пользователь добавляет SSH-ключ в профиле — инструкция с
+отпечатком сервера там же. Подключение как диска:
+```bash
+sshfs -p 2222 <логин>@<домен>:/ ~/tracker -o reconnect
+```
+
 ### Проверка claude-agent-sdk
 ```bash
 backend/.venv/bin/python scripts/verify_sdk.py
@@ -296,9 +314,10 @@ Postgres с проброшенным портом — см. `docker-compose.yml`
    валидацией API. Общий persistent-профиль между задачами недопустим ни при
    каких обстоятельствах.
 4. **Script-ноды — без сети и без лишних привилегий.** Контейнер запускается
-   без сетевого доступа (без исключений), монтируется только директория
-   репозиториев текущей задачи (read-write; из контейнера worker — подпутём
-   volume, найденного через `docker inspect`), обязательны лимиты CPU/памяти,
+   без сетевого доступа (без исключений), монтируются только директория
+   репозиториев и каталог артефактов текущей задачи (read-write; из
+   контейнера worker — подпутём volume, найденного через `docker inspect`),
+   обязательны лимиты CPU/памяти,
    `--privileged` не используется. Переменные задачи передаются, кроме
    системных `GITLAB_URL`/`GITLAB_TOKEN`.
 5. **Очистка рабочей директории репозиториев — только вручную и только в

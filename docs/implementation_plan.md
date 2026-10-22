@@ -31,7 +31,9 @@
    `claude auth login`-сессии. Периодические задачи `deprovision_inactive_users`
    и `revoke_stale_sshfs_keys` реализуются как заглушки/no-op с логированием
    (провижининга, который они должны обслуживать, нет). SSH-ключ профиля и
-   `deprovision_inactive_users` пересмотрены решением №16.
+   `deprovision_inactive_users` пересмотрены решением №16; доступ к файлам
+   задач без Linux-пользователей — решение №18 (`User-Provisioner` заменён
+   SFTP-шлюзом). Вход `claude auth login` по-прежнему вне периметра.
 5. **Токен GitLab API — один общий на систему**, через `env_variables`
    (`scope = global`), не отдельное поле в `repositories`.
 6. **«Приостановить» — отдельный статус `paused`** (решение 2026-10-19,
@@ -187,6 +189,35 @@
       `per_task_data_dir` (разделы 5, 10.3). Падение CLI и постоянная ошибка
       SDK в ноде пайплайна или промте библиотеки пишутся в `app_logs`
       (`dispatch.record_sdk_failure`, раздел 17.2).
+18. **SFTP-шлюз вместо `User-Provisioner` и артефакты задачи** (решение
+    2026-10-22, ТЗ 4.8: разделы 2.1, 3.1, 5, 6.1, 11.4, 14.3, 15.1, 15.2,
+    15.5, 16.2, 19.6, 20.2–20.5). Системные Linux-пользователи не заводятся:
+    пользователь подключает файлы своих задач по SFTP (в том числе как диск
+    через sshfs) к отдельному сервису `sftp` из образа backend.
+    - Шлюз — свой SSH-сервер на `asyncssh` (`backend/sftp_gateway/`), по
+      образцу `gitlab-sshd`: логин — `users.os_username`, ключ сверяется с
+      `users.ssh_public_key`; правила доступа — `services/sftp_access.py`,
+      те же «своё или admin», что в API. Ключ, блокировка и задачи
+      проверяются при входе и на каждой операции — синхронизации нет.
+    - Виртуальное дерево `/<код>/repos` (только чтение) и
+      `/<код>/artifacts` (запись); реальный путь —
+      `task_artifacts.resolve_inside` (`realpath` внутри каталога задачи),
+      ссылки наружу скрыты, создавать ссылки нельзя. Только подсистема SFTP:
+      без shell/exec/проброса; лимит соединений на адрес.
+    - Привилегии: контейнер `read_only`, `cap_drop: ALL` + `CHOWN`,
+      `DAC_OVERRIDE`, `FOWNER`, без `docker.sock`; `task_repos` — `:ro`. Роль
+      БД `tracker_sftp` (`sftp_gateway/db_role.py`, из entrypoint backend при
+      каждом старте — `pg_dump` роли не переносит) читает только `users` и
+      `tasks.code/created_by`, пишет `ssh_key_last_used_at` и `app_logs`.
+    - Ключ хоста — в volume `sftp_host_keys` (перенос — `install.sh
+      --restore`), отпечаток показывается в профиле.
+    - Артефакты задачи (`services/task_artifacts.py`, volume `user_files`):
+      API загрузки потоком без multipart, скачивания и удаления, карточка на
+      странице задачи, `{{task.artifacts_path}}`, `add_dirs` сессии и второе
+      монтирование в script-контейнер.
+    - `revoke_stale_sshfs_keys` — push владельцу ключа без входа 90 дней
+      (`SET NX` с TTL); `deprovision_inactive_users` больше не требует
+      ручной блокировки Linux-логина.
 
 Дополнительно (моя собственная, не переспрошенная деталь, вытекающая из
 раздела 3.2 «вместо удаления — архивация»): в `pipelines` и `nodes` нет явного
