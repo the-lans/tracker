@@ -13,6 +13,7 @@ from services.sftp_connection import host_key_path
 from services.task_artifacts import resolve_user_files_root
 from services.task_workspace import resolve_repos_root
 
+LOGGER_NAME = "sftp_gateway"
 # Порт внутри контейнера; наружу публикуется `SFTP_PORT` (docker-compose.yml).
 LISTEN_PORT = 2222
 LOGIN_TIMEOUT_SECONDS = 30

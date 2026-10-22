@@ -13,6 +13,7 @@ from services.task_artifacts import (
     delete_artifact,
     list_artifacts,
     max_upload_bytes,
+    resolve_entry,
     resolve_inside,
     save_artifact,
     task_artifacts_dir,
@@ -69,6 +70,32 @@ class TestResolveInside:
         assert resolve_inside(tmp_path, relative) == tmp_path.resolve()
 
 
+class TestResolveEntry:
+    def test_last_symlink_not_followed(self, tmp_path: Path) -> None:
+        (tmp_path / "real").mkdir()
+        (tmp_path / "alias").symlink_to(tmp_path / "real")
+        (tmp_path / "real" / "link").symlink_to(tmp_path)
+
+        assert resolve_entry(tmp_path, "alias/link") == tmp_path.resolve() / "real" / "link"
+
+    @pytest.mark.parametrize(
+        "relative",
+        ["", ".", "..", "a/..", "/etc/passwd", "a\0b"],
+        ids=["empty", "dot", "parent", "nested_parent", "absolute", "nul"],
+    )
+    def test_rejects(self, tmp_path: Path, relative: str) -> None:
+        with pytest.raises(ValidationError):
+            resolve_entry(tmp_path, relative)
+
+    def test_parent_outside_rejected(self, tmp_path: Path) -> None:
+        base = tmp_path / "base"
+        base.mkdir()
+        (base / "out").symlink_to(tmp_path)
+
+        with pytest.raises(ValidationError):
+            resolve_entry(base, "out/file.txt")
+
+
 class TestSave:
     async def test_writes_nested_file(self, user_files_root: Path) -> None:
         info = await save_artifact(CODE, "docs/spec.md", _chunks(b"# ", b"spec"), max_bytes=100)
@@ -91,6 +118,17 @@ class TestSave:
     async def test_rejects_path(self, relative: str) -> None:
         with pytest.raises(ValidationError):
             await save_artifact(CODE, relative, _chunks(b"x"), max_bytes=100)
+
+    async def test_replaces_symlink_not_target(self, user_files_root: Path) -> None:
+        directory = task_artifacts_dir(CODE)
+        (directory / "report.txt").write_text("report")
+        (directory / "latest").symlink_to("report.txt")
+
+        await save_artifact(CODE, "latest", _chunks(b"new"), max_bytes=100)
+
+        assert not (directory / "latest").is_symlink()
+        assert (directory / "latest").read_bytes() == b"new"
+        assert (directory / "report.txt").read_text() == "report"
 
     async def test_rejects_directory(self, user_files_root: Path) -> None:
         (user_files_root / CODE / "dir").mkdir(parents=True)
@@ -131,3 +169,17 @@ class TestFileAndDelete:
         delete_artifact(CODE, "a.txt")
 
         assert not path.exists()
+
+    def test_delete_symlink_keeps_target(self) -> None:
+        directory = task_artifacts_dir(CODE)
+        (directory / "report.txt").write_text("report")
+        (directory / "latest").symlink_to("report.txt")
+
+        delete_artifact(CODE, "latest")
+
+        assert not (directory / "latest").is_symlink()
+        assert (directory / "report.txt").read_text() == "report"
+
+    def test_delete_missing_is_404(self) -> None:
+        with pytest.raises(NotFoundError):
+            delete_artifact(CODE, "missing.txt")

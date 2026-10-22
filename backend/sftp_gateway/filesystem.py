@@ -5,12 +5,13 @@
     /<код>/repos/...          — директория репозиториев задачи, только чтение
     /<код>/artifacts/...      — артефакты задачи, чтение и запись
 
-Каждая операция заново проверяет доступ к задаче (`services/sftp_access.py`):
-блокировка пользователя и удаление задачи действуют сразу. Реальный путь
-вычисляет `resolve_inside`: выйти за каталог задачи нельзя ни через "..",
-ни через символическую ссылку. Ссылки внутри каталога клиенту показываются
-как сами файлы, ссылки наружу — не показываются вовсе. Создавать ссылки
-нельзя.
+Каждая операция заново проверяет вход и доступ к задаче
+(`services/sftp_access.py`): смена ключа, блокировка пользователя и удаление
+задачи действуют сразу. Реальный путь вычисляет `resolve_inside`: выйти за
+каталог задачи нельзя ни через "..", ни через символическую ссылку. Ссылки
+внутри каталога клиенту показываются как сами файлы, ссылки наружу — не
+показываются вовсе. Удаление и перенос действуют на саму ссылку
+(`resolve_entry`), а не на её цель. Создавать ссылки нельзя.
 """
 
 from __future__ import annotations
@@ -28,12 +29,10 @@ import asyncssh
 from asyncssh import SFTPAttrs, SFTPName
 
 from services.errors import ValidationError
-from services.sftp_access import is_task_visible, list_visible_task_codes
-from services.task_artifacts import resolve_inside
+from services.sftp_access import SftpLogin, is_task_visible, list_visible_task_codes
+from services.task_artifacts import resolve_entry, resolve_inside
 
 if TYPE_CHECKING:
-    import uuid
-
     from asyncssh import SSHServerChannel
 
     from sftp_gateway.config import GatewayConfig, SessionFactory
@@ -84,12 +83,12 @@ class TaskSftpServer(asyncssh.SFTPServer):
         self,
         chan: SSHServerChannel[bytes],
         *,
-        user_id: uuid.UUID,
+        login: SftpLogin,
         session_factory: SessionFactory,
         config: GatewayConfig,
     ) -> None:
         super().__init__(chan)
-        self._user_id = user_id
+        self._login = login
         self._session_factory = session_factory
         self._config = config
         self._read_only_files: set[int] = set()
@@ -103,15 +102,16 @@ class TaskSftpServer(asyncssh.SFTPServer):
 
     async def _visible_codes(self) -> list[str]:
         async with self._session_factory() as db_session:
-            return await list_visible_task_codes(db_session, user_id=self._user_id)
+            return await list_visible_task_codes(db_session, login=self._login)
 
-    async def _target(self, path: bytes) -> Target:
+    async def _target(self, path: bytes, *, entry: bool = False) -> Target:
+        """`entry` — путь самой записи каталога, без разыменования последнего элемента."""
         parts = [os.fsdecode(part) for part in normalize(path).split(b"/") if part]
         if not parts:
             return Target()
         code = parts[0]
         async with self._session_factory() as db_session:
-            visible = await is_task_visible(db_session, user_id=self._user_id, code=code)
+            visible = await is_task_visible(db_session, login=self._login, code=code)
         if not visible:
             raise asyncssh.SFTPNoSuchFile("Нет такой задачи")
         if len(parts) == 1:
@@ -121,14 +121,15 @@ class TaskSftpServer(asyncssh.SFTPServer):
         except ValueError as exc:
             raise asyncssh.SFTPNoSuchFile("Нет такого каталога") from exc
         relative = "/".join(parts[2:])
+        resolve = resolve_entry if entry and relative else resolve_inside
         try:
-            real = resolve_inside(self._area_root(code, area), relative)
+            real = resolve(self._area_root(code, area), relative)
         except ValidationError as exc:
             raise asyncssh.SFTPPermissionDenied(exc.message) from exc
         return Target(code=code, area=area, real=real, relative=relative)
 
-    async def _writable(self, path: bytes) -> Target:
-        target = await self._target(path)
+    async def _writable(self, path: bytes, *, entry: bool = False) -> Target:
+        target = await self._target(path, entry=entry)
         if target.area is not Area.ARTIFACTS or not target.is_entry:
             raise asyncssh.SFTPPermissionDenied(_READ_ONLY_MESSAGE)
         return target
@@ -234,17 +235,17 @@ class TaskSftpServer(asyncssh.SFTPServer):
         super().lsetstat(self._real_bytes(await self._writable(path)), attrs)
 
     async def remove(self, path: bytes) -> None:
-        super().remove(self._real_bytes(await self._writable(path)))
+        super().remove(self._real_bytes(await self._writable(path, entry=True)))
 
     async def mkdir(self, path: bytes, attrs: SFTPAttrs) -> None:
-        super().mkdir(self._real_bytes(await self._writable(path)), attrs)
+        super().mkdir(self._real_bytes(await self._writable(path, entry=True)), attrs)
 
     async def rmdir(self, path: bytes) -> None:
-        super().rmdir(self._real_bytes(await self._writable(path)))
+        super().rmdir(self._real_bytes(await self._writable(path, entry=True)))
 
     async def _rename_targets(self, oldpath: bytes, newpath: bytes) -> tuple[bytes, bytes]:
-        old = await self._writable(oldpath)
-        new = await self._writable(newpath)
+        old = await self._writable(oldpath, entry=True)
+        new = await self._writable(newpath, entry=True)
         if old.code != new.code:
             raise asyncssh.SFTPPermissionDenied("Переносить файлы между задачами нельзя")
         return self._real_bytes(old), self._real_bytes(new)

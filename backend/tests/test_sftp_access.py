@@ -12,6 +12,7 @@ import pytest
 from db.models.enums import UserRole
 from db.models.tasks import Task
 from services.sftp_access import (
+    SftpLogin,
     find_sftp_login,
     is_task_visible,
     key_matches,
@@ -36,6 +37,11 @@ async def _login_user(db_session: AsyncSession, **fields: object) -> User:
         setattr(user, name, value)
     await db_session.flush()
     return user
+
+
+def _login(user: User) -> SftpLogin:
+    assert user.os_username is not None
+    return SftpLogin(user_id=user.id, username=user.os_username, key_blob=_ED25519_BLOB)
 
 
 async def _task(db_session: AsyncSession, owner_id: uuid.UUID) -> Task:
@@ -90,26 +96,42 @@ class TestVisibility:
         own = await _task(db_session, user.id)
         foreign = await _task(db_session, other.id)
 
-        codes = await list_visible_task_codes(db_session, user_id=user.id)
+        codes = await list_visible_task_codes(db_session, login=_login(user))
 
         assert own.code in codes
         assert foreign.code not in codes
-        assert await is_task_visible(db_session, user_id=user.id, code=own.code) is True
-        assert await is_task_visible(db_session, user_id=user.id, code=foreign.code) is False
+        assert await is_task_visible(db_session, login=_login(user), code=own.code) is True
+        assert await is_task_visible(db_session, login=_login(user), code=foreign.code) is False
 
     async def test_admin_sees_all(self, db_session: AsyncSession) -> None:
         admin = await _login_user(db_session, role=UserRole.ADMIN)
         other = await make_user(db_session)
         foreign = await _task(db_session, other.id)
 
-        assert foreign.code in await list_visible_task_codes(db_session, user_id=admin.id)
-        assert await is_task_visible(db_session, user_id=admin.id, code=foreign.code) is True
+        assert foreign.code in await list_visible_task_codes(db_session, login=_login(admin))
+        assert await is_task_visible(db_session, login=_login(admin), code=foreign.code) is True
 
-    async def test_blocked_user_sees_nothing(self, db_session: AsyncSession) -> None:
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"is_active": False},
+            {"ssh_public_key": SAMPLE_ECDSA_KEY},
+            {"ssh_public_key": None},
+            {"os_username": "renamed"},
+        ],
+        ids=["blocked", "key_replaced", "key_removed", "login_changed"],
+    )
+    async def test_login_revoked_sees_nothing(
+        self,
+        db_session: AsyncSession,
+        fields: dict[str, object],
+    ) -> None:
         user = await _login_user(db_session)
         own = await _task(db_session, user.id)
-        user.is_active = False
+        login = _login(user)
+        for name, value in fields.items():
+            setattr(user, name, value)
         await db_session.flush()
 
-        assert await list_visible_task_codes(db_session, user_id=user.id) == []
-        assert await is_task_visible(db_session, user_id=user.id, code=own.code) is False
+        assert await list_visible_task_codes(db_session, login=login) == []
+        assert await is_task_visible(db_session, login=login, code=own.code) is False

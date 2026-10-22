@@ -4,32 +4,43 @@
 
 `validate_public_key` только отвечает, подходит ли ключ; вход состоялся
 лишь после проверки подписи (`auth_completed`) — тогда отмечается дата
-использования ключа и пишется запись аудита. Неудачный вход известного
-пользователя пишется в `app_logs` один раз на соединение; попытки с
-неизвестным логином (сканеры) — только в stdout.
+использования ключа и пишется запись аудита. Вход (`SftpLogin`) хранится в
+соединении: по нему файловые операции проверяют, что ключ не сменился.
+Неудачный вход известного пользователя пишется в `app_logs` один раз на
+соединение; попытки с неизвестным логином (сканеры) — только в stdout.
 """
 
 from __future__ import annotations
 
 import asyncio
-import uuid
 from collections import Counter
 from collections.abc import Coroutine
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import asyncssh
+from sqlalchemy.exc import SQLAlchemyError
 
 from app_logging.app_logs import write_app_log
 from app_logging.config import get_logger
 from db.models.enums import AppLogLevel
-from services.sftp_access import find_sftp_login, key_matches, touch_ssh_key_usage
-from sftp_gateway.config import MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP, SessionFactory
+from services.sftp_access import (
+    SftpLogin,
+    find_sftp_login,
+    key_matches,
+    touch_ssh_key_usage,
+)
+from sftp_gateway.config import (
+    LOGGER_NAME,
+    MAX_CONNECTIONS,
+    MAX_CONNECTIONS_PER_IP,
+    SessionFactory,
+)
 
 if TYPE_CHECKING:
     from asyncssh import SSHKey, SSHServerConnection
 
-logger = get_logger("sftp_gateway")
+logger = get_logger(LOGGER_NAME)
 
 LOG_SOURCE = "sftp"
 _UNKNOWN_PEER = "unknown"
@@ -70,16 +81,16 @@ class ConnectionLimiter:
 
 
 class GatewayServer(asyncssh.SSHServer):
-    """Одно SSH-соединение; `user_id` заполняется после успешного входа."""
+    """Одно SSH-соединение; `login` заполняется после успешного входа."""
 
     def __init__(self, *, session_factory: SessionFactory, limiter: ConnectionLimiter) -> None:
         self._session_factory = session_factory
         self._limiter = limiter
         self._peer = _UNKNOWN_PEER
         self._counted = False
-        self._candidate: tuple[uuid.UUID, str] | None = None
+        self._candidate: SftpLogin | None = None
         self._rejected_login: str | None = None
-        self.user_id: uuid.UUID | None = None
+        self.login: SftpLogin | None = None
 
     def connection_made(self, conn: SSHServerConnection) -> None:
         peer = conn.get_extra_info("peername")
@@ -92,7 +103,7 @@ class GatewayServer(asyncssh.SSHServer):
     def connection_lost(self, exc: Exception | None) -> None:
         if self._counted:
             self._limiter.release(self._peer)
-        if self.user_id is None and self._rejected_login is not None:
+        if self.login is None and self._rejected_login is not None:
             self._audit_rejection(self._rejected_login)
 
     def begin_auth(self, username: str) -> bool:
@@ -116,25 +127,33 @@ class GatewayServer(asyncssh.SSHServer):
         if not key_matches(user, key.public_data):
             self._rejected_login = username
             return False
-        self._candidate = (user.id, username)
+        self._candidate = SftpLogin(user_id=user.id, username=username, key_blob=key.public_data)
         return True
 
-    async def _record_login(self, user_id: uuid.UUID, username: str) -> None:
-        async with self._session_factory() as db_session:
-            await touch_ssh_key_usage(db_session, user_id=user_id, now=datetime.now(UTC))
-        logger.info("sftp_login", peer=self._peer, username=username)
+    async def _record_login(self, login: SftpLogin) -> None:
+        # Сбой отметки входа не должен оставить вход без записи аудита.
+        try:
+            async with self._session_factory() as db_session:
+                await touch_ssh_key_usage(db_session, user_id=login.user_id, now=datetime.now(UTC))
+        except SQLAlchemyError as exc:
+            logger.error("sftp_login_touch_failed", user_id=str(login.user_id), error=repr(exc))
+        logger.info("sftp_login", peer=self._peer, username=login.username)
         await write_app_log(
             level=AppLogLevel.INFO,
             source=LOG_SOURCE,
-            message=f"Вход в SFTP-шлюз: {username}",
-            context={"user_id": str(user_id), "username": username, "peer": self._peer},
+            message=f"Вход в SFTP-шлюз: {login.username}",
+            context={
+                "user_id": str(login.user_id),
+                "username": login.username,
+                "peer": self._peer,
+            },
         )
 
     def auth_completed(self) -> None:
         if self._candidate is None:
             return
-        self.user_id, username = self._candidate
-        _in_background(self._record_login(self.user_id, username))
+        self.login = self._candidate
+        _in_background(self._record_login(self.login))
 
     def _audit_rejection(self, username: str) -> None:
         logger.warning("sftp_login_rejected", peer=self._peer, username=username)

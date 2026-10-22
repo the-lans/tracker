@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -21,12 +22,14 @@ from db.models.logs import AppLog
 from db.models.tasks import Task
 from db.models.users import User
 from services.sftp_access import (
+    SftpLogin,
     find_sftp_login,
     is_task_visible,
     list_visible_task_codes,
     touch_ssh_key_usage,
 )
 from sftp_gateway.db_role import ROLE_NAME, ensure_sftp_db_role
+from tests.factories import SAMPLE_ED25519_KEY
 
 # Кавычка и двоеточие — пароль подставляется литералом, без параметров.
 _PASSWORD = "test-sftp:pass'word"
@@ -59,15 +62,21 @@ class TestAllowed:
                     id=user_id,
                     email=f"{user_id}@example.com",
                     os_username=username,
+                    ssh_public_key=SAMPLE_ED25519_KEY,
                 ),
             )
             await connection.execute(
                 sa.insert(Task).values(code=code, title="t", description="d", created_by=user_id),
             )
+        login = SftpLogin(
+            user_id=user_id,
+            username=username,
+            key_blob=base64.b64decode(SAMPLE_ED25519_KEY.split()[1]),
+        )
         try:
             assert (await find_sftp_login(role_session, username=username)) is not None
-            assert await list_visible_task_codes(role_session, user_id=user_id) == [code]
-            assert await is_task_visible(role_session, user_id=user_id, code=code) is True
+            assert await list_visible_task_codes(role_session, login=login) == [code]
+            assert await is_task_visible(role_session, login=login, code=code) is True
             await touch_ssh_key_usage(role_session, user_id=user_id, now=datetime.now(UTC))
         finally:
             async with owner.begin() as connection:

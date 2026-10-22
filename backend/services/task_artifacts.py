@@ -8,6 +8,9 @@
 `resolve_inside` — общая проверка пути для API и SFTP-шлюза: путь задаётся
 относительно каталога, а его реальное расположение (после разрешения
 символических ссылок) обязано остаться внутри этого каталога.
+`resolve_entry` — то же для операций над самой записью каталога (удаление,
+перенос, замена): последний элемент не разыменовывается, поэтому они
+действуют на символическую ссылку, а не на файл, куда она указывает.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ _BYTES_PER_MB = 1024 * 1024
 MAX_LISTED_ARTIFACTS = 1000
 # Незавершённая загрузка: в списке не показывается, на месте файла не лежит.
 _UPLOAD_TEMP_PREFIX = ".tracker-upload-"
+_NO_FILE_NAME_MESSAGE = "Не указано имя файла"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,15 +64,20 @@ def max_upload_bytes() -> int:
     return int(os.environ.get(_MAX_UPLOAD_ENV_VAR, DEFAULT_MAX_UPLOAD_MB)) * _BYTES_PER_MB
 
 
+def _checked_relative(relative: str) -> PurePosixPath:
+    pure = PurePosixPath(relative)
+    if "\0" in relative or pure.is_absolute() or ".." in pure.parts:
+        raise ValidationError(f"Недопустимый путь: {relative!r}")
+    return pure
+
+
 def resolve_inside(base: Path, relative: str) -> Path:
     """
     Реальный путь `relative` внутри `base`; пустой путь или "." — сам `base`.
     Абсолютный путь, "..", NUL и выход наружу через символическую ссылку —
     `ValidationError`.
     """
-    pure = PurePosixPath(relative)
-    if "\0" in relative or pure.is_absolute() or ".." in pure.parts:
-        raise ValidationError(f"Недопустимый путь: {relative!r}")
+    pure = _checked_relative(relative)
     real_base = Path(os.path.realpath(base))
     target = Path(os.path.realpath(real_base.joinpath(*pure.parts)))
     if target != real_base and real_base not in target.parents:
@@ -76,11 +85,22 @@ def resolve_inside(base: Path, relative: str) -> Path:
     return target
 
 
+def resolve_entry(base: Path, relative: str) -> Path:
+    """
+    Запись `relative` внутри `base`: родитель проверяется `resolve_inside`,
+    последний элемент остаётся как есть. Пустой путь — `ValidationError`.
+    """
+    pure = _checked_relative(relative)
+    if not pure.name:
+        raise ValidationError(_NO_FILE_NAME_MESSAGE)
+    return resolve_inside(base, str(pure.parent)) / pure.name
+
+
 def _artifact_target(task_code: str, relative: str) -> Path:
     directory = task_artifacts_dir(task_code)
     target = resolve_inside(directory, relative)
     if target == Path(os.path.realpath(directory)):
-        raise ValidationError("Не указано имя файла")
+        raise ValidationError(_NO_FILE_NAME_MESSAGE)
     return target
 
 
@@ -119,8 +139,9 @@ async def save_artifact(
     """
     Пишет файл во временный рядом и заменяет им цель только после полной
     загрузки: оборванная или слишком большая загрузка не портит прежний файл.
+    Символическая ссылка с тем же путём заменяется сама, её цель не меняется.
     """
-    target = _artifact_target(task_code, relative)
+    target = resolve_entry(task_artifacts_dir(task_code), relative)
     if target.is_dir():
         raise ValidationError(f"{relative!r} — каталог, а не файл")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -140,12 +161,20 @@ async def save_artifact(
     return _info(Path(os.path.realpath(task_artifacts_dir(task_code))), target)
 
 
+def _not_found(relative: str) -> NotFoundError:
+    return NotFoundError(f"Артефакт {relative!r} не найден")
+
+
 def artifact_file(task_code: str, relative: str) -> Path:
     target = _artifact_target(task_code, relative)
     if not target.is_file():
-        raise NotFoundError(f"Артефакт {relative!r} не найден")
+        raise _not_found(relative)
     return target
 
 
 def delete_artifact(task_code: str, relative: str) -> None:
-    artifact_file(task_code, relative).unlink()
+    """Символическая ссылка удаляется сама, файл, куда она указывает, остаётся."""
+    entry = resolve_entry(task_artifacts_dir(task_code), relative)
+    if not (entry.is_symlink() or entry.is_file()):
+        raise _not_found(relative)
+    entry.unlink()

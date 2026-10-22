@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 import asyncssh
 import pytest
 import pytest_asyncio
+import sqlalchemy as sa
 
 from db.models.enums import UserRole
 from db.models.tasks import Task
@@ -24,8 +25,8 @@ from sftp_gateway import auth as auth_module
 from sftp_gateway.auth import ConnectionLimiter
 from sftp_gateway.config import GatewayConfig
 from sftp_gateway.host_key import load_or_create_host_key
-from sftp_gateway.server import start_server
-from tests.factories import make_user
+from sftp_gateway.server import check_database, start_server
+from tests.factories import SAMPLE_ED25519_KEY, make_user
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -192,6 +193,25 @@ class TestLogin:
         assert [entry["context"]["username"] for entry in gateway.audit] == [sftp_user.username]
         assert sftp_user.user.ssh_key_last_used_at is None
 
+    async def test_touch_failure_still_audited(
+        self,
+        db_session: AsyncSession,
+        gateway: Gateway,
+        connect: Connect,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def broken_touch(*_args: Any, **_kwargs: Any) -> None:
+            raise sa.exc.OperationalError("UPDATE users", {}, Exception("db down"))
+
+        monkeypatch.setattr(auth_module, "touch_ssh_key_usage", broken_touch)
+        sftp_user = await _sftp_user(db_session)
+
+        async with _sftp(connect, sftp_user) as sftp:
+            assert await sftp.listdir("/") == [".", ".."]
+
+        await _wait_for(lambda: bool(gateway.audit))
+        assert gateway.audit[0]["context"]["username"] == sftp_user.username
+
     async def test_unknown_login_not_audited(self, gateway: Gateway, connect: Connect) -> None:
         with pytest.raises(asyncssh.PermissionDenied):
             await connect("nobody", client_keys=[asyncssh.generate_private_key("ssh-ed25519")])
@@ -246,6 +266,34 @@ class TestVisibility:
             assert await sftp.listdir("/") == [".", ".."]
             with pytest.raises(asyncssh.SFTPNoSuchFile):
                 await sftp.listdir(f"/{own.code}/artifacts")
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"ssh_public_key": None},
+            {"ssh_public_key": SAMPLE_ED25519_KEY},
+            {"os_username": "renamed-login"},
+        ],
+        ids=["key_removed", "key_replaced", "login_changed"],
+    )
+    async def test_key_change_applies_mid_session(
+        self,
+        db_session: AsyncSession,
+        connect: Connect,
+        fields: dict[str, object],
+    ) -> None:
+        sftp_user = await _sftp_user(db_session)
+        own = await _task(db_session, sftp_user.user.id)
+
+        async with _sftp(connect, sftp_user) as sftp:
+            assert own.code in await sftp.listdir("/")
+            for name, value in fields.items():
+                setattr(sftp_user.user, name, value)
+            await db_session.flush()
+
+            assert await sftp.listdir("/") == [".", ".."]
+            with pytest.raises(asyncssh.SFTPNoSuchFile):
+                await sftp.open(f"/{own.code}/artifacts/after.txt", "w")
 
 
 class TestReposReadOnly:
@@ -309,6 +357,29 @@ class TestArtifacts:
             await sftp.rmdir(f"{base}/docs")
 
         assert list((user_files_root / task.code).iterdir()) == []
+
+    async def test_remove_and_rename_act_on_symlink(
+        self,
+        db_session: AsyncSession,
+        user_files_root: Path,
+        connect: Connect,
+    ) -> None:
+        sftp_user = await _sftp_user(db_session)
+        task = await _task(db_session, sftp_user.user.id)
+        directory = user_files_root / task.code
+        directory.mkdir(parents=True)
+        (directory / "report.txt").write_text("report")
+        (directory / "latest").symlink_to("report.txt")
+        (directory / "previous").symlink_to("report.txt")
+        base = f"/{task.code}/artifacts"
+
+        async with _sftp(connect, sftp_user) as sftp:
+            await sftp.remove(f"{base}/latest")
+            await sftp.rename(f"{base}/previous", f"{base}/old")
+
+        assert sorted(path.name for path in directory.iterdir()) == ["old", "report.txt"]
+        assert (directory / "old").is_symlink()
+        assert (directory / "report.txt").read_text() == "report"
 
     async def test_links_denied(self, db_session: AsyncSession, connect: Connect) -> None:
         sftp_user = await _sftp_user(db_session)
@@ -403,6 +474,24 @@ class TestNoShell:
                 await conn.open_connection("127.0.0.1", gateway.port)
             with pytest.raises(asyncssh.ChannelListenError):
                 await conn.forward_remote_port("127.0.0.1", 0, "127.0.0.1", gateway.port)
+
+
+class TestCheckDatabase:
+    async def test_passes(self, db_session: AsyncSession) -> None:
+        @asynccontextmanager
+        async def session() -> AsyncIterator[AsyncSession]:
+            yield db_session
+
+        await check_database(session)
+
+    async def test_unavailable_raises(self) -> None:
+        @asynccontextmanager
+        async def session() -> AsyncIterator[AsyncSession]:
+            raise sa.exc.OperationalError("connect", {}, Exception("auth failed"))
+            yield  # pragma: no cover
+
+        with pytest.raises(sa.exc.OperationalError):
+            await check_database(session)
 
 
 class TestConnectionLimiter:

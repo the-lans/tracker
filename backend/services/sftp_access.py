@@ -3,8 +3,9 @@
 
 Шлюз ничего не копирует из трекера заранее: вход сверяет ключ с
 `users.ssh_public_key`, а каждая файловая операция заново проверяет, что
-пользователь активен и задача ему видна (`user` — свои, `admin` — все).
-Смена ключа, блокировка и новые задачи поэтому действуют сразу.
+вход ещё в силе (пользователь активен, логин и ключ прежние) и задача ему
+видна (`user` — свои, `admin` — все). Смена ключа, блокировка и новые
+задачи поэтому действуют сразу — и на уже открытые сессии.
 
 Роль БД шлюза читает только `users` и `tasks`, обновляет
 `users.ssh_key_last_used_at` и добавляет записи в `app_logs`
@@ -14,6 +15,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -31,6 +33,15 @@ if TYPE_CHECKING:
 # Логин шлюза (`users.os_username`) — в духе логина Linux: его набирают в
 # `sftp`/`sshfs`, поэтому без пробелов, заглавных и "@".
 SFTP_LOGIN_PATTERN = r"^[a-z_][a-z0-9_-]{0,31}$"
+
+
+@dataclass(frozen=True, slots=True)
+class SftpLogin:
+    """Состоявшийся вход: пользователь, логин и ключ, которым он вошёл."""
+
+    user_id: uuid.UUID
+    username: str
+    key_blob: bytes
 
 
 async def find_sftp_login(db_session: AsyncSession, *, username: str) -> User | None:
@@ -62,22 +73,26 @@ async def touch_ssh_key_usage(
     await db_session.commit()
 
 
-async def _active_user(db_session: AsyncSession, user_id: uuid.UUID) -> User | None:
-    stmt = sa.select(User).where(User.id == user_id, User.is_active == True)  # noqa: E712
-    return (await db_session.execute(stmt)).scalar_one_or_none()
+async def _logged_in_user(db_session: AsyncSession, login: SftpLogin) -> User | None:
+    """Пользователь входа, пока вход в силе; иначе (блокировка, смена логина или ключа) — `None`."""
+    stmt = sa.select(User).where(User.id == login.user_id)
+    user = (await db_session.execute(stmt)).scalar_one_or_none()
+    if user is None or user.os_username != login.username or not key_matches(user, login.key_blob):
+        return None
+    return user
 
 
-async def list_visible_task_codes(db_session: AsyncSession, *, user_id: uuid.UUID) -> list[str]:
-    """Коды задач, видимых пользователю; заблокированному — ни одной."""
-    user = await _active_user(db_session, user_id)
+async def list_visible_task_codes(db_session: AsyncSession, *, login: SftpLogin) -> list[str]:
+    """Коды задач, видимых пользователю; если вход уже не в силе — ни одной."""
+    user = await _logged_in_user(db_session, login)
     if user is None:
         return []
     stmt = sa.select(Task.code).where(owner_filter(Task.created_by, user)).order_by(Task.code)
     return list((await db_session.execute(stmt)).scalars().all())
 
 
-async def is_task_visible(db_session: AsyncSession, *, user_id: uuid.UUID, code: str) -> bool:
-    user = await _active_user(db_session, user_id)
+async def is_task_visible(db_session: AsyncSession, *, login: SftpLogin, code: str) -> bool:
+    user = await _logged_in_user(db_session, login)
     if user is None:
         return False
     # Только колонки, доступные роли шлюза (`code`, `created_by`), — не `SELECT *`.
