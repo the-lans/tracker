@@ -186,6 +186,18 @@ class ClaudeCodeSession:
         # Ход начат (`query()` отправлен), а его `ResultMessage` ещё не
         # прочитан — только такой ход есть смысл прерывать.
         self._turn_open = False
+        # Раздел 6.4: текст хода, полученный к этому моменту, — чтобы при
+        # остановке, таймауте или падении CLI он не пропал из `node_logs`.
+        self._turn_text_parts: list[str] = []
+
+    def take_partial_turn_text(self) -> str | None:
+        """
+        Текст прерванного хода (раздел 6.4), полученный до остановки, таймаута
+        или падения CLI. Буфер очищается: текст попадает ровно в одну запись.
+        """
+        text = "".join(self._turn_text_parts) or None
+        self._turn_text_parts = []
+        return text
 
     @property
     def session_id(self) -> str | None:
@@ -283,8 +295,9 @@ class ClaudeCodeSession:
             logger.info("session_query_started", prompt_length=len(prompt))
             self._turn_open = True
             try:
+                self._turn_text_parts = []
                 await self._client.query(prompt)
-                text_parts: list[str] = []
+                text_parts = self._turn_text_parts
                 result: ResultMessage | None = None
                 assistant_error: str | None = None
                 async for message in self._client.receive_response():
@@ -308,6 +321,7 @@ class ClaudeCodeSession:
                 self._turn_open = False
                 raise
             self._turn_open = False
+            self._turn_text_parts = []
             if result is None:
                 error_message = "Сессия завершила приём сообщений без ResultMessage"
                 raise RuntimeError(error_message)

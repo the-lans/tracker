@@ -84,7 +84,8 @@ def test_isolated_flag_sets_ephemeral_header() -> None:
     assert config["headers"]["X-Tracker-Isolation-Path"] == "ephemeral"
 
 
-def test_per_task_data_dir_renders_task_specific_path() -> None:
+def test_per_task_data_dir_renders_task_specific_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRACKER_REPOS_ROOT", "/data/repos")
     server = _make_mcp_server(
         has_stateful_resource=True,
         isolation_mode=McpIsolationMode.PER_TASK_DATA_DIR,
@@ -94,7 +95,7 @@ def test_per_task_data_dir_renders_task_specific_path() -> None:
 
     config = build_mcp_server_config(server, task=task)
 
-    expected_path = "tracker/repos/RR-00001/.mcp-profiles/playwright"
+    expected_path = "/data/repos/RR-00001/.mcp-profiles/playwright"
     assert config["headers"]["X-Tracker-Isolation-Path"] == expected_path
 
 
@@ -132,7 +133,10 @@ def test_per_task_data_dir_without_template_raises_before_session_start() -> Non
         build_mcp_server_config(server, task=task)
 
 
-def test_render_isolation_path_substitutes_both_variables() -> None:
+def test_render_isolation_path_substitutes_both_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRACKER_REPOS_ROOT", "/data/repos")
     task = _make_task("RR-00042")
     server = _make_mcp_server(name="browser-tools")
 
@@ -142,4 +146,4 @@ def test_render_isolation_path_substitutes_both_variables() -> None:
         mcp_server=server,
     )
 
-    assert rendered == "tracker/repos/RR-00042/.mcp-profiles/browser-tools"
+    assert rendered == "/data/repos/RR-00042/.mcp-profiles/browser-tools"

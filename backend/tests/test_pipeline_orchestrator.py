@@ -636,6 +636,53 @@ class TestFailureKinds:
         logs = await _node_logs_for(db_session, task.id)
         assert [log.status for log in logs] == [NodeLogStatus.FAILED, NodeLogStatus.SUCCESS]
 
+    async def test_crash_keeps_partial_reply(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Раздел 6.4: полученная до падения CLI часть ответа остаётся в истории;
+        раздел 17.2: сам сбой записан в `app_logs`.
+        """
+        logged: list[object] = []
+
+        async def record(**kwargs: object) -> None:
+            logged.append(kwargs["task_id"])
+
+        monkeypatch.setattr("services.nodes.dispatch.write_app_log", record)
+        task = await self._task_with_node(db_session)
+        crashed = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    AssistantMessage(content=[TextBlock(text="начало ответа")], model="claude"),
+                    make_result_message(),
+                ],
+            ],
+            failures_mid_turn={0: ProcessError("CLI упал", exit_code=1)},
+        )
+        replacement = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        session = ClaudeCodeSession(crashed)
+
+        async def recover() -> None:
+            await session.replace_client(replacement)
+
+        await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=session,
+            repos_path=tmp_path,
+            recover_session=recover,
+        )
+
+        logs = await _node_logs_for(db_session, task.id)
+        assert [(log.status, log.llm_output_text) for log in logs] == [
+            (NodeLogStatus.FAILED, "начало ответа"),
+            (NodeLogStatus.SUCCESS, ""),
+        ]
+        assert logged == [task.id]
+
     async def test_missing_cli_is_not_retried(
         self,
         db_session: AsyncSession,

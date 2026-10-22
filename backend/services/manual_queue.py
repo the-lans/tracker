@@ -41,6 +41,7 @@ from services.errors import ConflictError, ValidationError
 from services.nodes.dispatch import (
     execute_llm_node_with_timeout,
     execute_node,
+    record_sdk_failure,
     resolve_node_prompt_or_none,
     resolve_script_env_or_none,
 )
@@ -69,7 +70,8 @@ if TYPE_CHECKING:
 # защищена той же распределённой блокировкой, что и обращения к сессии."
 MANUAL_QUEUE_LOCK_OPERATION = "manual_queue"
 
-logger = get_logger("manual_queue")
+_LOG_SOURCE = "manual_queue"
+logger = get_logger(_LOG_SOURCE)
 
 # Раздел 7.2: "Типы clear_context и plan_prompt для библиотеки бессмысленны
 # (это разовые пайплайн-действия) и не должны предлагаться при создании
@@ -265,6 +267,9 @@ async def _run_library_prompt(
     node_log.finished_at = datetime.now(UTC)
     if outcome is None:
         node_log.status = NodeLogStatus.STOPPED
+        if node.node_type is not NodeType.SCRIPT:
+            # Раздел 6.4: полученная до остановки часть ответа не теряется.
+            node_log.llm_output_text = claude_session.take_partial_turn_text()
         if task_library_prompt is not None:
             task_library_prompt.last_run_status = LibraryPromptRunStatus.STOPPED
             task_library_prompt.last_run_at = node_log.finished_at
@@ -284,6 +289,7 @@ async def _run_library_prompt(
         task_library_prompt.last_run_at = node_log.finished_at
 
     await db_session.commit()
+    await record_sdk_failure(outcome, task_id=task.id, node_id=node.id, source=_LOG_SOURCE)
     logger.info(
         "library_prompt_run_finished",
         node_id=str(node.id),
@@ -346,12 +352,14 @@ async def _run_freeform_prompt(
     node_log.finished_at = datetime.now(UTC)
     if outcome is None:
         node_log.status = NodeLogStatus.STOPPED
+        node_log.llm_output_text = claude_session.take_partial_turn_text()
         await db_session.commit()
         logger.info("freeform_prompt_run_stopped")
         return
     node_log.llm_output_text = outcome.llm_output_text
     node_log.status = NodeLogStatus.SUCCESS if outcome.success else NodeLogStatus.FAILED
     await db_session.commit()
+    await record_sdk_failure(outcome, task_id=task.id, node_id=None, source=_LOG_SOURCE)
     logger.info(
         "freeform_prompt_run_finished",
         success=outcome.success,

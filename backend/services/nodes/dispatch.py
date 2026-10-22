@@ -13,8 +13,9 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from app_logging.app_logs import write_app_log
 from clients.claude_agent import ClaudeCodeSession
-from db.models.enums import NodeLogStatus, NodeType
+from db.models.enums import AppLogLevel, NodeLogStatus, NodeType
 from db.models.logs import NodeLog
 from services.failure_classification import is_transient_assistant_error
 from services.nodes.script import ScriptExecutionResult, run_script_node
@@ -102,6 +103,33 @@ class NodeExecutionOutcome:
     session_lost: bool = False
 
 
+async def record_sdk_failure(
+    outcome: NodeExecutionOutcome,
+    *,
+    task_id: uuid.UUID,
+    node_id: uuid.UUID | None,
+    source: str,
+) -> None:
+    """
+    Раздел 17.2: ошибка взаимодействия с Claude Agent SDK — падение процесса
+    CLI или постоянная ошибка ответа (раздел 17.3) — пишется в `app_logs`.
+    Сбои скриптов и таймауты сюда не относятся.
+    """
+    if outcome.success or (outcome.is_transient and not outcome.session_lost):
+        return
+    await write_app_log(
+        level=AppLogLevel.ERROR,
+        source=source,
+        message=f"Ошибка Claude Agent SDK: {outcome.error_message}",
+        context={
+            "node_id": str(node_id) if node_id is not None else None,
+            "session_lost": outcome.session_lost,
+            "is_transient": outcome.is_transient,
+        },
+        task_id=task_id,
+    )
+
+
 async def execute_llm_node(claude_session: ClaudeCodeSession, prompt: str) -> NodeExecutionOutcome:
     """Выполняет `plain_prompt`/`slash_command` — единая точка обращения к сессии (раздел 6.2)."""
     turn = await claude_session.send_and_collect_text(prompt)
@@ -133,8 +161,13 @@ async def execute_llm_node_with_timeout(
             timeout=timeout_seconds,
         )
     except TimeoutError:
+        partial_text = claude_session.take_partial_turn_text()
         await claude_session.abort_turn()
-        return NodeExecutionOutcome(success=False, error_message="Превышен таймаут выполнения")
+        return NodeExecutionOutcome(
+            success=False,
+            llm_output_text=partial_text,
+            error_message="Превышен таймаут выполнения",
+        )
 
 
 async def execute_script_node(

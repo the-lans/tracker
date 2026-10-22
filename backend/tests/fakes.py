@@ -65,7 +65,9 @@ class FakeClaudeAgentClient:
     ``messages_per_query`` — список последовательностей сообщений, по одной
     на каждый ожидаемый вызов `query()`, в порядке вызовов.
     ``failures_per_query`` — исключение, которым «падает процесс CLI» при
-    чтении ответа на вызов `query()` с данным номером (с нуля).
+    чтении ответа на вызов `query()` с данным номером (с нуля);
+    ``failures_mid_turn`` — то же, но после уже отданной части ответа, вместо
+    `ResultMessage`.
     """
 
     def __init__(
@@ -74,9 +76,11 @@ class FakeClaudeAgentClient:
         *,
         on_query: Callable[[], Awaitable[None]] | None = None,
         failures_per_query: dict[int, Exception] | None = None,
+        failures_mid_turn: dict[int, Exception] | None = None,
     ) -> None:
         self._messages_per_query = messages_per_query
         self._failures_per_query = failures_per_query or {}
+        self._failures_mid_turn = failures_mid_turn or {}
         # Симулирует побочный эффект callback'а разрешений SDK (раздел 9.6),
         # который в реальности мутирует БД ВНУТРИ обработки одного query() —
         # используется тестами `plan_prompt` (см. `test_nodes_dispatch.py`).
@@ -124,8 +128,11 @@ class FakeClaudeAgentClient:
         self.concurrent_calls += 1
         self.max_observed_concurrency = max(self.max_observed_concurrency, self.concurrent_calls)
         try:
+            mid_turn_failure = self._failures_mid_turn.get(len(self.queries) - 1)
             while self._stream:
                 await asyncio.sleep(self.message_delay_seconds)
+                if mid_turn_failure is not None and isinstance(self._stream[0], ResultMessage):
+                    raise mid_turn_failure
                 message = self._stream.pop(0)
                 yield message
                 if isinstance(message, ResultMessage):

@@ -2,6 +2,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from claude_agent_sdk import AssistantMessage, TextBlock
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.claude_agent import ClaudeCodeSession
@@ -19,11 +20,13 @@ from db.models.tasks import Task
 from db.models.users import User
 from services.nodes import dispatch
 from services.nodes.dispatch import (
+    NodeExecutionOutcome,
     execute_llm_node,
     execute_llm_node_with_timeout,
     execute_node,
     execute_plan_prompt_node,
     execute_script_node,
+    record_sdk_failure,
     resolve_node_prompt,
 )
 from services.nodes.script import ScriptExecutionResult
@@ -459,3 +462,75 @@ class TestScriptRunnerImage:
         await execute_script_node(node, repos_path=tmp_path, runner_image=runner_image)
 
         assert seen == [expected]
+
+
+class TestPartialReply:
+    """Раздел 6.4: полученная до таймаута часть ответа попадает в результат ноды."""
+
+    async def test_kept_on_timeout(self) -> None:
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    AssistantMessage(content=[TextBlock(text="часть ответа")], model="claude"),
+                    make_result_message(),
+                ],
+            ],
+        )
+        fake.message_delay_seconds = 0.5
+        session = ClaudeCodeSession(fake)
+
+        outcome = await execute_llm_node_with_timeout(session, "hi", timeout_seconds=0.75)
+
+        assert outcome.success is False
+        assert outcome.llm_output_text == "часть ответа"
+        assert session.take_partial_turn_text() is None
+
+    async def test_no_leftover_after_full_turn(self) -> None:
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    AssistantMessage(content=[TextBlock(text="ответ")], model="claude"),
+                    make_result_message(),
+                ],
+            ],
+        )
+        session = ClaudeCodeSession(fake)
+
+        outcome = await execute_llm_node_with_timeout(session, "hi", timeout_seconds=5)
+
+        assert outcome.llm_output_text == "ответ"
+        assert session.take_partial_turn_text() is None
+
+
+class TestRecordSdkFailure:
+    """Раздел 17.2: в `app_logs` — только ошибки взаимодействия с SDK."""
+
+    @pytest.mark.parametrize(
+        ("outcome", "logged"),
+        [
+            (NodeExecutionOutcome(success=True), False),
+            (NodeExecutionOutcome(success=False, error_message="Код возврата 1"), False),
+            (NodeExecutionOutcome(success=False, is_transient=False), True),
+            (NodeExecutionOutcome(success=False, session_lost=True), True),
+        ],
+        ids=["success", "script_or_timeout", "permanent", "cli_crashed"],
+    )
+    async def test_logged(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        outcome: NodeExecutionOutcome,
+        logged: bool,
+    ) -> None:
+        calls: list[dict[str, object]] = []
+
+        async def record(**kwargs: object) -> None:
+            calls.append(kwargs)
+
+        monkeypatch.setattr(dispatch, "write_app_log", record)
+        task_id = uuid.uuid4()
+
+        await record_sdk_failure(outcome, task_id=task_id, node_id=None, source="test")
+
+        assert len(calls) == (1 if logged else 0)
+        if logged:
+            assert calls[0]["task_id"] == task_id
