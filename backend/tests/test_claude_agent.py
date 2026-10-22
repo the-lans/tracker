@@ -35,9 +35,11 @@ def test_build_claude_agent_options_sets_remote_control_flag_on_first_connect() 
         mcp_servers={},
         claude_config_dir="/data/llm-accounts/acc-1",
         enable_remote_control=True,
+        add_dirs=["/data/user-files/RR-00001"],
     )
 
     assert options.resume is None
+    assert options.add_dirs == ["/data/user-files/RR-00001"]
     assert options.extra_args == {REMOTE_CONTROL_EXTRA_ARG: None}
     assert options.env == {"CLAUDE_CONFIG_DIR": "/data/llm-accounts/acc-1"}
 

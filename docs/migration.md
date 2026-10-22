@@ -11,9 +11,11 @@ volume-данных, без изменений кода или повторно�
 | `.env` | `${INSTALL_DIR}/.env` на старом сервере | Копируется файлом напрямую |
 | Данные PostgreSQL | volume `postgres_data` | Через дамп `pg_dump`/`pg_restore` (см. ниже) — не архивом сырых файлов данных, т.к. версия PostgreSQL на новом сервере обязана совпадать для архивного переноса, а дамп независим от версии |
 | Репозитории задач (включая профили MCP-инструментов, раздел 10.3) | volume `task_repos` | Архив `tar` |
-| Пользовательские файлы задач | volume `user_files` | Архив `tar` |
+| Артефакты задач (раздел 14.3) | volume `user_files` | Архив `tar` |
 | Архив истории выполнения (`rotate_task_logs`, раздел 16.2) | volume `log_archive` | Архив `tar` |
 | Входы в Claude и история сессий LLM-аккаунтов (разделы 6.4, 19.5) | volume `claude_accounts` | Архив `tar` |
+| Ключ хоста SFTP-шлюза (разделы 15.1, 20.4) | volume `sftp_host_keys` | Архив `tar` — иначе у сервера сменится отпечаток и клиенты SFTP/sshfs увидят предупреждение о подмене |
+| Роль БД SFTP-шлюза `tracker_sftp` | кластер PostgreSQL | Не переносится: `pg_dump` не сохраняет роли, её заново создаёт entrypoint backend по `SFTP_DB_PASSWORD` из `.env` |
 | TLS-сертификаты Caddy | volumes `caddy_data`/`caddy_config` | Не переносятся — Caddy сам перевыпустит сертификат на новом сервере при первом запуске (раздел 20.2, шаг 10); перенос усложнил бы процедуру без реальной пользы |
 
 ## Процедура
@@ -41,6 +43,8 @@ volume-данных, без изменений кода или повторно�
      tar czf /backup/log_archive.tar.gz -C /data .
    docker run --rm -v tracker_claude_accounts:/data -v "$(pwd)":/backup alpine \
      tar czf /backup/claude_accounts.tar.gz -C /data .
+   docker run --rm -v tracker_sftp_host_keys:/data -v "$(pwd)":/backup alpine \
+     tar czf /backup/sftp_host_keys.tar.gz -C /data .
    docker compose start worker beat
 
    docker cp "$(docker compose ps -q backup)":/backups/<файл-дампа>.sql.gz ./
@@ -48,13 +52,14 @@ volume-данных, без изменений кода или повторно�
 
    Перенести на новый сервер: `.env`, `task_repos.tar.gz`, `user_files.tar.gz`,
    `log_archive.tar.gz`, `claude_accounts.tar.gz` (входы в Claude и история сессий LLM-аккаунтов; у сервера версии без volume `claude_accounts` этого архива нет — восстановление его пропустит),
+   `sftp_host_keys.tar.gz` (ключ хоста SFTP-шлюза; у сервера версии без шлюза его нет — шлюз создаст новый ключ),
    `<файл-дампа>.sql.gz` (например, `scp`).
 
 ### На новом сервере
 
 3. Сложить перенесённые файлы в один каталог, например `/root/transfer`:
    `.env`, `<файл-дампа>.sql.gz`, `task_repos.tar.gz`, `user_files.tar.gz`,
-   `log_archive.tar.gz`, `claude_accounts.tar.gz`.
+   `log_archive.tar.gz`, `claude_accounts.tar.gz`, `sftp_host_keys.tar.gz`.
 4. Запустить `deploy/install.sh` (тот же скрипт, что и для обычной
    установки, раздел 20.2) в режиме восстановления:
 
@@ -69,9 +74,11 @@ volume-данных, без изменений кода или повторно�
    сохраняется как `.env.before-restore`), собирает образы, поднимает
    PostgreSQL и Redis, восстанавливает дамп в пустую БД **до** миграций,
    распаковывает архивы в volumes `task_repos`/`user_files`/`log_archive`/`claude_accounts` через сервис
-   `backend`, применяет миграции и запускает прикладные сервисы. Генерация
+   `backend` и `sftp_host_keys` — через сервис `sftp` (у backend он только
+   для чтения), применяет миграции и запускает прикладные сервисы. Генерация
    секретов, интерактивные вопросы и seed пропускаются: всё это уже есть
-   в `.env` и дампе.
+   в `.env` и дампе. Если `.env` старого сервера не знает `SFTP_DB_PASSWORD`
+   (версия без SFTP-шлюза), скрипт дописывает сгенерированный пароль.
 
    Важно: `SECRET_ENCRYPTION_KEY`/`SESSION_SECRET_KEY` обязаны быть теми же,
    что на старом сервере, — иначе расшифровка перенесённых
@@ -101,10 +108,12 @@ docker run --rm -v tracker_log_archive:/data -v "$(pwd)":/backup alpine \
   sh -c "rm -rf /data/* && tar xzf /backup/log_archive.tar.gz -C /data"
 docker run --rm -v tracker_claude_accounts:/data -v "$(pwd)":/backup alpine \
   sh -c "rm -rf /data/* && tar xzf /backup/claude_accounts.tar.gz -C /data"
+docker run --rm -v tracker_sftp_host_keys:/data -v "$(pwd)":/backup alpine \
+  sh -c "rm -rf /data/* && tar xzf /backup/sftp_host_keys.tar.gz -C /data"
 
 docker compose up -d --wait postgres
 zcat <файл-дампа>.sql.gz | docker compose exec -T postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"
-docker compose up -d backend worker beat frontend caddy backup
+docker compose up -d backend worker beat sftp frontend caddy backup
 ```
 
 В этом варианте миграции уже применены к пустой БД до восстановления

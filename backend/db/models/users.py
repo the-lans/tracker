@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
@@ -16,18 +17,20 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     __tablename__ = "users"
 
     email: Mapped[str] = mapped_column(sa.String, unique=True)
-    # os_username ссылается на уже существующий, вручную настроенный
-    # Linux-логин (провижининг вне периметра проекта) — заполняется админом
-    # после регистрации через Google OAuth, поэтому nullable.
+    # Логин SFTP-шлюза (раздел 3.1, решение №18 плана) — не Linux-логин:
+    # назначается админом после регистрации через Google OAuth, поэтому nullable.
     os_username: Mapped[str | None] = mapped_column(sa.String, unique=True)
     role: Mapped[UserRole] = mapped_column(
         pg_enum(UserRole, name="user_role"),
         default=UserRole.USER,
     )
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True)
-    # Раздел 15.1: публичный ключ sshfs-доступа (не секрет — правило 8 не
-    # применяется); на сервер его ставит администратор (решение №16 плана).
+    # Раздел 15.1: публичный ключ входа в SFTP-шлюз (не секрет — правило 8 не
+    # применяется); действует сразу после сохранения в профиле.
     ssh_public_key: Mapped[str | None] = mapped_column(sa.Text)
+    # Раздел 16.2: последний вход по ключу — по нему `revoke_stale_sshfs_keys`
+    # находит неиспользуемые ключи; смена ключа сбрасывает значение.
+    ssh_key_last_used_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
 
 class AllowedEmail(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

@@ -17,8 +17,8 @@ function keyTitle(publicKey: string): string {
 }
 
 /**
- * Раздел 15.1: публичный SSH-ключ для доступа к файлам задач по sshfs.
- * Один ключ на пользователя; на сервер его ставит администратор.
+ * Раздел 15.1: публичный SSH-ключ для доступа к файлам задач по SFTP.
+ * Один ключ на пользователя; действует сразу после сохранения.
  */
 export function SshKeyCard() {
   const { data: profile, isLoading } = useProfile();
@@ -37,7 +37,7 @@ export function SshKeyCard() {
         onSuccess: () => {
           setEditing(false);
           setDraft("");
-          toast.success("Ключ сохранён — администратор установит его на сервер");
+          toast.success("Ключ сохранён — доступ по SFTP открыт");
         },
         onError,
       },
@@ -49,7 +49,7 @@ export function SshKeyCard() {
 
   return (
     <Card>
-      <CardTitle>SSH-ключ для sshfs</CardTitle>
+      <CardTitle>SSH-ключ для SFTP</CardTitle>
       {isLoading && <LoadingState />}
       {publicKey !== null && !editing && (
         <div className="flex flex-wrap items-center gap-3">
@@ -104,7 +104,7 @@ export function SshKeyCard() {
         </div>
       )}
       <div className="mt-2 text-small text-text-3">
-        На сервер ключ устанавливает администратор — он видит его в разделе «Пользователи».
+        Новый ключ действует сразу, прежний после замены или удаления перестаёт работать.
       </div>
     </Card>
   );

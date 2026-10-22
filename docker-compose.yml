@@ -52,6 +52,14 @@ services:
       # Раздел 19.5: каталоги конфигурации LLM-аккаунтов (claude auth login)
       # — только внутри этого корня, volume claude_accounts ниже.
       CLAUDE_ACCOUNTS_ROOT: /data/claude-accounts
+      # Раздел 14.3: артефакты задач — volume user_files ниже.
+      TRACKER_USER_FILES_ROOT: /data/user-files
+      ARTIFACT_MAX_UPLOAD_MB: ${ARTIFACT_MAX_UPLOAD_MB:-100}
+      # Раздел 15.1, 20.5: инструкция подключения к SFTP-шлюзу в профиле и
+      # пароль его роли БД (создаётся docker-entrypoint.sh).
+      DOMAIN: ${DOMAIN}
+      SFTP_PORT: ${SFTP_PORT:-2222}
+      SFTP_DB_PASSWORD: ${SFTP_DB_PASSWORD}
       # Раздел 16.2: архив ротированной истории `node_logs` (rotate_task_logs).
       TRACKER_LOG_ARCHIVE_ROOT: /data/log-archive
       # Раздел 6.4: срок хранения истории сессий Claude Code (cleanupPeriodDays).
@@ -62,6 +70,8 @@ services:
       # Через backend `install.sh --restore` распаковывает архивы всех volume.
       - log_archive:/data/log-archive
       - claude_accounts:/data/claude-accounts
+      # Раздел 15.1: отпечаток ключа SFTP-шлюза для профиля.
+      - sftp_host_keys:/data/sftp-host-keys:ro
       # Раздел 20.5: доступ Celery worker/backend к Docker-демону хоста для запуска
       # script-нод и раннеров — задокументированный компромисс, без --privileged.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -120,6 +130,48 @@ services:
       backend:
         condition: service_healthy
 
+  # Раздел 2.1, 19.3, 20.5: SFTP-шлюз к файлам задач — тот же образ, своя
+  # команда, без миграций и docker.sock. Репозитории — только чтение,
+  # артефакты — запись; в БД — роль tracker_sftp с минимальными правами.
+  sftp:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "sftp_gateway"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://tracker_sftp:${SFTP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      TRACKER_REPOS_ROOT: /data/repos
+      TRACKER_USER_FILES_ROOT: /data/user-files
+      SFTP_HOST_KEYS_DIR: /data/sftp-host-keys
+    volumes:
+      - task_repos:/data/repos:ro
+      - user_files:/data/user-files
+      - sftp_host_keys:/data/sftp-host-keys
+    ports:
+      - "${SFTP_PORT:-2222}:2222"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    # root в контейнере без остальных привилегий: читать и перезаписывать
+    # файлы, созданные backend и worker.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 2222), 5).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   frontend:
     build:
       context: ./frontend
@@ -173,6 +225,8 @@ volumes:
   user_files:
   # Раздел 6.4, 19.5: входы в Claude и история сессий LLM-аккаунтов.
   claude_accounts:
+  # Раздел 20.4: ключ хоста SFTP-шлюза — отпечаток сервера не меняется при переносе.
+  sftp_host_keys:
   # Раздел 16.2: сжатые JSONL-архивы истории `node_logs`, переносятся вместе
   # с остальными данными (docs/migration.md).
   log_archive:

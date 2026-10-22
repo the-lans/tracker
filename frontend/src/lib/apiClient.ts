@@ -44,14 +44,30 @@ function buildUrl(path: string, params?: Record<string, QueryParamValue>): strin
   return `${url.pathname}${url.search}`;
 }
 
-async function request<TResponse>(path: string, options: RequestOptions = {}): Promise<TResponse> {
+function authHeaders(): Record<string, string> {
   const token = getStoredToken();
-  const headers: Record<string, string> = {};
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function errorOf(response: Response): Promise<ApiError> {
+  const text = await response.text();
+  let body: ApiErrorBody | null = null;
+  try {
+    body = text ? (JSON.parse(text) as ApiErrorBody) : null;
+  } catch {
+    // Ответ не JSON (например, прокси) — сообщение будет общим.
   }
+  return new ApiError(response.status, body);
+}
+
+async function request<TResponse>(path: string, options: RequestOptions = {}): Promise<TResponse> {
+  const headers = authHeaders();
   let body: BodyInit | undefined;
-  if (options.body !== undefined) {
+  if (options.body instanceof Blob) {
+    // Раздел 14.3: файл артефакта уходит телом запроса как есть.
+    headers["Content-Type"] = options.body.type || "application/octet-stream";
+    body = options.body;
+  } else if (options.body !== undefined) {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(options.body);
   }
@@ -62,18 +78,24 @@ async function request<TResponse>(path: string, options: RequestOptions = {}): P
     body,
   });
 
+  if (!response.ok) {
+    throw await errorOf(response);
+  }
   if (response.status === 204) {
     return undefined as TResponse;
   }
 
   const text = await response.text();
-  const data = text ? (JSON.parse(text) as unknown) : undefined;
+  return (text ? (JSON.parse(text) as unknown) : undefined) as TResponse;
+}
 
+/** Файл целиком (скачивание артефакта): авторизация — тем же токеном, что у API. */
+async function getBlob(path: string): Promise<Blob> {
+  const response = await fetch(buildUrl(path), { headers: authHeaders() });
   if (!response.ok) {
-    throw new ApiError(response.status, (data as ApiErrorBody | undefined) ?? null);
+    throw await errorOf(response);
   }
-
-  return data as TResponse;
+  return response.blob();
 }
 
 export const api = {
@@ -83,6 +105,7 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
   delete: <T = void>(path: string) => request<T>(path, { method: "DELETE" }),
+  getBlob,
 };
 
 export function wsUrl(path: string): string {

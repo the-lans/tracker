@@ -31,8 +31,10 @@ from services.maintenance_tasks import (
     revoke_stale_sshfs_keys,
     send_awaiting_decision_reminders,
     send_cleanup_reminders,
+    stale_ssh_key_reminder_key,
 )
 from services.notifications import NotificationEvent
+from tests.factories import SAMPLE_ED25519_KEY, make_user
 
 
 async def _make_task(db_session: AsyncSession, *, status: TaskStatus) -> Task:
@@ -247,8 +249,71 @@ async def test_health_check_all_mcp_servers_updates_is_healthy(db_session: Async
     assert unhealthy.is_healthy is False
 
 
-def test_revoke_stale_sshfs_keys_is_a_noop() -> None:
-    revoke_stale_sshfs_keys()  # не должно бросать исключений
+class TestStaleSshKeys:
+    """Раздел 16.2: давно не использованный ключ — напоминание владельцу раз за порог."""
+
+    @pytest.fixture
+    def sent(self, monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
+        recorded: list[uuid.UUID] = []
+
+        async def record(
+            _db: AsyncSession,
+            *,
+            event: NotificationEvent,
+            user_id: uuid.UUID,
+            detail: str,
+        ) -> None:
+            assert event is NotificationEvent.STALE_SSH_KEY
+            recorded.append(user_id)
+
+        monkeypatch.setattr(maintenance_tasks, "notify_user_event", record)
+        return recorded
+
+    async def _user(self, db_session: AsyncSession, last_used: datetime | None) -> User:
+        user = await make_user(db_session)
+        user.ssh_public_key = SAMPLE_ED25519_KEY
+        user.ssh_key_last_used_at = last_used
+        await db_session.flush()
+        return user
+
+    async def test_once_per_threshold(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        sent: list[uuid.UUID],
+    ) -> None:
+        now = datetime.now(UTC)
+        user = await self._user(db_session, now - timedelta(days=91))
+
+        first = await revoke_stale_sshfs_keys(db_session, redis_client=redis_client, now=now)
+        repeated = await revoke_stale_sshfs_keys(db_session, redis_client=redis_client, now=now)
+
+        assert user.id in first
+        assert user.id not in repeated
+        assert sent.count(user.id) == 1
+        assert await redis_client.ttl(stale_ssh_key_reminder_key(user.id)) > 0
+        await redis_client.delete(stale_ssh_key_reminder_key(user.id))
+
+    @pytest.mark.parametrize(
+        "last_used_days_ago",
+        [10, None],
+        ids=["recent", "never_used"],
+    )
+    async def test_not_stale(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        sent: list[uuid.UUID],
+        last_used_days_ago: int | None,
+    ) -> None:
+        now = datetime.now(UTC)
+        last_used = None if last_used_days_ago is None else now - timedelta(days=last_used_days_ago)
+        user = await self._user(db_session, last_used)
+
+        reminded = await revoke_stale_sshfs_keys(db_session, redis_client=redis_client, now=now)
+
+        assert user.id not in reminded
+        assert user.id not in sent
 
 
 def test_purge_orphaned_playwright_processes_is_a_noop() -> None:

@@ -85,3 +85,18 @@ export function formatInterval(seconds: number): string {
   }
   return `каждые ${seconds} ${plural(seconds, ["секунду", "секунды", "секунд"])}`;
 }
+
+const FILE_SIZE_UNITS = ["Б", "КБ", "МБ", "ГБ"] as const;
+const FILE_SIZE_STEP = 1024;
+
+/** Размер файла для списка артефактов (раздел 15.2): «12 КБ», «3,4 МБ». */
+export function formatFileSize(bytes: number): string {
+  let value = bytes;
+  let unit = 0;
+  while (value >= FILE_SIZE_STEP && unit < FILE_SIZE_UNITS.length - 1) {
+    value /= FILE_SIZE_STEP;
+    unit += 1;
+  }
+  const digits = unit === 0 || value >= 10 ? 0 : 1;
+  return `${value.toLocaleString("ru-RU", { maximumFractionDigits: digits })} ${FILE_SIZE_UNITS[unit]}`;
+}

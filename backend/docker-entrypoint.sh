@@ -9,5 +9,8 @@
 set -euo pipefail
 
 alembic upgrade head
+# Раздел 20.5: роль БД SFTP-шлюза — после миграций и при каждом старте
+# (pg_dump не переносит роли). Без SFTP_DB_PASSWORD шаг пропускается.
+python -m sftp_gateway.db_role
 
 exec "$@"

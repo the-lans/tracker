@@ -257,6 +257,14 @@ def _celery_eager() -> None:
     celery_app.conf.task_eager_propagates = True
 
 
+@pytest.fixture(autouse=True)
+def user_files_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Артефакты задач (раздел 14.3) — во временном каталоге, а не в рабочей директории."""
+    root = tmp_path / "user-files"
+    monkeypatch.setenv("TRACKER_USER_FILES_ROOT", str(root))
+    return root
+
+
 @pytest_asyncio.fixture
 async def api_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     """HTTP-клиент против реального `main.app` (раздел 21.1 — интеграционные

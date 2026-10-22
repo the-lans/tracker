@@ -40,6 +40,13 @@ class ConflictError(AppError):
     code = "conflict"
 
 
+class PayloadTooLargeError(AppError):
+    """Загружаемый файл больше допустимого (раздел 14.3 ТЗ, артефакты задачи)."""
+
+    status_code = 413
+    code = "payload_too_large"
+
+
 class UnauthorizedError(AppError):
     """Отсутствует или недействителен токен сессии (раздел 19.1 ТЗ)."""
 

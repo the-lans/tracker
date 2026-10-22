@@ -1,7 +1,7 @@
 """
-Пользователи и доступ (раздел 15.1, 15.5, 16.2, 19.1 ТЗ, решение №16 плана):
-SSH-ключ профиля, блокировка пользователей, чей email удалён из
-`allowed_emails`, и защита от потери последнего администратора.
+Пользователи и доступ (раздел 15.1, 15.5, 16.2, 19.1 ТЗ, решения №16 и №18
+плана): SSH-ключ профиля для SFTP-шлюза, блокировка пользователей, чей email
+удалён из `allowed_emails`, и защита от потери последнего администратора.
 """
 
 from __future__ import annotations
@@ -29,6 +29,8 @@ DEPROVISION_LOG_SOURCE = "periodic.deprovision_inactive_users"
 async def set_ssh_public_key(db_session: AsyncSession, *, user: User, public_key: str) -> User:
     """Сохраняет ключ в нормализованном виде (`тип base64 [комментарий]`)."""
     user.ssh_public_key = parse_public_key(public_key).to_authorized_keys_line()
+    # Раздел 16.2: давность использования считается заново для нового ключа.
+    user.ssh_key_last_used_at = None
     await db_session.commit()
     await db_session.refresh(user)
     return user
@@ -36,6 +38,7 @@ async def set_ssh_public_key(db_session: AsyncSession, *, user: User, public_key
 
 async def clear_ssh_public_key(db_session: AsyncSession, *, user: User) -> User:
     user.ssh_public_key = None
+    user.ssh_key_last_used_at = None
     await db_session.commit()
     await db_session.refresh(user)
     return user
@@ -105,13 +108,12 @@ async def _users_without_allowed_email(db_session: AsyncSession) -> list[User]:
 
 
 def _deprovision_log(user: User) -> AppLog:
-    os_username = user.os_username or "не назначен"
     return AppLog(
         level=AppLogLevel.WARNING,
         source=DEPROVISION_LOG_SOURCE,
         message=(
             f"Пользователь {user.email} заблокирован: email удалён из allowed_emails. "
-            f"Заблокируйте Linux-логин {os_username} на сервере вручную"
+            "Вход в трекер и доступ по SFTP закрыты"
         ),
         context={"user_id": str(user.id), "email": user.email, "os_username": user.os_username},
     )
@@ -133,10 +135,10 @@ def _kept_admin_log(user: User) -> AppLog:
 async def deprovision_inactive_users(db_session: AsyncSession) -> list[uuid.UUID]:
     """
     Раздел 16.2: блокирует (`is_active = false`) пользователей, чей email
-    удалён из `allowed_emails`; вход и API для них закрыты. Linux-логин
-    блокирует администратор вручную до появления `User-Provisioner` —
-    `os_username` пишется в `app_logs`. Повторный запуск идемпотентен: уже
-    заблокированные пользователи не выбираются.
+    удалён из `allowed_emails`; вход, API и SFTP-шлюз (он проверяет
+    `is_active` на каждой операции) для них закрыты, запись с `os_username`
+    пишется в `app_logs`. Повторный запуск идемпотентен: уже заблокированные
+    пользователи не выбираются.
 
     Удалить email последнего администратора нельзя
     (`ensure_allowed_email_deletable`), но email мог пропасть из списка ещё до

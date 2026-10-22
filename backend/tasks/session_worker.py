@@ -57,6 +57,7 @@ from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_r
 from services.remote_control import record_bridge_status
 from services.session_heartbeat import keep_session_heartbeat
 from services.session_lifecycle import plan_session_start
+from services.task_artifacts import task_artifacts_dir
 from services.task_control import (
     TaskControlCommand,
     clear_task_control,
@@ -535,6 +536,7 @@ async def _run_claimed_task(
     claude_config_dir = await _claude_config_dir(db_session, task)
     repos_root = resolve_repos_root()
     workspace = await prepare_task_workspace(db_session, task=task, repos_root=repos_root)
+    artifacts_dir = task_artifacts_dir(task.code)
     mcp_servers = await _resolve_mcp_servers_for_task(db_session, task)
 
     parent_summary = None
@@ -573,6 +575,7 @@ async def _run_claimed_task(
             claude_config_dir=claude_config_dir or "",
             enable_remote_control=enable_remote_control,
             can_use_tool=can_use_tool,
+            add_dirs=[str(artifacts_dir)],
         )
         return ClaudeSDKClient(options=options)
 

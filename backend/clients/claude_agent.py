@@ -19,7 +19,7 @@ Celery-таска на весь активный жизненный цикл с�
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Protocol
 
 from claude_agent_sdk import (
@@ -75,6 +75,7 @@ def build_claude_agent_options(
     enable_remote_control: bool,
     can_use_tool: CanUseTool | None = None,
     fork_session: bool = False,
+    add_dirs: Sequence[str] = (),
 ) -> ClaudeAgentOptions:
     """Собирает `ClaudeAgentOptions` для сессии задачи (раздел 6.1, 19.5).
 
@@ -88,7 +89,8 @@ def build_claude_agent_options(
     Частичные сообщения включены всегда: ответ показывается в ленте по мере
     генерации (раздел 15.2). ``fork_session`` вместе с ``resume_session_id``
     продолжает чужую историю в новой сессии, не меняя исходную, — так
-    пересказывается история родительской задачи.
+    пересказывается история родительской задачи. ``add_dirs`` — каталоги вне
+    ``cwd``, с которыми сессии можно работать: артефакты задачи (раздел 14.3).
     """
     extra_args: dict[str, str | None] = {}
     if enable_remote_control:
@@ -103,6 +105,7 @@ def build_claude_agent_options(
         enable_remote_control=enable_remote_control,
         extra_args=extra_args,
         fork_session=fork_session,
+        add_dirs=list(add_dirs),
     )
 
     return ClaudeAgentOptions(
@@ -115,6 +118,7 @@ def build_claude_agent_options(
         extra_args=extra_args,
         can_use_tool=can_use_tool,
         include_partial_messages=True,
+        add_dirs=list(add_dirs),
     )
 
 

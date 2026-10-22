@@ -10,7 +10,11 @@ export function copyText(text: string): void {
 
 /** Раздел 15.2: скачивание полного текста вывода файлом. */
 export function downloadText(text: string, filename: string): void {
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  downloadBlob(new Blob([text], { type: "text/plain;charset=utf-8" }), filename);
+}
+
+/** Сохранение полученного файла (раздел 14.3, артефакты задачи). */
+export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
