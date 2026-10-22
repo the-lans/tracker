@@ -5,8 +5,8 @@
 #   deploy/install.sh                     — новая установка
 #   deploy/install.sh --restore <каталог> — перенос на новый сервер (раздел
 #     20.4, docs/migration.md): в каталоге .env, дамп БД *.sql.gz,
-#     task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz и claude_accounts.tar.gz
-#     со старого сервера
+#     task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz, claude_accounts.tar.gz
+#     и sftp_host_keys.tar.gz со старого сервера
 
 set -euo pipefail
 
@@ -24,7 +24,8 @@ ADMIN_EMAIL=""
 # Каталог с архивами переноса; пусто — обычная установка.
 RESTORE_DIR=""
 RESTORE_DUMP=""
-# Архив -> точка монтирования volume в контейнере backend (docker-compose.yml).
+# Архив -> точка монтирования volume[ -> сервис, по умолчанию backend]
+# (docker-compose.yml).
 RESTORE_ARCHIVES=(
   "task_repos:/data/repos"
   "user_files:/data/user-files"
@@ -33,6 +34,8 @@ RESTORE_ARCHIVES=(
 # Необязательные: на сервере прежней версии такого volume ещё не было.
 RESTORE_OPTIONAL_ARCHIVES=(
   "claude_accounts:/data/claude-accounts"
+  # У backend этот volume только для чтения — распаковывает сам шлюз.
+  "sftp_host_keys:/data/sftp-host-keys:sftp"
 )
 
 log() { echo "[install.sh] $*"; }
@@ -142,6 +145,26 @@ _set_env_value() {
   rm -f "${ENV_FILE}.bak"
 }
 
+# Задаёт значение, только если его ещё нет: .env прежней версии (перенос)
+# может не знать о новых переменных.
+_ensure_env_value() {
+  local key="$1" value="$2"
+  if grep -q "^${key}=." "${ENV_FILE}"; then
+    return
+  fi
+  if grep -q "^${key}=" "${ENV_FILE}"; then
+    _set_env_value "${key}" "${value}"
+  else
+    echo "${key}=${value}" >> "${ENV_FILE}"
+  fi
+  log "В ${ENV_FILE} добавлено значение ${key}"
+}
+
+# Раздел 20.5: пароль роли БД SFTP-шлюза входит в DATABASE_URL — только hex.
+_generate_sftp_db_password() {
+  openssl rand -hex 24
+}
+
 # Шаг 3: генерация .env из .env.example — все секреты через openssl rand
 step_generate_env() {
   log "Шаг 3/11: генерация ${ENV_FILE} из ${ENV_EXAMPLE}"
@@ -155,6 +178,7 @@ step_generate_env() {
   _set_env_value SESSION_SECRET_KEY "$(openssl rand -hex 32)"
   _set_env_value POSTGRES_PASSWORD "$(openssl rand -base64 24)"
   _set_env_value REDIS_PASSWORD "$(openssl rand -base64 24)"
+  _set_env_value SFTP_DB_PASSWORD "$(_generate_sftp_db_password)"
 
   # Раздел 18.1: VAPID-ключевая пара для Web Push — не openssl rand, а
   # валидная EC-ключевая пара (P-256, пакет py-vapid, зависимость backend
@@ -259,8 +283,8 @@ step_seed_data() {
 
 # Шаг 9: старт прикладных сервисов
 step_start_app_services() {
-  log "Шаг 9/11: запуск backend, worker, beat, frontend, caddy, backup"
-  ( cd "${INSTALL_DIR}" && docker compose up -d backend worker beat frontend caddy backup )
+  log "Шаг 9/11: запуск backend, worker, beat, sftp, frontend, caddy, backup"
+  ( cd "${INSTALL_DIR}" && docker compose up -d backend worker beat sftp frontend caddy backup )
 }
 
 # Шаг 10: получение TLS-сертификата — выполняется автоматически Caddy
@@ -272,6 +296,8 @@ step_wait_tls() {
 step_final_instructions() {
   log "Шаг 11/11: откройте https://<DOMAIN> и войдите через Google OAuth (${ADMIN_EMAIL}) — первый пользователь автоматически получит роль admin"
   # Раздел 19.5: вход в Claude выполняется в каталоге уже заведённого LLM-аккаунта.
+  # Раздел 15.1, 20.3: доступ к файлам задач по SFTP/sshfs.
+  log "SFTP-шлюз слушает порт SFTP_PORT из ${ENV_FILE} (по умолчанию 2222) — откройте его в файрволе; инструкция подключения — в профиле трекера"
   log "Вход в Claude для LLM-аккаунта (после того как пользователь завёл его в разделе «LLM-аккаунты»): cd ${INSTALL_DIR} && docker compose exec -e CLAUDE_CONFIG_DIR=<каталог аккаунта> worker claude auth login"
 }
 
@@ -302,6 +328,7 @@ step_restore_env() {
     log "Прежний ${ENV_FILE} сохранён как ${ENV_FILE}.before-restore"
   fi
   cp "${RESTORE_DIR}/.env" "${ENV_FILE}"
+  _ensure_env_value SFTP_DB_PASSWORD "$(_generate_sftp_db_password)"
 }
 
 # В пустую БД и до миграций: дамп содержит схему старого сервера, миграции
@@ -312,19 +339,24 @@ step_restore_database() {
     && docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"')
 }
 
-# Тома монтирует сам сервис backend — имя compose-проекта знать не нужно.
+# Тома монтирует сам сервис — имя compose-проекта знать не нужно.
 step_restore_volumes() {
-  local mapping archive target
+  local mapping archive target service rest
   for mapping in "${RESTORE_ARCHIVES[@]}" "${RESTORE_OPTIONAL_ARCHIVES[@]}"; do
     archive="${mapping%%:*}.tar.gz"
-    target="${mapping#*:}"
+    rest="${mapping#*:}"
+    target="${rest%%:*}"
+    service="backend"
+    if [ "${rest}" != "${target}" ]; then
+      service="${rest#*:}"
+    fi
     if [ ! -f "${RESTORE_DIR}/${archive}" ]; then
       log "Восстановление: ${archive} нет в переносе — пропуск"
       continue
     fi
     log "Восстановление: ${archive} -> ${target}"
     (cd "${INSTALL_DIR}" && docker compose run --rm --no-deps \
-      -v "${RESTORE_DIR}:/restore:ro" --entrypoint sh backend \
+      -v "${RESTORE_DIR}:/restore:ro" --entrypoint sh "${service}" \
       -c "find '${target}' -mindepth 1 -delete && tar xzf '/restore/${archive}' -C '${target}'")
   done
 }

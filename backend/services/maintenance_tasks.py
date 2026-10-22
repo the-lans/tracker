@@ -7,9 +7,9 @@
 реализации, вынесенные в константы ниже и переопределяемые вызывающим
 кодом (административный интерфейс, раздел 15.5, "Периодические задачи").
 
-`revoke_stale_sshfs_keys` — заглушка (решения №4 и №16 плана реализации):
-ключ sshfs ставит на сервер администратор, и у трекера нет данных о том,
-каким ключом и когда пользовались, — помечать для ротации нечего.
+`revoke_stale_sshfs_keys` (решение №18 плана): SFTP-шлюз отмечает вход по
+ключу в `users.ssh_key_last_used_at`; владельцу ключа без входа дольше
+порога приходит напоминание заменить его. Сам ключ не удаляется.
 `deprovision_inactive_users` — в `services/users.py`.
 
 `purge_orphaned_playwright_processes` — тоже заглушка, но по другой
@@ -37,7 +37,8 @@ from db.models.enums import TaskStatus
 from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.tasks import Task
-from services.notifications import NotificationEvent, notify_task_event
+from db.models.users import User
+from services.notifications import NotificationEvent, notify_task_event, notify_user_event
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -51,6 +52,9 @@ DEFAULT_AWAITING_INPUT_THRESHOLD = timedelta(hours=4)
 # о решении — не чаще раза за порог ожидания.
 CLEANUP_REMINDER_INTERVAL = timedelta(days=7)
 AWAITING_DECISION_REMINDER_INTERVAL = DEFAULT_AWAITING_INPUT_THRESHOLD
+# Раздел 16.2: ключ без входа дольше порога помечается для ротации; повторное
+# напоминание — не раньше, чем через тот же срок.
+STALE_SSH_KEY_THRESHOLD = timedelta(days=90)
 DEFAULT_ORPHANED_CONTAINER_GRACE_PERIOD = timedelta(minutes=10)
 _MCP_HEALTH_CHECK_TIMEOUT_SECONDS = 5.0
 
@@ -246,13 +250,41 @@ async def health_check_all_mcp_servers(
     return results
 
 
-def revoke_stale_sshfs_keys() -> None:
-    """
-    Заглушка (решения №4 и №16 плана реализации): ключ ставит на сервер
-    администратор, данных об использовании ключей sshd у трекера нет.
-    Точка расширения для `User-Provisioner`.
-    """
-    logger.info("revoke_stale_sshfs_keys_noop")
+def stale_ssh_key_reminder_key(user_id: uuid.UUID) -> str:
+    return f"reminder:stale-ssh-key:{user_id}"
+
+
+async def find_users_with_stale_ssh_keys(db_session: AsyncSession, *, now: datetime) -> list[User]:
+    """Ключи без единого входа не помечаются: давность считается от последнего входа."""
+    stmt = sa.select(User).where(
+        User.is_active == True,  # noqa: E712
+        User.ssh_public_key.is_not(None),
+        User.ssh_key_last_used_at < now - STALE_SSH_KEY_THRESHOLD,
+    )
+    return list((await db_session.execute(stmt)).scalars().all())
+
+
+async def revoke_stale_sshfs_keys(
+    db_session: AsyncSession,
+    *,
+    redis_client: Redis,
+    now: datetime,
+) -> list[uuid.UUID]:
+    """Раздел 16.2: напоминает заменить давно не использованный ключ (`SET NX` + TTL)."""
+    reminded: list[uuid.UUID] = []
+    interval_seconds = int(STALE_SSH_KEY_THRESHOLD.total_seconds())
+    for user in await find_users_with_stale_ssh_keys(db_session, now=now):
+        key = stale_ssh_key_reminder_key(user.id)
+        if not await redis_client.set(key, "1", nx=True, ex=interval_seconds):
+            continue
+        await notify_user_event(
+            db_session,
+            event=NotificationEvent.STALE_SSH_KEY,
+            user_id=user.id,
+            detail="Ключ SFTP-доступа давно не использовался — замените или удалите его в профиле",
+        )
+        reminded.append(user.id)
+    return reminded
 
 
 def purge_orphaned_playwright_processes() -> None:

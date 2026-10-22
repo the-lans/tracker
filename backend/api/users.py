@@ -72,7 +72,11 @@ async def update_user(
         user.is_active = body.is_active
     if body.os_username is not None:
         user.os_username = body.os_username
-    await db_session.commit()
+    try:
+        await db_session.commit()
+    except sa.exc.IntegrityError as exc:
+        await db_session.rollback()
+        raise ConflictError("Логин SFTP уже занят другим пользователем") from exc
     await db_session.refresh(user)
     return user
 

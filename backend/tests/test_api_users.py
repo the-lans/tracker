@@ -5,11 +5,12 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
+import pytest
 import sqlalchemy as sa
 
 from db.models.enums import UserRole
 from db.models.users import AllowedEmail, User
-from tests.factories import SAMPLE_ED25519_FINGERPRINT, SAMPLE_ED25519_KEY
+from tests.factories import SAMPLE_ED25519_FINGERPRINT, SAMPLE_ED25519_KEY, make_user
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -106,3 +107,43 @@ class TestSshKeyInAdminList:
         assert response.status_code == 200
         assert response.json()["ssh_public_key"] == SAMPLE_ED25519_KEY
         assert response.json()["ssh_key_fingerprint"] == SAMPLE_ED25519_FINGERPRINT
+
+
+class TestSftpLogin:
+    """Раздел 3.1, 15.5: логин SFTP-шлюза (`os_username`) назначает администратор."""
+
+    async def test_set(self, admin_client: AsyncClient, current_user: User) -> None:
+        url = f"/users/{current_user.id}"
+
+        response = await admin_client.patch(url, json={"os_username": "dev_1"})
+
+        assert response.status_code == 200
+        assert response.json()["os_username"] == "dev_1"
+
+    @pytest.mark.parametrize(
+        "login",
+        ["", "Dev", "dev user", "dev@example.com", "1dev", "a" * 33],
+        ids=["empty", "uppercase", "space", "email", "leading_digit", "too_long"],
+    )
+    async def test_invalid(self, admin_client: AsyncClient, current_user: User, login: str) -> None:
+        url = f"/users/{current_user.id}"
+
+        response = await admin_client.patch(url, json={"os_username": login})
+
+        assert response.status_code == 422
+
+    async def test_taken(
+        self,
+        admin_client: AsyncClient,
+        current_user: User,
+        db_session: AsyncSession,
+    ) -> None:
+        other = await make_user(db_session)
+        other.os_username = "taken"
+        await db_session.flush()
+
+        url = f"/users/{current_user.id}"
+
+        response = await admin_client.patch(url, json={"os_username": "taken"})
+
+        assert response.status_code == 409

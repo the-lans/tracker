@@ -19,6 +19,7 @@ dependencies = [
     "google-auth==2.62.0",
     "requests==2.34.2",
     "pywebpush==2.5.0",
+    "asyncssh==2.24.1",
 ]
 
 [project.optional-dependencies]

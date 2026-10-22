@@ -37,6 +37,8 @@ _SYSTEM_TOOLS = (
     "basename",
     "id",
     "sed",
+    "grep",
+    "openssl",
 )
 
 _DOCKER_STUB = """#!/bin/sh
@@ -153,6 +155,7 @@ def _make_restore_dir(tmp_path: Path, *, skip: str | None = None) -> Path:
         "user_files.tar.gz",
         "log_archive.tar.gz",
         "claude_accounts.tar.gz",
+        "sftp_host_keys.tar.gz",
     ):
         if archive != skip:
             with tarfile.open(restore_dir / archive, "w:gz"):
@@ -192,8 +195,9 @@ class TestRestore:
             "user_files.tar.gz",
             "log_archive.tar.gz",
             "claude_accounts.tar.gz",
+            "sftp_host_keys.tar.gz",
             "docker compose run --rm backend alembic upgrade head",
-            "docker compose up -d backend worker beat frontend caddy backup",
+            "docker compose up -d backend worker beat sftp frontend caddy backup",
         ]
         positions = [
             next(index for index, call in enumerate(docker_calls) if expected in call)
@@ -202,8 +206,15 @@ class TestRestore:
         assert positions == sorted(positions)
         assert not any("seed_" in call for call in docker_calls)
         assert (stubs / "psql-input").read_text() == "-- fresh dump\n"
-        env_file = install_dir / ".env"
-        assert env_file.read_text() == "SECRET_ENCRYPTION_KEY=старый-ключ\n"
+        # Ключи старого сервера сохранены; пароль роли шлюза .env прежней
+        # версии не знал — он дописан.
+        env_lines = (install_dir / ".env").read_text().splitlines()
+        assert env_lines[0] == "SECRET_ENCRYPTION_KEY=старый-ключ"
+        assert env_lines[1].startswith("SFTP_DB_PASSWORD=")
+        assert len(env_lines[1].removeprefix("SFTP_DB_PASSWORD=")) == 48
+        # У backend volume ключа хоста только для чтения — распаковывает шлюз.
+        [host_keys_call] = [call for call in docker_calls if "sftp_host_keys.tar.gz" in call]
+        assert "--entrypoint sh sftp" in host_keys_call
 
     @pytest.mark.parametrize(
         "missing",
@@ -262,6 +273,38 @@ class TestRestore:
         )
 
         assert result.returncode == 2
+
+
+class TestEnsureEnvValue:
+    """Перенос со старого сервера: новые переменные дописываются, заданные — не трогаются."""
+
+    @pytest.mark.parametrize(
+        ("content", "expected"),
+        [
+            ("SFTP_DB_PASSWORD=old\n", "SFTP_DB_PASSWORD=old\n"),
+            ("SFTP_DB_PASSWORD=\n", "SFTP_DB_PASSWORD=new\n"),
+            ("OTHER=1\n", "OTHER=1\nSFTP_DB_PASSWORD=new\n"),
+        ],
+        ids=["kept", "empty_filled", "appended"],
+    )
+    def test_value(
+        self,
+        stubs: Path,
+        install_dir: Path,
+        content: str,
+        expected: str,
+    ) -> None:
+        env_file = install_dir / ".env"
+        env_file.write_text(content)
+
+        result = _run_bash(
+            f'source "{_INSTALL_SCRIPT}" && _ensure_env_value SFTP_DB_PASSWORD new',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert env_file.read_text() == expected
 
 
 class TestInstallDocker:

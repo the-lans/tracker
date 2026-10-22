@@ -112,7 +112,7 @@ class TestDeprovisionInactiveUsers:
         logs = await _deprovision_logs(db_session, removed)
         assert len(logs) == 1
         assert logs[0].level is AppLogLevel.WARNING
-        assert "dev-removed" in logs[0].message
+        assert "SFTP" in logs[0].message
         assert logs[0].context["os_username"] == "dev-removed"
 
     async def test_idempotent(self, db_session: AsyncSession) -> None:

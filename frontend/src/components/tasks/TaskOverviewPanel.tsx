@@ -9,6 +9,7 @@ import { useUpdateTask } from "@/hooks/useTasks";
 import { ApiError } from "@/lib/apiClient";
 import { TaskRepositoriesCard } from "@/components/tasks/TaskRepositoriesCard";
 import { TaskEnvVariablesCard } from "@/components/tasks/TaskEnvVariablesCard";
+import { TaskArtifactsCard } from "@/components/tasks/TaskArtifactsCard";
 import { ParentTaskCard } from "@/components/tasks/ParentTaskCard";
 import { useNodes } from "@/hooks/useNodes";
 import { formatDateTime } from "@/lib/utils";
@@ -90,6 +91,7 @@ export function TaskOverviewPanel({
           {/* До запуска — порядок настройки: окружение, расписание, пайплайн. */}
           <TaskRepositoriesCard taskId={task.id} />
           <TaskEnvVariablesCard task={task} />
+          <TaskArtifactsCard task={task} />
         <Card>
           <div className="flex items-center justify-between py-1">
             <div>
@@ -200,6 +202,7 @@ export function TaskOverviewPanel({
         <TaskLibraryPromptsCard task={task} libraryNodes={libraryNodes ?? []} />
           <TaskRepositoriesCard taskId={task.id} />
           <TaskEnvVariablesCard task={task} />
+          <TaskArtifactsCard task={task} />
           {/* Автозапуск после старта уже не настраивается — одна строка вместо формы. */}
           <Card className="flex items-center justify-between gap-3 py-3">
             <div className="text-body font-bold">Автозапуск</div>

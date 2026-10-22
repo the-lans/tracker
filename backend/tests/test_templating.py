@@ -32,7 +32,7 @@ def test_render_template_is_noop_on_text_without_variables() -> None:
     assert render_template(command, {}) == command
 
 
-@pytest.mark.parametrize("field", ["code", "title", "repos_path", "guide_url"])
+@pytest.mark.parametrize("field", ["code", "title", "repos_path", "artifacts_path", "guide_url"])
 def test_validate_known_task_fields_pass(field: str) -> None:
     validate_template_variables(f"{{{{task.{field}}}}}", scope=RenderScope.PIPELINE)
 

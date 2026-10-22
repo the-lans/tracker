@@ -58,8 +58,9 @@ async def test_build_task_context_maps_fields_and_computes_repos_path(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Раздел 5: `{{task.repos_path}}` — абсолютный путь директории задачи."""
+    """Раздел 5: `{{task.repos_path}}` и `{{task.artifacts_path}}` — абсолютные пути задачи."""
     monkeypatch.setenv("TRACKER_REPOS_ROOT", "/data/repos")
+    monkeypatch.setenv("TRACKER_USER_FILES_ROOT", "/data/user-files")
     task = await _make_task(db_session)
 
     context = build_task_context(task)
@@ -68,6 +69,7 @@ async def test_build_task_context_maps_fields_and_computes_repos_path(
     assert context["task.title"] == "Починить баг"
     assert context["task.status"] == "in_progress"
     assert context["task.repos_path"] == f"/data/repos/{task.code}/"
+    assert context["task.artifacts_path"] == f"/data/user-files/{task.code}/"
 
 
 async def test_build_session_context_uses_task_session_id(db_session: AsyncSession) -> None:
