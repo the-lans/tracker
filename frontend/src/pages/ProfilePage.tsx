@@ -2,6 +2,7 @@ import { LogOut } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ActiveSessionsCard } from "@/components/profile/ActiveSessionsCard";
 import { SshKeyCard } from "@/components/profile/SshKeyCard";
+import { SftpConnectionCard } from "@/components/profile/SftpConnectionCard";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/stores/authStore";
@@ -27,6 +28,8 @@ export function ProfilePage() {
           </Card>
 
           <SshKeyCard />
+
+          <SftpConnectionCard />
 
           <ActiveSessionsCard />
 

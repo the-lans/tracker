@@ -165,9 +165,20 @@ export interface User {
   role: UserRole;
   is_active: boolean;
   created_at: string;
-  /** Раздел 15.1: публичный ключ sshfs — ставит на сервер администратор. */
+  /** Раздел 15.1: публичный ключ входа в SFTP-шлюз — действует сразу. */
   ssh_public_key: string | null;
   ssh_key_fingerprint: string | null;
+  /** Раздел 16.2: последний вход в SFTP-шлюз по этому ключу. */
+  ssh_key_last_used_at: string | null;
+}
+
+/** Раздел 15.1: данные для подключения к SFTP-шлюзу. */
+export interface SftpConnection {
+  host: string;
+  port: number;
+  username: string | null;
+  /** `null` — шлюз ещё ни разу не запускался. */
+  host_key_fingerprint: string | null;
 }
 
 export interface SshKeyUpdateRequest {
@@ -322,6 +333,13 @@ export interface TaskNodeItem {
 export interface TaskEnvVariable {
   id: string;
   key: string;
+}
+
+/** Раздел 14.3: файл артефактов задачи; `path` — относительно её каталога. */
+export interface TaskArtifact {
+  path: string;
+  size: number;
+  modified_at: string;
 }
 
 /** Раздел 13.3, 15.2: нода, которая берёт вывод у отключаемой. */
