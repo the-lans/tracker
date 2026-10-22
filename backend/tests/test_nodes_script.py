@@ -22,9 +22,10 @@ from services.nodes.script import (
     RepositoryMountError,
     RootMount,
     parse_root_mount,
-    repos_mount_args,
     resolve_root_mount,
     run_script_node,
+    subpath_mount_args,
+    task_mount_args,
 )
 
 _GENEROUS_TIMEOUT_SECONDS = 30
@@ -193,44 +194,72 @@ class TestEnv:
         assert result.stdout.splitlines() == ["https://api.example.com", "два"]
 
 
-class TestReposMount:
+class TestSubpathMount:
     """Раздел 11.4, 19.3: монтируется только директория задачи."""
 
     def test_outside_container(self, tmp_path: Path) -> None:
-        assert repos_mount_args(tmp_path, None) == ["-v", f"{tmp_path}:{tmp_path}:rw"]
+        assert subpath_mount_args(tmp_path, tmp_path.parent, None) == [
+            "-v",
+            f"{tmp_path}:{tmp_path}:rw",
+        ]
 
-    def test_volume_subpath(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("TRACKER_REPOS_ROOT", str(tmp_path))
+    def test_volume_subpath(self, tmp_path: Path) -> None:
         repos_path = tmp_path / "RR-10001"
         mount = RootMount(type="volume", name="ai-tracker_task_repos", source="/var/lib/docker/x")
 
-        assert repos_mount_args(repos_path, mount) == [
+        assert subpath_mount_args(repos_path, tmp_path, mount) == [
             "--mount",
             f"type=volume,src=ai-tracker_task_repos,dst={repos_path},volume-subpath=RR-10001",
         ]
 
-    def test_host_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("TRACKER_REPOS_ROOT", str(tmp_path))
+    def test_host_directory(self, tmp_path: Path) -> None:
         repos_path = tmp_path / "RR-10001"
         mount = RootMount(type="bind", name="", source="/srv/tracker data/repos")
 
-        assert repos_mount_args(repos_path, mount) == [
+        assert subpath_mount_args(repos_path, tmp_path, mount) == [
             "-v",
             f"/srv/tracker data/repos/RR-10001:{repos_path}:rw",
         ]
 
     @pytest.mark.parametrize("relative", ["..", "."], ids=["outside_root", "root_itself"])
-    def test_rejects_path(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        relative: str,
-    ) -> None:
-        monkeypatch.setenv("TRACKER_REPOS_ROOT", str(tmp_path / "repos"))
+    def test_rejects_path(self, tmp_path: Path, relative: str) -> None:
         mount = RootMount(type="volume", name="v", source="/x")
 
         with pytest.raises(ValueError, match="корн"):
-            repos_mount_args(tmp_path / "repos" / relative, mount)
+            subpath_mount_args(tmp_path / "repos" / relative, tmp_path / "repos", mount)
+
+
+class TestTaskMounts:
+    """Раздел 14.3: каталог артефактов — вторым монтированием из своего volume."""
+
+    async def test_repos_and_artifacts(
+        self,
+        tmp_path: Path,
+        user_files_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("TRACKER_REPOS_ROOT", str(tmp_path / "repos"))
+        mounts = {
+            str((tmp_path / "repos").resolve()): RootMount("volume", "tracker_task_repos", "/x"),
+            str(user_files_root.resolve()): RootMount("volume", "tracker_user_files", "/y"),
+        }
+
+        async def fake_resolve(root: Path) -> RootMount | None:
+            return mounts[str(root.resolve())]
+
+        monkeypatch.setattr(script_module, "resolve_root_mount", fake_resolve)
+        repos_path = tmp_path / "repos" / "RR-10001"
+        artifacts_path = user_files_root / "RR-10001"
+
+        args = await task_mount_args(repos_path, artifacts_path)
+
+        assert args == [
+            "--mount",
+            f"type=volume,src=tracker_task_repos,dst={repos_path},volume-subpath=RR-10001",
+            "--mount",
+            f"type=volume,src=tracker_user_files,dst={artifacts_path},volume-subpath=RR-10001",
+        ]
+        assert artifacts_path.is_dir()
 
 
 class TestParseRootMount:
@@ -264,7 +293,7 @@ class TestResolveRootMount:
     ) -> list[int]:
         calls: list[int] = []
 
-        async def fake_inspect() -> RootMount | None:
+        async def fake_inspect(root: Path) -> RootMount | None:
             calls.append(1)
             return results[len(calls) - 1]
 
@@ -283,13 +312,31 @@ class TestResolveRootMount:
         calls = self._inspect_results(monkeypatch, [None, mount, None])
 
         with pytest.raises(RepositoryMountError):
-            await resolve_root_mount()
-        assert await resolve_root_mount() == mount
-        assert await resolve_root_mount() == mount
+            await resolve_root_mount(tmp_path)
+        assert await resolve_root_mount(tmp_path) == mount
+        assert await resolve_root_mount(tmp_path) == mount
         assert len(calls) == 2
 
     async def test_outside_container(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(script_module, "_CONTAINER_MARKER", tmp_path / "absent")
         self._inspect_results(monkeypatch, [None])
 
-        assert await resolve_root_mount() is None
+        assert await resolve_root_mount(tmp_path) is None
+
+
+class TestArtifactsInContainer:
+    async def test_script_writes_artifact(self, tmp_path: Path, user_files_root: Path) -> None:
+        """Раздел 11.4, 14.3: скрипт сохраняет результат в артефакты задачи."""
+        artifacts_path = user_files_root / "RR-10001"
+
+        result = await run_script_node(
+            script_content=f"open('{artifacts_path}/report.txt', 'w').write('готово')",
+            script_language=ScriptLanguage.PYTHON,
+            docker_image=None,
+            repos_path=tmp_path / "repos" / "RR-10001",
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+            artifacts_path=artifacts_path,
+        )
+
+        assert result.exit_code == 0, result.stderr
+        assert (artifacts_path / "report.txt").read_text() == "готово"

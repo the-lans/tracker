@@ -103,7 +103,7 @@ _SEED_TASKS: list[tuple[str, str, str, str, int]] = [
     (
         "revoke_stale_sshfs_keys",
         "Отзыв неиспользуемых SSH-ключей",
-        "Помечает неиспользуемые SSH-ключи sshfs-доступа для ротации",
+        "Напоминает заменить SSH-ключ SFTP-доступа, не использованный 90 дней",
         "tasks.periodic.revoke_stale_sshfs_keys",
         _DAY,
     ),
@@ -117,7 +117,7 @@ _SEED_TASKS: list[tuple[str, str, str, str, int]] = [
     (
         "deprovision_inactive_users",
         "Деактивация неактивных пользователей",
-        "Блокирует os_username для email, удалённых из allowed_emails",
+        "Блокирует пользователей (вход и SFTP), чьи email удалены из allowed_emails",
         "tasks.periodic.deprovision_inactive_users",
         _DAY,
     ),

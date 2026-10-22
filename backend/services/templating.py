@@ -28,8 +28,8 @@ from services.errors import ValidationError
 
 VARIABLE_PATTERN = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
-# Раздел 3.1 (таблица tasks) + repos_path — вычисляемое поле (раздел 5),
-# не колонка таблицы.
+# Раздел 3.1 (таблица tasks) + repos_path и artifacts_path — вычисляемые
+# поля (раздел 5), не колонки таблицы.
 TASK_FIELDS = frozenset(
     {
         "id",
@@ -50,6 +50,7 @@ TASK_FIELDS = frozenset(
         "auto_start_enabled",
         "created_at",
         "repos_path",
+        "artifacts_path",
     },
 )
 

@@ -829,6 +829,7 @@ class TestRestartAfterClearContext:
         self,
         db_session: AsyncSession,
         worker_env: WorkerEnv,
+        user_files_root: Path,
     ) -> None:
         """Раздел 14.2, 11.5: после «Очистить контекст» перезапуск — новая сессия."""
         task = await _make_task(db_session, status=TaskStatus.FAILED)
@@ -844,6 +845,8 @@ class TestRestartAfterClearContext:
         [options] = worker_env.options
         assert options.resume is None
         assert REMOTE_CONTROL_EXTRA_ARG in options.extra_args
+        # Раздел 14.3: каталог артефактов задачи доступен сессии.
+        assert options.add_dirs == [str(user_files_root / task.code)]
         await db_session.refresh(task)
         assert task.session_id == "sess-worker"
         assert task.status is TaskStatus.DONE

@@ -3,8 +3,8 @@
 
 Требования раздела 19.3, обеспечиваемые здесь при запуске (не образом):
 без сети (``--network none``), лимиты CPU/памяти обязательны, без
-``--privileged``, монтируется исключительно директория репозиториев
-текущей задачи, в режиме read-write.
+``--privileged``, монтируются исключительно директория репозиториев
+текущей задачи и каталог её артефактов (раздел 14.3), оба read-write.
 
 Файл скрипта пишется во временный файл ВНУТРИ этой же директории
 (``.tracker-scripts/``) — контейнеру больше нечего монтировать, чтобы дать
@@ -14,10 +14,10 @@
 Воркер в продакшене сам работает в контейнере, а `docker run` исполняет
 демон хоста: путь `/data/repos/...` из контейнера воркера демону не виден.
 Поэтому воркер один раз смотрит `docker inspect` своего контейнера, что
-смонтировано в корень репозиториев: volume — директория задачи монтируется
-его подпутём (Docker Engine 26+), каталог хоста — подкаталогом этого
-каталога. Если воркер не в контейнере (тесты, запуск на хосте), путь
-монтируется как есть.
+смонтировано в корень репозиториев (и так же — в корень артефактов):
+volume — директория задачи монтируется его подпутём (Docker Engine 26+),
+каталог хоста — подкаталогом этого каталога. Если воркер не в контейнере
+(тесты, запуск на хосте), путь монтируется как есть.
 
 Переменные окружения задачи (раздел 11.4) передаются аргументами
 ``-e KEY=VALUE``, а не через окружение процесса `docker`: иначе переменная
@@ -36,6 +36,7 @@ from pathlib import Path
 
 from app_logging.config import get_logger
 from db.models.enums import ScriptLanguage
+from services.task_artifacts import resolve_user_files_root
 from services.task_workspace import resolve_repos_root
 
 logger = get_logger("nodes.script")
@@ -60,7 +61,7 @@ _VOLUME_MOUNT = "volume"
 
 @dataclass(frozen=True, slots=True)
 class RootMount:
-    """Что демон Docker смонтировал в корень репозиториев контейнера воркера."""
+    """Что демон Docker смонтировал в корень (репозиториев, артефактов) контейнера воркера."""
 
     type: str
     name: str
@@ -75,7 +76,7 @@ _CONTAINER_MARKER = Path("/.dockerenv")
 
 
 class RepositoryMountError(RuntimeError):
-    """Воркер в контейнере, но не удалось узнать, что смонтировано в корень репозиториев."""
+    """Воркер в контейнере, но не удалось узнать, что смонтировано в корень директорий задач."""
 
 
 class ScriptExecutionResult:
@@ -96,6 +97,7 @@ async def run_script_node(
     repos_path: Path,
     timeout_seconds: int,
     env: Mapping[str, str] | None = None,
+    artifacts_path: Path | None = None,
 ) -> ScriptExecutionResult:
     """Запускает скрипт в одноразовом (``--rm``) контейнере без сети.
 
@@ -105,6 +107,7 @@ async def run_script_node(
     без необходимости не нужно, раз момент таймаута точно известен здесь.
     """
     image = docker_image or DEFAULT_RUNNER_IMAGES[script_language]
+    mount_args = await task_mount_args(repos_path, artifacts_path)
     scripts_dir = repos_path / _SCRIPT_SUBDIR
     scripts_dir.mkdir(parents=True, exist_ok=True)
     script_path = scripts_dir / f"{uuid.uuid4()}.{_SCRIPT_SUFFIXES[script_language]}"
@@ -122,7 +125,7 @@ async def run_script_node(
             "none",
             f"--memory={_DEFAULT_MEMORY_LIMIT}",
             f"--cpus={_DEFAULT_CPU_LIMIT}",
-            *repos_mount_args(repos_path, await resolve_root_mount()),
+            *mount_args,
             *_env_args(env or {}),
             "-w",
             str(repos_path),
@@ -171,11 +174,11 @@ def parse_root_mount(line: str) -> RootMount | None:
     return RootMount(type=mount_type, name=name, source=source)
 
 
-async def _inspect_root_mount() -> RootMount | None:
-    """Монтирование корня репозиториев в своём контейнере; `None` — не в контейнере."""
-    root = str(resolve_repos_root().resolve())
+async def _inspect_root_mount(root: Path) -> RootMount | None:
+    """Монтирование `root` в своём контейнере; `None` — не в контейнере."""
+    destination = str(root.resolve())
     template = (
-        "{{range .Mounts}}{{if eq .Destination " + f'"{root}"'
+        "{{range .Mounts}}{{if eq .Destination " + f'"{destination}"'
         + "}}{{.Type}} {{.Name}} {{.Source}}{{end}}{{end}}"
     )
     process = await asyncio.create_subprocess_exec(
@@ -193,49 +196,66 @@ async def _inspect_root_mount() -> RootMount | None:
     return parse_root_mount(stdout.decode())
 
 
-async def resolve_root_mount() -> RootMount | None:
+async def resolve_root_mount(root: Path) -> RootMount | None:
     """
     `None` — воркер не в контейнере, путь монтируется как есть. В контейнере
     без найденного монтирования путь хоста демону не виден, поэтому вместо
     тихой подмены — ошибка, а проверка повторится при следующем запуске.
     """
-    if "root" in _root_mount_cache:
-        return _root_mount_cache["root"]
-    mount = await _inspect_root_mount()
+    key = str(root.resolve())
+    if key in _root_mount_cache:
+        return _root_mount_cache[key]
+    mount = await _inspect_root_mount(root)
     if mount is not None:
-        _root_mount_cache["root"] = mount
-        logger.info("repos_root_mount_resolved", mount=str(mount))
+        _root_mount_cache[key] = mount
+        logger.info("root_mount_resolved", root=key, mount=str(mount))
         return mount
     if _CONTAINER_MARKER.exists():
         message = (
-            "Не удалось определить через `docker inspect`, что смонтировано в корень "
-            f"репозиториев {resolve_repos_root()} контейнера воркера"
+            f"Не удалось определить через `docker inspect`, что смонтировано в {root} "
+            "контейнера воркера"
         )
         raise RepositoryMountError(message)
     return None
 
 
-def repos_mount_args(repos_path: Path, root_mount: RootMount | None) -> list[str]:
-    """Аргументы `docker run`, монтирующие только директорию задачи (раздел 11.4, 19.3)."""
+def subpath_mount_args(path: Path, root: Path, root_mount: RootMount | None) -> list[str]:
+    """Аргументы `docker run`, монтирующие только каталог задачи `path` из `root` (раздел 19.3)."""
     if root_mount is None:
-        return ["-v", f"{repos_path}:{repos_path}:rw"]
-    repos_root = resolve_repos_root().resolve()
+        return ["-v", f"{path}:{path}:rw"]
+    real_root = root.resolve()
     try:
-        subpath = repos_path.resolve().relative_to(repos_root)
+        subpath = path.resolve().relative_to(real_root)
     except ValueError as exc:
-        message = f"Директория {repos_path} вне корня репозиториев {repos_root}"
+        message = f"Директория {path} вне корня {real_root}"
         raise ValueError(message) from exc
     if subpath == Path():
-        message = f"Директория задачи не может совпадать с корнем репозиториев {repos_root}"
+        message = f"Директория задачи не может совпадать с корнем {real_root}"
         raise ValueError(message)
     if root_mount.type == _VOLUME_MOUNT:
         return [
             "--mount",
-            f"type=volume,src={root_mount.name},dst={repos_path},"
+            f"type=volume,src={root_mount.name},dst={path},"
             f"volume-subpath={subpath.as_posix()}",
         ]
     host_path = Path(root_mount.source) / subpath
-    return ["-v", f"{host_path}:{repos_path}:rw"]
+    return ["-v", f"{host_path}:{path}:rw"]
+
+
+async def task_mount_args(repos_path: Path, artifacts_path: Path | None) -> list[str]:
+    """Директория репозиториев задачи и, если передан, каталог её артефактов."""
+    repos_root = resolve_repos_root()
+    args = subpath_mount_args(repos_path, repos_root, await resolve_root_mount(repos_root))
+    if artifacts_path is not None:
+        # Подпуть volume обязан существовать до `docker run`.
+        artifacts_path.mkdir(parents=True, exist_ok=True)
+        user_files_root = resolve_user_files_root()
+        args += subpath_mount_args(
+            artifacts_path,
+            user_files_root,
+            await resolve_root_mount(user_files_root),
+        )
+    return args
 
 
 def _env_args(env: Mapping[str, str]) -> list[str]:

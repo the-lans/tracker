@@ -244,8 +244,17 @@ def rotate_task_logs() -> None:
 
 @celery_app.task(name="revoke_stale_sshfs_keys")
 def revoke_stale_sshfs_keys() -> None:
-    async def body(_db_session: AsyncSession) -> None:
-        maintenance_tasks.revoke_stale_sshfs_keys()
+    async def body(db_session: AsyncSession) -> None:
+        redis_client = Redis.from_url(os.environ["REDIS_URL"])
+        try:
+            reminded = await maintenance_tasks.revoke_stale_sshfs_keys(
+                db_session,
+                redis_client=redis_client,
+                now=datetime.now(UTC),
+            )
+        finally:
+            await redis_client.aclose()
+        logger.info("stale_ssh_key_reminders_sent", count=len(reminded))
 
     _run_periodic("revoke_stale_sshfs_keys", body)
 

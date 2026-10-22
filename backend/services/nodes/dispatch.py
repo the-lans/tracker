@@ -19,6 +19,7 @@ from db.models.enums import AppLogLevel, NodeLogStatus, NodeType
 from db.models.logs import NodeLog
 from services.failure_classification import is_transient_assistant_error
 from services.nodes.script import ScriptExecutionResult, run_script_node
+from services.task_artifacts import task_artifacts_dir
 from services.template_context import render_for_task, resolve_task_env
 
 if TYPE_CHECKING:
@@ -183,6 +184,8 @@ async def execute_script_node(
     ``runner_image`` — образ, выбранный вызывающим кодом при запуске
     (`services/system_settings.py::resolve_runner_image`); ``env`` —
     переменные окружения задачи (`services/template_context.py::resolve_task_env`).
+    Каталог артефактов задачи (раздел 14.3) монтируется рядом с репозиториями:
+    директория репозиториев названа кодом задачи (`task_workspace.task_root`).
     """
     if node.script_content is None or node.script_language is None:
         message = "У ноды script не заполнены script_content/script_language"
@@ -194,6 +197,7 @@ async def execute_script_node(
         repos_path=repos_path,
         timeout_seconds=node.timeout_seconds,
         env=env,
+        artifacts_path=task_artifacts_dir(repos_path.name),
     )
     success = result.exit_code == 0 and not result.timed_out
     error_message = None

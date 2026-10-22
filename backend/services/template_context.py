@@ -26,6 +26,7 @@ from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from services.crypto import decrypt
 from services.errors import ValidationError
+from services.task_artifacts import task_artifacts_path
 from services.task_workspace import task_repos_path
 from services.templating import VARIABLE_PATTERN, render_template
 
@@ -49,7 +50,7 @@ def _stringify(value: object) -> str:
 
 
 def build_task_context(task: Task) -> dict[str, str]:
-    """``{{task.*}}`` — поля таблицы ``tasks`` плюс вычисляемый ``repos_path``."""
+    """``{{task.*}}`` — поля таблицы ``tasks`` плюс вычисляемые пути задачи (раздел 5)."""
     context = {
         "task.id": _stringify(task.id),
         "task.code": _stringify(task.code),
@@ -69,6 +70,7 @@ def build_task_context(task: Task) -> dict[str, str]:
         "task.auto_start_enabled": _stringify(task.auto_start_enabled),
         "task.created_at": _stringify(task.created_at),
         "task.repos_path": task_repos_path(task),
+        "task.artifacts_path": task_artifacts_path(task.code),
     }
     return context
 

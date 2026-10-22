@@ -30,6 +30,7 @@ from db.models.enums import (
     TaskStatus,
     UserRole,
 )
+from services.sftp_access import SFTP_LOGIN_PATTERN
 from services.ssh_keys import MAX_PUBLIC_KEY_LENGTH, fingerprint_of_public_key
 
 
@@ -352,6 +353,16 @@ class TaskEnvVariableResponse(BaseModel):
     key: str
 
 
+class ArtifactResponse(BaseModel):
+    """Раздел 14.3, 15.2: файл артефактов задачи; `path` — относительно её каталога."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    path: str
+    size: int
+    modified_at: datetime
+
+
 # --- MCP-серверы (раздел 3.1, 10.2) --------------------------------------
 
 
@@ -504,9 +515,10 @@ class UserResponse(BaseModel):
     role: UserRole
     is_active: bool
     created_at: datetime
-    # Раздел 15.1, 15.5: публичный ключ sshfs и его отпечаток — и в профиле,
-    # и в «Пользователях» (ключ на сервер ставит администратор).
+    # Раздел 15.1, 15.5: публичный ключ SFTP-шлюза, его отпечаток и последний
+    # вход по нему — и в профиле, и в «Пользователях».
     ssh_public_key: str | None
+    ssh_key_last_used_at: datetime | None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -516,6 +528,15 @@ class UserResponse(BaseModel):
         return fingerprint_of_public_key(self.ssh_public_key)
 
 
+class SftpConnectionResponse(BaseModel):
+    """Раздел 15.1: данные подключения к SFTP-шлюзу для инструкции в профиле."""
+
+    host: str
+    port: int
+    username: str | None
+    host_key_fingerprint: str | None
+
+
 class SshKeyUpdateRequest(BaseModel):
     public_key: str = Field(max_length=MAX_PUBLIC_KEY_LENGTH)
 
@@ -523,7 +544,8 @@ class SshKeyUpdateRequest(BaseModel):
 class UserUpdateRequest(BaseModel):
     role: UserRole | None = None
     is_active: bool | None = None
-    os_username: str | None = None
+    # Раздел 3.1, 15.5: логин SFTP-шлюза назначает администратор.
+    os_username: str | None = Field(default=None, pattern=SFTP_LOGIN_PATTERN)
 
 
 class AllowedEmailCreateRequest(BaseModel):

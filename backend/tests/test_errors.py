@@ -4,6 +4,7 @@ from services.errors import (
     ExternalServiceError,
     ForbiddenError,
     NotFoundError,
+    PayloadTooLargeError,
     UnauthorizedError,
     ValidationError,
 )
@@ -32,6 +33,12 @@ def test_conflict_error_status_and_code() -> None:
     err = ConflictError("конфликт")
     assert err.status_code == 409
     assert err.code == "conflict"
+
+
+def test_payload_too_large_error_status_and_code() -> None:
+    err = PayloadTooLargeError("слишком большой файл")
+    assert err.status_code == 413
+    assert err.code == "payload_too_large"
 
 
 def test_external_service_error_transient_flag() -> None:
