@@ -1,6 +1,7 @@
 FROM python:3.12-slim
 
-# Один образ на backend, worker и beat. Worker вызывает внешние программы:
+# Один образ на backend, worker, beat и SFTP-шлюз (sftp, своя команда без
+# миграций). Worker вызывает внешние программы:
 # git и ssh — клонирование и пуш репозиториев задачи по deploy-ключу
 # (services/git_ops.py), клиент Docker — script-ноды и уборка их контейнеров
 # через docker.sock хоста (раздел 11.4, 16.2, 20.5).

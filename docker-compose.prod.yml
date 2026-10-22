@@ -36,6 +36,14 @@ services:
           cpus: "0.25"
           memory: 128M
 
+  sftp:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
   frontend:
     restart: always
     deploy:
