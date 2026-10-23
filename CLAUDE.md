@@ -192,8 +192,9 @@ cd frontend && npm install
 # backend (FastAPI, автоперезагрузка)
 cd backend && uvicorn main:app --reload
 
-# Celery worker / beat
-cd backend && celery -A tasks.celery_app worker -l info
+# Celery: периодические задачи, сессии задач (своя очередь), планировщик
+cd backend && celery -A tasks.celery_app worker -Q celery -l info
+cd backend && celery -A tasks.celery_app worker -Q sessions -O fair -l info
 cd backend && celery -A tasks.celery_app beat -l info
 
 # frontend (Vite)

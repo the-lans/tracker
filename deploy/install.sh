@@ -283,8 +283,8 @@ step_seed_data() {
 
 # Шаг 9: старт прикладных сервисов
 step_start_app_services() {
-  log "Шаг 9/11: запуск backend, worker, beat, sftp, frontend, caddy, backup"
-  ( cd "${INSTALL_DIR}" && docker compose up -d backend worker beat sftp frontend caddy backup )
+  log "Шаг 9/11: запуск backend, worker, session-worker, beat, sftp, frontend, caddy, backup"
+  ( cd "${INSTALL_DIR}" && docker compose up -d backend worker session-worker beat sftp frontend caddy backup )
 }
 
 # Шаг 10: получение TLS-сертификата — выполняется автоматически Caddy
