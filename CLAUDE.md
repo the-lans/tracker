@@ -88,18 +88,26 @@ backend/
   api/       — HTTP-эндпоинты, валидация входных данных, сериализация ответов
               (auth, tasks, repositories, templates, preview, llm_accounts,
               env_variables, mcp_servers, pipelines, nodes, users, profile,
-              periodic_tasks, monitoring, push)
+              periodic_tasks, monitoring, push, system_settings, jira)
   services/  — бизнес-логика: пайплайны, сессии, git-операции (min. 85% test coverage);
               access.py — владение записями «своё или admin» (раздел 19.2),
               включая LLM-аккаунты; pipeline_validation.py — проверка ноды и
               всего пайплайна при сохранении (раздел 5.1); task_artifacts.py —
               артефакты задачи в volume user_files и проверка пути
               resolve_inside (раздел 14.3); sftp_access.py — правила входа и
-              видимости задач SFTP-шлюза (раздел 19.6)
+              видимости задач SFTP-шлюза (раздел 19.6); task_codes.py и
+              repository_validation.py — коды задач, git_url, имена
+              репозиториев и веток, безопасные для путей и git (раздел 3.1);
+              task_launch.py — проверки перед запуском, в т. ч. LLM-аккаунт
+              только для LLM-нод; task_editing.py — правка полей задачи;
+              jira_import.py — импорт задачи из Jira (раздел 15.6)
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
               (db/session.py — engine/session из DATABASE_URL)
-  clients/   — обёртки над Claude Agent SDK, GitLab API, MCP-серверами
-  tasks/     — Celery-приложение и задачи: celery_app.py, session_worker.py
+  clients/   — обёртки над Claude Agent SDK (claude_agent.py, в т. ч.
+              OfflineAgentClient для задач без LLM-аккаунта), GitLab API,
+              Jira REST API (jira.py), MCP-серверами
+  tasks/     — Celery-приложение и задачи: celery_app.py (include модулей,
+              очередь sessions, DatabaseScheduler), session_worker.py
               (долгоживущая сессия задачи), periodic.py / periodic_scheduler.py
   docker-entrypoint.sh — применяет alembic-миграции и создаёт роль БД
               SFTP-шлюза перед стартом backend/worker/beat
@@ -360,6 +368,8 @@ Postgres с проброшенным портом — см. `docker-compose.yml`
     compare-and-swap текущего статуса в транзакции БД.
 15. **Backend не обращается к содержимому Confluence-страниц** из поля
     `guide_url` — это ответственность LLM через MCP, не backend.
+    Единственное исключение — импорт задачи Jira по ключу (раздел 15.6):
+    по явному запросу пользователя и его личным токеном.
 16. **Сессией задачи управляет только её воркер** (`tasks/session_worker.py`).
     API не трогает сессию и не меняет статусы `in_progress`/`paused`
     напрямую: ручные промты кладёт в очередь, команды pause/resume/stop —
