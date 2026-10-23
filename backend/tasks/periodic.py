@@ -194,8 +194,7 @@ def sync_gitlab_merge_status() -> None:
 def rebase_child_branches_on_parent_merge() -> None:
     async def body(db_session: AsyncSession) -> None:
         repos_root = resolve_repos_root()
-        stmt = sa.select(TaskRepository).where(TaskRepository.merge_status == MergeStatus.MERGED)
-        merged = list((await db_session.execute(stmt)).scalars().all())
+        merged = await gitlab_sync.find_merged_parents_with_children(db_session)
         for parent_task_repository in merged:
             await gitlab_sync.rebase_child_task_repositories_on_parent_merge(
                 db_session,
