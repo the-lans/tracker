@@ -186,6 +186,11 @@ async def execute_llm_node_with_timeout(
         )
 
 
+# Раздел 11.4: пути задачи в окружении script-контейнера.
+SCRIPT_REPOS_PATH_ENV = "TASK_REPOS_PATH"
+SCRIPT_ARTIFACTS_PATH_ENV = "TASK_ARTIFACTS_PATH"
+
+
 async def execute_script_node(
     node: Node,
     *,
@@ -205,14 +210,21 @@ async def execute_script_node(
     if node.script_content is None or node.script_language is None:
         message = "У ноды script не заполнены script_content/script_language"
         raise ValueError(message)
+    artifacts_path = task_artifacts_dir(repos_path.name)
     result: ScriptExecutionResult = await run_script_node(
         script_content=node.script_content,
         script_language=node.script_language,
         docker_image=runner_image or node.docker_image,
         repos_path=repos_path,
         timeout_seconds=node.timeout_seconds,
-        env=env,
-        artifacts_path=task_artifacts_dir(repos_path.name),
+        # Текст скрипта шаблонизатор не обрабатывает — пути задачи скрипт
+        # узнаёт из окружения; переменные задачи их не перекрывают.
+        env={
+            **(env or {}),
+            SCRIPT_REPOS_PATH_ENV: str(repos_path),
+            SCRIPT_ARTIFACTS_PATH_ENV: str(artifacts_path),
+        },
+        artifacts_path=artifacts_path,
     )
     success = result.exit_code == 0 and not result.timed_out
     error_message = None
