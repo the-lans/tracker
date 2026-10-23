@@ -18,7 +18,7 @@ API (этап 12) только СОЗДАЁТ запись здесь и пуб�
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -31,6 +31,7 @@ from db.models.enums import (
     NodeLogStatus,
     NodeLogTriggerType,
     NodeType,
+    TaskStatus,
 )
 from db.models.logs import NodeLog
 from db.models.pipelines import Node
@@ -53,6 +54,7 @@ from services.pipeline_orchestrator import StopGuard, run_node_execution
 from services.system_settings import resolve_runner_image
 from services.task_control import clear_manual_stop, is_manual_stop_requested
 from services.task_launch import requires_llm_account
+from services.task_status import SESSION_ACTIVE_STATUSES
 from services.template_context import RenderedText, render_for_task
 from services.templating import (
     RenderScope,
@@ -168,6 +170,44 @@ async def render_freeform_prompt(
     return await render_for_task(db_session, task, text)
 
 
+_ACTIVE_REQUEST_STATUSES = (ManualRequestStatus.QUEUED, ManualRequestStatus.PROCESSING)
+
+
+async def _settle_cancelled_library_prompt(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    node_id: uuid.UUID | None,
+) -> None:
+    """
+    Раздел 7.3: отменённый запрос не оставляет промт «в очереди». Если у
+    промта в задаче не осталось других запросов, его статус — `stopped`
+    (кнопка ■ для запроса в очереди равна отмене).
+    """
+    if node_id is None:
+        return
+    still_active = await db_session.scalar(
+        sa.select(TaskManualRequestQueue.id)
+        .where(
+            TaskManualRequestQueue.task_id == task_id,
+            TaskManualRequestQueue.node_id == node_id,
+            TaskManualRequestQueue.status.in_(_ACTIVE_REQUEST_STATUSES),
+        )
+        .limit(1),
+    )
+    if still_active is not None:
+        return
+    await db_session.execute(
+        sa.update(TaskLibraryPrompt)
+        .where(
+            TaskLibraryPrompt.task_id == task_id,
+            TaskLibraryPrompt.node_id == node_id,
+            TaskLibraryPrompt.last_run_status == LibraryPromptRunStatus.QUEUED,
+        )
+        .values(last_run_status=LibraryPromptRunStatus.STOPPED),
+    )
+
+
 async def cancel_manual_request(
     db_session: AsyncSession,
     request: TaskManualRequestQueue,
@@ -177,6 +217,12 @@ async def cancel_manual_request(
         raise ConflictError("Запрос уже обрабатывается или завершён — отмена недоступна")
     request.status = ManualRequestStatus.CANCELLED
     request.processed_at = datetime.now(UTC)
+    await db_session.flush()
+    await _settle_cancelled_library_prompt(
+        db_session,
+        task_id=request.task_id,
+        node_id=request.node_id,
+    )
     await db_session.commit()
 
 
@@ -503,6 +549,12 @@ async def process_manual_queue_once(
         processed += 1
 
 
+# Раздел 16.2: сколько запрос может ждать в очереди задачи без живой сессии.
+STALE_QUEUED_REQUEST_AGE = timedelta(minutes=30)
+# Сессия жива или вот-вот начнётся — её очередь обработает воркер.
+_TASK_STATUSES_WITH_LIVE_SESSION = (TaskStatus.QUEUED, *SESSION_ACTIVE_STATUSES)
+
+
 async def expire_stale_manual_queue_requests(
     db_session: AsyncSession,
     *,
@@ -515,6 +567,10 @@ async def expire_stale_manual_queue_requests(
     ``older_than`` уже вычислен вызывающим кодом (периодической задачей,
     её Celery-обёртка) как "сейчас минус порог".
 
+    Зависшим считается только запрос задачи без живой сессии: у задачи в
+    работе, на паузе или в ожидании решения он дождётся своей очереди, даже
+    если впереди долгая нода с повторами или решение пользователя.
+
     Раздел 17.4: перевод `queued -> cancelled` — один `UPDATE ... RETURNING`
     с условием на текущий статус. Если два запуска пересеклись (ручной
     «Запустить сейчас» поверх расписания), запрос отменит и уведомит автора
@@ -525,16 +581,25 @@ async def expire_stale_manual_queue_requests(
         .where(
             TaskManualRequestQueue.status == ManualRequestStatus.QUEUED,
             TaskManualRequestQueue.requested_at < older_than,
+            TaskManualRequestQueue.task_id.in_(
+                sa.select(Task.id).where(Task.status.not_in(_TASK_STATUSES_WITH_LIVE_SESSION)),
+            ),
         )
         .values(status=ManualRequestStatus.CANCELLED, processed_at=datetime.now(UTC))
-        .returning(TaskManualRequestQueue.id, TaskManualRequestQueue.task_id)
+        .returning(
+            TaskManualRequestQueue.id,
+            TaskManualRequestQueue.task_id,
+            TaskManualRequestQueue.node_id,
+        )
         .execution_options(synchronize_session="fetch")
     )
     expired = list((await db_session.execute(stmt)).all())
     if not expired:
         return []
+    for _, task_id, node_id in expired:
+        await _settle_cancelled_library_prompt(db_session, task_id=task_id, node_id=node_id)
     await db_session.commit()
-    for request_id, task_id in expired:
+    for request_id, task_id, _ in expired:
         logger.info(
             "manual_queue_request_expired",
             request_id=str(request_id),
@@ -548,4 +613,4 @@ async def expire_stale_manual_queue_requests(
                 task=task,
                 detail=f"{task.code}: запрос из очереди отменён по таймауту ожидания",
             )
-    return [request_id for request_id, _ in expired]
+    return [request_id for request_id, _, _ in expired]

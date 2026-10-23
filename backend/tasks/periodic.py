@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import httpx
@@ -38,7 +38,7 @@ from services import gitlab_sync, maintenance_tasks, users
 from services.autostart import run_scheduled_autostart_check
 from services.llm_accounts import restore_expired_rate_limits
 from services.log_rotation import resolve_archive_root, rotate_node_logs
-from services.manual_queue import expire_stale_manual_queue_requests
+from services.manual_queue import STALE_QUEUED_REQUEST_AGE, expire_stale_manual_queue_requests
 from services.periodic_tasks import mark_periodic_task_running, record_periodic_task_run
 from services.remote_control import check_task_bridge
 from services.system_settings import get_gitlab_credentials
@@ -294,7 +294,7 @@ def check_remote_control_bridges() -> None:
 @celery_app.task(name="expire_stale_manual_queue_requests")
 def expire_stale_manual_queue_requests_task() -> None:
     async def body(db_session: AsyncSession) -> None:
-        older_than = datetime.now(UTC) - timedelta(minutes=30)
+        older_than = datetime.now(UTC) - STALE_QUEUED_REQUEST_AGE
         expired = await expire_stale_manual_queue_requests(db_session, older_than=older_than)
         logger.info("manual_queue_requests_expired", count=len(expired))
 
