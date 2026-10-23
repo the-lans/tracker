@@ -41,16 +41,18 @@ from services.errors import ConflictError, ValidationError
 from services.nodes.dispatch import (
     execute_llm_node_with_timeout,
     execute_node,
+    logged_prompt,
     record_sdk_failure,
     resolve_node_prompt_or_none,
     resolve_script_env_or_none,
+    sent_prompt,
 )
 from services.notifications import NotificationEvent, notify_task_event
 from services.parent_summary import run_parent_summary_request
 from services.pipeline_orchestrator import StopGuard, run_node_execution
 from services.system_settings import resolve_runner_image
 from services.task_control import clear_manual_stop, is_manual_stop_requested
-from services.template_context import render_for_task
+from services.template_context import RenderedText, render_for_task
 from services.templating import (
     RenderScope,
     is_slash_command_text,
@@ -137,7 +139,12 @@ async def enqueue_freeform_prompt_run(
     return request
 
 
-async def render_freeform_prompt(db_session: AsyncSession, *, task: Task, text: str) -> str:
+async def render_freeform_prompt(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    text: str,
+) -> RenderedText:
     """
     Раздел 8.2: переменные раздела 5 (кроме `{{node.*}}`) подставляются
     непосредственно перед отправкой (5.1); слэш-команда уходит буквально.
@@ -146,7 +153,7 @@ async def render_freeform_prompt(db_session: AsyncSession, *, task: Task, text: 
     что получит сессия.
     """
     if is_slash_command_text(text):
-        return text
+        return RenderedText.literal(text)
     return await render_for_task(db_session, task, text)
 
 
@@ -235,7 +242,7 @@ async def _run_library_prompt(
         node_id=node.id,
         trigger_type=NodeLogTriggerType.LIBRARY_MANUAL,
         triggered_by=request.requested_by,
-        rendered_prompt=prompt if node.node_type is not NodeType.SLASH_COMMAND else None,
+        rendered_prompt=logged_prompt(node, prompt),
         status=NodeLogStatus.RUNNING,
         started_at=datetime.now(UTC),
     )
@@ -251,7 +258,7 @@ async def _run_library_prompt(
     outcome = await run_node_execution(
         execute_node(
             node,
-            prompt=prompt,
+            prompt=sent_prompt(prompt),
             claude_session=claude_session,
             repos_path=repos_path,
             timeout_seconds=node.timeout_seconds,
@@ -320,7 +327,7 @@ async def _run_freeform_prompt(
         task_id=task.id,
         trigger_type=NodeLogTriggerType.FREEFORM_MANUAL,
         triggered_by=request.requested_by,
-        rendered_prompt=prompt,
+        rendered_prompt=prompt.display,
         status=NodeLogStatus.RUNNING,
         started_at=datetime.now(UTC),
     )
@@ -340,7 +347,7 @@ async def _run_freeform_prompt(
     outcome = await run_node_execution(
         execute_llm_node_with_timeout(
             claude_session,
-            prompt,
+            prompt.text,
             timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
         ),
         node_type=None,

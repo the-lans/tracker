@@ -121,7 +121,7 @@ async def _report_access_denied(
                 source=_SYNC_LOG_SOURCE,
                 message=(
                     f"{error.message}: синхронизация статусов MR приостановлена на сутки. "
-                    "Проверьте переменную GITLAB_TOKEN"
+                    "Проверьте токен GitLab в «Системных настройках»"
                 ),
                 context={},
             ),

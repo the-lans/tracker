@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import re
 import uuid
+from dataclasses import dataclass
 from enum import Enum
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app_logging.config import get_logger
-from clients.gitlab import GITLAB_TOKEN_ENV_KEY, GITLAB_URL_ENV_KEY
 from db.models.enums import EnvVariableScope
 from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.logs import NodeLog
@@ -33,10 +33,6 @@ from services.templating import VARIABLE_PATTERN, render_template
 logger = get_logger("template_context")
 
 
-# Раздел 11.4: системные настройки интеграции (решение №5 плана) в
-# script-контейнер не передаются — иначе скрипт любой задачи видел бы общий
-# токен GitLab и мог записать его в файл репозитория.
-SCRIPT_EXCLUDED_ENV_KEYS = frozenset({GITLAB_URL_ENV_KEY, GITLAB_TOKEN_ENV_KEY})
 # То же имя переменной, что и у `{{env.VAR_NAME}}` (`services/templating.py`).
 _ENV_KEY_PATTERN = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
@@ -119,24 +115,6 @@ def build_node_context(
     return context
 
 
-async def resolve_global_env_value(session: AsyncSession, *, key: str) -> str | None:
-    """Значение `env_variables` с `scope = global` — без привязки к задаче.
-
-    Используется вне контекста рендеринга промтов, например для системных
-    интеграций уровня всего инстанса (решение №5 плана реализации: токен
-    GitLab API — один общий на систему, через `env_variables`).
-    """
-    global_variable = await session.scalar(
-        sa.select(EnvVariable).where(
-            EnvVariable.key == key,
-            EnvVariable.scope == EnvVariableScope.GLOBAL,
-        ),
-    )
-    if global_variable is None:
-        return None
-    return decrypt(global_variable.value_encrypted)
-
-
 def _repository_env_stmt(task_id: uuid.UUID) -> sa.Select[EnvVariable, str]:
     """Переменные `scope = repository` репозиториев задачи вместе с именем репозитория."""
     return (
@@ -171,12 +149,20 @@ async def ensure_no_repository_env_conflicts(session: AsyncSession, *, task_id: 
             raise _conflict_error(key, repository_names)
 
 
+@dataclass(frozen=True, slots=True)
+class EnvValue:
+    """Значение ``{{env.*}}`` и признак, что его нельзя показывать (раздел 19.4)."""
+
+    value: str
+    is_secret: bool
+
+
 async def _resolve_repository_env_value(
     session: AsyncSession,
     *,
     task_id: uuid.UUID,
     key: str,
-) -> str | None:
+) -> EnvValue | None:
     stmt = _repository_env_stmt(task_id).where(EnvVariable.key == key)
     rows = (await session.execute(stmt)).all()
     if len(rows) > 1:
@@ -184,13 +170,21 @@ async def _resolve_repository_env_value(
     if not rows:
         return None
     variable, _ = rows[0]
-    return decrypt(variable.value_encrypted)
+    return EnvValue(value=decrypt(variable.value_encrypted), is_secret=variable.is_secret)
 
 
-async def resolve_env_value(session: AsyncSession, *, task_id: uuid.UUID, key: str) -> str | None:
+async def resolve_env_entry(
+    session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    key: str,
+) -> EnvValue | None:
     """
     ``{{env.VAR_NAME}}`` (раздел 5): уровень задачи, затем репозитории задачи
     (`scope = repository`), затем глобальные переменные.
+
+    Переменная уровня задачи считается секретной всегда: её значение в
+    интерфейсе скрыто так же, как у секретных (раздел 15.2, правило 8).
     """
     task_override = await session.scalar(
         sa.select(TaskEnvVariable).where(
@@ -199,21 +193,36 @@ async def resolve_env_value(session: AsyncSession, *, task_id: uuid.UUID, key: s
         ),
     )
     if task_override is not None:
-        return decrypt(task_override.value_encrypted)
+        return EnvValue(value=decrypt(task_override.value_encrypted), is_secret=True)
 
     repository_value = await _resolve_repository_env_value(session, task_id=task_id, key=key)
     if repository_value is not None:
         return repository_value
-    return await resolve_global_env_value(session, key=key)
+    global_variable = await session.scalar(
+        sa.select(EnvVariable).where(
+            EnvVariable.key == key,
+            EnvVariable.scope == EnvVariableScope.GLOBAL,
+        ),
+    )
+    if global_variable is None:
+        return None
+    return EnvValue(
+        value=decrypt(global_variable.value_encrypted),
+        is_secret=global_variable.is_secret,
+    )
+
+
+async def resolve_env_value(session: AsyncSession, *, task_id: uuid.UUID, key: str) -> str | None:
+    entry = await resolve_env_entry(session, task_id=task_id, key=key)
+    return entry.value if entry is not None else None
 
 
 async def resolve_task_env(session: AsyncSession, *, task_id: uuid.UUID) -> dict[str, str]:
     """
     Раздел 11.4: переменные окружения script-контейнера — все переменные
     задачи в порядке раздела 5 (глобальные, затем репозитории задачи, затем
-    уровень задачи — каждый следующий перекрывает предыдущий), кроме
-    системных ``SCRIPT_EXCLUDED_ENV_KEYS`` и ключей, которые нельзя передать
-    как имя переменной окружения.
+    уровень задачи — каждый следующий перекрывает предыдущий), кроме ключей,
+    которые нельзя передать как имя переменной окружения.
     """
     await ensure_no_repository_env_conflicts(session, task_id=task_id)
     global_rows = (
@@ -237,13 +246,31 @@ async def resolve_task_env(session: AsyncSession, *, task_id: uuid.UUID) -> dict
 
     env: dict[str, str] = {}
     for key, value_encrypted in [*global_rows, *repository_rows, *task_rows]:
-        if key in SCRIPT_EXCLUDED_ENV_KEYS:
-            continue
         if not _ENV_KEY_PATTERN.fullmatch(key):
             logger.warning("script_env_key_skipped", task_id=str(task_id), key=key)
             continue
         env[key] = decrypt(value_encrypted)
     return env
+
+
+# Раздел 19.4: секрет в показываемом тексте заменяется этим значением.
+SECRET_MASK = "••••••"
+
+
+@dataclass(frozen=True, slots=True)
+class RenderedText:
+    """
+    ``text`` — уходит в сессию; ``display`` — то же с замаскированными
+    секретами: для предпросмотра и `node_logs.rendered_prompt` (раздел 19.4).
+    """
+
+    text: str
+    display: str
+
+    @classmethod
+    def literal(cls, text: str) -> RenderedText:
+        """Текст без подстановок (слэш-команда, раздел 4)."""
+        return cls(text=text, display=text)
 
 
 async def render_for_task(
@@ -253,10 +280,10 @@ async def render_for_task(
     *,
     history: list[NodeLog] | None = None,
     last_n: int | None = None,
-) -> str:
+) -> RenderedText:
     """Полный рендеринг: собирает контекст из всех источников раздела 5 и подставляет.
 
-    Единственная функция, кроме ``resolve_env_value``, которой нужна сессия
+    Единственная функция, кроме ``resolve_env_entry``, которой нужна сессия
     БД — сканирует шаблон на ``{{env.KEY}}`` и резолвит каждую переменную;
     остальной контекст (``task``/``session``/``node``) собирается из уже
     переданных объектов.
@@ -266,10 +293,17 @@ async def render_for_task(
         **build_session_context(task),
         **build_node_context(history or [], last_n=last_n),
     }
+    display_context = dict(context)
     for namespace, key in VARIABLE_PATTERN.findall(template):
         if namespace != "env":
             continue
-        value = await resolve_env_value(session, task_id=task.id, key=key)
-        context[f"env.{key}"] = value or ""
+        entry = await resolve_env_entry(session, task_id=task.id, key=key)
+        value = entry.value if entry is not None else ""
+        context[f"env.{key}"] = value
+        is_secret = entry is not None and entry.is_secret and bool(value)
+        display_context[f"env.{key}"] = SECRET_MASK if is_secret else value
 
-    return render_template(template, context)
+    return RenderedText(
+        text=render_template(template, context),
+        display=render_template(template, display_context),
+    )

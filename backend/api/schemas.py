@@ -668,6 +668,19 @@ class SystemSettingsBody(BaseModel):
     default_runner_image_bash: str = Field(min_length=1)
 
 
+class GitlabIntegrationResponse(BaseModel):
+    """Раздел 15.5: токен GitLab не возвращается — только признак, что он сохранён."""
+
+    gitlab_url: str | None
+    gitlab_token_set: bool
+
+
+class GitlabIntegrationUpdateRequest(BaseModel):
+    gitlab_url: str | None = Field(default=None, pattern=r"^https?://\S+$")
+    # `None` — оставить сохранённый токен, пустая строка — удалить.
+    gitlab_token: str | None = None
+
+
 class LibraryUsageResponse(BaseModel):
     """Раздел 15.5: в скольких задачах используется промт библиотеки."""
 

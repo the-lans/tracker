@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -34,7 +35,7 @@ print(json.dumps({
 
 
 @pytest.fixture(scope="module")
-def worker_view() -> dict[str, object]:
+def worker_view() -> dict[str, Any]:
     """То, что видит процесс `celery -A tasks.celery_app worker`."""
     env = {**os.environ, "REDIS_URL": "redis://localhost:1/0"}
     result = subprocess.run(
@@ -45,23 +46,23 @@ def worker_view() -> dict[str, object]:
         text=True,
         check=True,
     )
-    view: dict[str, object] = json.loads(result.stdout.strip().splitlines()[-1])
+    view: dict[str, Any] = json.loads(result.stdout.strip().splitlines()[-1])
     return view
 
 
 class TestRegistration:
-    def test_session_task_registered(self, worker_view: dict[str, object]) -> None:
-        assert "run_task_session" in worker_view["tasks"]  # type: ignore[operator]
+    def test_session_task_registered(self, worker_view: dict[str, Any]) -> None:
+        assert "run_task_session" in worker_view["tasks"]
 
-    def test_every_seeded_periodic_task_registered(self, worker_view: dict[str, object]) -> None:
+    def test_every_seeded_periodic_task_registered(self, worker_view: dict[str, Any]) -> None:
         seeded = {entry[0] for entry in _load_seed_module()._SEED_TASKS}
-        assert seeded <= set(worker_view["tasks"])  # type: ignore[arg-type]
+        assert seeded <= set(worker_view["tasks"])
 
 
 class TestConfig:
-    def test_beat_reads_schedule_from_database(self, worker_view: dict[str, object]) -> None:
+    def test_beat_reads_schedule_from_database(self, worker_view: dict[str, Any]) -> None:
         assert worker_view["beat_scheduler"] == "tasks.periodic_scheduler:DatabaseScheduler"
 
-    def test_sessions_have_own_queue(self, worker_view: dict[str, object]) -> None:
+    def test_sessions_have_own_queue(self, worker_view: dict[str, Any]) -> None:
         assert worker_view["routes"] == {"run_task_session": {"queue": "sessions"}}
         assert worker_view["prefetch"] == 1

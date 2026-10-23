@@ -5,6 +5,8 @@ import type {
   AllowedEmail,
   AppLog,
   AppLogLevel,
+  GitlabIntegration,
+  GitlabIntegrationUpdate,
   LibraryUsage,
   NodeLogStatus,
   NodeRun,
@@ -143,6 +145,25 @@ export function useUpdateSystemSettings() {
   return useMutation({
     mutationFn: (body: SystemSettings) => api.put<SystemSettings>("/system-settings", body),
     onSuccess: (settings) => queryClient.setQueryData(SYSTEM_SETTINGS_KEY, settings),
+  });
+}
+
+const GITLAB_INTEGRATION_KEY = ["admin", "gitlab-integration"] as const;
+
+/** Раздел 15.5: адрес и токен GitLab — только администратору. */
+export function useGitlabIntegration() {
+  return useQuery({
+    queryKey: GITLAB_INTEGRATION_KEY,
+    queryFn: () => api.get<GitlabIntegration>("/system-settings/integrations"),
+  });
+}
+
+export function useUpdateGitlabIntegration() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: GitlabIntegrationUpdate) =>
+      api.put<GitlabIntegration>("/system-settings/integrations", body),
+    onSuccess: (integration) => queryClient.setQueryData(GITLAB_INTEGRATION_KEY, integration),
   });
 }
 

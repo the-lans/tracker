@@ -611,6 +611,18 @@ export interface SystemSettings {
   default_runner_image_bash: string;
 }
 
+/** Раздел 15.5: интеграция с GitLab — токен API не возвращается, только признак. */
+export interface GitlabIntegration {
+  gitlab_url: string | null;
+  gitlab_token_set: boolean;
+}
+
+/** `gitlab_token`: `null` — оставить сохранённый, пустая строка — удалить. */
+export interface GitlabIntegrationUpdate {
+  gitlab_url: string | null;
+  gitlab_token: string | null;
+}
+
 /** Раздел 15.5: в скольких задачах используется промт библиотеки. */
 export interface LibraryUsage {
   node_id: string;

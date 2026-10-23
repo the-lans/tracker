@@ -18,14 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.claude_agent import ClaudeCodeSession
 from db.models.enums import (
-    EnvVariableScope,
     NodeLogStatus,
     NodeType,
     ScriptLanguage,
     TaskStatus,
     UserRole,
 )
-from db.models.env_vars import EnvVariable, TaskEnvVariable
+from db.models.env_vars import TaskEnvVariable
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
@@ -38,6 +37,7 @@ from services.pipeline_orchestrator import (
     run_pipeline,
 )
 from services.plan_mode import ActiveNodeContext
+from services.system_settings import update_gitlab_integration
 from services.task_control import TaskControlCommand, request_task_control
 from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
@@ -346,12 +346,13 @@ class TestScriptEnv:
                     key="API_URL",
                     value_encrypted=encrypt("из задачи"),
                 ),
-                EnvVariable(
-                    key="GITLAB_TOKEN",
-                    value_encrypted=encrypt("секрет"),
-                    scope=EnvVariableScope.GLOBAL,
-                ),
             ],
+        )
+        # Токен GitLab — системная настройка, а не переменная окружения задачи.
+        await update_gitlab_integration(
+            db_session,
+            url="https://gitlab.example.com",
+            token="секрет",
         )
         await _add_node(
             db_session,

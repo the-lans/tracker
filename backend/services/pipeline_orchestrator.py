@@ -29,9 +29,11 @@ from services.nodes.clear_context import ensure_clear_context_allowed
 from services.nodes.dispatch import (
     NodeExecutionOutcome,
     execute_node,
+    logged_prompt,
     record_sdk_failure,
     resolve_node_prompt_or_none,
     resolve_script_env_or_none,
+    sent_prompt,
 )
 from services.system_settings import resolve_runner_image
 from services.task_control import TaskControlCommand, read_task_control, run_stoppable
@@ -181,7 +183,7 @@ async def run_pipeline_node_with_retry(
             node_id=node.id,
             trigger_type=NodeLogTriggerType.PIPELINE,
             attempt_number=attempt,
-            rendered_prompt=prompt if node.node_type is not NodeType.SLASH_COMMAND else None,
+            rendered_prompt=logged_prompt(node, prompt),
             status=NodeLogStatus.RUNNING,
             started_at=datetime.now(UTC),
         )
@@ -199,7 +201,7 @@ async def run_pipeline_node_with_retry(
             run_node_execution(
                 execute_node(
                     node,
-                    prompt=prompt,
+                    prompt=sent_prompt(prompt),
                     claude_session=claude_session,
                     repos_path=repos_path,
                     timeout_seconds=node.timeout_seconds,

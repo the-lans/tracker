@@ -72,7 +72,7 @@ async def test_resolve_node_prompt_renders_plain_prompt_template(db_session: Asy
 
     prompt = await resolve_node_prompt(db_session, node=node, task=task, history=[])
 
-    assert prompt == f"Задача {task.code}"
+    assert prompt.text == f"Задача {task.code}"
 
 
 async def test_resolve_node_prompt_returns_slash_command_literally_unmodified(
@@ -97,7 +97,7 @@ async def test_resolve_node_prompt_returns_slash_command_literally_unmodified(
 
     # Раздел 4: слэш-команда никогда не проходит через шаблонизатор — если
     # бы прошла, "{{task.code}}" был бы заменён на реальный код задачи.
-    assert prompt == literal_invocation
+    assert prompt.text == prompt.display == literal_invocation
 
 
 async def test_resolve_node_prompt_raises_when_slash_command_missing_invocation(

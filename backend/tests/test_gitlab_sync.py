@@ -666,7 +666,7 @@ class TestSyncFailures:
                 await db_session.execute(
                     sa.select(AppLog).where(
                         AppLog.source == "periodic.sync_gitlab_merge_status",
-                        AppLog.message.contains("GITLAB_TOKEN"),
+                        AppLog.message.contains("токен GitLab"),
                     ),
                 )
             ).scalars().all()

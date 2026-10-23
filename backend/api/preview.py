@@ -8,7 +8,8 @@
 существующей задачи (`{{task.*}}`/`{{env.*}}` резолвятся из строк БД) —
 без `task_id` эндпоинт лишь проверяет доступность переменных
 (`validate_template_variables`, та же проверка, что и при сохранении) и
-возвращает исходный текст без подстановки.
+возвращает исходный текст без подстановки. Значения секретных переменных
+показываются замаскированными (раздел 19.4).
 """
 
 from __future__ import annotations
@@ -56,7 +57,7 @@ async def preview_template(
         # Раздел 8.2: предпросмотр показывает ровно то, что уйдёт в сессию.
         validate_template_variables(body.text, scope=scope)
         rendered = await render_freeform_prompt(db_session, task=task, text=body.text)
-        return TemplatePreviewResponse(rendered_text=rendered)
+        return TemplatePreviewResponse(rendered_text=rendered.display)
 
     history: list[NodeLog] = []
     if scope is RenderScope.PIPELINE:
@@ -71,4 +72,4 @@ async def preview_template(
         history = list((await db_session.execute(stmt)).scalars().all())
 
     rendered_text = await render_for_task(db_session, task, body.text, history=history)
-    return TemplatePreviewResponse(rendered_text=rendered_text)
+    return TemplatePreviewResponse(rendered_text=rendered_text.display)
