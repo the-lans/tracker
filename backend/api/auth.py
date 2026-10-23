@@ -17,7 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import UserRole
 from db.session import get_session
-from services.auth import GoogleAuthLibraryVerifier, GoogleIdTokenVerifier, authenticate_or_register
+from services.auth import (
+    GoogleAuthLibraryVerifier,
+    GoogleIdTokenVerifier,
+    authenticate_or_register,
+    verify_google_id_token,
+)
 from services.auth_tokens import issue_session_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -56,7 +61,7 @@ async def login_with_google(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     verifier: Annotated[GoogleIdTokenVerifier, Depends(get_google_verifier)],
 ) -> LoginResponse:
-    identity = verifier.verify(body.id_token)
+    identity = await verify_google_id_token(verifier, body.id_token)
     user = await authenticate_or_register(db_session, identity=identity)
     session_token = issue_session_token(user.id)
     return LoginResponse(

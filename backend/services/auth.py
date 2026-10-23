@@ -8,18 +8,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 import sqlalchemy as sa
+from google.auth.exceptions import GoogleAuthError, TransportError
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import id_token as google_id_token
 
 from app_logging.config import get_logger
 from db.models.enums import UserRole
 from db.models.users import AllowedEmail, User
-from services.errors import ValidationError
+from services.errors import ExternalServiceError, UnauthorizedError, ValidationError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,6 +56,25 @@ class GoogleAuthLibraryVerifier:
             email=str(claims["email"]),
             email_verified=bool(claims.get("email_verified", False)),
         )
+
+
+async def verify_google_id_token(
+    verifier: GoogleIdTokenVerifier,
+    id_token_jwt: str,
+) -> GoogleIdentity:
+    """
+    Раздел 19.1: недействительный или просроченный токен — 401, недоступность
+    Google — 502. Проверка ходит в сеть синхронно, поэтому выполняется в
+    отдельном потоке и не останавливает остальные запросы.
+    """
+    try:
+        return await asyncio.to_thread(verifier.verify, id_token_jwt)
+    except TransportError as exc:
+        message = "Google недоступен — повторите вход позже"
+        raise ExternalServiceError(message, is_transient=True) from exc
+    except (GoogleAuthError, ValueError) as exc:
+        logger.info("google_id_token_rejected", error=str(exc))
+        raise UnauthorizedError("Вход через Google не подтверждён — войдите заново") from exc
 
 
 async def authenticate_or_register(
