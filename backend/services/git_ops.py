@@ -115,6 +115,8 @@ async def clone_task_repository(
             "clone",
             "--branch",
             task_repository.base_branch,
+            # Адрес и каталог — только позиционные аргументы, не опции git.
+            "--",
             repository.git_url,
             str(target_dir),
             cwd=repos_root,

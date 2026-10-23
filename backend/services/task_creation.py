@@ -18,6 +18,7 @@ from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from services.access import ensure_llm_account_of_owner
 from services.errors import ConflictError, NotFoundError, ValidationError
+from services.repository_validation import validate_branch_name
 from services.task_codes import validate_task_code
 from services.task_workspace import build_branch_name
 
@@ -61,6 +62,8 @@ async def _validate_draft(
     created_by: uuid.UUID,
 ) -> None:
     validate_task_code(draft.code)
+    for attached in draft.repositories:
+        validate_branch_name(attached.base_branch)
     repository_ids = [attached.repository_id for attached in draft.repositories]
     if len(set(repository_ids)) != len(repository_ids):
         raise ValidationError("Репозиторий указан у задачи больше одного раза")
