@@ -110,7 +110,7 @@ backend/
               очередь sessions, DatabaseScheduler), session_worker.py
               (долгоживущая сессия задачи), periodic.py / periodic_scheduler.py
   docker-entrypoint.sh — применяет alembic-миграции и создаёт роль БД
-              SFTP-шлюза перед стартом backend/worker/beat
+              SFTP-шлюза перед стартом backend/worker/session-worker/beat
   sftp_gateway/ — SFTP-шлюз (сервис `sftp`, `python -m sftp_gateway`):
               asyncssh-сервер, вход по ключу (auth.py), виртуальная ФС
               /<код>/repos (только чтение) и /<код>/artifacts (filesystem.py),

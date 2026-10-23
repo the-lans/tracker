@@ -39,7 +39,7 @@ def validate_git_url(git_url: str) -> str:
         _URL_SCHEME_PATTERN.fullmatch(git_url) or _SCP_PATTERN.fullmatch(git_url)
     ):
         raise ValidationError(
-            "Адрес репозитория — ssh://, https:// или вида git@host:group/project.git",
+            "Адрес репозитория — ssh://, http(s):// или вида git@host:group/project.git",
         )
     return git_url
 

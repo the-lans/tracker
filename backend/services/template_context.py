@@ -53,6 +53,7 @@ def build_task_context(task: Task) -> dict[str, str]:
         "task.title": _stringify(task.title),
         "task.description": _stringify(task.description),
         "task.guide_url": _stringify(task.guide_url),
+        "task.jira_issue_url": _stringify(task.jira_issue_url),
         "task.status": _stringify(task.status),
         "task.pipeline_id": _stringify(task.pipeline_id),
         "task.llm_account_id": _stringify(task.llm_account_id),

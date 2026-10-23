@@ -154,7 +154,8 @@
       смонтировано в корень репозиториев, и монтирует директорию задачи
       подпутём этого volume (Docker Engine 26+, проверка в `install.sh`) или
       подкаталогом каталога хоста — имя volume не хардкодится; в контейнер передаются переменные задачи
-      (`template_context.resolve_task_env`), кроме `GITLAB_URL`/`GITLAB_TOKEN`,
+      (`template_context.resolve_task_env`), кроме `GITLAB_URL`/`GITLAB_TOKEN`
+      (с решения №19 токен GitLab — в `system_settings`, исключение не нужно),
       аргументами `-e KEY=VALUE` — не окружением процесса `docker`, чтобы
       переменная задачи не меняла поведение клиента Docker.
     - Образ backend/worker (`backend/Dockerfile`) получил `git`, `openssh-client`

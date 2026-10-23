@@ -62,10 +62,12 @@ async def test_build_task_context_maps_fields_and_computes_repos_path(
     monkeypatch.setenv("TRACKER_REPOS_ROOT", "/data/repos")
     monkeypatch.setenv("TRACKER_USER_FILES_ROOT", "/data/user-files")
     task = await _make_task(db_session)
+    task.jira_issue_url = "https://jira.example.com/browse/PROJ-1"
 
     context = build_task_context(task)
 
     assert context["task.code"] == task.code
+    assert context["task.jira_issue_url"] == "https://jira.example.com/browse/PROJ-1"
     assert context["task.title"] == "Починить баг"
     assert context["task.status"] == "in_progress"
     assert context["task.repos_path"] == f"/data/repos/{task.code}/"
