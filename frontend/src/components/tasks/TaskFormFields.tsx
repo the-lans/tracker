@@ -29,8 +29,15 @@ export function TaskFormFields({
           placeholder="RR-10240"
           value={value.code}
           onChange={(event) => onChange({ code: event.target.value })}
+          pattern="\S+"
+          title="Любой текст без пробелов"
+          aria-describedby="task-code-hint"
           required
         />
+        <div id="task-code-hint" className="mt-1 text-meta text-text-3">
+          Любой текст без пробелов, например RR-10240 или ключ задачи Jira. Из него же
+          строится рабочая ветка feature/&lt;код&gt;.
+        </div>
       </div>
       <div>
         <Label htmlFor="task-title">Название</Label>

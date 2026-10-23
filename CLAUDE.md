@@ -295,8 +295,9 @@ Postgres с проброшенным портом — см. `docker-compose.yml`
 - **Шаблонные переменные** — `{{namespace.field}}`, namespace в нижнем
   регистре (`task`, `node`, `env`, `session`), `{{env.VAR_NAME}}` — сама
   переменная в UPPER_SNAKE_CASE.
-- **Код задачи** — формат `RR-XXXXX`; рабочая ветка репозитория — формат
-  `feature/RR-XXXXX`.
+- **Код задачи** — любой текст без пробелов (например, `RR-12345` или ключ
+  Jira), проверка — `services/task_codes.py`; рабочая ветка репозитория —
+  `feature/<код>`.
 - **Git-коммиты** — Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`,
   `refactor:`, `test:`, `ci:`), тема в повелительном наклонении, без точки в
   конце.

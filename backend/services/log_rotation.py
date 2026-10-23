@@ -29,6 +29,7 @@ from services.maintenance_tasks import (
     DEFAULT_LOG_ROTATION_THRESHOLD_DAYS,
     find_node_logs_eligible_for_rotation,
 )
+from services.task_codes import validate_task_code
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -116,7 +117,8 @@ async def rotate_node_logs(
 
     stamp = now.strftime(_FILE_TIMESTAMP_FORMAT)
     for task_code, node_logs in by_task.items():
-        path = archive_root / task_code / f"node_logs-{stamp}-{uuid.uuid4().hex[:8]}.jsonl.gz"
+        file_name = f"node_logs-{stamp}-{uuid.uuid4().hex[:8]}.jsonl.gz"
+        path = archive_root / validate_task_code(task_code) / file_name
         records = [_serialize(node_log) for node_log in node_logs]
         await asyncio.to_thread(_write_archive, path, records)
         await db_session.execute(

@@ -29,6 +29,7 @@ from db.models.tasks import Task, TaskRepository
 from services.distributed_lock import acquire_task_operation_lock
 from services.errors import ValidationError
 from services.git_ops import clone_task_repository, push_task_repository
+from services.task_codes import validate_task_code
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -51,7 +52,8 @@ def resolve_repos_root() -> Path:
 
 
 def task_root(repos_root: Path, task: Task) -> Path:
-    return repos_root / task.code
+    """Каталог задачи — прямой потомок корня: код проверяется и здесь (раздел 3.1)."""
+    return repos_root / validate_task_code(task.code)
 
 
 def task_repos_path(task: Task) -> str:

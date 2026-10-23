@@ -126,7 +126,7 @@ Backend и frontend — раздельные кодовые базы, взаим
 | Поле | Тип | Описание |
 |---|---|---|
 | `id` | UUID | Первичный ключ |
-| `code` | string, unique | Код задачи (формат RR-XXXXX) |
+| `code` | string, unique | Код задачи — любой текст без пробелов до 64 символов, например `RR-12345` или ключ задачи Jira. Код — имя каталога задачи и часть рабочей ветки, поэтому в нём нет символов `/ \ ~ ^ : ? * [`, последовательностей `..` и `@{`, он не начинается с `-` или `.` и не заканчивается на `.` или `.lock`; иначе API отвечает 422 |
 | `title` | string | Название |
 | `description` | text | Описание |
 | `guide_url` | string, nullable | URL страницы Confluence; доступ получает LLM через MCP, backend не парсит |
@@ -155,7 +155,7 @@ Backend и frontend — раздельные кодовые базы, взаим
 | `task_id` | FK → tasks | |
 | `repository_id` | FK → repositories | |
 | `role` | enum (`read_only`, `read_write`) | Роль репозитория в задаче |
-| `branch_name` | string | Рабочая ветка (формат `feature/RR-XXXXX`) |
+| `branch_name` | string | Рабочая ветка (формат `feature/<код задачи>`) |
 | `base_branch` | string | Базовая ветка |
 | `pushed_at` | timestamp, nullable | |
 | `merge_status` | enum (`not_pushed`, `pushed`, `merged`, `conflict`) | `conflict` — ребейз на обновлённую базовую ветку упал на конфликте и ещё не разрешён; после разрешения значение возвращается в `pushed` или `not_pushed` (раздел 14.2) |
