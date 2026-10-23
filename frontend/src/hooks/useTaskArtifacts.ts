@@ -10,11 +10,18 @@ export function artifactUrl(taskId: string, path: string): string {
   return `/tasks/${taskId}/artifacts/${encoded}`;
 }
 
-/** Раздел 14.3, 15.2: артефакты задачи. */
-export function useTaskArtifacts(taskId: string) {
+// Пока задача работает, агент сохраняет файлы и между сменами статуса.
+const ACTIVE_REFETCH_INTERVAL_MS = 15_000;
+
+/**
+ * Раздел 14.3, 15.2: артефакты задачи. ``active`` — у задачи живая сессия:
+ * список перечитывается периодически, а не только при смене статуса.
+ */
+export function useTaskArtifacts(taskId: string, active = false) {
   return useQuery({
     queryKey: keyOf(taskId),
     queryFn: () => api.get<TaskArtifact[]>(`/tasks/${taskId}/artifacts`),
+    refetchInterval: active ? ACTIVE_REFETCH_INTERVAL_MS : false,
   });
 }
 

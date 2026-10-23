@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { TaskArtifactRow } from "@/components/tasks/TaskArtifactRow";
 import { useTaskArtifacts, useUploadTaskArtifact } from "@/hooks/useTaskArtifacts";
+import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { ApiError } from "@/lib/apiClient";
 import type { Task } from "@/lib/types";
 
@@ -15,7 +16,10 @@ import type { Task } from "@/lib/types";
  * репозиториев; те же файлы видны по SFTP в `<код>/artifacts`.
  */
 export function TaskArtifactsCard({ task }: { task: Task }) {
-  const { data: artifacts } = useTaskArtifacts(task.id);
+  const { data: artifacts } = useTaskArtifacts(
+    task.id,
+    SESSION_ACTIVE_STATUSES.includes(task.status),
+  );
   const upload = useUploadTaskArtifact(task.id);
   const inputRef = useRef<HTMLInputElement>(null);
 

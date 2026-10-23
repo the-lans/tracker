@@ -22,6 +22,8 @@ function applyEvent(queryClient: QueryClient, taskId: string, payload: TaskSocke
   );
   void queryClient.invalidateQueries({ queryKey: ["tasks", "list"] });
   void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "node-logs"] });
+  // Раздел 14.3: файлы, сохранённые агентом или скриптом, появляются без перезагрузки.
+  void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "artifacts"] });
 }
 
 /**
