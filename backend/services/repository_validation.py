@@ -14,7 +14,8 @@ import re
 
 from services.errors import ValidationError
 
-_NAME_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
+# Буквы любого алфавита, цифры, «_», «.», «-»: без пробелов и разделителей пути.
+_NAME_PATTERN = re.compile(r"[\w.-]+")
 _RESERVED_NAMES = frozenset({".", ".."})
 # `ssh://`, `https://`, `http://` или scp-форма `user@host:path`.
 _URL_SCHEME_PATTERN = re.compile(r"(ssh|https?)://[^\s/@]+(@[^\s/]+)?/\S+")
@@ -27,7 +28,7 @@ _BRANCH_FORBIDDEN_SEQUENCES = ("..", "@{", "//", "/.")
 def validate_repository_name(name: str) -> str:
     if not _NAME_PATTERN.fullmatch(name) or name in _RESERVED_NAMES or name.startswith("-"):
         raise ValidationError(
-            "Имя репозитория — латинские буквы, цифры, «.», «_» и «-», "
+            "Имя репозитория — буквы, цифры, «.», «_» и «-» без пробелов, "
             "не «.» или «..» и не с «-» в начале",
         )
     return name

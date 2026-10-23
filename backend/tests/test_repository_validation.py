@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 
 class TestRepositoryName:
-    @pytest.mark.parametrize("name", ["backend", "web-app", "lib_1.2"])
+    @pytest.mark.parametrize("name", ["backend", "web-app", "lib_1.2", "бэкенд"])
     def test_accepted(self, name: str) -> None:
         assert validate_repository_name(name) == name
 

@@ -524,7 +524,7 @@ class TestRepositoryDefaultTemplate:
 
         response = await authed_client.patch(
             f"/repositories/{repository.id}",
-            json={"name": "новое имя", "default_template_id": str(foreign.id)},
+            json={"name": "новое-имя", "default_template_id": str(foreign.id)},
         )
 
         assert response.status_code == 200

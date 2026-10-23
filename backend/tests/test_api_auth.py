@@ -115,9 +115,10 @@ class TestRejectedToken:
     @pytest.mark.parametrize(
         ("error", "status_code"),
         [
-            (MalformedError("Certificate for key id abc not found."), 401),
+            # google-auth: исключения не аннотированы, несмотря на py.typed пакета.
+            (MalformedError("Certificate for key id abc not found."), 401),  # type: ignore[no-untyped-call]
             (ValueError("Token expired"), 401),
-            (TransportError("connection refused"), 502),
+            (TransportError("connection refused"), 502),  # type: ignore[no-untyped-call]
         ],
         ids=["malformed", "expired", "google_unavailable"],
     )

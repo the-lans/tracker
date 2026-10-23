@@ -76,11 +76,6 @@ if TYPE_CHECKING:
 _REPOSITORY_NAME = "backend"
 
 
-@pytest.fixture(autouse=True)
-def _accounts_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Каталоги LLM-аккаунтов тестовых задач — во временной директории теста."""
-    monkeypatch.setattr("tests.factories.DEFAULT_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
-
 
 async def _make_task(
     db_session: AsyncSession,
