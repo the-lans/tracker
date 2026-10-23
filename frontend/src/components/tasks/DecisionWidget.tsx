@@ -9,17 +9,23 @@ import { ApiError } from "@/lib/apiClient";
 import { cn } from "@/lib/utils";
 import type { NodeLog } from "@/lib/types";
 
+/** Ответ на вопрос агента своим текстом (`CUSTOM_ANSWER_OPTION` на бэкенде). */
+const CUSTOM_ANSWER_OPTION = "custom";
+
 /**
  * Универсальный виджет выбора (раздел 9.6 ТЗ) — единый механизм для
- * `plan_review` и обычного `awaiting_input` с вариантами: оба перехватываются
- * одним и тем же callback'ом разрешений SDK на бэкенде, поэтому здесь тоже
- * не два разных UI, а один компонент, ветвящийся по `pending_options`.
+ * `plan_review`, вопросов агента и подтверждения действий («Разрешить» /
+ * «Запретить»): все они перехватываются одним callback'ом разрешений SDK на
+ * бэкенде, поэтому здесь тоже не разные UI, а один компонент, ветвящийся по
+ * `pending_options`. Вопрос показывается всегда — без него варианты ответа
+ * непонятны.
  */
 export function DecisionWidget({ taskId, log }: { taskId: string; log: NodeLog }) {
   const submitDecision = useSubmitDecision(taskId);
   const [comment, setComment] = useState("");
   const [openAnswer, setOpenAnswer] = useState("");
   const hasOptions = (log.pending_options?.length ?? 0) > 0;
+  const isPlan = Boolean(log.pending_plan_text);
 
   function submit(optionId: string, feedbackText?: string) {
     submitDecision.mutate(
@@ -36,7 +42,7 @@ export function DecisionWidget({ taskId, log }: { taskId: string; log: NodeLog }
     <div className="flex max-w-[640px] flex-col gap-3">
       {log.pending_plan_text && <PlanCard text={log.pending_plan_text} />}
 
-      {!hasOptions && log.pending_question && (
+      {log.pending_question && (
         <div className="rounded-[14px] border border-border bg-surface px-3.5 py-2.5 text-body-lg leading-relaxed">
           {log.pending_question}
         </div>
@@ -59,11 +65,27 @@ export function DecisionWidget({ taskId, log }: { taskId: string; log: NodeLog }
             </button>
           ))}
           <Textarea
-            placeholder="Комментарий к решению (необязательно)…"
+            placeholder={
+              isPlan
+                ? "Комментарий к решению — для «Доработать план» опишите, что изменить…"
+                : "Комментарий к варианту или свой ответ…"
+            }
             rows={2}
             value={comment}
             onChange={(event) => setComment(event.target.value)}
           />
+          {!isPlan && (
+            <div>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!comment.trim() || submitDecision.isPending}
+                onClick={() => submit(CUSTOM_ANSWER_OPTION, comment.trim())}
+              >
+                <Send className="size-4" /> Ответить своим текстом
+              </Button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="flex items-center gap-2">

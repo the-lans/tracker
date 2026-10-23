@@ -195,6 +195,8 @@ async def run_pipeline_node_with_retry(
                 node_log_id=node_log.id,
                 task_id=task.id,
                 auto_accept_plan=task.auto_accept_plan,
+                # Раздел 9.1: пока план не принят, изменения запрещены.
+                plan_mode=node.node_type is NodeType.PLAN_PROMPT,
             )
 
         outcome = await _run_attempt(

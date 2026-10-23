@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 import pytest
+from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from claude_agent_sdk.types import ToolPermissionContext
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,9 +25,15 @@ from db.models.tasks import Task
 from db.models.users import User
 from services.notifications import NotificationEvent
 from services.plan_mode import (
+    CUSTOM_ANSWER_OPTION,
     DEFAULT_PLAN_OPTIONS,
+    PLAN_MODE_WRITE_DENIED,
+    TOOL_APPROVAL_ALLOW,
+    TOOL_APPROVAL_DENY,
+    TOOL_APPROVAL_OPTIONS,
     ActiveNodeContext,
     PlanDecisionOption,
+    answer_from_resolution,
     apply_plan_decision,
     build_can_use_tool_callback,
     decide_plan_auto_completion,
@@ -36,8 +43,10 @@ from services.plan_mode import (
 from services.task_signal import publish_task_signal
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
     from contextlib import AbstractAsyncContextManager
+
+    from claude_agent_sdk.types import CanUseTool
 
 _TEST_TOOL_CONTEXT = ToolPermissionContext()
 
@@ -333,77 +342,269 @@ async def test_callback_denies_on_timeout_without_resolution(
     assert result.behavior == "deny"
 
 
-async def test_callback_handles_ask_user_question_and_returns_answer(
-    db_session: AsyncSession,
-    redis_client: Redis,
-) -> None:
-    task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
-    callback = build_can_use_tool_callback(
-        context=context,
-        session_factory=_non_closing_session_factory(db_session),
-        redis_client=redis_client,
-        decision_wait_timeout_seconds=5.0,
-    )
-    tool_input = {
-        "question": "Продолжать с миграцией?",
-        "options": [{"id": "yes", "label": "Да"}, {"id": "no", "label": "Нет"}],
+def _question(text: str, *labels: str) -> dict[str, object]:
+    """Вопрос в формате SDK `AskUserQuestion`."""
+    return {
+        "question": text,
+        "header": "Вопрос",
+        "options": [{"label": label, "description": ""} for label in labels],
+        "multiSelect": False,
     }
 
-    async def _resolve_soon() -> None:
-        await asyncio.sleep(0.1)
-        node_log.user_input_text = "yes"
-        await db_session.commit()
-        await publish_task_signal(redis_client, task.id)
 
-    resolver = asyncio.create_task(_resolve_soon())
-    try:
-        result = await callback("AskUserQuestion", tool_input, _TEST_TOOL_CONTEXT)
-    finally:
-        await resolver
-
-    assert result.behavior == "allow"
-    assert result.updated_input is not None
-    assert result.updated_input["answer"] == "yes"
-    await db_session.refresh(node_log)
-    assert node_log.pending_question == "Продолжать с миграцией?"
-    assert node_log.pending_options == [
-        {"id": "yes", "label": "Да"},
-        {"id": "no", "label": "Нет"},
-    ]
-
-
-async def test_callback_handles_ask_user_question_with_plain_string_options(
+def _answering(
     db_session: AsyncSession,
-    redis_client: Redis,
-) -> None:
-    task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
-    callback = build_can_use_tool_callback(
-        context=context,
+    node_log: NodeLog,
+    resolutions: list[str],
+    seen: list[tuple[str | None, object]] | None = None,
+) -> Callable[..., Awaitable[bool]]:
+    """Подмена ожидания сигнала: пользователь отвечает по очереди."""
+    remaining = list(resolutions)
+
+    async def user_answers(*_args: object, **_kwargs: object) -> bool:
+        await db_session.refresh(node_log)
+        if seen is not None:
+            seen.append((node_log.pending_question, node_log.pending_options))
+        node_log.user_input_text = remaining.pop(0)
+        await db_session.commit()
+        return True
+
+    return user_answers
+
+
+def _callback(
+    db_session: AsyncSession,
+    task: Task,
+    node_log: NodeLog,
+    *,
+    auto_accept_plan: bool = False,
+    plan_mode: bool = False,
+) -> CanUseTool:
+    return build_can_use_tool_callback(
+        context=ActiveNodeContext(
+            node_log_id=node_log.id,
+            task_id=task.id,
+            auto_accept_plan=auto_accept_plan,
+            plan_mode=plan_mode,
+        ),
         session_factory=_non_closing_session_factory(db_session),
-        redis_client=redis_client,
+        redis_client=Redis(),
         decision_wait_timeout_seconds=5.0,
     )
-    tool_input = {"question": "Продолжать?", "options": ["Да", "Нет"]}
 
-    async def _resolve_soon() -> None:
-        await asyncio.sleep(0.1)
+
+class TestAskUserQuestion:
+    async def test_questions_asked_one_by_one(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        seen: list[tuple[str | None, object]] = []
+        monkeypatch.setattr(
+            "services.plan_mode.wait_for_task_signal",
+            _answering(
+                db_session,
+                node_log,
+                ["1", encode_decision(CUSTOM_ANSWER_OPTION, feedback_text="Redis")],
+                seen,
+            ),
+        )
+        questions = [
+            _question("Какую базу?", "main", "dev"),
+            _question("Какой кеш?", "нет", "memcached"),
+        ]
+
+        result = await _callback(db_session, task, node_log)(
+            "AskUserQuestion",
+            {"questions": questions},
+            _TEST_TOOL_CONTEXT,
+        )
+
+        assert isinstance(result, PermissionResultAllow)
+        assert result.updated_input == {
+            "questions": questions,
+            "answers": {"Какую базу?": "dev", "Какой кеш?": "Redis"},
+        }
+        assert seen == [
+            ("Какую базу?", [{"id": "0", "label": "main"}, {"id": "1", "label": "dev"}]),
+            ("Какой кеш?", [{"id": "0", "label": "нет"}, {"id": "1", "label": "memcached"}]),
+        ]
+        await db_session.refresh(node_log)
+        # Ответ получен — запись снова выполняется, виджет больше не показывается.
+        assert node_log.status is NodeLogStatus.RUNNING
+        assert node_log.user_input_text == "Какую базу?: dev\nКакой кеш?: Redis"
+
+    @pytest.mark.parametrize(
+        ("resolution", "answer"),
+        [
+            ("0", "Да"),
+            (encode_decision("0", feedback_text="но без миграций"), "Да. но без миграций"),
+            (encode_decision(CUSTOM_ANSWER_OPTION, feedback_text="Позже"), "Позже"),
+        ],
+        ids=["option", "option_with_comment", "custom"],
+    )
+    def test_answer_from_resolution(self, resolution: str, answer: str) -> None:
+        options = [{"id": "0", "label": "Да"}, {"id": "1", "label": "Нет"}]
+        assert answer_from_resolution(resolution, options) == answer
+
+    async def test_previous_answer_not_reused(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+    ) -> None:
+        """Ответ на прошлый вопрос той же записи не принимается за новый."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
         node_log.user_input_text = "0"
-        await db_session.commit()
-        await publish_task_signal(redis_client, task.id)
+        await db_session.flush()
+        callback = build_can_use_tool_callback(
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=redis_client,
+            decision_wait_timeout_seconds=0.3,
+        )
 
-    resolver = asyncio.create_task(_resolve_soon())
-    try:
-        await callback("AskUserQuestion", tool_input, _TEST_TOOL_CONTEXT)
-    finally:
-        await resolver
+        async def unrelated_signal() -> None:
+            await asyncio.sleep(0.1)
+            await publish_task_signal(redis_client, task.id)
 
-    await db_session.refresh(node_log)
-    assert node_log.pending_options == [
-        {"id": "0", "label": "Да"},
-        {"id": "1", "label": "Нет"},
-    ]
+        signaller = asyncio.create_task(unrelated_signal())
+        try:
+            result = await callback(
+                "AskUserQuestion",
+                {"questions": [_question("Ещё?", "Да", "Нет")]},
+                _TEST_TOOL_CONTEXT,
+            )
+        finally:
+            await signaller
+
+        assert result.behavior == "deny"
+
+    async def test_without_questions_denied(self, db_session: AsyncSession) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+
+        result = await _callback(db_session, task, node_log)(
+            "AskUserQuestion",
+            {"questions": []},
+            _TEST_TOOL_CONTEXT,
+        )
+
+        assert result.behavior == "deny"
+
+
+class TestOtherTools:
+    async def test_writes_denied_in_plan_mode(self, db_session: AsyncSession) -> None:
+        """Раздел 9.1: в режиме планирования агент не меняет файлы."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
+
+        result = await _callback(db_session, task, node_log, plan_mode=True)(
+            "Write",
+            {"file_path": "a.py", "content": "x"},
+            _TEST_TOOL_CONTEXT,
+        )
+
+        assert isinstance(result, PermissionResultDeny)
+        assert result.message == PLAN_MODE_WRITE_DENIED
+
+    @pytest.mark.parametrize("mode", [None, PermissionMode.ACCEPT_EDITS], ids=["start", "auto"])
+    async def test_autonomous_modes_allow(
+        self,
+        db_session: AsyncSession,
+        mode: PermissionMode | None,
+    ) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        task.current_permission_mode = mode
+        await db_session.flush()
+
+        result = await _callback(db_session, task, node_log)(
+            "Bash",
+            {"command": "rm -rf build"},
+            _TEST_TOOL_CONTEXT,
+        )
+
+        assert result.behavior == "allow"
+
+    @pytest.mark.parametrize(
+        ("resolution", "behavior"),
+        [(TOOL_APPROVAL_ALLOW, "allow"), (TOOL_APPROVAL_DENY, "deny")],
+        ids=["allowed", "denied"],
+    )
+    async def test_default_mode_asks_user(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        resolution: str,
+        behavior: str,
+    ) -> None:
+        """Раздел 9.3: «подтверждать каждое действие» — через виджет выбора."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        task.current_permission_mode = PermissionMode.DEFAULT
+        await db_session.flush()
+        seen: list[tuple[str | None, object]] = []
+        monkeypatch.setattr(
+            "services.plan_mode.wait_for_task_signal",
+            _answering(db_session, node_log, [resolution], seen),
+        )
+
+        result = await _callback(db_session, task, node_log)(
+            "Bash",
+            {"command": "rm -rf build"},
+            _TEST_TOOL_CONTEXT,
+        )
+
+        assert result.behavior == behavior
+        assert seen == [("Агент хочет выполнить Bash: rm -rf build", TOOL_APPROVAL_OPTIONS)]
+
+
+class TestPlanAcceptanceMode:
+    @pytest.mark.parametrize(
+        ("option", "mode"),
+        [
+            (PlanDecisionOption.ACCEPT_AUTO, "acceptEdits"),
+            (PlanDecisionOption.ACCEPT_DEFAULT, "default"),
+        ],
+        ids=["auto", "confirm_each"],
+    )
+    async def test_session_mode_switched(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        option: str,
+        mode: str,
+    ) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True)
+        monkeypatch.setattr(
+            "services.plan_mode.wait_for_task_signal",
+            _answering(db_session, node_log, [option]),
+        )
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=Redis(),
+        )
+
+        result = await callback("ExitPlanMode", {"plan": "p"}, _TEST_TOOL_CONTEXT)
+
+        assert isinstance(result, PermissionResultAllow)
+        assert result.updated_permissions is not None
+        assert [(u.type, u.mode, u.destination) for u in result.updated_permissions] == [
+            ("setMode", mode, "session"),
+        ]
+        assert context.plan_mode is False
+
+    async def test_auto_accept_switches_to_accept_edits(self, db_session: AsyncSession) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+
+        result = await _callback(db_session, task, node_log, auto_accept_plan=True, plan_mode=True)(
+            "ExitPlanMode",
+            {"plan": "p"},
+            _TEST_TOOL_CONTEXT,
+        )
+
+        assert isinstance(result, PermissionResultAllow)
+        assert result.updated_permissions is not None
+        assert result.updated_permissions[0].mode == "acceptEdits"
 
 
 async def _status_of(db_session: AsyncSession, task: Task) -> TaskStatus:
@@ -426,10 +627,10 @@ class TestDecisionStatus:
             ),
             (
                 "AskUserQuestion",
-                {"question": "Какую базу?", "options": ["main", "dev"]},
+                {"questions": [_question("Какую базу?", "main", "dev")]},
                 TaskStatus.PAUSED,
                 TaskStatus.AWAITING_INPUT,
-                "main",
+                "0",
             ),
         ],
         ids=["plan_from_in_progress", "question_from_paused"],
@@ -532,7 +733,11 @@ class TestDecisionStatus:
             decision_wait_timeout_seconds=0.2,
         )
 
-        result = await callback("AskUserQuestion", {"question": "?"}, _TEST_TOOL_CONTEXT)
+        result = await callback(
+            "AskUserQuestion",
+            {"questions": [_question("?", "Да", "Нет")]},
+            _TEST_TOOL_CONTEXT,
+        )
 
         assert result.behavior == "deny"
         assert await _status_of(db_session, task) is TaskStatus.REBASE_CONFLICT

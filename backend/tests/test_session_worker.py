@@ -714,7 +714,7 @@ class TestQuestionDuringPausedPrompt:
                 sa.select(NodeLog).where(NodeLog.status == NodeLogStatus.AWAITING_DECISION),
             )
             assert pending is not None
-            pending.user_input_text = "main"
+            pending.user_input_text = "0"
             await db_session.commit()
             return True
 
@@ -726,14 +726,20 @@ class TestQuestionDuringPausedPrompt:
             if worker_env.client.queries[-1] == "вопрос на паузе":
                 can_use_tool = worker_env.options[0].can_use_tool
                 assert can_use_tool is not None
+                question = {
+                    "question": "Какую базу?",
+                    "header": "База",
+                    "options": [{"label": "main"}, {"label": "dev"}],
+                    "multiSelect": False,
+                }
                 result = await can_use_tool(
                     "AskUserQuestion",
-                    {"question": "Какую базу?", "options": ["main", "dev"]},
+                    {"questions": [question]},
                     ToolPermissionContext(),
                 )
                 assert isinstance(result, PermissionResultAllow)
                 assert result.updated_input is not None
-                answers.append(result.updated_input["answer"])
+                answers.append(result.updated_input["answers"]["Какую базу?"])
 
         async def while_paused(observed: list[TaskStatus]) -> None:
             await db_session.refresh(task)
