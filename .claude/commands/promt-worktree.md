@@ -1,4 +1,4 @@
-Create a separate git worktree for task $1: a new branch from master named feature/$1 (not an existing branch name), in a directory next to the main repo (e.g. ../repo-$1).
+Create a separate git worktree for task $1: a new branch from origin/main (this repo's base branch) named feature/$1 (not an existing branch name), in a directory next to the main repo (e.g. ../repo-$1).
 If branch feature/$1 already exists, reuse it instead of creating a new one.
 Make all further changes for this task in that worktree only; do not touch the main checkout.
 Copy .env from the main project folder into the worktree.

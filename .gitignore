@@ -227,3 +227,6 @@ node_modules/
 
 # macOS
 .DS_Store
+
+# Личные настройки Claude Code (разрешения инструментов)
+.claude/settings.local.json
