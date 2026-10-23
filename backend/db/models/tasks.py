@@ -34,6 +34,8 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     title: Mapped[str] = mapped_column(sa.String)
     description: Mapped[str] = mapped_column(sa.Text)
     guide_url: Mapped[str | None] = mapped_column(sa.String)
+    # Раздел 15.6: задача Jira, из которой задача импортирована.
+    jira_issue_url: Mapped[str | None] = mapped_column(sa.String)
     status: Mapped[TaskStatus] = mapped_column(
         pg_enum(TaskStatus, name="task_status"),
         default=TaskStatus.NEW,

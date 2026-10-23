@@ -43,6 +43,8 @@ class TaskDraft:
     parent_task_id: uuid.UUID | None = None
     use_parent_summary: bool = False
     repositories: list[RepositoryAttachment] = field(default_factory=list)
+    # Раздел 15.6: задача Jira, из которой заполнена форма.
+    jira_issue_url: str | None = None
 
 
 async def _ensure_exists(
@@ -102,6 +104,7 @@ async def add_task_with_repositories(
         title=draft.title,
         description=draft.description,
         guide_url=draft.guide_url,
+        jira_issue_url=draft.jira_issue_url,
         parent_task_id=draft.parent_task_id,
         use_parent_summary=draft.use_parent_summary,
         llm_account_id=draft.llm_account_id,

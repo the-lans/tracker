@@ -170,6 +170,26 @@ export interface User {
   ssh_key_fingerprint: string | null;
   /** Раздел 16.2: последний вход в SFTP-шлюз по этому ключу. */
   ssh_key_last_used_at: string | null;
+  /** Раздел 15.6: личное подключение к Jira; токен не возвращается — только признак. */
+  jira_url: string | null;
+  jira_email: string | null;
+  jira_token_set: boolean;
+}
+
+/** `jira_token`: `null` — оставить сохранённый, пустая строка — удалить. */
+export interface JiraConnectionUpdate {
+  jira_url: string;
+  jira_email: string | null;
+  jira_token: string | null;
+}
+
+/** Раздел 15.6: поля формы новой задачи из задачи Jira. */
+export interface JiraIssueDraft {
+  code: string;
+  title: string;
+  description: string;
+  issue_url: string;
+  attachments: Array<{ filename: string; size: number }>;
 }
 
 /** Раздел 15.1: данные для подключения к SFTP-шлюзу. */
@@ -206,6 +226,8 @@ export interface Task {
   title: string;
   description: string;
   guide_url: string | null;
+  /** Раздел 15.6: задача Jira, из которой задача импортирована. */
+  jira_issue_url: string | null;
   status: TaskStatus;
   pipeline_id: string | null;
   llm_account_id: string | null;
@@ -243,6 +265,8 @@ export interface TaskDuplicateRequest {
 export interface TaskCreateRequest extends TaskDuplicateRequest {
   parent_task_id?: string | null;
   use_parent_summary?: boolean;
+  /** Раздел 15.6: ссылка и вложения задачи Jira берутся по ключу. */
+  jira_issue_key?: string | null;
 }
 
 /** PATCH /tasks/{id}: auto_accept_plan — до `done`, остальное — только в `new`. */

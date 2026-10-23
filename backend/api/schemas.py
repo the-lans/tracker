@@ -62,6 +62,8 @@ class TaskDuplicateRequest(BaseModel):
 class TaskCreateRequest(TaskDuplicateRequest):
     parent_task_id: uuid.UUID | None = None
     use_parent_summary: bool = False
+    # Раздел 15.6: задача заполнена из Jira — ссылка и вложения берутся по ключу.
+    jira_issue_key: str | None = None
 
 
 class TaskUpdateRequest(BaseModel):
@@ -100,6 +102,7 @@ class TaskResponse(BaseModel):
     title: str
     description: str
     guide_url: str | None
+    jira_issue_url: str | None = None
     status: TaskStatus
     pipeline_id: uuid.UUID | None
     llm_account_id: uuid.UUID | None
@@ -525,6 +528,10 @@ class UserResponse(BaseModel):
     # вход по нему — и в профиле, и в «Пользователях».
     ssh_public_key: str | None
     ssh_key_last_used_at: datetime | None
+    # Раздел 15.6: подключение к Jira; токен не отдаётся — только признак.
+    jira_url: str | None = None
+    jira_email: str | None = None
+    jira_token_encrypted: str | None = Field(default=None, exclude=True)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -532,6 +539,38 @@ class UserResponse(BaseModel):
         if self.ssh_public_key is None:
             return None
         return fingerprint_of_public_key(self.ssh_public_key)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def jira_token_set(self) -> bool:
+        return self.jira_token_encrypted is not None
+
+
+class JiraConnectionUpdateRequest(BaseModel):
+    """Раздел 15.6: ``jira_token`` — `None` оставить сохранённый, пустая строка — удалить."""
+
+    jira_url: str
+    jira_email: str | None = None
+    jira_token: str | None = None
+
+
+class JiraAttachmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    filename: str
+    size: int
+
+
+class JiraIssueDraftResponse(BaseModel):
+    """Раздел 15.6: поля формы новой задачи из задачи Jira."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    code: str
+    title: str
+    description: str
+    issue_url: str
+    attachments: list[JiraAttachmentResponse]
 
 
 class SftpConnectionResponse(BaseModel):

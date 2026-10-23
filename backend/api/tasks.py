@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import os
 import uuid
+from dataclasses import replace
 from typing import Annotated
 
+import httpx
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse
@@ -16,6 +18,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user
+from api.jira import get_jira_http_client
 from api.schemas import (
     ArtifactResponse,
     AwaitingDecisionCountResponse,
@@ -61,6 +64,7 @@ from services.access import (
 )
 from services.errors import ConflictError, NotFoundError, ValidationError
 from services.integrity import ensure_pipeline_attachable
+from services.jira_import import copy_jira_attachments, jira_issue_url
 from services.manual_queue import (
     attach_library_prompt,
     cancel_manual_request,
@@ -157,8 +161,12 @@ async def create_task(
     body: TaskCreateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
+    http_client: Annotated[httpx.AsyncClient, Depends(get_jira_http_client)],
 ) -> Task:
-    """Раздел 1.2 (сценарий 1): задача сразу с репозиториями и LLM-аккаунтом."""
+    """
+    Раздел 1.2 (сценарий 1): задача сразу с репозиториями и LLM-аккаунтом.
+    С ключом Jira (раздел 15.6) — ссылка на задачу Jira и её вложения в артефактах.
+    """
     if body.parent_task_id is not None:
         # Раздел 19.2: родителем может быть только доступная пользователю задача.
         await _get_task_or_404(db_session, body.parent_task_id, current_user)
@@ -167,7 +175,17 @@ async def create_task(
         parent_task_id=body.parent_task_id,
         use_parent_summary=body.use_parent_summary,
     )
-    return await create_task_with_repositories(db_session, draft=draft, created_by=current_user.id)
+    if body.jira_issue_key is not None:
+        draft = replace(draft, jira_issue_url=jira_issue_url(current_user, body.jira_issue_key))
+    task = await create_task_with_repositories(db_session, draft=draft, created_by=current_user.id)
+    if body.jira_issue_key is not None:
+        await copy_jira_attachments(
+            task=task,
+            user=current_user,
+            key=body.jira_issue_key,
+            http_client=http_client,
+        )
+    return task
 
 
 @router.post("/{task_id}/duplicate", response_model=TaskResponse, status_code=201)
