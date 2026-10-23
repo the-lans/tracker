@@ -12,7 +12,6 @@ Celery-задачи — синхронные функции (`@celery_app.task`)
 
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -43,6 +42,7 @@ from services.periodic_tasks import mark_periodic_task_running, record_periodic_
 from services.remote_control import check_task_bridge
 from services.system_settings import get_gitlab_credentials
 from services.task_workspace import resolve_repos_root
+from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import celery_app
 from tasks.session_worker import run_task_session
 
@@ -93,7 +93,7 @@ async def _run_periodic_async(name: str, body: Callable[[AsyncSession], Awaitabl
 
 
 def _run_periodic(name: str, body: Callable[[AsyncSession], Awaitable[None]]) -> None:
-    asyncio.run(_run_periodic_async(name, body))
+    run_with_fresh_pool(_run_periodic_async(name, body))
 
 
 @celery_app.task(name="check_scheduled_tasks_for_autostart")

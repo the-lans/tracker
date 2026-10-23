@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import uuid
 from collections.abc import Callable
@@ -79,6 +78,7 @@ from services.task_workspace import (
     resolve_repos_root,
     task_root,
 )
+from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import celery_app
 
 if TYPE_CHECKING:
@@ -126,7 +126,7 @@ def run_task_session(
     не выполняются (продолжение после `clear_context`, перезапуск после
     `failed`). ``continuation`` — задача уже в `in_progress`: предыдущий
     таск передал сессию этому после `clear_context` (раздел 11.5)."""
-    asyncio.run(
+    run_with_fresh_pool(
         _run_task_session_async(
             uuid.UUID(task_id),
             start_after_order_index=start_after_order_index,
