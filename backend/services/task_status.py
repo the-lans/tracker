@@ -85,8 +85,9 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.PLAN_REVIEW: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
     TaskStatus.AWAITING_INPUT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
     TaskStatus.REBASE_CONFLICT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.FAILED}),
-    TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS}),
-    TaskStatus.DONE: frozenset(),
+    # `-> new` — «Вернуть в новые» (раздел 14.2): сменить пайплайн и запустить заново.
+    TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.NEW}),
+    TaskStatus.DONE: frozenset({TaskStatus.NEW}),
 }
 
 
@@ -320,4 +321,26 @@ async def fail_task_after_error(
         db_session,
         task_id=task_id,
         failed_order_index=await first_unfinished_order_index(db_session, task_id),
+    )
+
+
+# Раздел 14.2 «Вернуть в новые»: только у задачи без живой сессии.
+RESETTABLE_STATUSES = frozenset({TaskStatus.FAILED, TaskStatus.DONE})
+
+
+async def reset_task_to_new(db_session: AsyncSession, *, task_id: uuid.UUID) -> Task:
+    """
+    Возвращает завершённую или упавшую задачу в `new`: пайплайн и состав нод
+    снова можно менять, «Запустить» пройдёт пайплайн с начала в той же
+    сессии. Точка перезапуска и автозапуск сбрасываются.
+    """
+    task = await db_session.get(Task, task_id, populate_existing=True)
+    if task is None or task.status not in RESETTABLE_STATUSES:
+        raise ConflictError("Вернуть в новые можно только завершённую или упавшую задачу")
+    return await transition_task_status(
+        db_session,
+        task_id=task_id,
+        from_status=task.status,
+        to_status=TaskStatus.NEW,
+        extra_values={"last_failed_order_index": None, "auto_start_enabled": False},
     )

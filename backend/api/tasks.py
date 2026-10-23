@@ -99,7 +99,11 @@ from services.task_env_variables import (
 from services.task_launch import ensure_task_launchable
 from services.task_nodes import bind_pipeline_to_task, list_task_nodes, set_task_node_enabled
 from services.task_signal import publish_task_signal
-from services.task_status import SESSION_ACTIVE_STATUSES, transition_task_status
+from services.task_status import (
+    SESSION_ACTIVE_STATUSES,
+    reset_task_to_new,
+    transition_task_status,
+)
 from services.task_workspace import load_task_repositories, resolve_repos_root
 from tasks.session_worker import run_task_session
 
@@ -349,6 +353,19 @@ async def restart_task(
     )
     await db_session.refresh(task)
     return task
+
+
+@router.post("/{task_id}/reset", response_model=TaskResponse)
+async def reset_task(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """Раздел 14.2 «Вернуть в новые»: из `failed`/`done` — чтобы сменить пайплайн."""
+    await _get_task_or_404(db_session, task_id, current_user)
+    updated = await reset_task_to_new(db_session, task_id=task_id)
+    await db_session.refresh(updated)
+    return updated
 
 
 @router.post("/{task_id}/cleanup-repositories", response_model=TaskResponse)

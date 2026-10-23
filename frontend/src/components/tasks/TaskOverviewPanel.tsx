@@ -144,7 +144,11 @@ export function TaskOverviewPanel({
           </div>
         </Card>
         {task.pipeline_id ? (
-          <TaskNodesCard task={task} nodeLogs={nodeLogs} />
+          <TaskNodesCard
+            task={task}
+            nodeLogs={nodeLogs}
+            onChangePipeline={() => setPipelinePickerOpen(true)}
+          />
         ) : (
           <Card>
             <div className="mb-2 text-body text-text-2">Пайплайн не выбран</div>
@@ -183,7 +187,11 @@ export function TaskOverviewPanel({
           </div>
         </Card>
         {task.pipeline_id ? (
-          <TaskNodesCard task={task} nodeLogs={nodeLogs} />
+          <TaskNodesCard
+            task={task}
+            nodeLogs={nodeLogs}
+            onChangePipeline={() => setPipelinePickerOpen(true)}
+          />
         ) : (
           <Card>
             <div className="mb-2 text-body text-text-2">Пайплайн не выбран</div>

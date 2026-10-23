@@ -79,9 +79,12 @@ class Node(UUIDPrimaryKeyMixin, Base):
 
 
 class TaskNode(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
-    """Снимок ноды пайплайна для конкретной задачи (3.1)."""
+    """Снимок ноды пайплайна для конкретной задачи (3.1): нода — не больше одного раза."""
 
     __tablename__ = "task_nodes"
+    __table_args__ = (
+        sa.Index("uq_task_nodes_task_id_node_id", "task_id", "node_id", unique=True),
+    )
 
     task_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("tasks.id"))
     node_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("nodes.id"))

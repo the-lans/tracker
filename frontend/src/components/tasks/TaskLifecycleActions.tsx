@@ -1,27 +1,28 @@
 import { useState } from "react";
-import { Copy, Eraser, FolderX } from "lucide-react";
+import { Copy, Eraser, FolderX, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/common/dialogs/ConfirmDialog";
 import { DuplicateTaskDialog } from "@/components/tasks/DuplicateTaskDialog";
 import { HEADER_BUTTON } from "@/styles/classes";
-import { useCleanupRepositories, useClearContext } from "@/hooks/useTasks";
+import { useCleanupRepositories, useClearContext, useResetTask } from "@/hooks/useTasks";
 import { ApiError } from "@/lib/apiClient";
 import { TaskStatus, type Task } from "@/lib/types";
 import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
 
-type PendingAction = "cleanup" | "clear-context" | null;
+type PendingAction = "cleanup" | "clear-context" | "reset" | null;
 
 function onError(fallback: string) {
   return (error: Error) => toast.error(error instanceof ApiError ? error.message : fallback);
 }
 
 /** Раздел 14.2, 14.3: действия над задачей в `done`/`failed` — очистка
- * директории репозиториев, очистка контекста, дублирование. */
+ * директории репозиториев, очистка контекста, возврат в новые, дублирование. */
 export function TaskLifecycleActions({ task }: { task: Task }) {
   const [pending, setPending] = useState<PendingAction>(null);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
   const cleanupRepositories = useCleanupRepositories(task.id);
   const clearContext = useClearContext(task.id);
+  const resetTask = useResetTask(task.id);
   const isTerminal = task.status === TaskStatus.DONE || task.status === TaskStatus.FAILED;
 
   function handleCleanup() {
@@ -44,8 +45,30 @@ export function TaskLifecycleActions({ task }: { task: Task }) {
     });
   }
 
+  function handleReset() {
+    resetTask.mutate(undefined, {
+      onSuccess: () => {
+        setPending(null);
+        toast.success("Задача снова в новых — можно сменить пайплайн и запустить");
+      },
+      onError: onError("Не удалось вернуть задачу в новые"),
+    });
+  }
+
   return (
     <>
+      {isTerminal && (
+        <button
+          type="button"
+          className={HEADER_BUTTON}
+          aria-label="Вернуть в новые"
+          title="Вернуть в новые"
+          onClick={() => setPending("reset")}
+        >
+          <RotateCcw className="size-3.5" />
+          <ButtonLabel>Вернуть в новые</ButtonLabel>
+        </button>
+      )}
       {task.status === TaskStatus.FAILED && (
         <button
           type="button"
@@ -105,6 +128,15 @@ export function TaskLifecycleActions({ task }: { task: Task }) {
         danger
         pending={clearContext.isPending}
         onConfirm={handleClearContext}
+      />
+      <ConfirmDialog
+        open={pending === "reset"}
+        onOpenChange={(open) => !open && setPending(null)}
+        title="Вернуть задачу в новые?"
+        description="Можно будет сменить пайплайн и состав нод. «Запустить» пройдёт пайплайн с начала в той же сессии агента; история выполнения сохранится."
+        confirmLabel="Вернуть в новые"
+        pending={resetTask.isPending}
+        onConfirm={handleReset}
       />
       <DuplicateTaskDialog task={task} open={duplicateOpen} onOpenChange={setDuplicateOpen} />
     </>

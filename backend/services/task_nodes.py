@@ -16,12 +16,11 @@ import sqlalchemy as sa
 from app_logging.config import get_logger
 from db.models.enums import NodeType, TaskStatus
 from db.models.pipelines import Node, TaskNode
+from db.models.tasks import Task
 from services.errors import ConflictError, NotFoundError, ValidationError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
-
-    from db.models.tasks import Task
 
 logger = get_logger("task_nodes")
 
@@ -107,12 +106,25 @@ async def bind_pipeline_to_task(
     Раздел 3.1, 13.1, правило 10 CLAUDE.md: снимок нод и `tasks.pipeline_id`
     — одной транзакцией.
 
+    Пока задача в `new`, пайплайн можно сменить: прежний снимок заменяется
+    новым в той же транзакции. Строка задачи блокируется до коммита, поэтому
+    две одновременные привязки не складывают снимки (решение №19 плана).
+
     ``disabled_node_ids`` — чекбоксы, снятые пользователем при выборе
     пайплайна; `None` — выбор не делался, и выключены ноды с `is_skipped`
     (раздел 15.4, «пропуск по умолчанию»).
     """
-    if task.status is not TaskStatus.NEW:
-        raise ValidationError("Пайплайн можно привязать только к задаче в статусе new")
+    locked = await db_session.scalar(
+        sa.select(Task)
+        .where(Task.id == task.id)
+        .with_for_update()
+        .execution_options(populate_existing=True),
+    )
+    if locked is None or locked.status is not TaskStatus.NEW:
+        raise ValidationError(
+            "Пайплайн можно выбрать или сменить только у задачи в статусе new — "
+            "запущенную задачу сначала верните в новые",
+        )
     nodes_stmt = sa.select(Node).where(Node.pipeline_id == pipeline_id).order_by(Node.order_index)
     nodes = list((await db_session.execute(nodes_stmt)).scalars().all())
     if not nodes:
@@ -123,6 +135,7 @@ async def bind_pipeline_to_task(
     if unknown:
         raise ValidationError("Отключаемые ноды не принадлежат выбранному пайплайну")
 
+    await db_session.execute(sa.delete(TaskNode).where(TaskNode.task_id == task.id))
     task.pipeline_id = pipeline_id
     for node in nodes:
         db_session.add(
