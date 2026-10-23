@@ -76,11 +76,18 @@ if TYPE_CHECKING:
 _REPOSITORY_NAME = "backend"
 
 
+@pytest.fixture(autouse=True)
+def _accounts_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Каталоги LLM-аккаунтов тестовых задач — во временной директории теста."""
+    monkeypatch.setattr("tests.factories.DEFAULT_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
+
+
 async def _make_task(
     db_session: AsyncSession,
     *,
     status: TaskStatus,
     origin: Path | None = None,
+    with_llm_account: bool = True,
 ) -> Task:
     user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
     db_session.add(user)
@@ -96,6 +103,8 @@ async def _make_task(
         pipeline_id=pipeline.id,
         status=status,
     )
+    if with_llm_account:
+        task.llm_account_id = (await make_llm_account(db_session, owner_id=user.id)).id
     db_session.add(task)
     await db_session.flush()
     if origin is not None:
@@ -1265,3 +1274,24 @@ class TestFailureKinds:
         assert task.status is TaskStatus.DONE
         assert replacement.queries == ["шаг 1"]
         assert worker_env.options[-1].resume == "sess-worker"
+
+
+class TestWithoutLlmAccount:
+    async def test_scripts_only_pipeline_done(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Раздел 3.1: задача из одних скриптов работает без LLM-аккаунта и без CLI."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED, with_llm_account=False)
+        script = await _add_node(db_session, task, order_index=0, node_type=NodeType.SCRIPT)
+        script.script_language = ScriptLanguage.PYTHON
+        script.script_content = 'print("ok")'
+        await db_session.flush()
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert worker_env.options == []
+        assert task.remote_control_status is not RemoteControlStatus.CONNECTED

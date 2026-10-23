@@ -68,6 +68,10 @@ export function TaskFormFields({
       </div>
       <div>
         <Label>LLM-аккаунт</Label>
+        <div className="mb-1 text-meta text-text-3">
+          Нужен для нод с промтами, слэш-командами и планированием; задаче из одних скриптов не
+          нужен.
+        </div>
         <Select value={value.llmAccountId} onValueChange={(llmAccountId) => onChange({ llmAccountId })}>
           <SelectTrigger>
             <SelectValue placeholder="Выберите аккаунт" />
@@ -84,7 +88,7 @@ export function TaskFormFields({
           <EmptyState
             compact
             title="LLM-аккаунтов пока нет"
-            hint="Без аккаунта Claude задачу не запустить. Добавьте свой аккаунт в разделе «LLM-аккаунты» кнопкой «+ Аккаунт»."
+            hint="Без аккаунта Claude можно запускать только скрипты. Добавьте свой аккаунт в разделе «LLM-аккаунты» кнопкой «+ Аккаунт»."
           />
         )}
       </div>

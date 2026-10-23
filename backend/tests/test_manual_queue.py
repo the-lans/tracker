@@ -45,6 +45,7 @@ from services.task_control import (
     request_manual_stop,
     request_task_control,
 )
+from tests.factories import make_llm_account
 from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
@@ -61,6 +62,7 @@ async def _make_task(db_session: AsyncSession) -> tuple[Task, uuid.UUID]:
         description="d",
         created_by=user.id,
         status=TaskStatus.IN_PROGRESS,
+        llm_account_id=(await make_llm_account(db_session, owner_id=user.id)).id,
     )
     db_session.add(task)
     await db_session.flush()

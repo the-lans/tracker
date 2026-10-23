@@ -15,7 +15,16 @@ import { ManualRequestStatus, ManualRequestType, type TaskStatus } from "@/lib/t
  * (раздел 8.2); при занятой сессии запрос ждёт в очереди — индикатор
  * «В очереди» рядом с полем. Предпросмотр (раздел 8.2) показывает текст
  * после подстановки переменных — ровно тот, что уйдёт в сессию. */
-export function Composer({ taskId, taskStatus }: { taskId: string; taskStatus: TaskStatus }) {
+export function Composer({
+  taskId,
+  taskStatus,
+  hasLlmAccount,
+}: {
+  taskId: string;
+  taskStatus: TaskStatus;
+  /** Раздел 3.1: без LLM-аккаунта свободный промт выполнить некому. */
+  hasLlmAccount: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [previewText, setPreviewText] = useState<string | null>(null);
@@ -70,7 +79,12 @@ export function Composer({ taskId, taskStatus }: { taskId: string; taskStatus: T
           В очереди: {queuedFreeform}
         </div>
       )}
-      {!sessionActive ? (
+      {!hasLlmAccount ? (
+        <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
+          <MessageSquarePlus className="size-3.5 shrink-0" />
+          У задачи нет LLM-аккаунта — свободный промт выполнить некому
+        </div>
+      ) : !sessionActive ? (
         <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
           <MessageSquarePlus className="size-3.5 shrink-0" />
           Свободный промт доступен, пока сессия задачи активна

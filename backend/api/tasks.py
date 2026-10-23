@@ -96,11 +96,11 @@ from services.task_env_variables import (
     reveal_task_env_variable,
     update_task_env_variable,
 )
+from services.task_launch import ensure_task_launchable
 from services.task_nodes import bind_pipeline_to_task, list_task_nodes, set_task_node_enabled
 from services.task_signal import publish_task_signal
 from services.task_status import SESSION_ACTIVE_STATUSES, transition_task_status
 from services.task_workspace import load_task_repositories, resolve_repos_root
-from services.template_context import ensure_no_repository_env_conflicts
 from tasks.session_worker import run_task_session
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -317,8 +317,8 @@ async def start_task(
     """Раздел 12.2: "тот же процесс запуска, что и ручная кнопка «Выполнить»" —
     `new -> queued`, затем Celery-таск, владеющий сессией, подхватывает
     задачу асинхронно (`tasks/session_worker.py`)."""
-    await _get_task_or_404(db_session, task_id, current_user)
-    await ensure_no_repository_env_conflicts(db_session, task_id=task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
+    await ensure_task_launchable(db_session, task)
     updated = await transition_task_status(
         db_session,
         task_id=task_id,
@@ -342,7 +342,7 @@ async def restart_task(
     task = await _get_task_or_404(db_session, task_id, current_user)
     if task.status is not TaskStatus.FAILED or task.last_failed_order_index is None:
         raise ValidationError("Перезапуск доступен только для задачи в статусе failed")
-    await ensure_no_repository_env_conflicts(db_session, task_id=task_id)
+    await ensure_task_launchable(db_session, task)
     run_task_session.delay(
         str(task_id),
         start_after_order_index=task.last_failed_order_index - 1,

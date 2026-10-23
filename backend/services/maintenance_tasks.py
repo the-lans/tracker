@@ -157,14 +157,20 @@ async def send_awaiting_decision_reminders(
 
 
 async def find_tasks_requiring_remote_control_check(db_session: AsyncSession) -> list[Task]:
-    """Раздел 6.6: `check_remote_control_bridges` — активные задачи."""
+    """
+    Раздел 6.6: `check_remote_control_bridges` — активные задачи с сессией
+    Claude Code; у задачи без LLM-аккаунта моста нет (раздел 3.1).
+    """
     active_statuses = (
         TaskStatus.IN_PROGRESS,
         TaskStatus.PAUSED,
         TaskStatus.AWAITING_INPUT,
         TaskStatus.PLAN_REVIEW,
     )
-    stmt = sa.select(Task).where(Task.status.in_(active_statuses))
+    stmt = sa.select(Task).where(
+        Task.status.in_(active_statuses),
+        Task.llm_account_id.is_not(None),
+    )
     return list((await db_session.execute(stmt)).scalars().all())
 
 

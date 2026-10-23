@@ -34,7 +34,7 @@ from services.maintenance_tasks import (
     stale_ssh_key_reminder_key,
 )
 from services.notifications import NotificationEvent
-from tests.factories import SAMPLE_ED25519_KEY, make_user
+from tests.factories import SAMPLE_ED25519_KEY, make_llm_account, make_user
 
 
 async def _make_task(db_session: AsyncSession, *, status: TaskStatus) -> Task:
@@ -144,12 +144,19 @@ async def test_find_tasks_requiring_remote_control_check_matches_active_statuses
 ) -> None:
     in_progress = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
     done = await _make_task(db_session, status=TaskStatus.DONE)
+    scripts_only = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
+    for task in (in_progress, done):
+        account = await make_llm_account(db_session, owner_id=task.created_by)
+        task.llm_account_id = account.id
+    await db_session.flush()
 
     found = await find_tasks_requiring_remote_control_check(db_session)
     found_ids = {t.id for t in found}
 
     assert in_progress.id in found_ids
     assert done.id not in found_ids
+    # Раздел 3.1: у задачи без LLM-аккаунта сессии Claude Code и моста нет.
+    assert scripts_only.id not in found_ids
 
 
 async def test_purge_orphaned_docker_containers_stops_stale_and_keeps_fresh() -> None:

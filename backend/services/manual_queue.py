@@ -52,6 +52,7 @@ from services.parent_summary import run_parent_summary_request
 from services.pipeline_orchestrator import StopGuard, run_node_execution
 from services.system_settings import resolve_runner_image
 from services.task_control import clear_manual_stop, is_manual_stop_requested
+from services.task_launch import requires_llm_account
 from services.template_context import RenderedText, render_for_task
 from services.templating import (
     RenderScope,
@@ -87,6 +88,13 @@ LIBRARY_FORBIDDEN_NODE_TYPES = frozenset({NodeType.CLEAR_CONTEXT, NodeType.PLAN_
 DEFAULT_FREEFORM_TIMEOUT_SECONDS = 600
 
 
+async def _ensure_task_has_llm_account(db_session: AsyncSession, task_id: uuid.UUID) -> None:
+    """Раздел 3.1: без LLM-аккаунта сессии Claude Code у задачи нет."""
+    task = await db_session.get(Task, task_id)
+    if task is not None and task.llm_account_id is None:
+        raise ValidationError("Промт выполняет LLM — выберите у задачи LLM-аккаунт")
+
+
 async def enqueue_library_prompt_run(
     db_session: AsyncSession,
     *,
@@ -96,6 +104,8 @@ async def enqueue_library_prompt_run(
 ) -> TaskManualRequestQueue:
     if node.node_type in LIBRARY_FORBIDDEN_NODE_TYPES:
         raise ValidationError(f"Тип ноды {node.node_type} недопустим для библиотеки промтов")
+    if requires_llm_account(node):
+        await _ensure_task_has_llm_account(db_session, task_library_prompt.task_id)
     request = TaskManualRequestQueue(
         task_id=task_library_prompt.task_id,
         request_type=ManualRequestType.LIBRARY_PROMPT,
@@ -125,6 +135,7 @@ async def enqueue_freeform_prompt_run(
     # Раздел 8.2: "{{node.*}}" недоступны свободному полю ввода — проверяется
     # здесь же, до постановки в очередь, а не только на предпросмотре.
     validate_template_variables(raw_prompt_text, scope=RenderScope.FREEFORM)
+    await _ensure_task_has_llm_account(db_session, task_id)
     request = TaskManualRequestQueue(
         task_id=task_id,
         request_type=ManualRequestType.FREEFORM_PROMPT,

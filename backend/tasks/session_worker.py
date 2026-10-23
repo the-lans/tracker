@@ -25,6 +25,7 @@ from app_logging.config import get_logger
 from clients.claude_agent import (
     ClaudeAgentClientProtocol,
     ClaudeCodeSession,
+    OfflineAgentClient,
     RateLimitHandler,
     build_claude_agent_options,
 )
@@ -181,6 +182,8 @@ class _SessionControl:
     # Новый процесс CLI с прежними флагами — после падения процесса посреди
     # ноды (раздел 17.3: временный сбой повторяется в той же сессии).
     recovery_client_factory: Callable[[str], ClaudeAgentClientProtocol]
+    # Раздел 3.1: без LLM-аккаунта процесса Claude Code нет вовсе.
+    has_llm: bool = True
 
     async def recover_session(self) -> None:
         session_id = self.claude_session.session_id or self.task.session_id
@@ -214,6 +217,10 @@ class _SessionControl:
             self.task,
         ):
             return True
+        if not self.has_llm:
+            # Конфликт разбирает агент (раздел 14) — без LLM-аккаунта некому.
+            logger.info("rebase_conflict_without_llm", task_id=str(self.task.id))
+            return False
         logger.info("rebase_conflict_resolution_started", task_id=str(self.task.id))
         if not await resolve_rebase_conflict(
             self.db_session,
@@ -253,7 +260,7 @@ class _SessionControl:
         await self.db_session.refresh(self.task)
         session_id = self.claude_session.session_id or self.task.session_id
         status = RemoteControlStatus.DISCONNECTED
-        if session_id is None:
+        if session_id is None or not self.has_llm:
             logger.info("bridge_reconnect_skipped_no_session", task_id=str(self.task.id))
         else:
             try:
@@ -562,11 +569,15 @@ async def _run_claimed_task(
         session_factory=async_session_factory,
         redis_client=redis_client,
     )
+    has_llm = task.llm_account_id is not None
+
     def make_client(
         *,
         resume_session_id: str | None,
         enable_remote_control: bool,
     ) -> ClaudeAgentClientProtocol:
+        if not has_llm:
+            return OfflineAgentClient()
         options = build_claude_agent_options(
             resume_session_id=resume_session_id,
             cwd=str(workspace),
@@ -582,10 +593,11 @@ async def _run_claimed_task(
     # Раздел 6.4: история сессии нужна, пока существует задача (resume, пересказ).
     ensure_history_retention(claude_config_dir, days=history_retention_days())
     start_plan = plan_session_start(existing_session_id=task.session_id)
+    enable_remote_control = start_plan.enable_remote_control and has_llm
     session = ClaudeCodeSession(
         make_client(
             resume_session_id=start_plan.resume_session_id,
-            enable_remote_control=start_plan.enable_remote_control,
+            enable_remote_control=enable_remote_control,
         ),
         on_text_delta=build_output_publisher(redis_client, active_node_context),
         on_abort=active_node_context.cancel_decision_wait,
@@ -604,11 +616,12 @@ async def _run_claimed_task(
         ),
         recovery_client_factory=lambda session_id: make_client(
             resume_session_id=session_id,
-            enable_remote_control=start_plan.enable_remote_control,
+            enable_remote_control=enable_remote_control,
         ),
+        has_llm=has_llm,
     )
     await session.connect()
-    if start_plan.enable_remote_control:
+    if enable_remote_control:
         await record_bridge_status(db_session, task=task, status=RemoteControlStatus.CONNECTED)
     outcome = None
     try:

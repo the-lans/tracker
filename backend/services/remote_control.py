@@ -99,6 +99,8 @@ async def start_bridge_reconnect(
     """
     if task.status not in SESSION_ACTIVE_STATUSES:
         raise ConflictError("У задачи нет активной сессии")
+    if task.llm_account_id is None:
+        raise ConflictError("У задачи без LLM-аккаунта нет сессии Claude Code")
     task.remote_control_status = RemoteControlStatus.RECONNECTING
     await db_session.commit()
     await request_bridge_reconnect(redis_client, task.id)
