@@ -50,9 +50,10 @@ export function JiraImportField({
   return (
     <div>
       <Label htmlFor="jira-key">Ключ задачи Jira</Label>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Input
           id="jira-key"
+          className="min-w-0 flex-1 basis-40"
           placeholder="PROJ-123"
           value={key}
           onChange={(event) => setKey(event.target.value)}
@@ -60,6 +61,7 @@ export function JiraImportField({
         <Button
           type="button"
           variant="secondary"
+          className="shrink-0"
           disabled={!key.trim() || fetchDraft.isPending}
           onClick={handleImport}
         >

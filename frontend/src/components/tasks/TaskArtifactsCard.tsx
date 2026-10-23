@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { TaskArtifactRow } from "@/components/tasks/TaskArtifactRow";
 import { useTaskArtifacts, useUploadTaskArtifact } from "@/hooks/useTaskArtifacts";
 import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
@@ -16,7 +17,7 @@ import type { Task } from "@/lib/types";
  * репозиториев; те же файлы видны по SFTP в `<код>/artifacts`.
  */
 export function TaskArtifactsCard({ task }: { task: Task }) {
-  const { data: artifacts } = useTaskArtifacts(
+  const { data: artifacts, isLoading } = useTaskArtifacts(
     task.id,
     SESSION_ACTIVE_STATUSES.includes(task.status),
   );
@@ -57,7 +58,9 @@ export function TaskArtifactsCard({ task }: { task: Task }) {
         aria-label="Файлы артефактов"
         onChange={handleFiles}
       />
-      {artifacts?.length ? (
+      {isLoading ? (
+        <LoadingState />
+      ) : artifacts?.length ? (
         <div className="flex flex-col">
           {artifacts.map((artifact) => (
             <TaskArtifactRow key={artifact.path} taskId={task.id} artifact={artifact} />
