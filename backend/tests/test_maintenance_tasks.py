@@ -33,6 +33,7 @@ from services.maintenance_tasks import (
     send_cleanup_reminders,
     stale_ssh_key_reminder_key,
 )
+from services.nodes.script import CONTAINER_DEADLINE_LABEL, container_deadline
 from services.notifications import NotificationEvent
 from tests.factories import SAMPLE_ED25519_KEY, make_llm_account, make_user
 
@@ -157,6 +158,55 @@ async def test_find_tasks_requiring_remote_control_check_matches_active_statuses
     assert done.id not in found_ids
     # Раздел 3.1: у задачи без LLM-аккаунта сессии Claude Code и моста нет.
     assert scripts_only.id not in found_ids
+
+
+async def _run_labelled_container(deadline: int) -> str:
+    container_name = f"tracker-node-{uuid.uuid4()}"
+    process = await asyncio.create_subprocess_exec(
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        container_name,
+        "--label",
+        f"{CONTAINER_DEADLINE_LABEL}={deadline}",
+        "alpine",
+        "sleep",
+        "60",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await process.communicate()
+    return container_name
+
+
+class TestPurgeByDeadline:
+    """Раздел 16.2: зависший — переживший свой дедлайн, а не просто «старый»."""
+
+    @pytest.mark.parametrize(
+        ("deadline_offset", "grace_period", "purged"),
+        [
+            (timedelta(hours=1), timedelta(seconds=0), False),
+            (-timedelta(seconds=1), timedelta(hours=1), True),
+        ],
+        ids=["long_running_script_kept", "past_deadline_stopped"],
+    )
+    async def test_deadline_wins_over_grace(
+        self,
+        deadline_offset: timedelta,
+        grace_period: timedelta,
+        purged: bool,
+    ) -> None:
+        now = datetime.now(UTC)
+        container_name = await _run_labelled_container(int((now + deadline_offset).timestamp()))
+        try:
+            stopped = await purge_orphaned_docker_containers(now=now, grace_period=grace_period)
+            assert (container_name in stopped) is purged
+        finally:
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+
+    def test_deadline_includes_node_timeout(self) -> None:
+        assert container_deadline(1800, now=1000.0) > 1000 + 1800
 
 
 async def test_purge_orphaned_docker_containers_stops_stale_and_keeps_fresh() -> None:

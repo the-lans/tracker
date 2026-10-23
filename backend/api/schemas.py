@@ -420,6 +420,12 @@ class PipelineResponse(BaseModel):
     created_by: uuid.UUID
 
 
+# Границы значений выполнения ноды — те же, что у «Системных настроек» (раздел 15.5).
+_MAX_TIMEOUT_SECONDS = 24 * 60 * 60
+_MAX_RETRIES = 10
+_MAX_RETRY_DELAY_SECONDS = 60 * 60
+
+
 class NodeCreateRequest(BaseModel):
     """Раздел 3.1: одна и та же форма для ноды пайплайна и промта
     библиотеки — различие только в ``pipeline_id``/``order_index``
@@ -437,9 +443,9 @@ class NodeCreateRequest(BaseModel):
     script_content: str | None = None
     docker_image: str | None = None
     # Раздел 15.5: не переданные значения берутся из «Системных настроек».
-    timeout_seconds: int | None = Field(default=None, ge=1)
-    max_retries: int | None = Field(default=None, ge=1)
-    retry_base_delay_seconds: int | None = Field(default=None, ge=0)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=_MAX_TIMEOUT_SECONDS)
+    max_retries: int | None = Field(default=None, ge=1, le=_MAX_RETRIES)
+    retry_base_delay_seconds: int | None = Field(default=None, ge=0, le=_MAX_RETRY_DELAY_SECONDS)
     guide_url: str | None = None
     is_skipped: bool = False
     llm_output_last_n: int | None = None
@@ -454,9 +460,9 @@ class NodeUpdateRequest(BaseModel):
     script_language: ScriptLanguage | None = None
     script_content: str | None = None
     docker_image: str | None = None
-    timeout_seconds: int | None = None
-    max_retries: int | None = None
-    retry_base_delay_seconds: int | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1, le=_MAX_TIMEOUT_SECONDS)
+    max_retries: int | None = Field(default=None, ge=1, le=_MAX_RETRIES)
+    retry_base_delay_seconds: int | None = Field(default=None, ge=0, le=_MAX_RETRY_DELAY_SECONDS)
     guide_url: str | None = None
     is_skipped: bool | None = None
     is_archived: bool | None = None
@@ -653,9 +659,6 @@ class AppLogResponse(BaseModel):
 
 # --- Системные настройки (раздел 15.5) ------------------------------------
 
-_MAX_TIMEOUT_SECONDS = 24 * 60 * 60
-_MAX_RETRIES = 10
-_MAX_RETRY_DELAY_SECONDS = 60 * 60
 
 
 class SystemSettingsBody(BaseModel):
