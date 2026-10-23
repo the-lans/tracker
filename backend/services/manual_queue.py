@@ -39,6 +39,7 @@ from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
+from services.integrity import ensure_library_prompt_attachable
 from services.nodes.dispatch import (
     execute_llm_node_with_timeout,
     execute_node,
@@ -88,6 +89,26 @@ LIBRARY_FORBIDDEN_NODE_TYPES = frozenset({NodeType.CLEAR_CONTEXT, NodeType.PLAN_
 # нода у свободного промта отсутствует. Значение — то же умолчание, что и
 # у ноды пайплайна (nodes.timeout_seconds, раздел 3.1).
 DEFAULT_FREEFORM_TIMEOUT_SECONDS = 600
+
+
+async def attach_library_prompt(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    node: Node,
+    added_by: uuid.UUID,
+) -> TaskLibraryPrompt:
+    """Раздел 7.3: промт из библиотеки добавляется в список задачи; архивный — нет."""
+    ensure_library_prompt_attachable(node)
+    task_library_prompt = TaskLibraryPrompt(
+        task_id=task_id,
+        node_id=node.id,
+        added_by=added_by,
+        added_at=datetime.now(UTC),
+    )
+    db_session.add(task_library_prompt)
+    await db_session.commit()
+    return task_library_prompt
 
 
 async def _ensure_task_has_llm_account(db_session: AsyncSession, task_id: uuid.UUID) -> None:

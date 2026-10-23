@@ -48,8 +48,8 @@ from app_logging.config import get_logger
 from db.models.enums import NodeLogStatus, PermissionMode, TaskStatus
 from db.models.logs import NodeLog
 from db.models.tasks import Task
-from services.errors import ConflictError
-from services.task_signal import wait_for_task_signal
+from services.errors import ConflictError, NotFoundError, ValidationError
+from services.task_signal import publish_task_signal, wait_for_task_signal
 from services.task_status import transition_task_status
 
 if TYPE_CHECKING:
@@ -234,6 +234,31 @@ def encode_decision(option_id: str, *, feedback_text: str | None = None) -> str:
 def parse_decision(encoded: str) -> tuple[str, str | None]:
     option_id, separator, feedback_text = encoded.partition(_DECISION_SEPARATOR)
     return option_id, feedback_text if separator else None
+
+
+async def record_user_decision(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    node_log_id: uuid.UUID,
+    option_id: str,
+    feedback_text: str | None,
+    redis_client: Redis,
+) -> None:
+    """
+    Раздел 9.6: решение по плану, ответ на вопрос агента и подтверждение
+    действия приходят одним путём — решение записывается в
+    `node_logs.user_input_text` ожидающей записи, ожидающий callback
+    будится сигналом задачи.
+    """
+    node_log = await db_session.get(NodeLog, node_log_id)
+    if node_log is None or node_log.task_id != task.id:
+        raise NotFoundError(f"Запись node_logs {node_log_id} не найдена у этой задачи")
+    if node_log.status is not NodeLogStatus.AWAITING_DECISION:
+        raise ValidationError("Эта запись не ожидает решения")
+    node_log.user_input_text = encode_decision(option_id, feedback_text=feedback_text)
+    await db_session.commit()
+    await publish_task_signal(redis_client, task.id)
 
 
 async def _read_resolution(db_session: AsyncSession, *, node_log_id: uuid.UUID) -> str | None:
