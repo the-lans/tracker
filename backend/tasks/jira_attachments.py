@@ -47,15 +47,19 @@ async def _copy(*, task_id: uuid.UUID, user_id: uuid.UUID, key: str) -> None:
             )
 
 
+async def _clear_pending(task_id: uuid.UUID) -> None:
+    redis_client = Redis.from_url(os.environ["REDIS_URL"])
+    try:
+        await clear_attachment_copy_pending(redis_client, task_id)
+    finally:
+        await redis_client.aclose()
+
+
 async def copy_jira_attachments_async(*, task_id: uuid.UUID, user_id: uuid.UUID, key: str) -> None:
     try:
         await _copy(task_id=task_id, user_id=user_id, key=key)
     finally:
-        redis_client = Redis.from_url(os.environ["REDIS_URL"])
-        try:
-            await clear_attachment_copy_pending(redis_client, task_id)
-        finally:
-            await redis_client.aclose()
+        await _clear_pending(task_id)
 
 
 @celery_app.task(name="copy_jira_attachments_to_task")

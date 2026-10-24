@@ -331,7 +331,9 @@ class TestCreateFromJira:
         redis_client: Redis,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Сбой копирования не оставляет страницу задачи опрашивать артефакты вечно."""
+        """
+        Сбой копирования не оставляет страницу задачи опрашивать артефакты вечно.
+        """
         task_id = uuid.uuid4()
         await mark_attachment_copy_pending(redis_client, task_id)
 
@@ -357,8 +359,9 @@ class TestCreateFromJira:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """
-        Одноимённые вложения сохраняются оба, слишком большое и лежащее не на
-        сервере Jira — пропускаются; повторный запуск ничего не добавляет.
+        Одноимённые вложения сохраняются оба, слишком большое пропускается,
+        ссылка на чужой хост запрашивается с сервера Jira и, не найдясь, тоже
+        пропускается; повторный запуск ничего не добавляет.
         """
         await _connect(authed_client, db_session)
         task_queue = jira_attachments.copy_jira_attachments_to_task
