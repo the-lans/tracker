@@ -123,6 +123,7 @@ backend/
   tasks/     — Celery-приложение и задачи: celery_app.py (include модулей,
               очередь sessions, DatabaseScheduler), session_worker.py
               (долгоживущая сессия задачи), periodic.py / periodic_scheduler.py,
+              jira_attachments.py (вложения Jira → артефакты, в фоне),
               async_runner.py — run_with_fresh_pool: асинхронное тело задачи
               в своём event loop с пустым пулом БД (правило 12)
   docker-entrypoint.sh — применяет alembic-миграции и создаёт роль БД
@@ -179,7 +180,8 @@ alembic/
                  push_subscriptions, nodes.llm_output_last_n, статус paused,
                  task_parent_summaries, system_settings, владельцы записей,
                  SFTP, токен GitLab в system_settings, уникальность
-                 task_nodes, подключение к Jira); новые миграции пишут DDL
+                 task_nodes, подключение к Jira, tasks.reset_at, адрес Jira
+                 в system_settings); новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
@@ -394,14 +396,17 @@ Postgres из `backend/tests/conftest.py`:
     иначе вторая задача процесса получит соединение пула чужого event loop.
 13. **Покрытие тестами `backend/services/`** — не ниже 85%.
 14. **Переход в `done`** невозможен, пока хотя бы одна включённая нода
-    пайплайна не имеет записи `node_logs` со статусом `success`.
+    пайплайна не имеет записи `node_logs` со статусом `success` в текущем
+    прогоне: после «Вернуть в новые» записи раньше `tasks.reset_at` не
+    считаются ни здесь, ни в точке перезапуска.
     Переход в `failed` обязан зафиксировать `tasks.last_failed_order_index`
     (`order_index` упавшей ноды); все статусные переходы — через
     compare-and-swap текущего статуса в транзакции БД.
 15. **Backend не обращается к содержимому Confluence-страниц** из поля
     `guide_url` — это ответственность LLM через MCP, не backend.
     Единственное исключение — импорт задачи Jira по ключу (раздел 15.6):
-    по явному запросу пользователя и его личным токеном.
+    по явному запросу пользователя и его личным токеном, только с сервера
+    из `system_settings.jira_url` (адрес задаёт администратор).
 16. **Сессией задачи управляет только её воркер** (`tasks/session_worker.py`).
     API не трогает сессию и не меняет статусы `in_progress`/`paused`
     напрямую: ручные промты кладёт в очередь, команды pause/resume/stop —
