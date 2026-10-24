@@ -49,7 +49,11 @@ from db.models.enums import NodeLogStatus, PermissionMode, TaskStatus
 from db.models.logs import NodeLog
 from db.models.tasks import Task
 from services.errors import ConflictError, NotFoundError, ValidationError
-from services.task_signal import publish_task_signal, wait_for_task_signal
+from services.task_signal import (
+    TaskSignalSubscription,
+    publish_task_signal,
+    subscribe_task_signal,
+)
 from services.task_status import transition_task_status
 
 if TYPE_CHECKING:
@@ -273,8 +277,7 @@ async def _read_resolution(db_session: AsyncSession, *, node_log_id: uuid.UUID) 
 async def _wait_for_resolution(
     *,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    redis_client: Redis,
-    task_id: uuid.UUID,
+    signals: TaskSignalSubscription,
     node_log_id: uuid.UUID,
     timeout: float | None,
 ) -> str | None:
@@ -282,25 +285,24 @@ async def _wait_for_resolution(
 
     Канал сигналов у задачи один на всё (раздел 7.3: постановка ручного
     запроса, команды управления тоже будят его) — сигнал сам по себе не
-    означает решения, поэтому после каждого пробуждения решение
-    перечитывается, а ожидание продолжается до дедлайна. Читать решение
-    ДО первого сигнала нельзя: после «Доработать план» в записи остаётся
-    прошлое решение, и следующий `ExitPlanMode` той же ноды принял бы его
-    за новое.
+    означает решения, поэтому решение перечитывается перед каждым ожиданием.
+    Подписка открыта до того, как запись стала ожидать решения, а прошлое
+    решение запись уже сбросила (`_mark_awaiting_decision`): ответ,
+    пришедший раньше ожидания, не теряется и не путается с прежним.
     """
     loop = asyncio.get_running_loop()
     deadline = None if timeout is None else loop.time() + timeout
     while True:
-        remaining = None if deadline is None else deadline - loop.time()
-        if remaining is not None and remaining <= 0:
-            return None
-        if not await wait_for_task_signal(redis_client, task_id, timeout=remaining):
-            return None
         async with session_factory() as db_session:
             resolution = await _read_resolution(db_session, node_log_id=node_log_id)
         if resolution is not None:
             return resolution
-        logger.info("decision_wait_woken_without_resolution", node_log_id=str(node_log_id))
+        remaining = None if deadline is None else deadline - loop.time()
+        if remaining is not None and remaining <= 0:
+            return None
+        if not await signals.wait(timeout=remaining):
+            return None
+        logger.info("decision_wait_woken", node_log_id=str(node_log_id))
 
 
 # Из этих статусов задача уходит в ожидание решения и в них же возвращается.
@@ -497,30 +499,30 @@ def build_can_use_tool_callback(
         # коммита перехода, а лишний возврат безопасен — это compare-and-swap.
         context.track_decision_wait()
         try:
-            async with session_factory() as db_session:
-                await _mark_awaiting_decision(
-                    db_session,
-                    node_log_id=node_log_id,
-                    pending_question=question,
-                    pending_plan_text=plan_text,
-                    pending_options=options,
-                )
-                resume_status = await resumable_decision_status(db_session, task_id=task_id)
-                if resume_status is not None:
-                    await enter_decision_status(
+            async with subscribe_task_signal(redis_client, task_id) as signals:
+                async with session_factory() as db_session:
+                    await _mark_awaiting_decision(
                         db_session,
-                        task_id=task_id,
-                        resume_status=resume_status,
-                        awaiting_status=awaiting_status,
+                        node_log_id=node_log_id,
+                        pending_question=question,
+                        pending_plan_text=plan_text,
+                        pending_options=options,
                     )
-            logger.info("awaiting_user_decision", node_log_id=str(node_log_id))
-            return await _wait_for_resolution(
-                session_factory=session_factory,
-                redis_client=redis_client,
-                task_id=task_id,
-                node_log_id=node_log_id,
-                timeout=decision_wait_timeout_seconds,
-            )
+                    resume_status = await resumable_decision_status(db_session, task_id=task_id)
+                    if resume_status is not None:
+                        await enter_decision_status(
+                            db_session,
+                            task_id=task_id,
+                            resume_status=resume_status,
+                            awaiting_status=awaiting_status,
+                        )
+                logger.info("awaiting_user_decision", node_log_id=str(node_log_id))
+                return await _wait_for_resolution(
+                    session_factory=session_factory,
+                    signals=signals,
+                    node_log_id=node_log_id,
+                    timeout=decision_wait_timeout_seconds,
+                )
         finally:
             # И после решения, и после таймаута, и при отмене хода (таймаут
             # ноды, «Остановить» — `cancel_decision_wait`) задача не должна

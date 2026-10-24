@@ -41,7 +41,7 @@ from services.crypto import encrypt
 from services.plan_mode import PlanDecisionOption
 from tasks import session_worker
 from tests.factories import make_llm_account
-from tests.fakes import FakeClaudeAgentClient, make_result_message
+from tests.fakes import FakeClaudeAgentClient, make_result_message, patch_plan_mode_signals
 from tests.worker_support import init_bare_origin, run_command
 
 if TYPE_CHECKING:
@@ -216,7 +216,7 @@ class TestFullCycle:
         assert [str(task_id) for task_id in autostart.started_task_ids] == [user.task_id]
 
         # 4. Ход сессии: действия пользователя по ходу выполнения нод.
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user.accept_plan)
+        patch_plan_mode_signals(monkeypatch, user.accept_plan)
         stop_presses: list[asyncio.Task[None]] = []
 
         async def press_stop_soon() -> None:

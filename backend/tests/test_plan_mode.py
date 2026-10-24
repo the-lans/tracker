@@ -39,8 +39,10 @@ from services.plan_mode import (
     decide_plan_auto_completion,
     encode_decision,
     parse_decision,
+    record_user_decision,
 )
 from services.task_signal import publish_task_signal
+from tests.fakes import patch_plan_mode_signals
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -324,6 +326,50 @@ async def test_unrelated_task_signal_does_not_reject_pending_plan(
     assert result.behavior == "allow"
 
 
+class TestDecisionWait:
+    async def test_answer_during_status_change(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Ответ, записанный, пока задача переходит в ожидание и рассылаются
+        push-уведомления, будит callback, хотя ожидание ещё не началось.
+        """
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        context = ActiveNodeContext(
+            node_log_id=node_log.id,
+            task_id=task.id,
+            auto_accept_plan=False,
+        )
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=redis_client,
+            decision_wait_timeout_seconds=1.0,
+        )
+
+        async def user_answers_during_status_change(*_args: object, **_kwargs: object) -> None:
+            await record_user_decision(
+                db_session,
+                task=task,
+                node_log_id=node_log.id,
+                option_id=PlanDecisionOption.ACCEPT_DEFAULT,
+                feedback_text=None,
+                redis_client=redis_client,
+            )
+
+        monkeypatch.setattr(
+            "services.plan_mode.enter_decision_status",
+            user_answers_during_status_change,
+        )
+
+        result = await callback("ExitPlanMode", {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
+
+        assert result.behavior == "allow"
+
+
 async def test_callback_denies_on_timeout_without_resolution(
     db_session: AsyncSession,
     redis_client: Redis,
@@ -401,8 +447,8 @@ class TestAskUserQuestion:
     ) -> None:
         task, node_log = await _make_task_with_running_node_log(db_session)
         seen: list[tuple[str | None, object]] = []
-        monkeypatch.setattr(
-            "services.plan_mode.wait_for_task_signal",
+        patch_plan_mode_signals(
+            monkeypatch,
             _answering(
                 db_session,
                 node_log,
@@ -541,8 +587,8 @@ class TestOtherTools:
         task.current_permission_mode = PermissionMode.DEFAULT
         await db_session.flush()
         seen: list[tuple[str | None, object]] = []
-        monkeypatch.setattr(
-            "services.plan_mode.wait_for_task_signal",
+        patch_plan_mode_signals(
+            monkeypatch,
             _answering(db_session, node_log, [resolution], seen),
         )
 
@@ -574,8 +620,8 @@ class TestPlanAcceptanceMode:
     ) -> None:
         task, node_log = await _make_task_with_running_node_log(db_session)
         context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True)
-        monkeypatch.setattr(
-            "services.plan_mode.wait_for_task_signal",
+        patch_plan_mode_signals(
+            monkeypatch,
             _answering(db_session, node_log, [option]),
         )
         callback = build_can_use_tool_callback(
@@ -674,7 +720,7 @@ class TestDecisionStatus:
             await db_session.commit()
             return True
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_answers)
+        patch_plan_mode_signals(monkeypatch, user_answers)
 
         result = await callback(tool_name, tool_input, _TEST_TOOL_CONTEXT)
 
@@ -703,7 +749,7 @@ class TestDecisionStatus:
             await asyncio.Event().wait()
             return False
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", wait_forever)
+        patch_plan_mode_signals(monkeypatch, wait_forever)
 
         async def agent_exits_plan_mode() -> object:
             return await callback("ExitPlanMode", {"plan": "p"}, _TEST_TOOL_CONTEXT)
@@ -789,7 +835,7 @@ class TestCancelDecisionWait:
             await asyncio.Event().wait()
             return False
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", wait_forever)
+        patch_plan_mode_signals(monkeypatch, wait_forever)
 
         async def sdk_handler() -> object:
             return await callback("ExitPlanMode", {"plan": "p"}, _TEST_TOOL_CONTEXT)

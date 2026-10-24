@@ -65,6 +65,7 @@ from tests.fakes import (
     make_assistant_error,
     make_rate_limit_event,
     make_result_message,
+    patch_plan_mode_signals,
 )
 from tests.worker_support import GIT_AUTHOR_ARGS, WorkerEnv, init_bare_origin, run_command
 
@@ -711,7 +712,7 @@ class TestQuestionDuringPausedPrompt:
         statuses_while_asking: list[TaskStatus] = []
         answers: list[str] = []
 
-        async def user_answers(_redis: Any, _task_id: uuid.UUID, *, timeout: float | None) -> bool:
+        async def user_answers(*, timeout: float | None) -> bool:
             await db_session.refresh(task)
             statuses_while_asking.append(task.status)
             pending = await db_session.scalar(
@@ -722,7 +723,7 @@ class TestQuestionDuringPausedPrompt:
             await db_session.commit()
             return True
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_answers)
+        patch_plan_mode_signals(monkeypatch, user_answers)
 
         async def agent_behaviour() -> None:
             if len(worker_env.client.queries) == 1:
@@ -972,7 +973,7 @@ class TestNodeTimeoutWhileAwaitingDecision:
             await asyncio.Event().wait()
             return False
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_never_answers)
+        patch_plan_mode_signals(monkeypatch, user_never_answers)
 
         class HangingClient(FakeClaudeAgentClient):
             async def interrupt(self) -> None:
@@ -1115,7 +1116,7 @@ class TestPlanRevision:
             await db_session.commit()
             return True
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_decides)
+        patch_plan_mode_signals(monkeypatch, user_decides)
 
         async def agent_plans_twice() -> None:
             can_use_tool = worker_env.options[0].can_use_tool
