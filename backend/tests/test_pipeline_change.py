@@ -15,10 +15,13 @@ import sqlalchemy as sa
 from db.models.enums import TaskStatus
 from db.models.pipelines import TaskNode
 from db.models.tasks import Task
+from tests.factories import make_llm_account
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from db.models.users import User
 
 
 async def _pipeline(client: AsyncClient, name: str) -> str:
@@ -153,3 +156,39 @@ class TestResetToNew:
         response = await authed_client.post(f"/tasks/{body['id']}/reset")
 
         assert response.status_code == 409
+
+
+class TestAccountChangeAfterReset:
+    """
+    Сессия хранится в каталоге своего LLM-аккаунта (раздел 19.5): после
+    смены аккаунта прежний `session_id` не продолжить.
+    """
+
+    @pytest.mark.parametrize(("switch", "session_kept"), [(True, False), (False, True)])
+    async def test_session_forgotten_only_on_switch(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        switch: bool,
+        session_kept: bool,
+    ) -> None:
+        first = await make_llm_account(db_session, owner_id=current_user.id)
+        second = await make_llm_account(db_session, owner_id=current_user.id)
+        body = await _task(authed_client)
+        task = await db_session.get(Task, uuid.UUID(body["id"]))
+        assert task is not None
+        task.llm_account_id = first.id
+        task.session_id = "sess-old"
+        await db_session.flush()
+
+        chosen = second if switch else first
+        response = await authed_client.patch(
+            f"/tasks/{body['id']}",
+            json={"llm_account_id": str(chosen.id)},
+        )
+
+        assert response.status_code == 200, response.text
+        await db_session.refresh(task)
+        assert (task.session_id == "sess-old") is session_kept
+
