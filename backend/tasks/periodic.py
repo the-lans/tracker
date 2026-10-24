@@ -12,9 +12,8 @@ Celery-задачи — синхронные функции (`@celery_app.task`)
 
 from __future__ import annotations
 
-import asyncio
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import httpx
@@ -22,7 +21,7 @@ import sqlalchemy as sa
 from redis.asyncio import Redis
 
 from app_logging.config import get_logger
-from clients.gitlab import GITLAB_TOKEN_ENV_KEY, GITLAB_URL_ENV_KEY, GitlabClient
+from clients.gitlab import GitlabClient
 from db.models.enums import (
     AppLogLevel,
     MergeStatus,
@@ -38,11 +37,12 @@ from services import gitlab_sync, maintenance_tasks, users
 from services.autostart import run_scheduled_autostart_check
 from services.llm_accounts import restore_expired_rate_limits
 from services.log_rotation import resolve_archive_root, rotate_node_logs
-from services.manual_queue import expire_stale_manual_queue_requests
+from services.manual_queue import STALE_QUEUED_REQUEST_AGE, expire_stale_manual_queue_requests
 from services.periodic_tasks import mark_periodic_task_running, record_periodic_task_run
 from services.remote_control import check_task_bridge
+from services.system_settings import get_gitlab_credentials
 from services.task_workspace import resolve_repos_root
-from services.template_context import resolve_global_env_value
+from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import celery_app
 from tasks.session_worker import run_task_session
 
@@ -93,7 +93,7 @@ async def _run_periodic_async(name: str, body: Callable[[AsyncSession], Awaitabl
 
 
 def _run_periodic(name: str, body: Callable[[AsyncSession], Awaitable[None]]) -> None:
-    asyncio.run(_run_periodic_async(name, body))
+    run_with_fresh_pool(_run_periodic_async(name, body))
 
 
 @celery_app.task(name="check_scheduled_tasks_for_autostart")
@@ -150,20 +150,12 @@ def detect_awaiting_input_timeout() -> None:
     _run_periodic("detect_awaiting_input_timeout", body)
 
 
-async def _build_gitlab_client(db_session: AsyncSession) -> GitlabClient | None:
-    base_url = await resolve_global_env_value(db_session, key=GITLAB_URL_ENV_KEY)
-    token = await resolve_global_env_value(db_session, key=GITLAB_TOKEN_ENV_KEY)
-    if base_url is None or token is None:
-        logger.warning("gitlab_credentials_not_configured")
-        return None
-    return GitlabClient(base_url=base_url, token=token, http_client=httpx.AsyncClient())
-
-
 @celery_app.task(name="sync_gitlab_merge_status")
 def sync_gitlab_merge_status() -> None:
     async def body(db_session: AsyncSession) -> None:
-        gitlab_client = await _build_gitlab_client(db_session)
-        if gitlab_client is None:
+        credentials = await get_gitlab_credentials(db_session)
+        if credentials is None:
+            logger.warning("gitlab_credentials_not_configured")
             return
         stmt = (
             sa.select(TaskRepository, Repository, Task)
@@ -181,12 +173,17 @@ def sync_gitlab_merge_status() -> None:
         ]
         redis_client = Redis.from_url(os.environ["REDIS_URL"])
         try:
-            await gitlab_sync.sync_merge_statuses(
-                db_session,
-                rows=rows,
-                gitlab_client=gitlab_client,
-                redis_client=redis_client,
-            )
+            async with httpx.AsyncClient() as http_client:
+                await gitlab_sync.sync_merge_statuses(
+                    db_session,
+                    rows=rows,
+                    gitlab_client=GitlabClient(
+                        base_url=credentials.url,
+                        token=credentials.token,
+                        http_client=http_client,
+                    ),
+                    redis_client=redis_client,
+                )
         finally:
             await redis_client.aclose()
 
@@ -197,8 +194,7 @@ def sync_gitlab_merge_status() -> None:
 def rebase_child_branches_on_parent_merge() -> None:
     async def body(db_session: AsyncSession) -> None:
         repos_root = resolve_repos_root()
-        stmt = sa.select(TaskRepository).where(TaskRepository.merge_status == MergeStatus.MERGED)
-        merged = list((await db_session.execute(stmt)).scalars().all())
+        merged = await gitlab_sync.find_merged_parents_with_children(db_session)
         for parent_task_repository in merged:
             await gitlab_sync.rebase_child_task_repositories_on_parent_merge(
                 db_session,
@@ -297,7 +293,7 @@ def check_remote_control_bridges() -> None:
 @celery_app.task(name="expire_stale_manual_queue_requests")
 def expire_stale_manual_queue_requests_task() -> None:
     async def body(db_session: AsyncSession) -> None:
-        older_than = datetime.now(UTC) - timedelta(minutes=30)
+        older_than = datetime.now(UTC) - STALE_QUEUED_REQUEST_AGE
         expired = await expire_stale_manual_queue_requests(db_session, older_than=older_than)
         logger.info("manual_queue_requests_expired", count=len(expired))
 

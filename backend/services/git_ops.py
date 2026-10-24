@@ -26,6 +26,7 @@ from db.models.repositories import Repository
 from db.models.tasks import TaskRepository
 from services.crypto import decrypt
 from services.errors import ExternalServiceError
+from services.task_codes import validate_task_code
 
 logger = get_logger("git_ops")
 
@@ -106,7 +107,7 @@ async def clone_task_repository(
     уже есть: перезапуск после ручной очистки директории (раздел 14.3) не
     должен терять запушенную работу.
     """
-    target_dir = repos_root / task_code / repository.name
+    target_dir = repos_root / validate_task_code(task_code) / repository.name
     target_dir.parent.mkdir(parents=True, exist_ok=True)
 
     async with _deploy_key_env(repository) as env:
@@ -114,6 +115,8 @@ async def clone_task_repository(
             "clone",
             "--branch",
             task_repository.base_branch,
+            # Адрес и каталог — только позиционные аргументы, не опции git.
+            "--",
             repository.git_url,
             str(target_dir),
             cwd=repos_root,

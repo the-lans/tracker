@@ -40,7 +40,8 @@ from services.autostart import run_scheduled_autostart_check
 from services.crypto import encrypt
 from services.plan_mode import PlanDecisionOption
 from tasks import session_worker
-from tests.fakes import FakeClaudeAgentClient, make_result_message
+from tests.factories import make_llm_account
+from tests.fakes import FakeClaudeAgentClient, make_result_message, patch_plan_mode_signals
 from tests.worker_support import init_bare_origin, run_command
 
 if TYPE_CHECKING:
@@ -181,14 +182,16 @@ class TestFullCycle:
         pipeline, nodes = await _make_pipeline(db_session, current_user.id)
         library_node = await _make_library_node(db_session, current_user.id)
 
-        # 1. Создание задачи с репозиторием.
+        # 1. Создание задачи с репозиторием и LLM-аккаунтом (у пайплайна есть LLM-ноды).
         code = f"RR-{uuid.uuid4().hex[:5]}"
+        account = await make_llm_account(db_session, owner_id=current_user.id)
         created = await authed_client.post(
             "/tasks",
             json={
                 "code": code,
                 "title": "E2E",
                 "description": "Полный цикл",
+                "llm_account_id": str(account.id),
                 "repositories": [{"repository_id": str(repository.id), "role": "read_write"}],
             },
         )
@@ -213,7 +216,7 @@ class TestFullCycle:
         assert [str(task_id) for task_id in autostart.started_task_ids] == [user.task_id]
 
         # 4. Ход сессии: действия пользователя по ходу выполнения нод.
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user.accept_plan)
+        patch_plan_mode_signals(monkeypatch, user.accept_plan)
         stop_presses: list[asyncio.Task[None]] = []
 
         async def press_stop_soon() -> None:

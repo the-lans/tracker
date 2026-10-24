@@ -33,6 +33,8 @@ from db.models.enums import (
 from services.sftp_access import SFTP_LOGIN_PATTERN
 from services.ssh_keys import MAX_PUBLIC_KEY_LENGTH, fingerprint_of_public_key
 
+_HTTP_URL_PATTERN = r"^https?://\S+$"
+
 
 class AwaitingDecisionCountResponse(BaseModel):
     """Раздел 18.3: счётчик задач, ожидающих решения, в постоянной навигации."""
@@ -62,6 +64,8 @@ class TaskDuplicateRequest(BaseModel):
 class TaskCreateRequest(TaskDuplicateRequest):
     parent_task_id: uuid.UUID | None = None
     use_parent_summary: bool = False
+    # Раздел 15.6: задача заполнена из Jira — ссылка и вложения берутся по ключу.
+    jira_issue_key: str | None = None
 
 
 class TaskUpdateRequest(BaseModel):
@@ -100,6 +104,7 @@ class TaskResponse(BaseModel):
     title: str
     description: str
     guide_url: str | None
+    jira_issue_url: str | None = None
     status: TaskStatus
     pipeline_id: uuid.UUID | None
     llm_account_id: uuid.UUID | None
@@ -420,6 +425,12 @@ class PipelineResponse(BaseModel):
     created_by: uuid.UUID
 
 
+# Границы значений выполнения ноды — те же, что у «Системных настроек» (раздел 15.5).
+_MAX_TIMEOUT_SECONDS = 24 * 60 * 60
+_MAX_RETRIES = 10
+_MAX_RETRY_DELAY_SECONDS = 60 * 60
+
+
 class NodeCreateRequest(BaseModel):
     """Раздел 3.1: одна и та же форма для ноды пайплайна и промта
     библиотеки — различие только в ``pipeline_id``/``order_index``
@@ -437,9 +448,9 @@ class NodeCreateRequest(BaseModel):
     script_content: str | None = None
     docker_image: str | None = None
     # Раздел 15.5: не переданные значения берутся из «Системных настроек».
-    timeout_seconds: int | None = Field(default=None, ge=1)
-    max_retries: int | None = Field(default=None, ge=1)
-    retry_base_delay_seconds: int | None = Field(default=None, ge=0)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=_MAX_TIMEOUT_SECONDS)
+    max_retries: int | None = Field(default=None, ge=1, le=_MAX_RETRIES)
+    retry_base_delay_seconds: int | None = Field(default=None, ge=0, le=_MAX_RETRY_DELAY_SECONDS)
     guide_url: str | None = None
     is_skipped: bool = False
     llm_output_last_n: int | None = None
@@ -454,9 +465,9 @@ class NodeUpdateRequest(BaseModel):
     script_language: ScriptLanguage | None = None
     script_content: str | None = None
     docker_image: str | None = None
-    timeout_seconds: int | None = None
-    max_retries: int | None = None
-    retry_base_delay_seconds: int | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1, le=_MAX_TIMEOUT_SECONDS)
+    max_retries: int | None = Field(default=None, ge=1, le=_MAX_RETRIES)
+    retry_base_delay_seconds: int | None = Field(default=None, ge=0, le=_MAX_RETRY_DELAY_SECONDS)
     guide_url: str | None = None
     is_skipped: bool | None = None
     is_archived: bool | None = None
@@ -519,6 +530,9 @@ class UserResponse(BaseModel):
     # вход по нему — и в профиле, и в «Пользователях».
     ssh_public_key: str | None
     ssh_key_last_used_at: datetime | None
+    # Раздел 15.6: личный доступ к Jira; токен не отдаётся — только признак.
+    jira_email: str | None = None
+    jira_token_encrypted: str | None = Field(default=None, exclude=True)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -526,6 +540,51 @@ class UserResponse(BaseModel):
         if self.ssh_public_key is None:
             return None
         return fingerprint_of_public_key(self.ssh_public_key)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def jira_token_set(self) -> bool:
+        return self.jira_token_encrypted is not None
+
+
+class JiraConnectionUpdateRequest(BaseModel):
+    """Раздел 15.6: ``jira_token`` — `None` оставить сохранённый, пустая строка — удалить."""
+
+    jira_email: str | None = None
+    jira_token: str | None = None
+
+
+class JiraServerResponse(BaseModel):
+    """
+    Раздел 15.6: адрес Jira, заданный администратором; `None` — импорт недоступен.
+    """
+
+    jira_url: str | None
+
+
+class JiraAttachmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    filename: str
+    size: int
+
+
+class JiraIssueDraftResponse(BaseModel):
+    """Раздел 15.6: поля формы новой задачи из задачи Jira."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    code: str
+    title: str
+    description: str
+    issue_url: str
+    attachments: list[JiraAttachmentResponse]
+
+
+class JiraAttachmentCopyResponse(BaseModel):
+    """Раздел 15.6: вложения Jira ещё копируются в артефакты задачи."""
+
+    pending: bool
 
 
 class SftpConnectionResponse(BaseModel):
@@ -653,9 +712,6 @@ class AppLogResponse(BaseModel):
 
 # --- Системные настройки (раздел 15.5) ------------------------------------
 
-_MAX_TIMEOUT_SECONDS = 24 * 60 * 60
-_MAX_RETRIES = 10
-_MAX_RETRY_DELAY_SECONDS = 60 * 60
 
 
 class SystemSettingsBody(BaseModel):
@@ -666,6 +722,22 @@ class SystemSettingsBody(BaseModel):
     default_retry_base_delay_seconds: int = Field(ge=0, le=_MAX_RETRY_DELAY_SECONDS)
     default_runner_image_python: str = Field(min_length=1)
     default_runner_image_bash: str = Field(min_length=1)
+
+
+class IntegrationsResponse(BaseModel):
+    """Раздел 15.5: токен GitLab не возвращается — только признак, что он сохранён."""
+
+    gitlab_url: str | None
+    gitlab_token_set: bool
+    jira_url: str | None
+
+
+class IntegrationsUpdateRequest(BaseModel):
+    gitlab_url: str | None = Field(default=None, pattern=_HTTP_URL_PATTERN)
+    # `None` — оставить сохранённый токен, пустая строка — удалить.
+    gitlab_token: str | None = None
+    # Раздел 15.6: сервер Jira, к которому обращается импорт задач.
+    jira_url: str | None = Field(default=None, pattern=_HTTP_URL_PATTERN)
 
 
 class LibraryUsageResponse(BaseModel):

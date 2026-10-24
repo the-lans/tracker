@@ -72,7 +72,7 @@ async def test_resolve_node_prompt_renders_plain_prompt_template(db_session: Asy
 
     prompt = await resolve_node_prompt(db_session, node=node, task=task, history=[])
 
-    assert prompt == f"Задача {task.code}"
+    assert prompt.text == f"Задача {task.code}"
 
 
 async def test_resolve_node_prompt_returns_slash_command_literally_unmodified(
@@ -97,7 +97,7 @@ async def test_resolve_node_prompt_returns_slash_command_literally_unmodified(
 
     # Раздел 4: слэш-команда никогда не проходит через шаблонизатор — если
     # бы прошла, "{{task.code}}" был бы заменён на реальный код задачи.
-    assert prompt == literal_invocation
+    assert prompt.text == prompt.display == literal_invocation
 
 
 async def test_resolve_node_prompt_raises_when_slash_command_missing_invocation(
@@ -534,3 +534,35 @@ class TestRecordSdkFailure:
         assert len(calls) == (1 if logged else 0)
         if logged:
             assert calls[0]["task_id"] == task_id
+
+
+class TestScriptTaskPaths:
+    """Раздел 11.4: текст скрипта не шаблонизируется — пути задачи приходят в окружении."""
+
+    async def test_script_saves_artifact(self, tmp_path: Path, user_files_root: Path) -> None:
+        repos_path = tmp_path / "repos" / "RR-55555"
+        repos_path.mkdir(parents=True)
+        node = Node(
+            created_by=uuid.uuid4(),
+            name="n",
+            node_type=NodeType.SCRIPT,
+            script_language=ScriptLanguage.PYTHON,
+            script_content=(
+                "import os\n"
+                "path = os.path.join(os.environ['TASK_ARTIFACTS_PATH'], 'report.txt')\n"
+                "open(path, 'w').write(os.environ['TASK_REPOS_PATH'])\n"
+            ),
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+            is_library_item=True,
+            is_archived=False,
+        )
+
+        outcome = await execute_script_node(
+            node,
+            repos_path=repos_path,
+            # Переменная задачи с тем же именем путь не подменяет.
+            env={"TASK_ARTIFACTS_PATH": "/tmp"},
+        )
+
+        assert outcome.success is True, outcome.error_message
+        assert (user_files_root / "RR-55555" / "report.txt").read_text() == str(repos_path)

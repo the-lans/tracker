@@ -89,12 +89,13 @@ services:
       retries: 10
       start_period: 10s
 
-  worker:
+  # Периодические задачи (раздел 16): очередь `celery`.
+  worker: &worker
     build:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
-    command: ["celery", "-A", "tasks.celery_app", "worker", "-l", "info"]
+    command: ["celery", "-A", "tasks.celery_app", "worker", "-Q", "celery", "-l", "info"]
     environment: *backend_env
     volumes:
       - task_repos:/data/repos
@@ -112,6 +113,17 @@ services:
       # ещё-не-созданную схему БД при холодном старте стека.
       backend:
         condition: service_healthy
+
+  # Раздел 6.1, 20.3: сессии задач — своя очередь `sessions`. Сессия занимает
+  # процесс часами (пауза, ожидание решения), поэтому число процессов —
+  # верхняя граница одновременно работающих задач.
+  session-worker:
+    <<: *worker
+    command:
+      [
+        "celery", "-A", "tasks.celery_app", "worker", "-Q", "sessions", "-O", "fair",
+        "--concurrency", "${SESSION_WORKER_CONCURRENCY:-4}", "-l", "info",
+      ]
 
   beat:
     build:

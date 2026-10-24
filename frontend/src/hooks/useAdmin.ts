@@ -1,10 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/apiClient";
+import { JIRA_SERVER_KEY } from "@/hooks/useProfile";
 import type {
   ActiveCeleryTask,
   AllowedEmail,
   AppLog,
   AppLogLevel,
+  Integrations,
+  IntegrationsUpdate,
   LibraryUsage,
   NodeLogStatus,
   NodeRun,
@@ -143,6 +146,28 @@ export function useUpdateSystemSettings() {
   return useMutation({
     mutationFn: (body: SystemSettings) => api.put<SystemSettings>("/system-settings", body),
     onSuccess: (settings) => queryClient.setQueryData(SYSTEM_SETTINGS_KEY, settings),
+  });
+}
+
+const INTEGRATIONS_KEY = ["admin", "integrations"] as const;
+
+/** Раздел 15.5, 15.6: адрес и токен GitLab, адрес Jira — только администратору. */
+export function useIntegrations() {
+  return useQuery({
+    queryKey: INTEGRATIONS_KEY,
+    queryFn: () => api.get<Integrations>("/system-settings/integrations"),
+  });
+}
+
+export function useUpdateIntegrations() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: IntegrationsUpdate) =>
+      api.put<Integrations>("/system-settings/integrations", body),
+    onSuccess: (integrations) => {
+      queryClient.setQueryData(INTEGRATIONS_KEY, integrations);
+      void queryClient.invalidateQueries({ queryKey: JIRA_SERVER_KEY });
+    },
   });
 }
 

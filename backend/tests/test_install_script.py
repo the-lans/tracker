@@ -197,7 +197,7 @@ class TestRestore:
             "claude_accounts.tar.gz",
             "sftp_host_keys.tar.gz",
             "docker compose run --rm backend alembic upgrade head",
-            "docker compose up -d backend worker beat sftp frontend caddy backup",
+            "docker compose up -d backend worker session-worker beat sftp frontend caddy backup",
         ]
         positions = [
             next(index for index, call in enumerate(docker_calls) if expected in call)

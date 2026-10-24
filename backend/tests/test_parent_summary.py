@@ -31,6 +31,7 @@ from services.manual_queue import process_manual_queue_once
 from services.parent_summary import deny_all_tools
 from services.task_control import TaskControlCommand, request_task_control
 from tasks import session_worker
+from tests.factories import make_llm_account
 from tests.fakes import FakeClaudeAgentClient, make_result_message
 
 if TYPE_CHECKING:
@@ -70,6 +71,7 @@ async def _make_parent(
         created_by=user.id,
         status=status,
         session_id=session_id,
+        llm_account_id=(await make_llm_account(db_session, owner_id=user.id)).id,
     )
     db_session.add(parent)
     await db_session.flush()
@@ -89,6 +91,7 @@ async def _make_child(db_session: AsyncSession, user: User, parent: Task) -> Tas
         parent_task_id=parent.id,
         use_parent_summary=True,
         status=TaskStatus.QUEUED,
+        llm_account_id=(await make_llm_account(db_session, owner_id=user.id)).id,
     )
     db_session.add(child)
     await db_session.flush()

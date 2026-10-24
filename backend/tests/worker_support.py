@@ -100,6 +100,8 @@ def install_worker_env(
 ) -> WorkerEnv:
     env = WorkerEnv(repos_root=tmp_path / "repos")
     monkeypatch.setenv("TRACKER_REPOS_ROOT", str(env.repos_root))
+    # Каталоги LLM-аккаунтов тестовых задач — во временной директории теста.
+    monkeypatch.setattr("tests.factories.DEFAULT_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
     monkeypatch.setattr(session_worker, "async_session_factory", lambda: SharedSession(db_session))
     monkeypatch.setattr(
         session_worker,

@@ -378,6 +378,8 @@ async def _create_task_in_status(
     task = await db_session.get(Task, uuid.UUID(body["id"]))
     assert task is not None
     task.status = status
+    # Ручные промты и мост выполняет LLM — у такой задачи есть аккаунт (раздел 3.1).
+    task.llm_account_id = (await make_llm_account(db_session, owner_id=task.created_by)).id
     await db_session.flush()
     return body
 

@@ -65,6 +65,40 @@ class ClaudeAgentClientProtocol(Protocol):
     def set_permission_mode(self, mode: SdkPermissionMode) -> Awaitable[None]: ...
 
 
+class LlmAccountMissingError(RuntimeError):
+    """Задаче без LLM-аккаунта понадобилась сессия Claude Code (раздел 3.1)."""
+
+
+class OfflineAgentClient:
+    """
+    Сессия задачи без LLM-аккаунта (раздел 3.1, решение №19 плана): пайплайн
+    из одних скриптов работает, не запуская Claude Code CLI. Обращение к LLM
+    сюда не доходит — его отклоняют проверки до запуска
+    (`services/task_launch.py`) и постановки ручного запроса; если всё же
+    дошло, ход завершается понятной ошибкой.
+    """
+
+    async def connect(self) -> None:
+        return None
+
+    async def disconnect(self) -> None:
+        return None
+
+    async def query(self, prompt: str) -> None:  # noqa: ARG002 — интерфейс ClaudeSDKClient
+        message = "У задачи нет LLM-аккаунта — выполнять LLM-ноды и промты нечем"
+        raise LlmAccountMissingError(message)
+
+    async def receive_response(self) -> AsyncIterator[Message]:
+        return
+        yield  # pragma: no cover — делает метод асинхронным генератором
+
+    async def interrupt(self) -> None:
+        return None
+
+    async def set_permission_mode(self, mode: SdkPermissionMode) -> None:  # noqa: ARG002
+        return None
+
+
 def build_claude_agent_options(
     *,
     resume_session_id: str | None,

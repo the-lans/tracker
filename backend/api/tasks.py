@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import UTC, datetime
+from dataclasses import replace
 from typing import Annotated
 
 import sqlalchemy as sa
@@ -24,6 +24,7 @@ from api.schemas import (
     DecisionRequest,
     EnvVariableRevealResponse,
     FreeformPromptRequest,
+    JiraAttachmentCopyResponse,
     LibraryPromptAddRequest,
     ManualRequestResponse,
     NodeDependentResponse,
@@ -55,21 +56,27 @@ from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from db.session import get_session
 from services.access import (
-    ensure_llm_account_of_owner,
     get_node_for_user,
     get_pipeline_for_user,
     get_task_for_user,
     owner_filter,
 )
 from services.errors import ConflictError, NotFoundError, ValidationError
-from services.integrity import ensure_library_prompt_attachable, ensure_pipeline_attachable
+from services.integrity import ensure_pipeline_attachable
+from services.jira_import import (
+    attachment_copy_pending,
+    jira_issue_url,
+    mark_attachment_copy_pending,
+    validate_issue_key,
+)
 from services.manual_queue import (
+    attach_library_prompt,
     cancel_manual_request,
     enqueue_freeform_prompt_run,
     enqueue_library_prompt_run,
 )
 from services.node_dependencies import find_task_node_dependents
-from services.plan_mode import encode_decision
+from services.plan_mode import record_user_decision
 from services.remote_control import start_bridge_reconnect
 from services.session_context import clear_task_session_context, list_active_sessions
 from services.task_artifacts import (
@@ -89,6 +96,7 @@ from services.task_control import (
 from services.task_creation import RepositoryAttachment, TaskDraft
 from services.task_creation import create_task as create_task_with_repositories
 from services.task_duplication import duplicate_task
+from services.task_editing import update_task as update_task_fields
 from services.task_env_variables import (
     create_task_env_variable,
     delete_task_env_variable,
@@ -96,11 +104,16 @@ from services.task_env_variables import (
     reveal_task_env_variable,
     update_task_env_variable,
 )
+from services.task_launch import ensure_task_launchable
 from services.task_nodes import bind_pipeline_to_task, list_task_nodes, set_task_node_enabled
 from services.task_signal import publish_task_signal
-from services.task_status import SESSION_ACTIVE_STATUSES, transition_task_status
+from services.task_status import (
+    SESSION_ACTIVE_STATUSES,
+    reset_task_to_new,
+    transition_task_status,
+)
 from services.task_workspace import load_task_repositories, resolve_repos_root
-from services.template_context import ensure_no_repository_env_conflicts
+from tasks.jira_attachments import copy_jira_attachments_to_task
 from tasks.session_worker import run_task_session
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -154,7 +167,11 @@ async def create_task(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
-    """Раздел 1.2 (сценарий 1): задача сразу с репозиториями и LLM-аккаунтом."""
+    """
+    Раздел 1.2 (сценарий 1): задача сразу с репозиториями и LLM-аккаунтом.
+    С ключом Jira (раздел 15.6) — ссылка на задачу Jira; её вложения копирует
+    в артефакты фоновая задача.
+    """
     if body.parent_task_id is not None:
         # Раздел 19.2: родителем может быть только доступная пользователю задача.
         await _get_task_or_404(db_session, body.parent_task_id, current_user)
@@ -163,7 +180,22 @@ async def create_task(
         parent_task_id=body.parent_task_id,
         use_parent_summary=body.use_parent_summary,
     )
-    return await create_task_with_repositories(db_session, draft=draft, created_by=current_user.id)
+    if body.jira_issue_key is not None:
+        issue_url = await jira_issue_url(db_session, current_user, body.jira_issue_key)
+        draft = replace(draft, jira_issue_url=issue_url)
+    task = await create_task_with_repositories(db_session, draft=draft, created_by=current_user.id)
+    if body.jira_issue_key is not None:
+        redis_client = _get_redis_client()
+        try:
+            await mark_attachment_copy_pending(redis_client, task.id)
+        finally:
+            await redis_client.aclose()
+        copy_jira_attachments_to_task.delay(
+            str(task.id),
+            str(current_user.id),
+            validate_issue_key(body.jira_issue_key),
+        )
+    return task
 
 
 @router.post("/{task_id}/duplicate", response_model=TaskResponse, status_code=201)
@@ -193,27 +225,11 @@ async def update_task(
     """Раздел 12.1, 15.2: автозапуск и поля задачи — пока задача `new`;
     ``auto_accept_plan`` — в любой момент до `done`."""
     task = await _get_task_or_404(db_session, task_id, current_user)
-    changes = body.model_dump(exclude_unset=True)
-    auto_accept_plan = changes.pop("auto_accept_plan", None)
-    if changes and task.status is not TaskStatus.NEW:
-        raise ValidationError("Поля задачи можно менять только в статусе new")
-    if auto_accept_plan is not None and task.status is TaskStatus.DONE:
-        raise ValidationError("Задача уже завершена")
-    if changes.get("llm_account_id") is not None:
-        # Раздел 19.2: аккаунт автора задачи, даже если меняет `admin`.
-        await ensure_llm_account_of_owner(
-            db_session,
-            changes["llm_account_id"],
-            owner_id=task.created_by,
-        )
-
-    for field, value in changes.items():
-        setattr(task, field, value)
-    if auto_accept_plan is not None:
-        task.auto_accept_plan = auto_accept_plan
-    await db_session.commit()
-    await db_session.refresh(task)
-    return task
+    return await update_task_fields(
+        db_session,
+        task=task,
+        changes=body.model_dump(exclude_unset=True),
+    )
 
 
 @router.get("/{task_id}/repositories", response_model=list[TaskRepositoryResponse])
@@ -317,8 +333,8 @@ async def start_task(
     """Раздел 12.2: "тот же процесс запуска, что и ручная кнопка «Выполнить»" —
     `new -> queued`, затем Celery-таск, владеющий сессией, подхватывает
     задачу асинхронно (`tasks/session_worker.py`)."""
-    await _get_task_or_404(db_session, task_id, current_user)
-    await ensure_no_repository_env_conflicts(db_session, task_id=task_id)
+    task = await _get_task_or_404(db_session, task_id, current_user)
+    await ensure_task_launchable(db_session, task)
     updated = await transition_task_status(
         db_session,
         task_id=task_id,
@@ -342,13 +358,26 @@ async def restart_task(
     task = await _get_task_or_404(db_session, task_id, current_user)
     if task.status is not TaskStatus.FAILED or task.last_failed_order_index is None:
         raise ValidationError("Перезапуск доступен только для задачи в статусе failed")
-    await ensure_no_repository_env_conflicts(db_session, task_id=task_id)
+    await ensure_task_launchable(db_session, task)
     run_task_session.delay(
         str(task_id),
         start_after_order_index=task.last_failed_order_index - 1,
     )
     await db_session.refresh(task)
     return task
+
+
+@router.post("/{task_id}/reset", response_model=TaskResponse)
+async def reset_task(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """Раздел 14.2 «Вернуть в новые»: из `failed`/`done` — чтобы сменить пайплайн."""
+    await _get_task_or_404(db_session, task_id, current_user)
+    updated = await reset_task_to_new(db_session, task_id=task_id)
+    await db_session.refresh(updated)
+    return updated
 
 
 @router.post("/{task_id}/cleanup-repositories", response_model=TaskResponse)
@@ -567,18 +596,16 @@ async def submit_decision(
     ожидающий Celery-таск через Redis pub/sub (раздел 9.6, "asyncio.Event/
     эквивалент")."""
     task = await _get_task_or_404(db_session, task_id, current_user)
-    node_log = await db_session.get(NodeLog, body.node_log_id)
-    if node_log is None or node_log.task_id != task.id:
-        raise NotFoundError(f"Запись node_logs {body.node_log_id} не найдена у этой задачи")
-    if node_log.status is not NodeLogStatus.AWAITING_DECISION:
-        raise ValidationError("Эта запись не ожидает решения")
-
-    node_log.user_input_text = encode_decision(body.option_id, feedback_text=body.feedback_text)
-    await db_session.commit()
-
     redis_client = _get_redis_client()
     try:
-        await publish_task_signal(redis_client, task_id)
+        await record_user_decision(
+            db_session,
+            task=task,
+            node_log_id=body.node_log_id,
+            option_id=body.option_id,
+            feedback_text=body.feedback_text,
+            redis_client=redis_client,
+        )
     finally:
         await redis_client.aclose()
 
@@ -615,16 +642,12 @@ async def add_library_prompt(
 ) -> TaskLibraryPrompt:
     await _get_task_or_404(db_session, task_id, current_user)
     node = await get_node_for_user(db_session, body.node_id, user=current_user)
-    ensure_library_prompt_attachable(node)
-    task_library_prompt = TaskLibraryPrompt(
+    return await attach_library_prompt(
+        db_session,
         task_id=task_id,
-        node_id=body.node_id,
+        node=node,
         added_by=current_user.id,
-        added_at=datetime.now(UTC),
     )
-    db_session.add(task_library_prompt)
-    await db_session.commit()
-    return task_library_prompt
 
 
 @router.post(
@@ -854,6 +877,25 @@ async def list_task_artifacts(
     """Раздел 14.3, 15.2: артефакты задачи — в любом её статусе."""
     task = await _get_task_or_404(db_session, task_id, current_user)
     return list_artifacts(task.code)
+
+
+@router.get("/{task_id}/jira-attachments", response_model=JiraAttachmentCopyResponse)
+async def get_jira_attachment_copy(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> JiraAttachmentCopyResponse:
+    """
+    Раздел 15.6: идёт ли ещё копирование вложений Jira — пока идёт, страница
+    задачи перечитывает список артефактов.
+    """
+    task = await _get_task_or_404(db_session, task_id, current_user)
+    redis_client = _get_redis_client()
+    try:
+        pending = await attachment_copy_pending(redis_client, task.id)
+    finally:
+        await redis_client.aclose()
+    return JiraAttachmentCopyResponse(pending=pending)
 
 
 @router.put("/{task_id}/artifacts/{path:path}", response_model=ArtifactResponse, status_code=201)

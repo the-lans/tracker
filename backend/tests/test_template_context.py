@@ -62,10 +62,12 @@ async def test_build_task_context_maps_fields_and_computes_repos_path(
     monkeypatch.setenv("TRACKER_REPOS_ROOT", "/data/repos")
     monkeypatch.setenv("TRACKER_USER_FILES_ROOT", "/data/user-files")
     task = await _make_task(db_session)
+    task.jira_issue_url = "https://jira.example.com/browse/PROJ-1"
 
     context = build_task_context(task)
 
     assert context["task.code"] == task.code
+    assert context["task.jira_issue_url"] == "https://jira.example.com/browse/PROJ-1"
     assert context["task.title"] == "Починить баг"
     assert context["task.status"] == "in_progress"
     assert context["task.repos_path"] == f"/data/repos/{task.code}/"
@@ -163,7 +165,7 @@ async def test_render_for_task_combines_all_sources(db_session: AsyncSession) ->
         "{{task.code}} / {{env.REGION}} / {{session.id}}",
     )
 
-    assert rendered == f"{task.code} / eu / sess-123"
+    assert rendered.text == f"{task.code} / eu / sess-123"
 
 
 async def _attach_repository_variable(
@@ -294,8 +296,8 @@ class TestResolveTaskEnv:
 
     @pytest.mark.parametrize(
         "key",
-        ["GITLAB_URL", "GITLAB_TOKEN", "1BAD", "WITH-DASH", "SPACE KEY"],
-        ids=["gitlab_url", "gitlab_token", "leading_digit", "dash", "space"],
+        ["1BAD", "WITH-DASH", "SPACE KEY"],
+        ids=["leading_digit", "dash", "space"],
     )
     async def test_skips_key(self, db_session: AsyncSession, key: str) -> None:
         task = await _make_task(db_session)

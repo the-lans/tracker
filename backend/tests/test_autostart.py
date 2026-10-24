@@ -195,11 +195,11 @@ class TestRepositoryEnvConflict:
         async def capture(_db: AsyncSession, *, event: NotificationEvent, **_: object) -> None:
             events.append(event)
 
-        async def conflict(_db: AsyncSession, *, task_id: uuid.UUID) -> None:
+        async def conflict(_db: AsyncSession, _task: Task) -> None:
             raise ValidationError("Переменная API_URL задана в нескольких репозиториях задачи")
 
         monkeypatch.setattr(autostart_module, "notify_task_event", capture)
-        monkeypatch.setattr(autostart_module, "ensure_no_repository_env_conflicts", conflict)
+        monkeypatch.setattr(autostart_module, "ensure_task_launchable", conflict)
 
         result = await run_scheduled_autostart_check(db_session, now=now)
 

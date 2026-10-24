@@ -19,7 +19,8 @@ from db.session import get_session
 from services.access import get_template_for_user
 from services.crypto import encrypt
 from services.errors import ConflictError, NotFoundError
-from services.integrity import ensure_repository_deletable
+from services.integrity import ensure_repository_deletable, ensure_repository_renamable
+from services.repository_validation import validate_git_url, validate_repository_name
 
 router = APIRouter(prefix="/repositories", tags=["repositories"])
 
@@ -41,8 +42,8 @@ async def create_repository(
         await get_template_for_user(db_session, body.default_template_id, user=current_user)
     repository = Repository(
         id=uuid.uuid4(),
-        name=body.name,
-        git_url=body.git_url,
+        name=validate_repository_name(body.name),
+        git_url=validate_git_url(body.git_url),
         default_template_id=body.default_template_id,
         deploy_key_encrypted=encrypt(body.deploy_key),
     )
@@ -77,10 +78,11 @@ async def update_repository(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Repository:
     repository = await _get_repository_or_404(db_session, repository_id)
-    if body.name is not None:
-        repository.name = body.name
+    if body.name is not None and body.name != repository.name:
+        await ensure_repository_renamable(db_session, repository_id)
+        repository.name = validate_repository_name(body.name)
     if body.git_url is not None:
-        repository.git_url = body.git_url
+        repository.git_url = validate_git_url(body.git_url)
     if (
         "default_template_id" in body.model_fields_set
         and body.default_template_id != repository.default_template_id

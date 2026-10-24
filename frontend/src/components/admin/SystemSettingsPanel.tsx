@@ -9,6 +9,7 @@ import { ApiError } from "@/lib/apiClient";
 import type { SystemSettings } from "@/lib/types";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
+import { IntegrationsCard } from "@/components/admin/IntegrationsCard";
 
 type NumericField =
   | "default_timeout_seconds"
@@ -89,7 +90,7 @@ function SettingsForm({ initial }: { initial: SystemSettings }) {
   );
 }
 
-/** Раздел 15.5: значения по умолчанию для новых нод — уже созданные ноды не меняются. */
+/** Раздел 15.5: значения по умолчанию для новых нод (уже созданные не меняются) и интеграция с GitLab. */
 export function SystemSettingsPanel() {
   const { data: settings, isLoading } = useSystemSettings();
 
@@ -105,6 +106,7 @@ export function SystemSettingsPanel() {
         {isLoading && <LoadingState />}
         {settings && <SettingsForm initial={settings} />}
       </Card>
+      <IntegrationsCard />
     </div>
   );
 }

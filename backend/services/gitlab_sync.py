@@ -25,6 +25,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
+from sqlalchemy.orm import aliased
 
 from app_logging.config import get_logger
 from clients.gitlab import GitlabAccessDeniedError, project_path_from_git_url
@@ -121,7 +122,7 @@ async def _report_access_denied(
                 source=_SYNC_LOG_SOURCE,
                 message=(
                     f"{error.message}: синхронизация статусов MR приостановлена на сутки. "
-                    "Проверьте переменную GITLAB_TOKEN"
+                    "Проверьте токен GitLab в «Системных настройках»"
                 ),
                 context={},
             ),
@@ -217,6 +218,32 @@ _REBASABLE_STATUSES = frozenset(
 # конфликт остаётся признаком в `task_repositories`, и воркер разберёт его в
 # ближайшей точке проверки, когда решение будет принято.
 _CONFLICT_STATUS_SOURCES = frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED})
+
+
+async def find_merged_parents_with_children(db_session: AsyncSession) -> list[TaskRepository]:
+    """
+    Раздел 16.2: слитые ветки родителей, на которые ещё опираются дочерние
+    задачи. Обработанная дочерняя задача переключает базу на ветку
+    родителя по умолчанию и сюда больше не попадает — проход не растёт со
+    временем вместе с историей слитых задач.
+    """
+    child = aliased(TaskRepository)
+    child_task = aliased(Task)
+    pending_child = (
+        sa.select(child.id)
+        .join(child_task, child_task.id == child.task_id)
+        .where(
+            child_task.parent_task_id == TaskRepository.task_id,
+            child.repository_id == TaskRepository.repository_id,
+            child.base_branch == TaskRepository.branch_name,
+        )
+        .exists()
+    )
+    stmt = sa.select(TaskRepository).where(
+        TaskRepository.merge_status == MergeStatus.MERGED,
+        pending_child,
+    )
+    return list((await db_session.execute(stmt)).scalars().all())
 
 
 async def rebase_child_task_repositories_on_parent_merge(

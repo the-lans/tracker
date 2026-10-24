@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import time
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -55,6 +56,11 @@ _SCRIPT_SUFFIXES: dict[ScriptLanguage, str] = {
 # значения — это дефолт реализации, переопределяемый по мере появления
 # реальной нагрузки (не часть ТЗ напрямую).
 _DEFAULT_MEMORY_LIMIT = "512m"
+# Раздел 16.2: метка с моментом, после которого контейнер считается зависшим, —
+# по ней `purge_orphaned_docker_containers` не трогает долгие, но живые скрипты.
+CONTAINER_DEADLINE_LABEL = "tracker.deadline"
+# Запас на остановку по таймауту самой ноды (`docker stop`) сверх `timeout_seconds`.
+_DEADLINE_MARGIN_SECONDS = 120
 _DEFAULT_CPU_LIMIT = "1.0"
 _VOLUME_MOUNT = "volume"
 
@@ -87,6 +93,12 @@ class ScriptExecutionResult:
         self.stdout = stdout
         self.stderr = stderr
         self.timed_out = timed_out
+
+
+def container_deadline(timeout_seconds: int, *, now: float | None = None) -> int:
+    """Unix-время, после которого контейнер script-ноды считается зависшим."""
+    started = time.time() if now is None else now
+    return int(started) + timeout_seconds + _DEADLINE_MARGIN_SECONDS
 
 
 async def run_script_node(
@@ -125,6 +137,8 @@ async def run_script_node(
             "none",
             f"--memory={_DEFAULT_MEMORY_LIMIT}",
             f"--cpus={_DEFAULT_CPU_LIMIT}",
+            "--label",
+            f"{CONTAINER_DEADLINE_LABEL}={container_deadline(timeout_seconds)}",
             *mount_args,
             *_env_args(env or {}),
             "-w",

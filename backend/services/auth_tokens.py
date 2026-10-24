@@ -54,7 +54,7 @@ def verify_session_token(token: str) -> uuid.UUID:
     токен подделан или истёк."""
     try:
         raw = _fernet().decrypt(token.encode("ascii"))
-    except InvalidToken as exc:
+    except (InvalidToken, UnicodeEncodeError) as exc:
         raise InvalidSessionTokenError("Токен сессии недействителен") from exc
 
     payload = json.loads(raw)

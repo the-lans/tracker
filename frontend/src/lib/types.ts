@@ -170,6 +170,34 @@ export interface User {
   ssh_key_fingerprint: string | null;
   /** Раздел 16.2: последний вход в SFTP-шлюз по этому ключу. */
   ssh_key_last_used_at: string | null;
+  /** Раздел 15.6: личный доступ к Jira; токен не возвращается — только признак. */
+  jira_email: string | null;
+  jira_token_set: boolean;
+}
+
+/** `jira_token`: `null` — оставить сохранённый, пустая строка — удалить. */
+export interface JiraConnectionUpdate {
+  jira_email: string | null;
+  jira_token: string | null;
+}
+
+/** Раздел 15.6: адрес Jira задаёт администратор; `null` — импорт недоступен. */
+export interface JiraServer {
+  jira_url: string | null;
+}
+
+/** Раздел 15.6: вложения Jira ещё копируются в артефакты задачи. */
+export interface JiraAttachmentCopy {
+  pending: boolean;
+}
+
+/** Раздел 15.6: поля формы новой задачи из задачи Jira. */
+export interface JiraIssueDraft {
+  code: string;
+  title: string;
+  description: string;
+  issue_url: string;
+  attachments: Array<{ filename: string; size: number }>;
 }
 
 /** Раздел 15.1: данные для подключения к SFTP-шлюзу. */
@@ -206,6 +234,8 @@ export interface Task {
   title: string;
   description: string;
   guide_url: string | null;
+  /** Раздел 15.6: задача Jira, из которой задача импортирована. */
+  jira_issue_url: string | null;
   status: TaskStatus;
   pipeline_id: string | null;
   llm_account_id: string | null;
@@ -243,6 +273,8 @@ export interface TaskDuplicateRequest {
 export interface TaskCreateRequest extends TaskDuplicateRequest {
   parent_task_id?: string | null;
   use_parent_summary?: boolean;
+  /** Раздел 15.6: ссылка и вложения задачи Jira берутся по ключу. */
+  jira_issue_key?: string | null;
 }
 
 /** PATCH /tasks/{id}: auto_accept_plan — до `done`, остальное — только в `new`. */
@@ -609,6 +641,23 @@ export interface SystemSettings {
   default_retry_base_delay_seconds: number;
   default_runner_image_python: string;
   default_runner_image_bash: string;
+}
+
+/**
+ * Раздел 15.5, 15.6: интеграции — GitLab (токен API не возвращается, только
+ * признак) и адрес Jira для импорта задач.
+ */
+export interface Integrations {
+  gitlab_url: string | null;
+  gitlab_token_set: boolean;
+  jira_url: string | null;
+}
+
+/** `gitlab_token`: `null` — оставить сохранённый, пустая строка — удалить. */
+export interface IntegrationsUpdate {
+  gitlab_url: string | null;
+  gitlab_token: string | null;
+  jira_url: string | null;
 }
 
 /** Раздел 15.5: в скольких задачах используется промт библиотеки. */

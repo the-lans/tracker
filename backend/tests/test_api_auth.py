@@ -11,6 +11,8 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
+import pytest
+from google.auth.exceptions import MalformedError, TransportError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_google_verifier
@@ -19,7 +21,18 @@ from db.models.users import AllowedEmail, User
 from services.auth import GoogleIdentity
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from httpx import AsyncClient
+
+
+@pytest.fixture(autouse=True)
+def _reset_verifier() -> Iterator[None]:
+    """Подменённый верификатор Google не переходит в следующие тесты."""
+    yield
+    from main import app
+
+    app.dependency_overrides.pop(get_google_verifier, None)
 
 
 class _FakeVerifier:
@@ -86,3 +99,39 @@ async def test_login_returns_working_session_token_for_existing_user(
 
     assert response.status_code == 200
     assert response.json()["user"]["id"] == str(existing.id)
+
+
+class _FailingVerifier:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def verify(self, id_token_jwt: str) -> GoogleIdentity:  # noqa: ARG002
+        raise self._error
+
+
+class TestRejectedToken:
+    """Раздел 19.1: плохой токен Google — 401, а не «внутренняя ошибка»."""
+
+    @pytest.mark.parametrize(
+        ("error", "status_code"),
+        [
+            # google-auth: исключения не аннотированы, несмотря на py.typed пакета.
+            (MalformedError("Certificate for key id abc not found."), 401),  # type: ignore[no-untyped-call]
+            (ValueError("Token expired"), 401),
+            (TransportError("connection refused"), 502),  # type: ignore[no-untyped-call]
+        ],
+        ids=["malformed", "expired", "google_unavailable"],
+    )
+    async def test_status(
+        self,
+        api_client: AsyncClient,
+        error: Exception,
+        status_code: int,
+    ) -> None:
+        from main import app
+
+        app.dependency_overrides[get_google_verifier] = lambda: _FailingVerifier(error)
+
+        response = await api_client.post("/auth/google", json={"id_token": "bad"})
+
+        assert response.status_code == status_code

@@ -16,10 +16,10 @@ services:
           cpus: "0.25"
           memory: 256M
 
+  # Периодические задачи — короткие, одного процесса на очередь `celery` хватает.
   worker:
     restart: always
     deploy:
-      replicas: 3
       resources:
         limits:
           cpus: "1.0"
@@ -27,6 +27,19 @@ services:
         reservations:
           cpus: "0.25"
           memory: 256M
+
+  # Сессии задач: на каждую — процесс Claude Code CLI. Число одновременных
+  # сессий — SESSION_WORKER_CONCURRENCY (.env); лимиты подбираются под него.
+  session-worker:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
 
   beat:
     restart: always

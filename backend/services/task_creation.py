@@ -18,6 +18,8 @@ from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from services.access import ensure_llm_account_of_owner
 from services.errors import ConflictError, NotFoundError, ValidationError
+from services.repository_validation import validate_branch_name
+from services.task_codes import validate_task_code
 from services.task_workspace import build_branch_name
 
 if TYPE_CHECKING:
@@ -41,6 +43,8 @@ class TaskDraft:
     parent_task_id: uuid.UUID | None = None
     use_parent_summary: bool = False
     repositories: list[RepositoryAttachment] = field(default_factory=list)
+    # Раздел 15.6: задача Jira, из которой заполнена форма.
+    jira_issue_url: str | None = None
 
 
 async def _ensure_exists(
@@ -59,6 +63,9 @@ async def _validate_draft(
     *,
     created_by: uuid.UUID,
 ) -> None:
+    validate_task_code(draft.code)
+    for attached in draft.repositories:
+        validate_branch_name(attached.base_branch)
     repository_ids = [attached.repository_id for attached in draft.repositories]
     if len(set(repository_ids)) != len(repository_ids):
         raise ValidationError("Репозиторий указан у задачи больше одного раза")
@@ -97,6 +104,7 @@ async def add_task_with_repositories(
         title=draft.title,
         description=draft.description,
         guide_url=draft.guide_url,
+        jira_issue_url=draft.jira_issue_url,
         parent_task_id=draft.parent_task_id,
         use_parent_summary=draft.use_parent_summary,
         llm_account_id=draft.llm_account_id,

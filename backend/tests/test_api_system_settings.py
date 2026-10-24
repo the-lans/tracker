@@ -7,9 +7,11 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from db.models.enums import NodeType, ScriptLanguage
+from services.system_settings import get_gitlab_credentials, get_jira_url
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 _SETTINGS = {
     "default_timeout_seconds": 900,
@@ -99,3 +101,69 @@ class TestNewNodeDefaults:
         assert response.json()["timeout_seconds"] == 30
         assert response.json()["max_retries"] == 1
         assert response.json()["docker_image"] is None
+
+
+class TestIntegrations:
+    async def test_token_saved_but_never_returned(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        saved = await admin_client.put(
+            "/system-settings/integrations",
+            json={"gitlab_url": "https://gitlab.example.com", "gitlab_token": "glpat-example"},
+        )
+
+        assert saved.json() == {
+            "gitlab_url": "https://gitlab.example.com",
+            "gitlab_token_set": True,
+            "jira_url": None,
+        }
+        assert "glpat-example" not in (await admin_client.get("/system-settings/integrations")).text
+        credentials = await get_gitlab_credentials(db_session)
+        assert credentials is not None
+        assert credentials.token == "glpat-example"
+
+    @pytest.mark.parametrize(
+        ("token", "token_set"),
+        [(None, True), ("", False)],
+        ids=["keep", "clear"],
+    )
+    async def test_token_kept_or_cleared(
+        self,
+        admin_client: AsyncClient,
+        token: str | None,
+        token_set: bool,
+    ) -> None:
+        await admin_client.put(
+            "/system-settings/integrations",
+            json={"gitlab_url": "https://gitlab.example.com", "gitlab_token": "glpat-example"},
+        )
+
+        response = await admin_client.put(
+            "/system-settings/integrations",
+            json={"gitlab_url": "https://gitlab.example.com", "gitlab_token": token},
+        )
+
+        assert response.json()["gitlab_token_set"] is token_set
+
+    async def test_jira_url_saved(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        response = await admin_client.put(
+            "/system-settings/integrations",
+            json={"jira_url": "https://jira.example.com/"},
+        )
+
+        assert response.json()["jira_url"] == "https://jira.example.com"
+        assert await get_jira_url(db_session) == "https://jira.example.com"
+
+    @pytest.mark.parametrize("method", ["get", "put"])
+    async def test_admin_only(self, authed_client: AsyncClient, method: str) -> None:
+        if method == "get":
+            response = await authed_client.get("/system-settings/integrations")
+        else:
+            response = await authed_client.put("/system-settings/integrations", json={})
+        assert response.status_code == 403

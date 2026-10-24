@@ -18,7 +18,7 @@ API (этап 12) только СОЗДАЁТ запись здесь и пуб�
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -31,6 +31,7 @@ from db.models.enums import (
     NodeLogStatus,
     NodeLogTriggerType,
     NodeType,
+    TaskStatus,
 )
 from db.models.logs import NodeLog
 from db.models.pipelines import Node
@@ -38,19 +39,24 @@ from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
+from services.integrity import ensure_library_prompt_attachable
 from services.nodes.dispatch import (
     execute_llm_node_with_timeout,
     execute_node,
+    logged_prompt,
     record_sdk_failure,
     resolve_node_prompt_or_none,
     resolve_script_env_or_none,
+    sent_prompt,
 )
 from services.notifications import NotificationEvent, notify_task_event
 from services.parent_summary import run_parent_summary_request
 from services.pipeline_orchestrator import StopGuard, run_node_execution
 from services.system_settings import resolve_runner_image
 from services.task_control import clear_manual_stop, is_manual_stop_requested
-from services.template_context import render_for_task
+from services.task_launch import requires_llm_account
+from services.task_status import SESSION_ACTIVE_STATUSES
+from services.template_context import RenderedText, render_for_task
 from services.templating import (
     RenderScope,
     is_slash_command_text,
@@ -85,6 +91,33 @@ LIBRARY_FORBIDDEN_NODE_TYPES = frozenset({NodeType.CLEAR_CONTEXT, NodeType.PLAN_
 DEFAULT_FREEFORM_TIMEOUT_SECONDS = 600
 
 
+async def attach_library_prompt(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    node: Node,
+    added_by: uuid.UUID,
+) -> TaskLibraryPrompt:
+    """Раздел 7.3: промт из библиотеки добавляется в список задачи; архивный — нет."""
+    ensure_library_prompt_attachable(node)
+    task_library_prompt = TaskLibraryPrompt(
+        task_id=task_id,
+        node_id=node.id,
+        added_by=added_by,
+        added_at=datetime.now(UTC),
+    )
+    db_session.add(task_library_prompt)
+    await db_session.commit()
+    return task_library_prompt
+
+
+async def _ensure_task_has_llm_account(db_session: AsyncSession, task_id: uuid.UUID) -> None:
+    """Раздел 3.1: без LLM-аккаунта сессии Claude Code у задачи нет."""
+    task = await db_session.get(Task, task_id)
+    if task is not None and task.llm_account_id is None:
+        raise ValidationError("Промт выполняет LLM — выберите у задачи LLM-аккаунт")
+
+
 async def enqueue_library_prompt_run(
     db_session: AsyncSession,
     *,
@@ -94,6 +127,8 @@ async def enqueue_library_prompt_run(
 ) -> TaskManualRequestQueue:
     if node.node_type in LIBRARY_FORBIDDEN_NODE_TYPES:
         raise ValidationError(f"Тип ноды {node.node_type} недопустим для библиотеки промтов")
+    if requires_llm_account(node):
+        await _ensure_task_has_llm_account(db_session, task_library_prompt.task_id)
     request = TaskManualRequestQueue(
         task_id=task_library_prompt.task_id,
         request_type=ManualRequestType.LIBRARY_PROMPT,
@@ -123,6 +158,7 @@ async def enqueue_freeform_prompt_run(
     # Раздел 8.2: "{{node.*}}" недоступны свободному полю ввода — проверяется
     # здесь же, до постановки в очередь, а не только на предпросмотре.
     validate_template_variables(raw_prompt_text, scope=RenderScope.FREEFORM)
+    await _ensure_task_has_llm_account(db_session, task_id)
     request = TaskManualRequestQueue(
         task_id=task_id,
         request_type=ManualRequestType.FREEFORM_PROMPT,
@@ -137,7 +173,12 @@ async def enqueue_freeform_prompt_run(
     return request
 
 
-async def render_freeform_prompt(db_session: AsyncSession, *, task: Task, text: str) -> str:
+async def render_freeform_prompt(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    text: str,
+) -> RenderedText:
     """
     Раздел 8.2: переменные раздела 5 (кроме `{{node.*}}`) подставляются
     непосредственно перед отправкой (5.1); слэш-команда уходит буквально.
@@ -146,8 +187,46 @@ async def render_freeform_prompt(db_session: AsyncSession, *, task: Task, text: 
     что получит сессия.
     """
     if is_slash_command_text(text):
-        return text
+        return RenderedText.literal(text)
     return await render_for_task(db_session, task, text)
+
+
+_ACTIVE_REQUEST_STATUSES = (ManualRequestStatus.QUEUED, ManualRequestStatus.PROCESSING)
+
+
+async def _settle_cancelled_library_prompt(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    node_id: uuid.UUID | None,
+) -> None:
+    """
+    Раздел 7.3: отменённый запрос не оставляет промт «в очереди». Если у
+    промта в задаче не осталось других запросов, его статус — `stopped`
+    (кнопка ■ для запроса в очереди равна отмене).
+    """
+    if node_id is None:
+        return
+    still_active = await db_session.scalar(
+        sa.select(TaskManualRequestQueue.id)
+        .where(
+            TaskManualRequestQueue.task_id == task_id,
+            TaskManualRequestQueue.node_id == node_id,
+            TaskManualRequestQueue.status.in_(_ACTIVE_REQUEST_STATUSES),
+        )
+        .limit(1),
+    )
+    if still_active is not None:
+        return
+    await db_session.execute(
+        sa.update(TaskLibraryPrompt)
+        .where(
+            TaskLibraryPrompt.task_id == task_id,
+            TaskLibraryPrompt.node_id == node_id,
+            TaskLibraryPrompt.last_run_status == LibraryPromptRunStatus.QUEUED,
+        )
+        .values(last_run_status=LibraryPromptRunStatus.STOPPED),
+    )
 
 
 async def cancel_manual_request(
@@ -159,6 +238,12 @@ async def cancel_manual_request(
         raise ConflictError("Запрос уже обрабатывается или завершён — отмена недоступна")
     request.status = ManualRequestStatus.CANCELLED
     request.processed_at = datetime.now(UTC)
+    await db_session.flush()
+    await _settle_cancelled_library_prompt(
+        db_session,
+        task_id=request.task_id,
+        node_id=request.node_id,
+    )
     await db_session.commit()
 
 
@@ -235,7 +320,7 @@ async def _run_library_prompt(
         node_id=node.id,
         trigger_type=NodeLogTriggerType.LIBRARY_MANUAL,
         triggered_by=request.requested_by,
-        rendered_prompt=prompt if node.node_type is not NodeType.SLASH_COMMAND else None,
+        rendered_prompt=logged_prompt(node, prompt),
         status=NodeLogStatus.RUNNING,
         started_at=datetime.now(UTC),
     )
@@ -251,7 +336,7 @@ async def _run_library_prompt(
     outcome = await run_node_execution(
         execute_node(
             node,
-            prompt=prompt,
+            prompt=sent_prompt(prompt),
             claude_session=claude_session,
             repos_path=repos_path,
             timeout_seconds=node.timeout_seconds,
@@ -320,7 +405,7 @@ async def _run_freeform_prompt(
         task_id=task.id,
         trigger_type=NodeLogTriggerType.FREEFORM_MANUAL,
         triggered_by=request.requested_by,
-        rendered_prompt=prompt,
+        rendered_prompt=prompt.display,
         status=NodeLogStatus.RUNNING,
         started_at=datetime.now(UTC),
     )
@@ -340,7 +425,7 @@ async def _run_freeform_prompt(
     outcome = await run_node_execution(
         execute_llm_node_with_timeout(
             claude_session,
-            prompt,
+            prompt.text,
             timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
         ),
         node_type=None,
@@ -485,6 +570,12 @@ async def process_manual_queue_once(
         processed += 1
 
 
+# Раздел 16.2: сколько запрос может ждать в очереди задачи без живой сессии.
+STALE_QUEUED_REQUEST_AGE = timedelta(minutes=30)
+# Сессия жива или вот-вот начнётся — её очередь обработает воркер.
+_TASK_STATUSES_WITH_LIVE_SESSION = (TaskStatus.QUEUED, *SESSION_ACTIVE_STATUSES)
+
+
 async def expire_stale_manual_queue_requests(
     db_session: AsyncSession,
     *,
@@ -497,6 +588,10 @@ async def expire_stale_manual_queue_requests(
     ``older_than`` уже вычислен вызывающим кодом (периодической задачей,
     её Celery-обёртка) как "сейчас минус порог".
 
+    Зависшим считается только запрос задачи без живой сессии: у задачи в
+    работе, на паузе или в ожидании решения он дождётся своей очереди, даже
+    если впереди долгая нода с повторами или решение пользователя.
+
     Раздел 17.4: перевод `queued -> cancelled` — один `UPDATE ... RETURNING`
     с условием на текущий статус. Если два запуска пересеклись (ручной
     «Запустить сейчас» поверх расписания), запрос отменит и уведомит автора
@@ -507,16 +602,25 @@ async def expire_stale_manual_queue_requests(
         .where(
             TaskManualRequestQueue.status == ManualRequestStatus.QUEUED,
             TaskManualRequestQueue.requested_at < older_than,
+            TaskManualRequestQueue.task_id.in_(
+                sa.select(Task.id).where(Task.status.not_in(_TASK_STATUSES_WITH_LIVE_SESSION)),
+            ),
         )
         .values(status=ManualRequestStatus.CANCELLED, processed_at=datetime.now(UTC))
-        .returning(TaskManualRequestQueue.id, TaskManualRequestQueue.task_id)
+        .returning(
+            TaskManualRequestQueue.id,
+            TaskManualRequestQueue.task_id,
+            TaskManualRequestQueue.node_id,
+        )
         .execution_options(synchronize_session="fetch")
     )
     expired = list((await db_session.execute(stmt)).all())
     if not expired:
         return []
+    for _, task_id, node_id in expired:
+        await _settle_cancelled_library_prompt(db_session, task_id=task_id, node_id=node_id)
     await db_session.commit()
-    for request_id, task_id in expired:
+    for request_id, task_id, _ in expired:
         logger.info(
             "manual_queue_request_expired",
             request_id=str(request_id),
@@ -530,4 +634,4 @@ async def expire_stale_manual_queue_requests(
                 task=task,
                 detail=f"{task.code}: запрос из очереди отменён по таймауту ожидания",
             )
-    return [request_id for request_id, _ in expired]
+    return [request_id for request_id, _, _ in expired]

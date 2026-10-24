@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -23,6 +22,7 @@ from app_logging.config import get_logger
 from db.models.enums import PeriodicScheduleType
 from db.session import async_session_factory
 from services.periodic_tasks import list_enabled_periodic_tasks
+from tasks.async_runner import run_with_fresh_pool
 
 if TYPE_CHECKING:
     from db.models.periodic import PeriodicTask
@@ -87,7 +87,7 @@ class DatabaseScheduler(Scheduler):  # type: ignore[misc]  # celery без py.ty
 
     def _load_schedule_from_db(self) -> dict[str, ScheduleEntry]:
         try:
-            periodic_tasks = asyncio.run(_fetch_enabled_periodic_tasks())
+            periodic_tasks = run_with_fresh_pool(_fetch_enabled_periodic_tasks())
         except Exception as exc:  # noqa: BLE001 — сбой обновления расписания не должен ронять Beat
             logger.error("periodic_schedule_refresh_failed", error=str(exc))
             return self._cached_schedule

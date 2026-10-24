@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { wsUrl } from "@/lib/apiClient";
+import { wsAuthMessage, wsUrl } from "@/lib/apiClient";
 import type { Task, TaskOutputStream, TaskSocketEvent } from "@/lib/types";
 
 const RECONNECT_DELAY_MS = 3000;
@@ -22,6 +22,8 @@ function applyEvent(queryClient: QueryClient, taskId: string, payload: TaskSocke
   );
   void queryClient.invalidateQueries({ queryKey: ["tasks", "list"] });
   void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "node-logs"] });
+  // Раздел 14.3: файлы, сохранённые агентом или скриптом, появляются без перезагрузки.
+  void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "artifacts"] });
 }
 
 /**
@@ -42,15 +44,17 @@ export function useTaskStatusSocket(taskId: string | undefined) {
 
     function connect() {
       if (cancelled || !taskId) return;
-      socket = new WebSocket(wsUrl(`/ws/tasks/${taskId}/status`));
-      socket.onmessage = (event: MessageEvent<string>) => {
+      const current = new WebSocket(wsUrl(`/ws/tasks/${taskId}/status`));
+      socket = current;
+      current.onopen = () => current.send(wsAuthMessage());
+      current.onmessage = (event: MessageEvent<string>) => {
         try {
           applyEvent(queryClient, taskId, JSON.parse(event.data) as TaskSocketEvent);
         } catch {
           // неожиданный формат сообщения — игнорируем, следующее событие поправит состояние
         }
       };
-      socket.onclose = (event) => {
+      current.onclose = (event) => {
         // 4401/4404 — токен недействителен либо задача удалена: переподключение бессмысленно.
         if (cancelled || event.code === 4401 || event.code === 4404) return;
         reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY_MS);

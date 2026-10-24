@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import sqlalchemy as sa
@@ -24,6 +24,7 @@ from services.errors import ConflictError, ValidationError
 from services.task_status import (
     fail_task_after_error,
     first_unfinished_order_index,
+    reset_task_to_new,
     transition_task_status,
 )
 
@@ -412,3 +413,67 @@ class TestFailTaskClosesManualRun:
         assert request.processed_at is not None
         assert library_prompt.last_run_status is LibraryPromptRunStatus.FAILED
         assert library_prompt.last_run_at is not None
+
+
+class TestRunAfterReset:
+    """
+    Раздел 14.2 «Вернуть в новые»: выполнения нод прошлого прогона не
+    засчитываются новому — ни точкой перезапуска, ни переходом в `done`.
+    """
+
+    async def _done_then_reset(self, db_session: AsyncSession) -> tuple[Task, list[Node]]:
+        task = await _make_task(db_session, status=TaskStatus.DONE)
+        nodes = [await _add_enabled_node(db_session, task, order_index=index) for index in (0, 1)]
+        earlier = datetime.now(UTC) - timedelta(hours=1)
+        for node in nodes:
+            db_session.add(
+                NodeLog(
+                    task_id=task.id,
+                    node_id=node.id,
+                    trigger_type=NodeLogTriggerType.PIPELINE,
+                    status=NodeLogStatus.SUCCESS,
+                    started_at=earlier,
+                ),
+            )
+        await db_session.flush()
+        await reset_task_to_new(db_session, task_id=task.id)
+        return task, nodes
+
+    async def test_restart_point_ignores_previous_run(self, db_session: AsyncSession) -> None:
+        task, _ = await self._done_then_reset(db_session)
+
+        assert await first_unfinished_order_index(db_session, task.id) == 0
+
+    async def test_done_needs_success_in_current_run(self, db_session: AsyncSession) -> None:
+        task, nodes = await self._done_then_reset(db_session)
+        await db_session.execute(
+            sa.update(Task).where(Task.id == task.id).values(status=TaskStatus.IN_PROGRESS),
+        )
+
+        with pytest.raises(ValidationError):
+            await transition_task_status(
+                db_session,
+                task_id=task.id,
+                from_status=TaskStatus.IN_PROGRESS,
+                to_status=TaskStatus.DONE,
+            )
+
+        for node in nodes:
+            db_session.add(
+                NodeLog(
+                    task_id=task.id,
+                    node_id=node.id,
+                    trigger_type=NodeLogTriggerType.PIPELINE,
+                    status=NodeLogStatus.SUCCESS,
+                    started_at=datetime.now(UTC),
+                ),
+            )
+        await db_session.flush()
+        updated = await transition_task_status(
+            db_session,
+            task_id=task.id,
+            from_status=TaskStatus.IN_PROGRESS,
+            to_status=TaskStatus.DONE,
+        )
+        assert updated.status is TaskStatus.DONE
+

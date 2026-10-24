@@ -34,7 +34,7 @@ volume-данных, без изменений кода или повторно�
 2. Заархивировать volume-данные и скопировать вместе с `.env` и последним дампом на новый сервер (пример через `docker run` + `tar`, без остановки сервисов — репозитории задач не должны меняться на лету во время архивации, поэтому короткая пауза `worker`/`beat` разумна для консистентности архива `task_repos`):
 
    ```bash
-   docker compose stop worker beat
+   docker compose stop worker session-worker beat
    docker run --rm -v tracker_task_repos:/data -v "$(pwd)":/backup alpine \
      tar czf /backup/task_repos.tar.gz -C /data .
    docker run --rm -v tracker_user_files:/data -v "$(pwd)":/backup alpine \
@@ -45,7 +45,7 @@ volume-данных, без изменений кода или повторно�
      tar czf /backup/claude_accounts.tar.gz -C /data .
    docker run --rm -v tracker_sftp_host_keys:/data -v "$(pwd)":/backup alpine \
      tar czf /backup/sftp_host_keys.tar.gz -C /data .
-   docker compose start worker beat
+   docker compose start worker session-worker beat
 
    docker cp "$(docker compose ps -q backup)":/backups/<файл-дампа>.sql.gz ./
    ```
@@ -98,7 +98,7 @@ volume-данных, без изменений кода или повторно�
 
 ```bash
 cd /opt/tracker
-docker compose stop backend worker beat
+docker compose stop backend worker session-worker beat
 
 docker run --rm -v tracker_task_repos:/data -v "$(pwd)":/backup alpine \
   sh -c "rm -rf /data/* && tar xzf /backup/task_repos.tar.gz -C /data"
@@ -113,7 +113,7 @@ docker run --rm -v tracker_sftp_host_keys:/data -v "$(pwd)":/backup alpine \
 
 docker compose up -d --wait postgres
 zcat <файл-дампа>.sql.gz | docker compose exec -T postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"
-docker compose up -d backend worker beat sftp frontend caddy backup
+docker compose up -d backend worker session-worker beat sftp frontend caddy backup
 ```
 
 В этом варианте миграции уже применены к пустой БД до восстановления

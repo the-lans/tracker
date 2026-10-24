@@ -85,9 +85,22 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.PLAN_REVIEW: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
     TaskStatus.AWAITING_INPUT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
     TaskStatus.REBASE_CONFLICT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.FAILED}),
-    TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS}),
-    TaskStatus.DONE: frozenset(),
+    # `-> new` — «Вернуть в новые» (раздел 14.2): сменить пайплайн и запустить заново.
+    TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.NEW}),
+    TaskStatus.DONE: frozenset({TaskStatus.NEW}),
 }
+
+
+async def _current_run_filter(
+    db_session: AsyncSession,
+    task_id: uuid.UUID,
+) -> list[sa.ColumnElement[bool]]:
+    """
+    Записи `node_logs` текущего прогона: после «Вернуть в новые»
+    (`tasks.reset_at`) прежние выполнения нод не учитываются.
+    """
+    reset_at = await db_session.scalar(sa.select(Task.reset_at).where(Task.id == task_id))
+    return [] if reset_at is None else [NodeLog.started_at >= reset_at]
 
 
 async def _ensure_done_invariant(db_session: AsyncSession, task_id: uuid.UUID) -> None:
@@ -105,6 +118,7 @@ async def _ensure_done_invariant(db_session: AsyncSession, task_id: uuid.UUID) -
         NodeLog.task_id == task_id,
         NodeLog.status == NodeLogStatus.SUCCESS,
         NodeLog.node_id.in_(enabled_node_ids),
+        *await _current_run_filter(db_session, task_id),
     )
     succeeded_node_ids = set((await db_session.execute(succeeded_node_ids_stmt)).scalars().all())
 
@@ -194,7 +208,7 @@ FAILABLE_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REBAS
 
 
 async def first_unfinished_order_index(db_session: AsyncSession, task_id: uuid.UUID) -> int:
-    """`order_index` первой включённой ноды без успешного выполнения в пайплайне.
+    """`order_index` первой включённой ноды без успешного выполнения в текущем прогоне.
 
     Если все включённые ноды уже успешны (сбой случился после них — например,
     при пуше), возвращает индекс за последней нодой: перезапуск с этой точки
@@ -208,6 +222,7 @@ async def first_unfinished_order_index(db_session: AsyncSession, task_id: uuid.U
             NodeLog.status == NodeLogStatus.SUCCESS,
             # NOT IN с NULL в подзапросе отбросил бы все строки.
             NodeLog.node_id.is_not(None),
+            *await _current_run_filter(db_session, task_id),
         )
         .scalar_subquery()
     )
@@ -320,4 +335,31 @@ async def fail_task_after_error(
         db_session,
         task_id=task_id,
         failed_order_index=await first_unfinished_order_index(db_session, task_id),
+    )
+
+
+# Раздел 14.2 «Вернуть в новые»: только у задачи без живой сессии.
+RESETTABLE_STATUSES = frozenset({TaskStatus.FAILED, TaskStatus.DONE})
+
+
+async def reset_task_to_new(db_session: AsyncSession, *, task_id: uuid.UUID) -> Task:
+    """
+    Возвращает завершённую или упавшую задачу в `new`: пайплайн и состав нод
+    снова можно менять, «Запустить» пройдёт пайплайн с начала в той же
+    сессии. Точка перезапуска и автозапуск сбрасываются; `reset_at` отделяет
+    новый прогон от прежних выполнений нод (`_current_run_filter`).
+    """
+    task = await db_session.get(Task, task_id, populate_existing=True)
+    if task is None or task.status not in RESETTABLE_STATUSES:
+        raise ConflictError("Вернуть в новые можно только завершённую или упавшую задачу")
+    return await transition_task_status(
+        db_session,
+        task_id=task_id,
+        from_status=task.status,
+        to_status=TaskStatus.NEW,
+        extra_values={
+            "last_failed_order_index": None,
+            "auto_start_enabled": False,
+            "reset_at": datetime.now(UTC),
+        },
     )

@@ -65,8 +65,7 @@ async def ensure_node_deletable(session: AsyncSession, node: Node) -> None:
     )
 
 
-async def ensure_repository_deletable(session: AsyncSession, repository_id: uuid.UUID) -> None:
-    """Запрещает удаление репозитория, привязанного к активной (не терминальной) задаче."""
+async def _attached_to_active_task(session: AsyncSession, repository_id: uuid.UUID) -> bool:
     stmt = (
         sa.select(TaskRepository.id)
         .join(Task, Task.id == TaskRepository.task_id)
@@ -76,8 +75,26 @@ async def ensure_repository_deletable(session: AsyncSession, repository_id: uuid
         )
         .limit(1)
     )
-    if (await session.execute(stmt)).first() is not None:
+    return (await session.execute(stmt)).first() is not None
+
+
+async def ensure_repository_deletable(session: AsyncSession, repository_id: uuid.UUID) -> None:
+    """Запрещает удаление репозитория, привязанного к активной (не терминальной) задаче."""
+    if await _attached_to_active_task(session, repository_id):
         raise ConflictError("Репозиторий привязан к активной задаче")
+
+
+async def ensure_repository_renamable(session: AsyncSession, repository_id: uuid.UUID) -> None:
+    """
+    Раздел 3.2: имя — каталог клона в директории задачи. Переименование
+    репозитория активной задачи увело бы следующий запуск в новый пустой клон,
+    а незапушенная работа осталась бы в прежнем каталоге.
+    """
+    if await _attached_to_active_task(session, repository_id):
+        raise ConflictError(
+            "Репозиторий привязан к активной задаче — переименовать его можно, "
+            "когда задача завершится или упадёт",
+        )
 
 
 async def ensure_llm_account_deletable(session: AsyncSession, llm_account_id: uuid.UUID) -> None:

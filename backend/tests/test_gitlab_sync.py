@@ -29,6 +29,7 @@ from services.crypto import encrypt
 from services.git_ops import clone_task_repository
 from services.gitlab_sync import (
     ACCESS_DENIED_KEY,
+    find_merged_parents_with_children,
     permanent_failure_key,
     rebase_child_task_repositories_on_parent_merge,
     sync_merge_statuses,
@@ -666,10 +667,60 @@ class TestSyncFailures:
                 await db_session.execute(
                     sa.select(AppLog).where(
                         AppLog.source == "periodic.sync_gitlab_merge_status",
-                        AppLog.message.contains("GITLAB_TOKEN"),
+                        AppLog.message.contains("токен GitLab"),
                     ),
                 )
             ).scalars().all()
             assert len(logs) == 1
         finally:
             await redis_client.delete(ACCESS_DENIED_KEY)
+
+
+class TestFindMergedParentsWithChildren:
+    """Раздел 16.2: проход ребейза берёт только слитые ветки, на которые ещё опираются дети."""
+
+    async def test_only_pending_parents(self, db_session: AsyncSession) -> None:
+        user = await _make_user(db_session)
+        repository = _make_repository()
+        db_session.add(repository)
+        await db_session.flush()
+
+        async def parent_branch(
+            merge_status: MergeStatus,
+            *,
+            child_base: str | None,
+        ) -> TaskRepository:
+            parent = await _make_task(db_session, created_by=user.id, status=TaskStatus.DONE)
+            branch = f"feature/{parent.code}"
+            parent_repository = TaskRepository(
+                task_id=parent.id,
+                repository_id=repository.id,
+                role=RepositoryRole.READ_WRITE,
+                branch_name=branch,
+                base_branch="main",
+                merge_status=merge_status,
+            )
+            db_session.add(parent_repository)
+            if child_base is not None:
+                child = await _make_task(db_session, created_by=user.id, parent_task_id=parent.id)
+                db_session.add(
+                    TaskRepository(
+                        task_id=child.id,
+                        repository_id=repository.id,
+                        role=RepositoryRole.READ_WRITE,
+                        branch_name=f"feature/{child.code}",
+                        base_branch=branch if child_base == "parent" else child_base,
+                    ),
+                )
+            await db_session.flush()
+            return parent_repository
+
+        pending = await parent_branch(MergeStatus.MERGED, child_base="parent")
+        already_switched = await parent_branch(MergeStatus.MERGED, child_base="main")
+        without_children = await parent_branch(MergeStatus.MERGED, child_base=None)
+        not_merged = await parent_branch(MergeStatus.PUSHED, child_base="parent")
+
+        found = {row.id for row in await find_merged_parents_with_children(db_session)}
+
+        assert pending.id in found
+        assert not {already_switched.id, without_children.id, not_merged.id} & found

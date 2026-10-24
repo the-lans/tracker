@@ -65,6 +65,7 @@ from tests.fakes import (
     make_assistant_error,
     make_rate_limit_event,
     make_result_message,
+    patch_plan_mode_signals,
 )
 from tests.worker_support import GIT_AUTHOR_ARGS, WorkerEnv, init_bare_origin, run_command
 
@@ -76,11 +77,13 @@ if TYPE_CHECKING:
 _REPOSITORY_NAME = "backend"
 
 
+
 async def _make_task(
     db_session: AsyncSession,
     *,
     status: TaskStatus,
     origin: Path | None = None,
+    with_llm_account: bool = True,
 ) -> Task:
     user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
     db_session.add(user)
@@ -96,6 +99,8 @@ async def _make_task(
         pipeline_id=pipeline.id,
         status=status,
     )
+    if with_llm_account:
+        task.llm_account_id = (await make_llm_account(db_session, owner_id=user.id)).id
     db_session.add(task)
     await db_session.flush()
     if origin is not None:
@@ -707,18 +712,18 @@ class TestQuestionDuringPausedPrompt:
         statuses_while_asking: list[TaskStatus] = []
         answers: list[str] = []
 
-        async def user_answers(_redis: Any, _task_id: uuid.UUID, *, timeout: float | None) -> bool:
+        async def user_answers(*, timeout: float | None) -> bool:
             await db_session.refresh(task)
             statuses_while_asking.append(task.status)
             pending = await db_session.scalar(
                 sa.select(NodeLog).where(NodeLog.status == NodeLogStatus.AWAITING_DECISION),
             )
             assert pending is not None
-            pending.user_input_text = "main"
+            pending.user_input_text = "0"
             await db_session.commit()
             return True
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_answers)
+        patch_plan_mode_signals(monkeypatch, user_answers)
 
         async def agent_behaviour() -> None:
             if len(worker_env.client.queries) == 1:
@@ -726,14 +731,20 @@ class TestQuestionDuringPausedPrompt:
             if worker_env.client.queries[-1] == "вопрос на паузе":
                 can_use_tool = worker_env.options[0].can_use_tool
                 assert can_use_tool is not None
+                question = {
+                    "question": "Какую базу?",
+                    "header": "База",
+                    "options": [{"label": "main"}, {"label": "dev"}],
+                    "multiSelect": False,
+                }
                 result = await can_use_tool(
                     "AskUserQuestion",
-                    {"question": "Какую базу?", "options": ["main", "dev"]},
+                    {"questions": [question]},
                     ToolPermissionContext(),
                 )
                 assert isinstance(result, PermissionResultAllow)
                 assert result.updated_input is not None
-                answers.append(result.updated_input["answer"])
+                answers.append(result.updated_input["answers"]["Какую базу?"])
 
         async def while_paused(observed: list[TaskStatus]) -> None:
             await db_session.refresh(task)
@@ -962,7 +973,7 @@ class TestNodeTimeoutWhileAwaitingDecision:
             await asyncio.Event().wait()
             return False
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_never_answers)
+        patch_plan_mode_signals(monkeypatch, user_never_answers)
 
         class HangingClient(FakeClaudeAgentClient):
             async def interrupt(self) -> None:
@@ -1105,7 +1116,7 @@ class TestPlanRevision:
             await db_session.commit()
             return True
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_decides)
+        patch_plan_mode_signals(monkeypatch, user_decides)
 
         async def agent_plans_twice() -> None:
             can_use_tool = worker_env.options[0].can_use_tool
@@ -1259,3 +1270,24 @@ class TestFailureKinds:
         assert task.status is TaskStatus.DONE
         assert replacement.queries == ["шаг 1"]
         assert worker_env.options[-1].resume == "sess-worker"
+
+
+class TestWithoutLlmAccount:
+    async def test_scripts_only_pipeline_done(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Раздел 3.1: задача из одних скриптов работает без LLM-аккаунта и без CLI."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED, with_llm_account=False)
+        script = await _add_node(db_session, task, order_index=0, node_type=NodeType.SCRIPT)
+        script.script_language = ScriptLanguage.PYTHON
+        script.script_content = 'print("ok")'
+        await db_session.flush()
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert worker_env.options == []
+        assert task.remote_control_status is not RemoteControlStatus.CONNECTED
