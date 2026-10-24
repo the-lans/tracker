@@ -33,6 +33,8 @@ from db.models.enums import (
 from services.sftp_access import SFTP_LOGIN_PATTERN
 from services.ssh_keys import MAX_PUBLIC_KEY_LENGTH, fingerprint_of_public_key
 
+_HTTP_URL_PATTERN = r"^https?://\S+$"
+
 
 class AwaitingDecisionCountResponse(BaseModel):
     """Раздел 18.3: счётчик задач, ожидающих решения, в постоянной навигации."""
@@ -528,8 +530,7 @@ class UserResponse(BaseModel):
     # вход по нему — и в профиле, и в «Пользователях».
     ssh_public_key: str | None
     ssh_key_last_used_at: datetime | None
-    # Раздел 15.6: подключение к Jira; токен не отдаётся — только признак.
-    jira_url: str | None = None
+    # Раздел 15.6: личный доступ к Jira; токен не отдаётся — только признак.
     jira_email: str | None = None
     jira_token_encrypted: str | None = Field(default=None, exclude=True)
 
@@ -549,9 +550,16 @@ class UserResponse(BaseModel):
 class JiraConnectionUpdateRequest(BaseModel):
     """Раздел 15.6: ``jira_token`` — `None` оставить сохранённый, пустая строка — удалить."""
 
-    jira_url: str
     jira_email: str | None = None
     jira_token: str | None = None
+
+
+class JiraServerResponse(BaseModel):
+    """
+    Раздел 15.6: адрес Jira, заданный администратором; `None` — импорт недоступен.
+    """
+
+    jira_url: str | None
 
 
 class JiraAttachmentResponse(BaseModel):
@@ -571,6 +579,12 @@ class JiraIssueDraftResponse(BaseModel):
     description: str
     issue_url: str
     attachments: list[JiraAttachmentResponse]
+
+
+class JiraAttachmentCopyResponse(BaseModel):
+    """Раздел 15.6: вложения Jira ещё копируются в артефакты задачи."""
+
+    pending: bool
 
 
 class SftpConnectionResponse(BaseModel):
@@ -710,17 +724,20 @@ class SystemSettingsBody(BaseModel):
     default_runner_image_bash: str = Field(min_length=1)
 
 
-class GitlabIntegrationResponse(BaseModel):
+class IntegrationsResponse(BaseModel):
     """Раздел 15.5: токен GitLab не возвращается — только признак, что он сохранён."""
 
     gitlab_url: str | None
     gitlab_token_set: bool
+    jira_url: str | None
 
 
-class GitlabIntegrationUpdateRequest(BaseModel):
-    gitlab_url: str | None = Field(default=None, pattern=r"^https?://\S+$")
+class IntegrationsUpdateRequest(BaseModel):
+    gitlab_url: str | None = Field(default=None, pattern=_HTTP_URL_PATTERN)
     # `None` — оставить сохранённый токен, пустая строка — удалить.
     gitlab_token: str | None = None
+    # Раздел 15.6: сервер Jira, к которому обращается импорт задач.
+    jira_url: str | None = Field(default=None, pattern=_HTTP_URL_PATTERN)
 
 
 class LibraryUsageResponse(BaseModel):

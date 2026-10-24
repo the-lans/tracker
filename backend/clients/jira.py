@@ -5,13 +5,16 @@
 API v2 одинаков у Jira Cloud и Server/Data Center, а `description` в нём —
 текст, а не документ Atlassian. Авторизация: с email — Basic (Jira Cloud,
 email + API token), без email — Bearer (personal access token Server/DC).
+Вложения запрашиваются только с сервера из настроек: из ссылки Jira берутся
+путь и параметры, поэтому токен пользователя не уходит на другой хост, а
+Base URL Jira, отличный от адреса в настройках, не мешает скачиванию.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
@@ -46,6 +49,17 @@ class JiraIssue:
     description: str
     browse_url: str
     attachments: list[JiraAttachment]
+
+
+def _on_server(url: str, *, server_url: str) -> str:
+    """
+    Ссылка Jira на сервере из настроек: Jira строит ссылки от своего Base URL,
+    а он может отличаться от адреса, заданного администратором (внутренний
+    адрес, явный порт).
+    """
+    link = urlsplit(url)
+    server = urlsplit(server_url)
+    return urlunsplit((server.scheme, server.netloc, link.path, link.query, ""))
 
 
 class AttachmentTooLargeError(Exception):
@@ -105,12 +119,29 @@ class JiraClient:
         except httpx.TransportError as exc:
             raise ExternalServiceError(f"Jira недоступна: {exc}", is_transient=True) from exc
 
+    @staticmethod
+    def _json_object(response: httpx.Response) -> dict[str, Any]:
+        """
+        Ответ API v2 — объект JSON; страница входа SSO или чужой сервер — нет.
+        """
+        try:
+            body = response.json()
+        except ValueError as exc:
+            message = "Jira ответила не JSON — проверьте адрес Jira и личный токен"
+            raise ExternalServiceError(message, is_transient=False) from exc
+        if not isinstance(body, dict):
+            message = "Jira вернула неожиданный ответ — проверьте адрес Jira"
+            raise ExternalServiceError(message, is_transient=False)
+        return body
+
     async def get_issue(self, key: str) -> JiraIssue:
         url = f"{self._base_url}{_ISSUE_PATH.format(key=quote(key, safe=''))}"
         response = await self._get(url, params={"fields": _ISSUE_FIELDS})
         self._raise_for_status(response, what=f"Задача {key}")
-        body = response.json()
-        fields: dict[str, Any] = body.get("fields") or {}
+        body = self._json_object(response)
+        fields = body.get("fields")
+        if not isinstance(fields, dict):
+            fields = {}
         issue_key = str(body.get("key") or key)
         return JiraIssue(
             key=issue_key,
@@ -124,7 +155,7 @@ class JiraClient:
         """Содержимое вложения; больше ``max_bytes`` — `AttachmentTooLargeError`."""
         if attachment.size > max_bytes:
             raise AttachmentTooLargeError(attachment.filename)
-        response = await self._get(attachment.content_url)
+        response = await self._get(_on_server(attachment.content_url, server_url=self._base_url))
         self._raise_for_status(response, what=f"Вложение {attachment.filename}")
         if len(response.content) > max_bytes:
             raise AttachmentTooLargeError(attachment.filename)

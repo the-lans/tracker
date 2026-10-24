@@ -13,9 +13,11 @@ SYSTEM_SETTINGS_ROW_ID = 1
 
 class SystemSettings(Base):
     """
-    Значения по умолчанию для новых нод и раннеров script-нод, интеграция с
+    Значения по умолчанию для новых нод и раннеров script-нод, интеграции:
     GitLab (адрес и токен API — настройки системы, а не переменные окружения
-    задач: в промты и скрипты они не попадают, раздел 15.5, 19.4).
+    задач: в промты и скрипты они не попадают, раздел 15.5, 19.4) и адрес
+    Jira (раздел 15.6: сервер, к которому обращается импорт задач, выбирает
+    администратор, личный токен — в профиле пользователя).
 
     Одна строка на инстанс: `id` всегда равен `SYSTEM_SETTINGS_ROW_ID`.
     """
@@ -33,3 +35,4 @@ class SystemSettings(Base):
     default_runner_image_bash: Mapped[str] = mapped_column(sa.String)
     gitlab_url: Mapped[str | None] = mapped_column(sa.String)
     gitlab_token_encrypted: Mapped[str | None] = mapped_column(sa.Text)
+    jira_url: Mapped[str | None] = mapped_column(sa.String)

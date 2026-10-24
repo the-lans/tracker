@@ -142,24 +142,32 @@ async def get_gitlab_credentials(db_session: AsyncSession) -> GitlabCredentials 
     )
 
 
-async def update_gitlab_integration(
+async def get_jira_url(db_session: AsyncSession) -> str | None:
+    """Раздел 15.6: адрес сервера Jira для импорта задач; `None` — не задан."""
+    return (await get_system_settings(db_session)).jira_url
+
+
+async def update_integrations(
     db_session: AsyncSession,
     *,
-    url: str | None,
-    token: str | None,
+    gitlab_url: str | None,
+    gitlab_token: str | None,
+    jira_url: str | None,
 ) -> SystemSettings:
     """
-    ``token``: `None` — оставить сохранённый, пустая строка — удалить.
+    ``gitlab_token``: `None` — оставить сохранённый, пустая строка — удалить.
     Значение токена API не возвращает никогда.
     """
     settings = await get_system_settings(db_session)
-    settings.gitlab_url = url or None
-    if token is not None:
-        settings.gitlab_token_encrypted = encrypt(token) if token else None
+    settings.gitlab_url = gitlab_url or None
+    if gitlab_token is not None:
+        settings.gitlab_token_encrypted = encrypt(gitlab_token) if gitlab_token else None
+    settings.jira_url = jira_url.rstrip("/") if jira_url else None
     await db_session.commit()
     logger.info(
-        "gitlab_integration_updated",
-        url_set=settings.gitlab_url is not None,
-        token_set=settings.gitlab_token_encrypted is not None,
+        "integrations_updated",
+        gitlab_url_set=settings.gitlab_url is not None,
+        gitlab_token_set=settings.gitlab_token_encrypted is not None,
+        jira_url_set=settings.jira_url is not None,
     )
     return settings

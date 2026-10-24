@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from db.models.enums import NodeType, ScriptLanguage
-from services.system_settings import get_gitlab_credentials
+from services.system_settings import get_gitlab_credentials, get_jira_url
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -103,7 +103,7 @@ class TestNewNodeDefaults:
         assert response.json()["docker_image"] is None
 
 
-class TestGitlabIntegration:
+class TestIntegrations:
     async def test_token_saved_but_never_returned(
         self,
         admin_client: AsyncClient,
@@ -117,6 +117,7 @@ class TestGitlabIntegration:
         assert saved.json() == {
             "gitlab_url": "https://gitlab.example.com",
             "gitlab_token_set": True,
+            "jira_url": None,
         }
         assert "glpat-example" not in (await admin_client.get("/system-settings/integrations")).text
         credentials = await get_gitlab_credentials(db_session)
@@ -145,6 +146,19 @@ class TestGitlabIntegration:
         )
 
         assert response.json()["gitlab_token_set"] is token_set
+
+    async def test_jira_url_saved(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        response = await admin_client.put(
+            "/system-settings/integrations",
+            json={"jira_url": "https://jira.example.com/"},
+        )
+
+        assert response.json()["jira_url"] == "https://jira.example.com"
+        assert await get_jira_url(db_session) == "https://jira.example.com"
 
     @pytest.mark.parametrize("method", ["get", "put"])
     async def test_admin_only(self, authed_client: AsyncClient, method: str) -> None:

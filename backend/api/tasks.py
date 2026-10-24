@@ -10,7 +10,6 @@ import uuid
 from dataclasses import replace
 from typing import Annotated
 
-import httpx
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse
@@ -18,7 +17,6 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user
-from api.jira import get_jira_http_client
 from api.schemas import (
     ArtifactResponse,
     AwaitingDecisionCountResponse,
@@ -26,6 +24,7 @@ from api.schemas import (
     DecisionRequest,
     EnvVariableRevealResponse,
     FreeformPromptRequest,
+    JiraAttachmentCopyResponse,
     LibraryPromptAddRequest,
     ManualRequestResponse,
     NodeDependentResponse,
@@ -64,7 +63,12 @@ from services.access import (
 )
 from services.errors import ConflictError, NotFoundError, ValidationError
 from services.integrity import ensure_pipeline_attachable
-from services.jira_import import copy_jira_attachments, jira_issue_url
+from services.jira_import import (
+    attachment_copy_pending,
+    jira_issue_url,
+    mark_attachment_copy_pending,
+    validate_issue_key,
+)
 from services.manual_queue import (
     attach_library_prompt,
     cancel_manual_request,
@@ -109,6 +113,7 @@ from services.task_status import (
     transition_task_status,
 )
 from services.task_workspace import load_task_repositories, resolve_repos_root
+from tasks.jira_attachments import copy_jira_attachments_to_task
 from tasks.session_worker import run_task_session
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -161,11 +166,11 @@ async def create_task(
     body: TaskCreateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
-    http_client: Annotated[httpx.AsyncClient, Depends(get_jira_http_client)],
 ) -> Task:
     """
     Раздел 1.2 (сценарий 1): задача сразу с репозиториями и LLM-аккаунтом.
-    С ключом Jira (раздел 15.6) — ссылка на задачу Jira и её вложения в артефактах.
+    С ключом Jira (раздел 15.6) — ссылка на задачу Jira; её вложения копирует
+    в артефакты фоновая задача.
     """
     if body.parent_task_id is not None:
         # Раздел 19.2: родителем может быть только доступная пользователю задача.
@@ -176,14 +181,19 @@ async def create_task(
         use_parent_summary=body.use_parent_summary,
     )
     if body.jira_issue_key is not None:
-        draft = replace(draft, jira_issue_url=jira_issue_url(current_user, body.jira_issue_key))
+        issue_url = await jira_issue_url(db_session, current_user, body.jira_issue_key)
+        draft = replace(draft, jira_issue_url=issue_url)
     task = await create_task_with_repositories(db_session, draft=draft, created_by=current_user.id)
     if body.jira_issue_key is not None:
-        await copy_jira_attachments(
-            task=task,
-            user=current_user,
-            key=body.jira_issue_key,
-            http_client=http_client,
+        redis_client = _get_redis_client()
+        try:
+            await mark_attachment_copy_pending(redis_client, task.id)
+        finally:
+            await redis_client.aclose()
+        copy_jira_attachments_to_task.delay(
+            str(task.id),
+            str(current_user.id),
+            validate_issue_key(body.jira_issue_key),
         )
     return task
 
@@ -867,6 +877,25 @@ async def list_task_artifacts(
     """Раздел 14.3, 15.2: артефакты задачи — в любом её статусе."""
     task = await _get_task_or_404(db_session, task_id, current_user)
     return list_artifacts(task.code)
+
+
+@router.get("/{task_id}/jira-attachments", response_model=JiraAttachmentCopyResponse)
+async def get_jira_attachment_copy(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> JiraAttachmentCopyResponse:
+    """
+    Раздел 15.6: идёт ли ещё копирование вложений Jira — пока идёт, страница
+    задачи перечитывает список артефактов.
+    """
+    task = await _get_task_or_404(db_session, task_id, current_user)
+    redis_client = _get_redis_client()
+    try:
+        pending = await attachment_copy_pending(redis_client, task.id)
+    finally:
+        await redis_client.aclose()
+    return JiraAttachmentCopyResponse(pending=pending)
 
 
 @router.put("/{task_id}/artifacts/{path:path}", response_model=ArtifactResponse, status_code=201)

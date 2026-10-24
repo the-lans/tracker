@@ -3,6 +3,7 @@ import { api } from "@/lib/apiClient";
 import type {
   JiraConnectionUpdate,
   JiraIssueDraft,
+  JiraServer,
   SftpConnection,
   SshKeyUpdateRequest,
   User,
@@ -39,7 +40,17 @@ export function useSftpConnection() {
   });
 }
 
-/** Раздел 15.6: личное подключение к Jira для импорта задач. */
+export const JIRA_SERVER_KEY = ["jira", "server"] as const;
+
+/** Раздел 15.6: адрес Jira из «Системных настроек» — сервер выбирает администратор. */
+export function useJiraServer() {
+  return useQuery({
+    queryKey: JIRA_SERVER_KEY,
+    queryFn: () => api.get<JiraServer>("/jira/server"),
+  });
+}
+
+/** Раздел 15.6: личный доступ к Jira (email и токен) для импорта задач. */
 export function useUpdateJiraConnection() {
   const queryClient = useQueryClient();
   return useMutation({

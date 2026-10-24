@@ -51,8 +51,9 @@ def worker_view() -> dict[str, Any]:
 
 
 class TestRegistration:
-    def test_session_task_registered(self, worker_view: dict[str, Any]) -> None:
-        assert "run_task_session" in worker_view["tasks"]
+    @pytest.mark.parametrize("name", ["run_task_session", "copy_jira_attachments_to_task"])
+    def test_task_registered(self, worker_view: dict[str, Any], name: str) -> None:
+        assert name in worker_view["tasks"]
 
     def test_every_seeded_periodic_task_registered(self, worker_view: dict[str, Any]) -> None:
         seeded = {entry[0] for entry in _load_seed_module()._SEED_TASKS}

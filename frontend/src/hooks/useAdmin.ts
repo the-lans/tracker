@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/apiClient";
+import { JIRA_SERVER_KEY } from "@/hooks/useProfile";
 import type {
   ActiveCeleryTask,
   AllowedEmail,
   AppLog,
   AppLogLevel,
-  GitlabIntegration,
-  GitlabIntegrationUpdate,
+  Integrations,
+  IntegrationsUpdate,
   LibraryUsage,
   NodeLogStatus,
   NodeRun,
@@ -148,22 +149,25 @@ export function useUpdateSystemSettings() {
   });
 }
 
-const GITLAB_INTEGRATION_KEY = ["admin", "gitlab-integration"] as const;
+const INTEGRATIONS_KEY = ["admin", "integrations"] as const;
 
-/** Раздел 15.5: адрес и токен GitLab — только администратору. */
-export function useGitlabIntegration() {
+/** Раздел 15.5, 15.6: адрес и токен GitLab, адрес Jira — только администратору. */
+export function useIntegrations() {
   return useQuery({
-    queryKey: GITLAB_INTEGRATION_KEY,
-    queryFn: () => api.get<GitlabIntegration>("/system-settings/integrations"),
+    queryKey: INTEGRATIONS_KEY,
+    queryFn: () => api.get<Integrations>("/system-settings/integrations"),
   });
 }
 
-export function useUpdateGitlabIntegration() {
+export function useUpdateIntegrations() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: GitlabIntegrationUpdate) =>
-      api.put<GitlabIntegration>("/system-settings/integrations", body),
-    onSuccess: (integration) => queryClient.setQueryData(GITLAB_INTEGRATION_KEY, integration),
+    mutationFn: (body: IntegrationsUpdate) =>
+      api.put<Integrations>("/system-settings/integrations", body),
+    onSuccess: (integrations) => {
+      queryClient.setQueryData(INTEGRATIONS_KEY, integrations);
+      void queryClient.invalidateQueries({ queryKey: JIRA_SERVER_KEY });
+    },
   });
 }
 

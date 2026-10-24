@@ -6,12 +6,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
-import { useDeleteJiraConnection, useProfile, useUpdateJiraConnection } from "@/hooks/useProfile";
+import {
+  useDeleteJiraConnection,
+  useJiraServer,
+  useProfile,
+  useUpdateJiraConnection,
+} from "@/hooks/useProfile";
 import { ApiError } from "@/lib/apiClient";
 import type { User } from "@/lib/types";
 
-function JiraConnectionForm({ profile }: { profile: User }) {
-  const [url, setUrl] = useState(profile.jira_url ?? "");
+function JiraConnectionForm({ profile, serverUrl }: { profile: User; serverUrl: string }) {
   const [email, setEmail] = useState(profile.jira_email ?? "");
   const [token, setToken] = useState("");
   const update = useUpdateJiraConnection();
@@ -20,7 +24,7 @@ function JiraConnectionForm({ profile }: { profile: User }) {
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     update.mutate(
-      { jira_url: url.trim(), jira_email: email.trim() || null, jira_token: token || null },
+      { jira_email: email.trim() || null, jira_token: token || null },
       {
         onSuccess: () => {
           setToken("");
@@ -34,16 +38,8 @@ function JiraConnectionForm({ profile }: { profile: User }) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-      <div>
-        <Label htmlFor="jira-url">Адрес Jira</Label>
-        <Input
-          id="jira-url"
-          type="url"
-          placeholder="https://company.atlassian.net"
-          value={url}
-          onChange={(event) => setUrl(event.target.value)}
-          required
-        />
+      <div className="text-small text-text-2">
+        Сервер Jira: <span className="break-all font-mono">{serverUrl}</span>
       </div>
       <div>
         <Label htmlFor="jira-email">Email в Jira Cloud</Label>
@@ -78,14 +74,11 @@ function JiraConnectionForm({ profile }: { profile: User }) {
         {profile.jira_token_set && (
           <ConfirmDeleteButton
             kind="подключение к Jira"
-            name={profile.jira_url ?? "Jira"}
+            name={serverUrl}
             pending={disconnect.isPending}
             onConfirm={() =>
               disconnect.mutate(undefined, {
-                onSuccess: () => {
-                  setUrl("");
-                  setEmail("");
-                },
+                onSuccess: () => setEmail(""),
               })
             }
           />
@@ -95,9 +88,13 @@ function JiraConnectionForm({ profile }: { profile: User }) {
   );
 }
 
-/** Раздел 15.6: личное подключение к Jira — для заполнения новой задачи по ключу. */
+/**
+ * Раздел 15.6: личный доступ к Jira — для заполнения новой задачи по ключу.
+ * Адрес Jira задаёт администратор в «Системных настройках».
+ */
 export function JiraConnectionCard() {
   const { data: profile, isLoading } = useProfile();
+  const { data: server, isLoading: serverLoading } = useJiraServer();
 
   return (
     <Card>
@@ -108,8 +105,15 @@ export function JiraConnectionCard() {
         Новую задачу можно заполнить из задачи Jira по ключу: код, название, описание, ссылка и
         вложения.
       </div>
-      {isLoading && <LoadingState />}
-      {profile && <JiraConnectionForm profile={profile} />}
+      {(isLoading || serverLoading) && <LoadingState />}
+      {server && !server.jira_url && (
+        <div className="text-small text-text-3">
+          Адрес Jira ещё не задан: его указывает администратор в «Системных настройках».
+        </div>
+      )}
+      {profile && server?.jira_url && (
+        <JiraConnectionForm profile={profile} serverUrl={server.jira_url} />
+      )}
     </Card>
   );
 }

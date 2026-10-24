@@ -170,17 +170,25 @@ export interface User {
   ssh_key_fingerprint: string | null;
   /** Раздел 16.2: последний вход в SFTP-шлюз по этому ключу. */
   ssh_key_last_used_at: string | null;
-  /** Раздел 15.6: личное подключение к Jira; токен не возвращается — только признак. */
-  jira_url: string | null;
+  /** Раздел 15.6: личный доступ к Jira; токен не возвращается — только признак. */
   jira_email: string | null;
   jira_token_set: boolean;
 }
 
 /** `jira_token`: `null` — оставить сохранённый, пустая строка — удалить. */
 export interface JiraConnectionUpdate {
-  jira_url: string;
   jira_email: string | null;
   jira_token: string | null;
+}
+
+/** Раздел 15.6: адрес Jira задаёт администратор; `null` — импорт недоступен. */
+export interface JiraServer {
+  jira_url: string | null;
+}
+
+/** Раздел 15.6: вложения Jira ещё копируются в артефакты задачи. */
+export interface JiraAttachmentCopy {
+  pending: boolean;
 }
 
 /** Раздел 15.6: поля формы новой задачи из задачи Jira. */
@@ -635,16 +643,21 @@ export interface SystemSettings {
   default_runner_image_bash: string;
 }
 
-/** Раздел 15.5: интеграция с GitLab — токен API не возвращается, только признак. */
-export interface GitlabIntegration {
+/**
+ * Раздел 15.5, 15.6: интеграции — GitLab (токен API не возвращается, только
+ * признак) и адрес Jira для импорта задач.
+ */
+export interface Integrations {
   gitlab_url: string | null;
   gitlab_token_set: boolean;
+  jira_url: string | null;
 }
 
 /** `gitlab_token`: `null` — оставить сохранённый, пустая строка — удалить. */
-export interface GitlabIntegrationUpdate {
+export interface IntegrationsUpdate {
   gitlab_url: string | null;
   gitlab_token: string | null;
+  jira_url: string | null;
 }
 
 /** Раздел 15.5: в скольких задачах используется промт библиотеки. */

@@ -60,11 +60,10 @@ async def update_jira(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
-    """Раздел 15.6: личное подключение к Jira; токен в ответе не возвращается."""
+    """Раздел 15.6: личный доступ к Jira; токен в ответе не возвращается."""
     return await update_jira_connection(
         db_session,
         user=current_user,
-        url=body.jira_url,
         email=body.jira_email,
         token=body.jira_token,
     )

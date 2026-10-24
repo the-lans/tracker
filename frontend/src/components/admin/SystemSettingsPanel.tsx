@@ -9,7 +9,7 @@ import { ApiError } from "@/lib/apiClient";
 import type { SystemSettings } from "@/lib/types";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
-import { GitlabIntegrationCard } from "@/components/admin/GitlabIntegrationCard";
+import { IntegrationsCard } from "@/components/admin/IntegrationsCard";
 
 type NumericField =
   | "default_timeout_seconds"
@@ -106,7 +106,7 @@ export function SystemSettingsPanel() {
         {isLoading && <LoadingState />}
         {settings && <SettingsForm initial={settings} />}
       </Card>
-      <GitlabIntegrationCard />
+      <IntegrationsCard />
     </div>
   );
 }

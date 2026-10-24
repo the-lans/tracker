@@ -24,7 +24,7 @@ celery_app = Celery(
     broker=os.environ["REDIS_URL"],
     backend=os.environ["REDIS_URL"],
     # Модули с задачами: без них воркер не знает ни одной задачи.
-    include=["tasks.session_worker", "tasks.periodic"],
+    include=["tasks.session_worker", "tasks.periodic", "tasks.jira_attachments"],
 )
 
 celery_app.conf.update(

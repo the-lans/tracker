@@ -1,7 +1,7 @@
 """
 «Системные настройки» (раздел 15.5 ТЗ): чтение — любому пользователю (форме
 ноды нужны значения по умолчанию), изменение — только администратору.
-Интеграция с GitLab — только администратору и без значения токена.
+Интеграции (GitLab, адрес Jira) — только администратору и без значения токена.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user, require_admin
 from api.schemas import (
-    GitlabIntegrationResponse,
-    GitlabIntegrationUpdateRequest,
+    IntegrationsResponse,
+    IntegrationsUpdateRequest,
     SystemSettingsBody,
 )
 from db.models.settings import SystemSettings
@@ -23,7 +23,7 @@ from db.session import get_session
 from services.system_settings import (
     SystemSettingsValues,
     get_system_settings,
-    update_gitlab_integration,
+    update_integrations,
     update_system_settings,
 )
 
@@ -50,30 +50,32 @@ async def replace_system_settings(
     )
 
 
-def _gitlab_integration(settings: SystemSettings) -> GitlabIntegrationResponse:
-    return GitlabIntegrationResponse(
+def _integrations(settings: SystemSettings) -> IntegrationsResponse:
+    return IntegrationsResponse(
         gitlab_url=settings.gitlab_url,
         gitlab_token_set=settings.gitlab_token_encrypted is not None,
+        jira_url=settings.jira_url,
     )
 
 
-@router.get("/integrations", response_model=GitlabIntegrationResponse)
+@router.get("/integrations", response_model=IntegrationsResponse)
 async def read_integrations(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     _admin: Annotated[User, Depends(require_admin)],
-) -> GitlabIntegrationResponse:
-    return _gitlab_integration(await get_system_settings(db_session))
+) -> IntegrationsResponse:
+    return _integrations(await get_system_settings(db_session))
 
 
-@router.put("/integrations", response_model=GitlabIntegrationResponse)
+@router.put("/integrations", response_model=IntegrationsResponse)
 async def replace_integrations(
-    body: GitlabIntegrationUpdateRequest,
+    body: IntegrationsUpdateRequest,
     db_session: Annotated[AsyncSession, Depends(get_session)],
     _admin: Annotated[User, Depends(require_admin)],
-) -> GitlabIntegrationResponse:
-    settings = await update_gitlab_integration(
+) -> IntegrationsResponse:
+    settings = await update_integrations(
         db_session,
-        url=body.gitlab_url,
-        token=body.gitlab_token,
+        gitlab_url=body.gitlab_url,
+        gitlab_token=body.gitlab_token,
+        jira_url=body.jira_url,
     )
-    return _gitlab_integration(settings)
+    return _integrations(settings)

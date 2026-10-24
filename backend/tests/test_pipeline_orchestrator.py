@@ -37,7 +37,7 @@ from services.pipeline_orchestrator import (
     run_pipeline,
 )
 from services.plan_mode import ActiveNodeContext
-from services.system_settings import update_gitlab_integration
+from services.system_settings import update_integrations
 from services.task_control import TaskControlCommand, request_task_control
 from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
@@ -349,10 +349,11 @@ class TestScriptEnv:
             ],
         )
         # Токен GitLab — системная настройка, а не переменная окружения задачи.
-        await update_gitlab_integration(
+        await update_integrations(
             db_session,
-            url="https://gitlab.example.com",
-            token="секрет",
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="секрет",
+            jira_url=None,
         )
         await _add_node(
             db_session,
