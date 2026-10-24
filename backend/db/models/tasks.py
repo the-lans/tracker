@@ -67,6 +67,9 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     scheduled_start_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     auto_start_enabled: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     last_failed_order_index: Mapped[int | None] = mapped_column(sa.Integer)
+    # Раздел 14.2 «Вернуть в новые»: выполнения нод до этого момента не
+    # учитываются ни точкой перезапуска, ни переходом в `done`.
+    reset_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     repo_cleaned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"))
 
