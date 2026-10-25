@@ -37,10 +37,9 @@ from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
 from services.autostart import run_scheduled_autostart_check
-from services.crypto import encrypt
 from services.plan_mode import PlanDecisionOption
 from tasks import session_worker
-from tests.factories import make_llm_account
+from tests.factories import make_llm_account, make_repository
 from tests.fakes import FakeClaudeAgentClient, make_result_message, patch_plan_mode_signals
 from tests.worker_support import init_bare_origin, run_command
 
@@ -114,14 +113,11 @@ async def _make_library_node(db_session: AsyncSession, owner_id: uuid.UUID) -> N
 
 
 async def _make_repository(db_session: AsyncSession, origin: Path) -> Repository:
-    repository = Repository(
-        name="backend",
+    return await make_repository(
+        db_session,
         git_url=str(origin),
-        deploy_key_encrypted=encrypt("не используется файловым transport'ом"),
+        deploy_key="не используется файловым transport'ом",
     )
-    db_session.add(repository)
-    await db_session.flush()
-    return repository
 
 
 class _User:

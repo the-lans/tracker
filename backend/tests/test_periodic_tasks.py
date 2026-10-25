@@ -17,13 +17,11 @@ from services.periodic_tasks import (
     record_periodic_task_run,
 )
 from tasks.periodic import _run_periodic_async
+from tests.factories import make_user
 
 
 async def _make_user(db_session: AsyncSession) -> User:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.ADMIN)
-    db_session.add(user)
-    await db_session.flush()
-    return user
+    return await make_user(db_session, role=UserRole.ADMIN)
 
 
 def _make_interval_task(

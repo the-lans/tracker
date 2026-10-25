@@ -25,26 +25,15 @@ from services.integrity import (
     ensure_repository_deletable,
     ensure_template_deletable,
 )
+from tests.factories import make_task, make_user
 
 
 async def _make_user(session: AsyncSession) -> User:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.ADMIN)
-    session.add(user)
-    await session.flush()
-    return user
+    return await make_user(session, role=UserRole.ADMIN)
 
 
 async def _make_task(session: AsyncSession, *, created_by: uuid.UUID, status: TaskStatus) -> Task:
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="задача",
-        description="описание",
-        created_by=created_by,
-        status=status,
-    )
-    session.add(task)
-    await session.flush()
-    return task
+    return await make_task(session, created_by=created_by, status=status)
 
 
 async def test_ensure_pipeline_deletable_allows_unused_pipeline(db_session: AsyncSession) -> None:

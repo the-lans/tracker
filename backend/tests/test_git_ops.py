@@ -21,7 +21,6 @@ import pytest
 from db.models.enums import RepositoryRole
 from db.models.repositories import Repository
 from db.models.tasks import TaskRepository
-from services.crypto import encrypt
 from services.errors import ExternalServiceError
 from services.git_ops import (
     RebaseConflictError,
@@ -30,17 +29,17 @@ from services.git_ops import (
     push_task_repository,
     rebase_onto_base_branch,
 )
+from tests.factories import build_repository
 from tests.git_support import GIT_AUTHOR_ARGS, init_bare_origin, run
 
 _UNUSED_DEPLOY_KEY_PLACEHOLDER = "не используется файловым transport'ом, но должен расшифровываться"
 
 
 def _make_repository(*, git_url: str) -> Repository:
-    return Repository(
-        id=uuid.uuid4(),
+    return build_repository(
         name="demo-repo",
         git_url=git_url,
-        deploy_key_encrypted=encrypt(_UNUSED_DEPLOY_KEY_PLACEHOLDER),
+        deploy_key=_UNUSED_DEPLOY_KEY_PLACEHOLDER,
     )
 
 
@@ -57,6 +56,20 @@ def _make_task_repository(
         branch_name=branch_name,
         base_branch="main",
     )
+
+
+async def _clone_read_write(tmp_path: Path) -> tuple[Path, Repository, TaskRepository, Path]:
+    """Origin, репозиторий, его привязка к задаче (read-write) и клон рабочей ветки."""
+    origin = init_bare_origin(tmp_path)
+    repository = _make_repository(git_url=str(origin))
+    task_repository = _make_task_repository(role=RepositoryRole.READ_WRITE)
+    target_dir = await clone_task_repository(
+        repository=repository,
+        task_repository=task_repository,
+        task_code="RR-00001",
+        repos_root=tmp_path / "repos",
+    )
+    return origin, repository, task_repository, target_dir
 
 
 async def test_clone_task_repository_creates_working_branch(tmp_path: Path) -> None:
@@ -77,15 +90,7 @@ async def test_clone_task_repository_creates_working_branch(tmp_path: Path) -> N
 
 
 async def test_push_task_repository_pushes_when_read_write(tmp_path: Path) -> None:
-    origin = init_bare_origin(tmp_path)
-    repository = _make_repository(git_url=str(origin))
-    task_repository = _make_task_repository(role=RepositoryRole.READ_WRITE)
-    target_dir = await clone_task_repository(
-        repository=repository,
-        task_repository=task_repository,
-        task_code="RR-00001",
-        repos_root=tmp_path / "repos",
-    )
+    origin, repository, task_repository, target_dir = await _clone_read_write(tmp_path)
     (target_dir / "new_file.txt").write_text("новый файл\n")
     run("git", "add", "new_file.txt", cwd=target_dir)
     run("git", *GIT_AUTHOR_ARGS, "commit", "-m", "добавить файл", cwd=target_dir)
@@ -125,15 +130,7 @@ async def test_push_task_repository_skips_when_read_only(tmp_path: Path) -> None
 
 
 async def test_rebase_onto_base_branch_succeeds_without_conflict(tmp_path: Path) -> None:
-    origin = init_bare_origin(tmp_path)
-    repository = _make_repository(git_url=str(origin))
-    task_repository = _make_task_repository(role=RepositoryRole.READ_WRITE)
-    target_dir = await clone_task_repository(
-        repository=repository,
-        task_repository=task_repository,
-        task_code="RR-00001",
-        repos_root=tmp_path / "repos",
-    )
+    origin, repository, task_repository, target_dir = await _clone_read_write(tmp_path)
 
     # Кто-то ещё обновил base_branch независимо от рабочей ветки задачи.
     updater_dir = tmp_path / "updater"
@@ -163,15 +160,7 @@ async def test_rebase_rewrites_commits_without_global_git_identity(
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.useConfigOnly")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
-    origin = init_bare_origin(tmp_path)
-    repository = _make_repository(git_url=str(origin))
-    task_repository = _make_task_repository(role=RepositoryRole.READ_WRITE)
-    target_dir = await clone_task_repository(
-        repository=repository,
-        task_repository=task_repository,
-        task_code="RR-00001",
-        repos_root=tmp_path / "repos",
-    )
+    origin, repository, task_repository, target_dir = await _clone_read_write(tmp_path)
     # Свой коммит в ветке задачи: без него ребейз — fast-forward и
     # committer-идентичность не нужна.
     (target_dir / "task_file.txt").write_text("работа задачи\n")
@@ -197,15 +186,7 @@ async def test_rebase_rewrites_commits_without_global_git_identity(
 
 
 async def test_rebase_onto_base_branch_raises_and_aborts_on_conflict(tmp_path: Path) -> None:
-    origin = init_bare_origin(tmp_path)
-    repository = _make_repository(git_url=str(origin))
-    task_repository = _make_task_repository(role=RepositoryRole.READ_WRITE)
-    target_dir = await clone_task_repository(
-        repository=repository,
-        task_repository=task_repository,
-        task_code="RR-00001",
-        repos_root=tmp_path / "repos",
-    )
+    origin, repository, task_repository, target_dir = await _clone_read_write(tmp_path)
     (target_dir / "README.md").write_text("изменение из рабочей ветки задачи\n")
     run("git", "add", "README.md", cwd=target_dir)
     run("git", *GIT_AUTHOR_ARGS, "commit", "-m", "правка в задаче", cwd=target_dir)
@@ -252,15 +233,7 @@ def _push_conflicting_base_update(tmp_path: Path, origin: Path) -> None:
 
 
 async def test_is_rebased_onto_base_tracks_rebase_progress(tmp_path: Path) -> None:
-    origin = init_bare_origin(tmp_path)
-    repository = _make_repository(git_url=str(origin))
-    task_repository = _make_task_repository(role=RepositoryRole.READ_WRITE)
-    target_dir = await clone_task_repository(
-        repository=repository,
-        task_repository=task_repository,
-        task_code="RR-00001",
-        repos_root=tmp_path / "repos",
-    )
+    origin, repository, task_repository, target_dir = await _clone_read_write(tmp_path)
     (target_dir / "README.md").write_text("изменение из рабочей ветки задачи\n")
     run("git", "add", "README.md", cwd=target_dir)
     run("git", *GIT_AUTHOR_ARGS, "commit", "-m", "правка в задаче", cwd=target_dir)
@@ -345,15 +318,7 @@ class TestUntrustedWorkingCopy:
     """Раздел 19.3: git воркера не исполняет то, что агент или скрипт положили в репозиторий."""
 
     async def _clone(self, tmp_path: Path) -> tuple[Repository, TaskRepository, Path]:
-        origin = init_bare_origin(tmp_path)
-        repository = _make_repository(git_url=str(origin))
-        task_repository = _make_task_repository(role=RepositoryRole.READ_WRITE)
-        target_dir = await clone_task_repository(
-            repository=repository,
-            task_repository=task_repository,
-            task_code="RR-00001",
-            repos_root=tmp_path / "repos",
-        )
+        _, repository, task_repository, target_dir = await _clone_read_write(tmp_path)
         return repository, task_repository, target_dir
 
     def _plant_marker_script(self, path: Path, marker: Path) -> None:

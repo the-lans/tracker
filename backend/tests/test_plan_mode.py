@@ -196,10 +196,12 @@ async def test_callback_auto_accepts_plan_without_waiting(db_session: AsyncSessi
     assert task.current_permission_mode is PermissionMode.ACCEPT_EDITS
 
 
-async def test_callback_marks_awaiting_decision_and_resolves_plan_review(
+async def _review_plan_with_decision(
     db_session: AsyncSession,
     redis_client: Redis,
-) -> None:
+    decision: str,
+) -> tuple[Task, NodeLog, PermissionResultAllow | PermissionResultDeny]:
+    """План на ревью; пользователь вскоре выбирает ``decision`` в виджете."""
     task, node_log = await _make_task_with_running_node_log(db_session)
     context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
     callback = build_can_use_tool_callback(
@@ -211,7 +213,7 @@ async def test_callback_marks_awaiting_decision_and_resolves_plan_review(
 
     async def _resolve_soon() -> None:
         await asyncio.sleep(0.1)
-        node_log.user_input_text = PlanDecisionOption.ACCEPT_DEFAULT
+        node_log.user_input_text = decision
         await db_session.commit()
         await publish_task_signal(redis_client, task.id)
 
@@ -220,6 +222,18 @@ async def test_callback_marks_awaiting_decision_and_resolves_plan_review(
         result = await callback("ExitPlanMode", {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
     finally:
         await resolver
+    return task, node_log, result
+
+
+async def test_callback_marks_awaiting_decision_and_resolves_plan_review(
+    db_session: AsyncSession,
+    redis_client: Redis,
+) -> None:
+    task, node_log, result = await _review_plan_with_decision(
+        db_session,
+        redis_client,
+        PlanDecisionOption.ACCEPT_DEFAULT,
+    )
 
     assert result.behavior == "allow"
     await db_session.refresh(node_log)
@@ -235,26 +249,11 @@ async def test_callback_denies_when_revise_chosen(
     db_session: AsyncSession,
     redis_client: Redis,
 ) -> None:
-    task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
-    callback = build_can_use_tool_callback(
-        context=context,
-        session_factory=_non_closing_session_factory(db_session),
-        redis_client=redis_client,
-        decision_wait_timeout_seconds=5.0,
+    _, node_log, result = await _review_plan_with_decision(
+        db_session,
+        redis_client,
+        PlanDecisionOption.REVISE,
     )
-
-    async def _resolve_soon() -> None:
-        await asyncio.sleep(0.1)
-        node_log.user_input_text = PlanDecisionOption.REVISE
-        await db_session.commit()
-        await publish_task_signal(redis_client, task.id)
-
-    resolver = asyncio.create_task(_resolve_soon())
-    try:
-        result = await callback("ExitPlanMode", {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
-    finally:
-        await resolver
 
     assert result.behavior == "deny"
     await db_session.refresh(node_log)
@@ -266,29 +265,11 @@ async def test_callback_passes_revise_feedback_text_to_denial_message(
     db_session: AsyncSession,
     redis_client: Redis,
 ) -> None:
-    task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
-    callback = build_can_use_tool_callback(
-        context=context,
-        session_factory=_non_closing_session_factory(db_session),
-        redis_client=redis_client,
-        decision_wait_timeout_seconds=5.0,
+    _, _, result = await _review_plan_with_decision(
+        db_session,
+        redis_client,
+        encode_decision(PlanDecisionOption.REVISE, feedback_text="добавь обработку ошибок"),
     )
-
-    async def _resolve_soon() -> None:
-        await asyncio.sleep(0.1)
-        node_log.user_input_text = encode_decision(
-            PlanDecisionOption.REVISE,
-            feedback_text="добавь обработку ошибок",
-        )
-        await db_session.commit()
-        await publish_task_signal(redis_client, task.id)
-
-    resolver = asyncio.create_task(_resolve_soon())
-    try:
-        result = await callback("ExitPlanMode", {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
-    finally:
-        await resolver
 
     assert result.behavior == "deny"
     assert result.message == "добавь обработку ошибок"

@@ -17,13 +17,11 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.gitlab import GitlabClient
-from db.models.enums import AppLogLevel, MergeStatus, RepositoryRole, TaskStatus, UserRole
+from db.models.enums import AppLogLevel, MergeStatus, RepositoryRole, TaskStatus
 from db.models.logs import AppLog
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
-from db.models.users import User
 from services import gitlab_sync as gitlab_sync_module
-from services.crypto import encrypt
 from services.gitlab_sync import (
     ACCESS_DENIED_KEY,
     find_merged_parents_with_children,
@@ -33,17 +31,13 @@ from services.gitlab_sync import (
     sync_task_repository_merge_status,
 )
 from services.notifications import NotificationEvent
+from tests.factories import build_repository, make_task, make_user
 
 
 def _make_repository(*, git_url: str = "git@gitlab.example.com:g/p.git") -> Repository:
-    return Repository(name="r", git_url=git_url, deploy_key_encrypted=encrypt("k"))
+    return build_repository(name="r", git_url=git_url)
 
 
-async def _make_user(db_session: AsyncSession) -> User:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    return user
 
 
 async def _make_task(
@@ -53,17 +47,12 @@ async def _make_task(
     parent_task_id: uuid.UUID | None = None,
     status: TaskStatus = TaskStatus.IN_PROGRESS,
 ) -> Task:
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
+    return await make_task(
+        db_session,
         created_by=created_by,
         status=status,
         parent_task_id=parent_task_id,
     )
-    db_session.add(task)
-    await db_session.flush()
-    return task
 
 
 def _gitlab_client_returning(state: str | None) -> GitlabClient:
@@ -79,119 +68,52 @@ def _gitlab_client_returning(state: str | None) -> GitlabClient:
     )
 
 
-async def test_sync_skips_not_pushed_repository(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
-    task = await _make_task(db_session, created_by=user.id)
-    repository = _make_repository()
-    db_session.add(repository)
-    await db_session.flush()
-    task_repository = TaskRepository(
-        task_id=task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-00001",
-        base_branch="main",
-        merge_status=MergeStatus.NOT_PUSHED,
+class TestSyncMergeStatus:
+    """Раздел 16.2: статус слияния подтягивается только у запушенных веток."""
+
+    @pytest.mark.parametrize(
+        ("merge_status", "gitlab_state", "result", "stored"),
+        [
+            (MergeStatus.NOT_PUSHED, "merged", None, MergeStatus.NOT_PUSHED),
+            (MergeStatus.PUSHED, "merged", MergeStatus.MERGED, MergeStatus.MERGED),
+            (MergeStatus.PUSHED, "closed", None, MergeStatus.PUSHED),
+            (MergeStatus.PUSHED, None, None, MergeStatus.PUSHED),
+        ],
+        ids=["not_pushed", "merged", "closed", "no_merge_requests"],
     )
-    db_session.add(task_repository)
-    await db_session.flush()
-    gitlab_client = _gitlab_client_returning("merged")
+    async def test_sync(
+        self,
+        db_session: AsyncSession,
+        merge_status: MergeStatus,
+        gitlab_state: str | None,
+        result: MergeStatus | None,
+        stored: MergeStatus,
+    ) -> None:
+        user = await make_user(db_session)
+        task = await _make_task(db_session, created_by=user.id)
+        repository = _make_repository()
+        db_session.add(repository)
+        await db_session.flush()
+        task_repository = TaskRepository(
+            task_id=task.id,
+            repository_id=repository.id,
+            role=RepositoryRole.READ_WRITE,
+            branch_name="feature/RR-00001",
+            base_branch="main",
+            merge_status=merge_status,
+        )
+        db_session.add(task_repository)
+        await db_session.flush()
 
-    result = await sync_task_repository_merge_status(
-        db_session,
-        task_repository=task_repository,
-        repository=repository,
-        gitlab_client=gitlab_client,
-    )
+        synced = await sync_task_repository_merge_status(
+            db_session,
+            task_repository=task_repository,
+            repository=repository,
+            gitlab_client=_gitlab_client_returning(gitlab_state),
+        )
 
-    assert result is None
-    assert task_repository.merge_status is MergeStatus.NOT_PUSHED
-
-
-async def test_sync_updates_status_to_merged(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
-    task = await _make_task(db_session, created_by=user.id)
-    repository = _make_repository()
-    db_session.add(repository)
-    await db_session.flush()
-    task_repository = TaskRepository(
-        task_id=task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-00001",
-        base_branch="main",
-        merge_status=MergeStatus.PUSHED,
-    )
-    db_session.add(task_repository)
-    await db_session.flush()
-    gitlab_client = _gitlab_client_returning("merged")
-
-    result = await sync_task_repository_merge_status(
-        db_session,
-        task_repository=task_repository,
-        repository=repository,
-        gitlab_client=gitlab_client,
-    )
-
-    assert result is MergeStatus.MERGED
-    assert task_repository.merge_status is MergeStatus.MERGED
-
-
-async def test_sync_ignores_closed_state_no_schema_mapping(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
-    task = await _make_task(db_session, created_by=user.id)
-    repository = _make_repository()
-    db_session.add(repository)
-    await db_session.flush()
-    task_repository = TaskRepository(
-        task_id=task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-00001",
-        base_branch="main",
-        merge_status=MergeStatus.PUSHED,
-    )
-    db_session.add(task_repository)
-    await db_session.flush()
-    gitlab_client = _gitlab_client_returning("closed")
-
-    result = await sync_task_repository_merge_status(
-        db_session,
-        task_repository=task_repository,
-        repository=repository,
-        gitlab_client=gitlab_client,
-    )
-
-    assert result is None
-    assert task_repository.merge_status is MergeStatus.PUSHED
-
-
-async def test_sync_returns_none_when_no_merge_requests(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
-    task = await _make_task(db_session, created_by=user.id)
-    repository = _make_repository()
-    db_session.add(repository)
-    await db_session.flush()
-    task_repository = TaskRepository(
-        task_id=task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-00001",
-        base_branch="main",
-        merge_status=MergeStatus.PUSHED,
-    )
-    db_session.add(task_repository)
-    await db_session.flush()
-    gitlab_client = _gitlab_client_returning(None)
-
-    result = await sync_task_repository_merge_status(
-        db_session,
-        task_repository=task_repository,
-        repository=repository,
-        gitlab_client=gitlab_client,
-    )
-
-    assert result is None
+        assert synced is result
+        assert task_repository.merge_status is stored
 
 
 async def _parent_and_child(
@@ -200,7 +122,7 @@ async def _parent_and_child(
     parent_merge_status: MergeStatus,
     child_status: TaskStatus,
 ) -> tuple[TaskRepository, TaskRepository]:
-    user = await _make_user(db_session)
+    user = await make_user(db_session)
     repository = _make_repository()
     db_session.add(repository)
     await db_session.flush()
@@ -301,7 +223,7 @@ class TestSyncFailures:
         *,
         branch: str,
     ) -> tuple[TaskRepository, Repository, Task]:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         task = await _make_task(db_session, created_by=user.id)
         repository = _make_repository(git_url=f"git@gitlab.example.com:g/{branch}.git")
         db_session.add(repository)
@@ -471,7 +393,7 @@ class TestFindMergedParentsWithChildren:
     """Раздел 16.2: проход ребейза берёт только слитые ветки, на которые ещё опираются дети."""
 
     async def test_only_pending_parents(self, db_session: AsyncSession) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         repository = _make_repository()
         db_session.add(repository)
         await db_session.flush()

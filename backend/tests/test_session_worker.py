@@ -32,14 +32,12 @@ from db.models.enums import (
     RepositoryRole,
     ScriptLanguage,
     TaskStatus,
-    UserRole,
 )
 from db.models.logs import NodeLog
 from db.models.mcp import McpServer
-from db.models.pipelines import Node, Pipeline, TaskNode
+from db.models.pipelines import Node, TaskNode
 from db.models.repositories import Repository, Template, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
-from db.models.users import User
 from services import task_status as task_status_module
 from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
@@ -59,7 +57,7 @@ from services.task_control import (
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name
 from tasks import session_worker
-from tests.factories import make_llm_account, make_user
+from tests.factories import make_llm_account, make_pipeline, make_repository, make_task, make_user
 from tests.fakes import (
     FakeClaudeAgentClient,
     make_assistant_error,
@@ -85,32 +83,25 @@ async def _make_task(
     origin: Path | None = None,
     with_llm_account: bool = True,
 ) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    pipeline = Pipeline(name="p", is_archived=False, created_by=user.id)
-    db_session.add(pipeline)
-    await db_session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
+    user = await make_user(db_session)
+    pipeline = await make_pipeline(db_session, created_by=user.id)
+    llm_account_id = None
+    if with_llm_account:
+        llm_account_id = (await make_llm_account(db_session, owner_id=user.id)).id
+    task = await make_task(
+        db_session,
         created_by=user.id,
         pipeline_id=pipeline.id,
         status=status,
+        llm_account_id=llm_account_id,
     )
-    if with_llm_account:
-        task.llm_account_id = (await make_llm_account(db_session, owner_id=user.id)).id
-    db_session.add(task)
-    await db_session.flush()
     if origin is not None:
-        repository = Repository(
+        repository = await make_repository(
+            db_session,
             name=_REPOSITORY_NAME,
             git_url=str(origin),
-            deploy_key_encrypted=encrypt("не используется"),
+            deploy_key="не используется",
         )
-        db_session.add(repository)
-        await db_session.flush()
         db_session.add(
             TaskRepository(
                 task_id=task.id,

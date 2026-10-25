@@ -9,13 +9,11 @@ from db.models.enums import (
     NodeLogTriggerType,
     RepositoryRole,
     TaskStatus,
-    UserRole,
 )
 from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.logs import NodeLog
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
-from db.models.users import User
 from services.crypto import encrypt
 from services.errors import ValidationError
 from services.template_context import (
@@ -27,23 +25,17 @@ from services.template_context import (
     resolve_env_value,
     resolve_task_env,
 )
+from tests.factories import make_task
 
 
 async def _make_task(session: AsyncSession) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    session.add(user)
-    await session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
+    return await make_task(
+        session,
         title="Починить баг",
         description="Описание задачи",
-        created_by=user.id,
         status=TaskStatus.IN_PROGRESS,
         session_id="sess-123",
     )
-    session.add(task)
-    await session.flush()
-    return task
 
 
 def _global_env_variable(key: str, plaintext_value: str) -> EnvVariable:

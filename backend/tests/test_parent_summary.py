@@ -20,7 +20,6 @@ from db.models.enums import (
     NodeType,
     ParentSummaryStatus,
     TaskStatus,
-    UserRole,
 )
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
@@ -31,7 +30,7 @@ from services.manual_queue import process_manual_queue_once
 from services.parent_summary import deny_all_tools
 from services.task_control import TaskControlCommand, request_task_control
 from tasks import session_worker
-from tests.factories import make_llm_account
+from tests.factories import make_llm_account, make_user
 from tests.fakes import FakeClaudeAgentClient, make_result_message
 
 if TYPE_CHECKING:
@@ -50,11 +49,6 @@ def _answer(text: str) -> list[Message]:
     return [AssistantMessage(content=[TextBlock(text=text)], model="claude"), make_result_message()]
 
 
-async def _make_user(db_session: AsyncSession) -> User:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    return user
 
 
 async def _make_parent(
@@ -151,7 +145,7 @@ class TestBusyParent:
         redis_client: Redis,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(
             db_session,
             user,
@@ -205,7 +199,7 @@ class TestBusyParent:
         worker_env: WorkerEnv,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(
             db_session,
             user,
@@ -244,7 +238,7 @@ class TestBusyParent:
         redis_client: Redis,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(
             db_session,
             user,
@@ -273,7 +267,7 @@ class TestIdleParent:
         db_session: AsyncSession,
         worker_env: WorkerEnv,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(
             db_session,
             user,
@@ -307,7 +301,7 @@ class TestIdleParent:
         db_session: AsyncSession,
         worker_env: WorkerEnv,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(db_session, user, status=TaskStatus.NEW, session_id=None)
         child = await _make_child(db_session, user, parent)
         worker_env.client = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
@@ -330,7 +324,7 @@ class TestRestart:
         db_session: AsyncSession,
         worker_env: WorkerEnv,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(
             db_session,
             user,

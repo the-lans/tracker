@@ -19,14 +19,12 @@ from db.models.enums import (
     NodeType,
     ScriptLanguage,
     TaskStatus,
-    UserRole,
 )
 from db.models.env_vars import TaskEnvVariable
 from db.models.logs import NodeLog
 from db.models.pipelines import Node
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
-from db.models.users import User
 from services.crypto import encrypt
 from services.distributed_lock import acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
@@ -45,7 +43,7 @@ from services.task_control import (
     request_manual_stop,
     request_task_control,
 )
-from tests.factories import make_llm_account
+from tests.factories import make_llm_account, make_task, make_user
 from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
@@ -53,19 +51,13 @@ _LIBRARY_PROMPT_TEXT = "библиотечный промт"
 
 
 async def _make_task(db_session: AsyncSession) -> tuple[Task, uuid.UUID]:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
+    user = await make_user(db_session)
+    task = await make_task(
+        db_session,
         created_by=user.id,
         status=TaskStatus.IN_PROGRESS,
         llm_account_id=(await make_llm_account(db_session, owner_id=user.id)).id,
     )
-    db_session.add(task)
-    await db_session.flush()
     return task, user.id
 
 

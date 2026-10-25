@@ -1,4 +1,3 @@
-import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -6,14 +5,14 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import services.autostart as autostart_module
-from db.models.enums import AppLogLevel, TaskStatus, UserRole
+from db.models.enums import AppLogLevel, TaskStatus
 from db.models.logs import AppLog
 from db.models.tasks import Task
-from db.models.users import User
 from services.autostart import find_tasks_due_for_autostart, run_scheduled_autostart_check
 from services.errors import ConflictError, ValidationError
 from services.notifications import NotificationEvent
 from tasks import periodic, session_worker
+from tests.factories import make_task
 
 
 async def _make_task(
@@ -23,21 +22,12 @@ async def _make_task(
     auto_start_enabled: bool = True,
     scheduled_start_at: datetime | None = None,
 ) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
-        created_by=user.id,
+    return await make_task(
+        db_session,
         status=status,
         auto_start_enabled=auto_start_enabled,
         scheduled_start_at=scheduled_start_at,
     )
-    db_session.add(task)
-    await db_session.flush()
-    return task
 
 
 async def test_find_tasks_due_for_autostart_matches_past_scheduled_time(

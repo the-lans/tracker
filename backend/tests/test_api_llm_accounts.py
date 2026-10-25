@@ -14,7 +14,7 @@ import pytest
 from db.models.enums import TaskStatus
 from db.models.tasks import Task
 from services.llm_accounts import DEFAULT_ACCOUNTS_ROOT
-from tests.factories import make_llm_account, make_user
+from tests.factories import make_llm_account, make_task, make_user
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -24,17 +24,8 @@ if TYPE_CHECKING:
 
 
 async def _task(db_session: AsyncSession, owner_id: uuid.UUID, **fields: Any) -> Task:
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:6]}",
-        title="t",
-        description="d",
-        created_by=owner_id,
-        status=fields.pop("status", TaskStatus.NEW),
-        **fields,
-    )
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    fields.setdefault("status", TaskStatus.NEW)
+    return await make_task(db_session, created_by=owner_id, **fields)
 
 
 _ROOT = DEFAULT_ACCOUNTS_ROOT

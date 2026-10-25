@@ -15,7 +15,7 @@ from db.models.enums import (
     UserRole,
 )
 from db.models.logs import NodeLog
-from db.models.pipelines import Node, Pipeline
+from db.models.pipelines import Node
 from db.models.tasks import Task
 from db.models.users import User
 from services.nodes import dispatch
@@ -30,29 +30,21 @@ from services.nodes.dispatch import (
     resolve_node_prompt,
 )
 from services.nodes.script import ScriptExecutionResult
+from tests.factories import make_pipeline, make_task, make_user
 from tests.fakes import FakeClaudeAgentClient, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
 
 
 async def _make_task(db_session: AsyncSession) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    pipeline = Pipeline(name="p", is_archived=False, created_by=user.id)
-    db_session.add(pipeline)
-    await db_session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
+    user = await make_user(db_session)
+    pipeline = await make_pipeline(db_session, created_by=user.id)
+    return await make_task(
+        db_session,
         created_by=user.id,
         pipeline_id=pipeline.id,
         status=TaskStatus.IN_PROGRESS,
     )
-    db_session.add(task)
-    await db_session.flush()
-    return task
 
 
 async def test_resolve_node_prompt_renders_plain_prompt_template(db_session: AsyncSession) -> None:

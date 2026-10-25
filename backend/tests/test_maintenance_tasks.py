@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import McpAuthType, NodeLogStatus, NodeLogTriggerType, TaskStatus, UserRole
+from db.models.enums import McpAuthType, NodeLogStatus, NodeLogTriggerType, TaskStatus
 from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.tasks import Task
@@ -35,23 +35,11 @@ from services.maintenance_tasks import (
 )
 from services.nodes.script import CONTAINER_DEADLINE_LABEL, container_deadline
 from services.notifications import NotificationEvent
-from tests.factories import SAMPLE_ED25519_KEY, make_llm_account, make_user
+from tests.factories import SAMPLE_ED25519_KEY, make_llm_account, make_task, make_user
 
 
 async def _make_task(db_session: AsyncSession, *, status: TaskStatus) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
-        created_by=user.id,
-        status=status,
-    )
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    return await make_task(db_session, status=status)
 
 
 async def _set_updated_at(db_session: AsyncSession, task: Task, value: datetime) -> None:

@@ -16,7 +16,7 @@ from db.models.pipelines import Node, Pipeline
 from db.models.repositories import Repository, Template
 from db.models.tasks import Task
 from services.crypto import encrypt
-from tests.factories import make_user
+from tests.factories import make_task, make_user
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -31,16 +31,7 @@ async def _task(
     *,
     status: TaskStatus = TaskStatus.NEW,
 ) -> Task:
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:6]}",
-        title="t",
-        description="d",
-        created_by=owner_id,
-        status=status,
-    )
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    return await make_task(db_session, created_by=owner_id, status=status)
 
 
 async def _pipeline_with_node(db_session: AsyncSession, owner_id: uuid.UUID) -> Pipeline:

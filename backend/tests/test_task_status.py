@@ -1,4 +1,3 @@
-import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -13,13 +12,11 @@ from db.models.enums import (
     NodeLogTriggerType,
     NodeType,
     TaskStatus,
-    UserRole,
 )
 from db.models.logs import AppLog, NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
-from db.models.users import User
 from services.errors import ConflictError, ValidationError
 from services.task_status import (
     fail_task_after_error,
@@ -27,22 +24,11 @@ from services.task_status import (
     reset_task_to_new,
     transition_task_status,
 )
+from tests.factories import make_task
 
 
 async def _make_task(db_session: AsyncSession, *, status: TaskStatus = TaskStatus.NEW) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
-        created_by=user.id,
-        status=status,
-    )
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    return await make_task(db_session, status=status)
 
 
 async def _add_enabled_node(db_session: AsyncSession, task: Task, *, order_index: int) -> Node:

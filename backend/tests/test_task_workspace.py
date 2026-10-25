@@ -19,11 +19,9 @@ from db.models.enums import (
     ParentSummaryStatus,
     RepositoryRole,
     TaskStatus,
-    UserRole,
 )
 from db.models.repositories import Repository, Template
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
-from db.models.users import User
 from services.crypto import encrypt
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
@@ -34,7 +32,7 @@ from services.task_workspace import (
     push_task_workspace,
     write_template_files,
 )
-from tests.factories import make_user
+from tests.factories import make_task, make_user
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -62,14 +60,7 @@ def _init_bare_origin(tmp_path: Path, name: str) -> Path:
 
 
 async def _make_task(db_session: AsyncSession) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    code = f"RR-{uuid.uuid4().hex[:5]}"
-    task = Task(code=code, title="t", description="d", created_by=user.id)
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    return await make_task(db_session)
 
 
 async def _attach_repository(
