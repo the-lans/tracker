@@ -113,7 +113,13 @@ backend/
               clear_context.py); plan_mode.py — callback разрешений SDK:
               решение по плану, вопросы агента, режимы разрешений (раздел 9);
               template_context.py — рендер переменных (RenderedText: текст для
-              сессии и замаскированный для показа)
+              сессии и замаскированный для показа); session_container.py —
+              аргументы контейнера сессии (раздел 19.3), docker_mounts.py —
+              монтирование каталогов задачи в контейнеры script-нод и сессии;
+              child_rebase.py — ребейз дочерней ветки воркером по
+              `rebase_requested_at`; session_heartbeat.py — пульс и единственный
+              владелец сессии; node_history.py — история `node_logs` задачи
+              для `{{node.*}}`
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
               (db/session.py — engine/session из DATABASE_URL)
   clients/   — обёртки над Claude Agent SDK (claude_agent.py, в т. ч.
@@ -126,6 +132,8 @@ backend/
               jira_attachments.py (вложения Jira → артефакты, в фоне),
               async_runner.py — run_with_fresh_pool: асинхронное тело задачи
               в своём event loop с пустым пулом БД (правило 12)
+  session_cli.py — обёртка `cli_path` SDK: запускает Claude Code CLI в
+              контейнере сессии `tracker-session` (белый список окружения)
   docker-entrypoint.sh — применяет alembic-миграции и создаёт роль БД
               SFTP-шлюза перед стартом backend/worker/session-worker/beat
   sftp_gateway/ — SFTP-шлюз (сервис `sftp`, `python -m sftp_gateway`):
@@ -146,6 +154,7 @@ backend/
   tests/     — pytest (test_*.py, плоско; conftest.py поднимает Postgres и
               Redis в Docker, fakes.py — фейки Claude Agent SDK,
               factories.py — общие тестовые записи (автор, LLM-аккаунт, эталонные SSH-ключи),
+              git_support.py — локальные bare-репозитории и коммиты для тестов git,
               worker_support.py — обвязка воркера сессии для его тестов и E2E)
 frontend/    — React SPA: дашборд, страница задачи (обзор + диалог),
               конструктор пайплайна/библиотека, CRUD-страницы
@@ -170,10 +179,14 @@ deploy/
   install.sh — единственный скрипт установки по разделу 20.2 ТЗ;
               `--restore <каталог>` — перенос на новый сервер (раздел 20.4):
               дамп БД и архивы volume task_repos, user_files, log_archive,
-              claude_accounts, sftp_host_keys
+              claude_accounts, sftp_host_keys; `--update` — обновление
+              установленного сервера (раздел 20.6): свежий код, пересборка
+              всех образов (в т. ч. раннеров и tracker-session), миграции
 runners/
   tracker-runner-python/ — Docker-образ раннера для script-нод (Python)
   tracker-runner-bash/   — Docker-образ раннера для script-нод (Bash)
+  tracker-session/       — Docker-образ контейнера сессии: процесс Claude
+              Code CLI задачи (раздел 19.3), запускается обёрткой `cli_path`
 alembic/
   env.py       — async env (target_metadata = db.base.Base.metadata)
   versions/    — миграции базы данных (полная схема раздела 3.1,
@@ -181,7 +194,7 @@ alembic/
                  task_parent_summaries, system_settings, владельцы записей,
                  SFTP, токен GitLab в system_settings, уникальность
                  task_nodes, подключение к Jira, tasks.reset_at, адрес Jira
-                 в system_settings); новые миграции пишут DDL
+                 в system_settings, task_repositories.rebase_requested_at); новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
@@ -263,6 +276,7 @@ script-нод запускают образы раннеров — их нужн
 ```bash
 docker build -t tracker-runner-python:latest runners/tracker-runner-python/
 docker build -t tracker-runner-bash:latest runners/tracker-runner-bash/
+docker build -t tracker-session:latest runners/tracker-session/
 ```
 
 ### Линт
@@ -359,7 +373,12 @@ Postgres из `backend/tests/conftest.py`:
    `--privileged` не используется. Переменные задачи передаются все; токен
    GitLab — системная настройка (`system_settings`), а не переменная, и в
    контейнер не попадает. Пути задачи — в `TASK_REPOS_PATH` и
-   `TASK_ARTIFACTS_PATH` (текст скрипта не шаблонизируется).
+   `TASK_ARTIFACTS_PATH` (текст скрипта не шаблонизируется). Процесс
+   Claude Code CLI — тоже в контейнере (`tracker-session`, ТЗ 19.3): только
+   репозитории, артефакты задачи и каталог LLM-аккаунта, окружение по белому
+   списку, без `docker.sock`, ключей шифрования и внутренней сети сервисов.
+   Git воркера не исполняет код из репозитория: без хуков, без системного и
+   глобального конфига, локальный `.git/config` — по белому списку.
 5. **Очистка рабочей директории репозиториев — только вручную и только в
    терминальном статусе** (`done`/`failed`). Автоматическое удаление
    запрещено.
@@ -394,6 +413,10 @@ Postgres из `backend/tests/conftest.py`:
     Асинхронное тело Celery-задачи запускается через
     `tasks/async_runner.run_with_fresh_pool`, а не голым `asyncio.run`:
     иначе вторая задача процесса получит соединение пула чужого event loop.
+    У сессии задачи один владелец: ключ пульса ставится `SET NX` с
+    токеном и продлевается/снимается только им; повторно доставленное
+    продолжение ждёт освобождения ограниченное время и выходит без
+    эффектов, `visibility_timeout` брокера больше этого ожидания.
 13. **Покрытие тестами `backend/services/`** — не ниже 85%.
 14. **Переход в `done`** невозможен, пока хотя бы одна включённая нода
     пайплайна не имеет записи `node_logs` со статусом `success` в текущем
@@ -412,10 +435,13 @@ Postgres из `backend/tests/conftest.py`:
     напрямую: ручные промты кладёт в очередь, команды pause/resume/stop —
     в Redis (`services/task_control.py`), и будит воркер сигналом. Воркер
     перед каждой нодой выполняет запрошенное переподключение моста, затем
-    обрабатывает конфликт ребейза, очередь ручных запросов FIFO и команды;
+    выполняет запрошенный ребейз (`task_repositories.rebase_requested_at`)
+    и обрабатывает конфликт ребейза, очередь ручных запросов FIFO и команды;
     статус `paused` — решение пользователя, см.
     `docs/implementation_plan.md`, п. 6. `claude.ai/code` — только для
     просмотра сессии: ввод в сессию идёт только через трекер (п. 8).
+    Задача, у которой пропал пульс сессии (`services/session_heartbeat.py`),
+    после исчерпания попыток переходит в `failed` (ТЗ 6.6).
 17. **Режимы разрешений агента** (`services/plan_mode.py`, ТЗ 9): пока идёт
     нода `plan_prompt`, правки запрещены; `current_permission_mode =
     default` — каждое действие, требующее разрешения, ждёт «Разрешить» /
