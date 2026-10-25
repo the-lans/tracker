@@ -424,7 +424,9 @@ Postgres из `backend/tests/conftest.py`:
     статусе `new` (там же пайплайн меняется — снимок заменяется целиком;
     после запуска — через «Вернуть в новые» из `failed`/`done`,
     `POST /tasks/{id}/reset`); в `failed` — только для нод с `order_index >
-    tasks.last_failed_order_index` (`services/task_nodes.py`,
+    tasks.last_failed_order_index` и для ноды на самой точке перезапуска,
+    если она не начинала выполняться в текущем прогоне (остановка на паузе
+    после ноды ставит точку сразу за ней) (`services/task_nodes.py`,
     `PATCH /tasks/{id}/nodes/{task_node_id}`). По тем же правилам между
     нодами снимка вставляются, правятся и удаляются свои промты задачи
     (`nodes.task_id`, `POST`/`DELETE /tasks/{id}/nodes…`); своя нода с

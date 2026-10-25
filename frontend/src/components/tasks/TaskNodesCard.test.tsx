@@ -270,11 +270,26 @@ describe("TaskNodesCard", () => {
         lastFailed: 0,
         after: ["после ноды Анализ задачи", "после ноды Тесты и линтеры", "после ноды Отчёт для MR"],
       },
-      { status: TaskStatus.FAILED, lastFailed: 2, after: ["после ноды Отчёт для MR"] },
+      {
+        status: TaskStatus.FAILED,
+        lastFailed: 2,
+        after: ["после ноды Отчёт для MR"],
+      },
+      {
+        status: TaskStatus.FAILED,
+        lastFailed: 2,
+        restartPointOpen: true,
+        after: ["после ноды Тесты и линтеры", "после ноды Отчёт для MR"],
+      },
+      { status: TaskStatus.FAILED, lastFailed: 3, after: ["после ноды Отчёт для MR"] },
       { status: TaskStatus.IN_PROGRESS, lastFailed: null, after: [] },
       { status: TaskStatus.DONE, lastFailed: null, after: [] },
-    ])("$status, сбой на $lastFailed → «+ Промт» $after", async ({ status, lastFailed, after }, { api }) => {
-      renderCard(api, { status, lastFailed });
+    ])("$status, перезапуск с $lastFailed → «+ Промт» $after", async ({ status, lastFailed, restartPointOpen = false, after }, { api }) => {
+      // Нода на точке перезапуска редактируема, только если ещё не начинала выполняться.
+      const nodes = [analysis, tests, report].map((node) =>
+        node.order_index === lastFailed ? { ...node, editable: restartPointOpen } : node,
+      );
+      renderCard(api, { status, lastFailed, nodes });
       await checkbox(analysis.name);
 
       expect(insertButtons()).toEqual(after.map((place) => `Вставить свой промт ${place}`));

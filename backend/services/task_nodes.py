@@ -28,7 +28,7 @@ from services.pipeline_validation import (
     validate_node_shape,
 )
 from services.system_settings import resolve_node_execution_defaults
-from services.task_status import lock_task
+from services.task_status import lock_task, restart_point_started
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,19 +62,38 @@ class CustomNodeDraft:
     command_invocation: str | None = None
 
 
-def is_position_editable(task: Task, order_index: int) -> bool:
-    """Правило 11 CLAUDE.md: в `new` — любая позиция; в `failed` — только
-    ещё не начинавшие выполнение (`order_index > last_failed_order_index`);
-    после запуска в остальных статусах — никакая."""
+def is_position_editable(task: Task, order_index: int, *, restart_point_open: bool) -> bool:
+    """
+    Правило 11 CLAUDE.md, раздел 13.2: в `new` — любая позиция; в `failed` —
+    только ещё не начинавшие выполнение: за точкой перезапуска
+    (`order_index > last_failed_order_index`) и на ней самой, если нода там
+    не начинала выполняться (``restart_point_open``: остановка на паузе,
+    сбой после последней ноды); в остальных статусах — никакая.
+    """
     if task.status is TaskStatus.NEW:
         return True
     if task.status is TaskStatus.FAILED and task.last_failed_order_index is not None:
+        if order_index == task.last_failed_order_index:
+            return restart_point_open
         return order_index > task.last_failed_order_index
     return False
 
 
-def is_task_node_editable(task: Task, task_node: TaskNode) -> bool:
-    return is_position_editable(task, task_node.order_index)
+async def _is_restart_point_open(db_session: AsyncSession, task: Task) -> bool:
+    if task.status is not TaskStatus.FAILED:
+        return False
+    return not await restart_point_started(db_session, task)
+
+
+async def _ensure_position_editable(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    order_index: int,
+) -> None:
+    restart_point_open = await _is_restart_point_open(db_session, task)
+    if not is_position_editable(task, order_index, restart_point_open=restart_point_open):
+        raise ConflictError(_locked_composition_message(task))
 
 
 def _locked_composition_message(task: Task) -> str:
@@ -100,6 +119,7 @@ async def load_task_node_rows(
 
 
 async def list_task_nodes(db_session: AsyncSession, task: Task) -> list[TaskNodeView]:
+    restart_point_open = await _is_restart_point_open(db_session, task)
     return [
         TaskNodeView(
             id=task_node.id,
@@ -109,7 +129,11 @@ async def list_task_nodes(db_session: AsyncSession, task: Task) -> list[TaskNode
             pause_after=task_node.pause_after,
             name=node.name,
             node_type=node.node_type,
-            editable=is_task_node_editable(task, task_node),
+            editable=is_position_editable(
+                task,
+                task_node.order_index,
+                restart_point_open=restart_point_open,
+            ),
             is_custom=node.task_id is not None,
             prompt_template=node.prompt_template if node.task_id is not None else None,
             command_invocation=node.command_invocation if node.task_id is not None else None,
@@ -141,8 +165,7 @@ async def set_task_node_enabled(
     is_enabled: bool,
 ) -> TaskNode:
     task_node = await _get_task_node_or_404(db_session, task=task, task_node_id=task_node_id)
-    if not is_task_node_editable(task, task_node):
-        raise ConflictError(_locked_composition_message(task))
+    await _ensure_position_editable(db_session, task=task, order_index=task_node.order_index)
     task_node.is_enabled = is_enabled
     await db_session.commit()
     logger.info(
@@ -297,8 +320,7 @@ async def add_custom_task_node(
         task=locked,
         after_task_node_id=after_task_node_id,
     )
-    if not is_position_editable(locked, position):
-        raise ConflictError(_locked_composition_message(locked))
+    await _ensure_position_editable(db_session, task=locked, order_index=position)
 
     defaults = await resolve_node_execution_defaults(
         db_session,
@@ -359,8 +381,7 @@ async def _get_editable_custom_node(
     node = await db_session.get(Node, task_node.node_id)
     if node is None or node.task_id != task.id:
         raise ConflictError("Ноду пайплайна нельзя изменить или удалить — её можно отключить")
-    if not is_task_node_editable(task, task_node):
-        raise ConflictError(_locked_composition_message(task))
+    await _ensure_position_editable(db_session, task=task, order_index=task_node.order_index)
     return task_node, node
 
 

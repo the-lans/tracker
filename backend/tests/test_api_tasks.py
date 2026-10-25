@@ -38,7 +38,7 @@ from services.task_control import (
     read_task_control,
 )
 from services.task_signal import wait_for_task_signal
-from tests.factories import make_llm_account, make_repository
+from tests.factories import make_llm_account, make_node_log, make_repository
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -786,7 +786,7 @@ async def test_failed_task_locks_nodes_up_to_failure_point(
     assert task is not None
     task.status = TaskStatus.FAILED
     task.last_failed_order_index = 1
-    await db_session.flush()
+    await make_node_log(db_session, task_id=task.id, node_id=uuid.UUID(nodes[1]["node_id"]))
 
     locked = await authed_client.patch(
         f"/tasks/{task_body['id']}/nodes/{nodes[1]['id']}",

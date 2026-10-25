@@ -63,7 +63,7 @@ export function TaskNodesCard({
   const nodes = taskNodes ?? [];
 
   function canInsertAfter(after: TaskNodeItem | null): boolean {
-    return isPositionEditable(task, insertOrderIndex(nodes, after));
+    return isPositionEditable(task, nodes, insertOrderIndex(nodes, after));
   }
 
   function confirmDelete() {

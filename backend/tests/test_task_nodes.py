@@ -30,6 +30,7 @@ from services.task_nodes import (
     update_custom_task_node,
 )
 from services.task_status import reset_task_to_new
+from tests.factories import make_node_log
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,7 +42,12 @@ async def _make_task_with_nodes(
     status: TaskStatus,
     last_failed_order_index: int | None = None,
     node_count: int = 3,
+    restart_point_started: bool = True,
 ) -> tuple[Task, list[TaskNode]]:
+    """
+    ``restart_point_started`` — нода на `last_failed_order_index` упала
+    в этом прогоне; `False` — точка перезапуска после остановки на паузе.
+    """
     user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
     db_session.add(user)
     await db_session.flush()
@@ -81,6 +87,12 @@ async def _make_task_with_nodes(
         db_session.add(task_node)
         task_nodes.append(task_node)
     await db_session.flush()
+    if restart_point_started and last_failed_order_index is not None:
+        await make_node_log(
+            db_session,
+            task_id=task.id,
+            node_id=task_nodes[last_failed_order_index].node_id,
+        )
     return task, task_nodes
 
 
@@ -324,6 +336,36 @@ class TestAddCustomNode:
             with pytest.raises(ConflictError):
                 await _add(db_session, task, after=anchor)
             assert await _names(db_session, task) == ["node-0", "node-1", "node-2"]
+
+    @pytest.mark.parametrize(
+        ("last_failed", "after", "names"),
+        [
+            (1, 0, ["node-0", "Уточнения", "node-1", "node-2"]),
+            (3, 2, ["node-0", "node-1", "node-2", "Уточнения"]),
+        ],
+        ids=["before_next_node", "after_last_node"],
+    )
+    async def test_insert_at_pause_stop_point(
+        self,
+        db_session: AsyncSession,
+        last_failed: int,
+        after: int,
+        names: list[str],
+    ) -> None:
+        task, task_nodes = await _make_task_with_nodes(
+            db_session,
+            status=TaskStatus.FAILED,
+            last_failed_order_index=last_failed,
+            restart_point_started=False,
+        )
+        await db_session.commit()
+
+        await _add(db_session, task, after=task_nodes[after])
+
+        assert await _names(db_session, task) == names
+        # Вставленная нода — на точке перезапуска и остаётся редактируемой.
+        views = await list_task_nodes(db_session, task)
+        assert [view.editable for view in views] == [index > after for index in range(len(names))]
 
     @pytest.mark.parametrize(
         "draft",

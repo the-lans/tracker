@@ -1520,6 +1520,47 @@ class TestPauseAfterNode:
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
 
+    async def test_prompt_at_stop_point_runs_on_restart(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 13.2: после «Остановить» на паузе свой промт вставляется сразу за нодой."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0, pause_after=True)
+        await _add_node(db_session, task, order_index=1)
+
+        async def while_paused(observed: list[TaskStatus]) -> None:
+            await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+
+        _patch_pause_wait(monkeypatch, while_paused)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+        await _run_worker(task)
+        await db_session.refresh(task)
+        first = await db_session.scalar(
+            sa.select(TaskNode).where(TaskNode.task_id == task.id, TaskNode.order_index == 0),
+        )
+        assert first is not None
+        await add_custom_task_node(
+            db_session,
+            task=task,
+            after_task_node_id=first.id,
+            draft=CustomNodeDraft(
+                name="Уточнения",
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template="уточни",
+            ),
+        )
+
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(2))
+        await _run_worker(task, start_after_order_index=0)
+
+        assert worker_env.client.queries == ["уточни", "шаг 1"]
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+
     async def test_button_pause_not_doubled(
         self,
         db_session: AsyncSession,

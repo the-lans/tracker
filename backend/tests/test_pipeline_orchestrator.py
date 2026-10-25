@@ -937,10 +937,12 @@ class TestPauseAfterNode:
     @pytest.mark.parametrize(
         ("flags", "resume_at"),
         [
-            ([(True, True), (False, False), (True, False)], 2),
-            ([(True, False), (True, True), (False, False)], 3),
+            # Отключённая следующая нода — тоже точка перезапуска: туда
+            # можно вставить свой промт (раздел 13.2).
+            ([(True, True), (False, False), (True, False)], 1),
+            ([(True, False), (True, False), (True, True)], 3),
         ],
-        ids=["next_enabled_node", "after_last_node"],
+        ids=["next_node", "after_last_node"],
     )
     async def test_stop_on_pause(
         self,
