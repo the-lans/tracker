@@ -6,6 +6,7 @@ import uuid
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import PeriodicScheduleType
@@ -69,6 +70,76 @@ async def test_update_crontab_expression_on_interval_task_is_rejected(
     )
 
     assert response.status_code == 422
+
+
+class TestScheduleValidation:
+    """Раздел 16.1: расписание из админки проверяется до сохранения."""
+
+    async def test_crontab_normalized(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+        admin_user: User,
+    ) -> None:
+        periodic_task = await _create_periodic_task(
+            db_session,
+            admin_user,
+            schedule_type=PeriodicScheduleType.CRONTAB,
+            interval_seconds=None,
+            crontab_expression="0 3 * * *",
+        )
+
+        response = await admin_client.patch(
+            f"/periodic-tasks/{periodic_task.id}",
+            json={"crontab_expression": "  30  4 * * 1 "},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["crontab_expression"] == "30 4 * * 1"
+
+    @pytest.mark.parametrize(
+        "expression",
+        ["0 3 * *", "0 3 * * * *", "61 3 * * *", "каждый день"],
+        ids=["four_fields", "six_fields", "bad_minute", "text"],
+    )
+    async def test_bad_crontab_rejected(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+        admin_user: User,
+        expression: str,
+    ) -> None:
+        periodic_task = await _create_periodic_task(
+            db_session,
+            admin_user,
+            schedule_type=PeriodicScheduleType.CRONTAB,
+            interval_seconds=None,
+            crontab_expression="0 3 * * *",
+        )
+
+        response = await admin_client.patch(
+            f"/periodic-tasks/{periodic_task.id}",
+            json={"crontab_expression": expression},
+        )
+
+        assert response.status_code == 422
+
+    @pytest.mark.parametrize("seconds", [0, -60])
+    async def test_non_positive_interval_rejected(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+        admin_user: User,
+        seconds: int,
+    ) -> None:
+        periodic_task = await _create_periodic_task(db_session, admin_user)
+
+        response = await admin_client.patch(
+            f"/periodic-tasks/{periodic_task.id}",
+            json={"interval_seconds": seconds},
+        )
+
+        assert response.status_code == 422
 
 
 async def test_disable_periodic_task(

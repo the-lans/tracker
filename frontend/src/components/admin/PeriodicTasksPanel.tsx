@@ -5,13 +5,14 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { usePeriodicTasks, useRunPeriodicTaskNow, useUpdatePeriodicTask } from "@/hooks/useAdmin";
-import { formatDateTime, formatInterval } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import { toastError } from "@/lib/errors";
-import { PeriodicScheduleType, type PeriodicTask } from "@/lib/types";
+import type { PeriodicTask } from "@/lib/types";
 import { PERIODIC_RUN_STATUS_LABEL, PERIODIC_RUN_STATUS_TONE } from "@/lib/labels";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
+import { PeriodicScheduleEditor } from "@/components/admin/PeriodicScheduleEditor";
 
 function PeriodicTaskRow({ task }: { task: PeriodicTask }) {
   const updateTask = useUpdatePeriodicTask(task.id);
@@ -23,10 +24,8 @@ function PeriodicTaskRow({ task }: { task: PeriodicTask }) {
       <div className="min-w-0 flex-1 basis-64">
         <div className="font-bold">{task.display_name}</div>
         <div className="text-meta text-text-3">{task.description}</div>
-        <div className="mt-1 text-meta text-text-3">
-          {task.schedule_type === PeriodicScheduleType.INTERVAL
-            ? formatInterval(task.interval_seconds ?? 0)
-            : `по расписанию cron: ${task.crontab_expression}`}
+        <div className="mt-1">
+          <PeriodicScheduleEditor task={task} />
         </div>
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-3">
@@ -76,7 +75,7 @@ export function PeriodicTasksPanel() {
         <EmptyState
           icon={Timer}
           title="Периодические задачи не заполнены"
-          hint="Их создаёт скрипт первичного заполнения scripts/seed_periodic_tasks.py — администратор сервера запускает его после первого входа в систему."
+          hint="Список заполняет установщик (deploy/install.sh) до первого входа. Если он пуст, администратор сервера повторяет заполнение: deploy/install.sh --update или scripts/seed_periodic_tasks.py."
         />
       )}
       {(tasks ?? []).map((task) => (

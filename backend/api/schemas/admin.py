@@ -147,6 +147,6 @@ class PeriodicTaskUpdateRequest(BaseModel):
     текущей записи (менять сам `schedule_type` не поддерживается — это
     сменило бы природу задачи, не просто её расписание)."""
 
-    interval_seconds: int | None = None
+    interval_seconds: int | None = Field(default=None, ge=1)
     crontab_expression: str | None = None
     is_enabled: bool | None = None

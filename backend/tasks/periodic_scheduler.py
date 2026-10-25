@@ -21,7 +21,7 @@ from celery.beat import ScheduleEntry, Scheduler
 from app_logging.config import get_logger
 from db.models.enums import PeriodicScheduleType
 from db.session import async_session_factory
-from services.periodic_tasks import list_enabled_periodic_tasks
+from services.periodic_tasks import CRONTAB_FIELD_COUNT, list_enabled_periodic_tasks
 from tasks.async_runner import run_with_fresh_pool
 
 if TYPE_CHECKING:
@@ -30,13 +30,10 @@ if TYPE_CHECKING:
 logger = get_logger("periodic_scheduler")
 
 _REFRESH_INTERVAL_SECONDS = 10.0
-_CRONTAB_FIELD_COUNT = 5
-
-
 def parse_crontab_expression(expression: str) -> tuple[str, str, str, str, str]:
     """Стандартный 5-польный cron (`минута час день_месяца месяц день_недели`)."""
     parts = expression.split()
-    if len(parts) != _CRONTAB_FIELD_COUNT:
+    if len(parts) != CRONTAB_FIELD_COUNT:
         message = f"crontab_expression должен состоять из 5 полей: {expression!r}"
         raise ValueError(message)
     minute, hour, day_of_month, month_of_year, day_of_week = parts
