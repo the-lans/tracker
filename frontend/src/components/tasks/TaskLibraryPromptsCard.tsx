@@ -20,7 +20,13 @@ import {
 import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { errorMessage } from "@/lib/errors";
 import { formatDateTime } from "@/lib/utils";
-import { LibraryPromptRunStatus, type NodeItem, type Task } from "@/lib/types";
+import {
+  LibraryPromptRunStatus,
+  NodeType,
+  type NodeItem,
+  type Task,
+  type TaskLibraryPromptItem,
+} from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 
 const RUN_STATUS_LABEL: Record<LibraryPromptRunStatus, string> = {
@@ -51,6 +57,15 @@ export function TaskLibraryPromptsCard({
   const runLibraryPrompt = useRunLibraryPrompt(task.id);
   const stopManualRequest = useStopManualRequest(task.id);
   const sessionActive = SESSION_ACTIVE_STATUSES.includes(task.status);
+
+  /** Раздел 3.1: без LLM-аккаунта у задачи нет сессии Claude — доступны только скрипты. */
+  function runBlockReason(prompt: TaskLibraryPromptItem): string | null {
+    if (!sessionActive) return "Сессия задачи не активна";
+    if (task.llm_account_id === null && prompt.node_type !== NodeType.SCRIPT) {
+      return "У задачи нет LLM-аккаунта — доступны только скрипты";
+    }
+    return null;
+  }
 
   function handleAdd() {
     if (!selectedNodeId) return;
@@ -89,6 +104,7 @@ export function TaskLibraryPromptsCard({
       <div className="flex flex-col">
         {(prompts ?? []).map((prompt) => {
           const activeRequestId = prompt.active_request_id;
+          const blockReason = runBlockReason(prompt);
           return (
             <div
               key={prompt.id}
@@ -97,10 +113,10 @@ export function TaskLibraryPromptsCard({
               <button
                 type="button"
                 onClick={() => handleRun(prompt.id)}
-                disabled={!sessionActive || runLibraryPrompt.isPending}
+                disabled={blockReason !== null || runLibraryPrompt.isPending}
                 className="flex touch-target size-6 shrink-0 items-center justify-center rounded-[7px] border border-border text-text-2 disabled:opacity-40"
                 aria-label="Выполнить промт"
-                title={sessionActive ? "Выполнить" : "Сессия задачи не активна"}
+                title={blockReason ?? "Выполнить"}
               >
                 <Play className="size-2.5" fill="currentColor" />
               </button>
