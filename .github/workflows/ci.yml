@@ -32,7 +32,7 @@ jobs:
 
       # make check сам устанавливает зависимости backend (backend/.venv через
       # pip install -e ".[dev]") и frontend (npm install), затем прогоняет
-      # ruff → mypy → pytest и eslint → tsc --noEmit (см. Makefile, CLAUDE.md
+      # ruff → mypy → pytest и eslint → tsc --noEmit → vitest run (см. Makefile, CLAUDE.md
       # раздел 4). Никаких деплой-шагов на этом этапе.
       - name: make check
         env:
