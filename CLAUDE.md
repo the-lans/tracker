@@ -95,8 +95,11 @@ backend/
               (auth, tasks, repositories, templates, preview, llm_accounts,
               env_variables, mcp_servers, pipelines, nodes, users, profile,
               periodic_tasks, monitoring, push, system_settings, jira);
-              dependencies.py — текущий пользователь и require_admin,
-              schemas.py — схемы запросов и ответов
+              tasks/ — эндпоинты задачи по разделам (crud, lifecycle, nodes,
+              manual, env_variables, artifacts; common.py — доступ к задаче
+              и сигнал воркеру); dependencies.py — текущий пользователь и
+              require_admin; schemas/ — схемы запросов и ответов по разделам
+              (импорт — `from api.schemas import …`)
   services/  — бизнес-логика: пайплайны, сессии, git-операции (min. 85% test coverage);
               access.py — владение записями «своё или admin» (раздел 19.2),
               включая LLM-аккаунты; pipeline_validation.py — проверка ноды и
@@ -119,12 +122,16 @@ backend/
               child_rebase.py — ребейз дочерней ветки воркером по
               `rebase_requested_at`; session_heartbeat.py — пульс и единственный
               владелец сессии; node_history.py — история `node_logs` задачи
-              для `{{node.*}}`
+              для `{{node.*}}` и вкладки «Логи»; node_runs.py — жизненный
+              цикл записи `node_logs` (старт, итог, остановка);
+              redis_connection.py — клиент Redis на операцию; integrity.py —
+              запреты удаления (раздел 3.2) и commit_or_conflict
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
               (db/session.py — engine/session из DATABASE_URL)
   clients/   — обёртки над Claude Agent SDK (claude_agent.py, в т. ч.
               OfflineAgentClient для задач без LLM-аккаунта), GitLab API
-              (gitlab.py), Jira REST API (jira.py); конфигурация MCP-серверов
+              (gitlab.py), Jira REST API (jira.py), классы HTTP-сбоев внешних
+              API (http_errors.py); конфигурация MCP-серверов
               для сессии — services/mcp_config.py
   tasks/     — Celery-приложение и задачи: celery_app.py (include модулей,
               очередь sessions, DatabaseScheduler), session_worker.py
@@ -169,7 +176,11 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               repositories,templates,llmAccounts,envVariables};
               styles/tokens.css + index.css — токены (цвета, шкала шрифтов
               text-caption…text-display), styles/classes.ts — общие наборы
-              классов; lib/labels.ts — все подписи и цвета статусов
+              классов; lib/labels.ts — все подписи и цвета статусов;
+              lib/errors.ts — текст и тост ошибки API (errorMessage,
+              toastError); hooks/useInvalidatingMutation.ts — мутация с
+              перечитыванием списков; common/dialogs/EntityFormDialog —
+              диалог создания/правки записи справочника
 deploy/
   caddy/     — конфигурация reverse-proxy (handle_path /api/* — срезает
               префикс перед проксированием на backend)
