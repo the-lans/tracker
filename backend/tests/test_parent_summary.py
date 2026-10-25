@@ -32,6 +32,7 @@ from services.task_control import TaskControlCommand, request_task_control
 from tasks import session_worker
 from tests.factories import make_llm_account, make_user
 from tests.fakes import FakeClaudeAgentClient, make_result_message
+from tests.worker_support import assert_cli_in_session_container
 
 if TYPE_CHECKING:
     from claude_agent_sdk import Message
@@ -289,6 +290,8 @@ class TestIdleParent:
         assert fork_options.cwd == str(worker_env.repos_root / parent.code)
         assert fork_options.can_use_tool is deny_all_tools
         assert fork_options.mcp_servers == {}
+        # Контейнер пересказа — часть сессии дочерней задачи (раздел 19.3).
+        assert_cli_in_session_container(fork_options, child.id)
         assert fork_client.disconnected is True
         assert _SUMMARY in worker_env.client.queries[0]
         [parent_log] = await _logs(db_session, parent)

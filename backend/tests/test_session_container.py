@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import subprocess
 import tomllib
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -89,17 +91,32 @@ class TestSessionCli:
         assert exc_info.value.code != 0
 
 
+def _spec_image(spec: dict[str, Any]) -> str:
+    return str(spec["image"])
+
+
+def _spec_network(spec: dict[str, Any]) -> str:
+    args: list[str] = spec["docker_args"]
+    return args[args.index("--network") + 1]
+
+
+@pytest.fixture
+def session_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Корни каталогов задачи во временной директории; воркер — не в контейнере.
+    """
+    monkeypatch.setenv("TRACKER_REPOS_ROOT", str(tmp_path / "repos"))
+    monkeypatch.setenv("TRACKER_USER_FILES_ROOT", str(tmp_path / "files"))
+    monkeypatch.setenv("CLAUDE_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
+
+    async def not_in_container(_root: Path) -> None:
+        return None
+
+    monkeypatch.setattr(docker_mounts, "resolve_root_mount", not_in_container)
+
+
+@pytest.mark.usefixtures("session_roots")
 class TestSessionDockerArgs:
-    @pytest.fixture(autouse=True)
-    def _roots(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("TRACKER_REPOS_ROOT", str(tmp_path / "repos"))
-        monkeypatch.setenv("TRACKER_USER_FILES_ROOT", str(tmp_path / "files"))
-        monkeypatch.setenv("CLAUDE_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
-
-        async def not_in_container(_root: Path) -> None:
-            return None
-
-        monkeypatch.setattr(docker_mounts, "resolve_root_mount", not_in_container)
 
     async def _docker_args(
         self,
@@ -139,6 +156,46 @@ class TestSessionDockerArgs:
         assert "--privileged" not in args
         assert not any("docker.sock" in arg for arg in args)
 
+    async def test_isolation_flags(self, tmp_path: Path) -> None:
+        """
+        Раздел 19.3: пользователь воркера, лимиты, без привилегий и capabilities.
+        """
+        args = await self._docker_args(
+            tmp_path, task_id=uuid.uuid4(), config_dir="", with_artifacts=False
+        )
+
+        assert args[args.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
+        assert "--memory=4g" in args
+        assert "--cpus=2.0" in args
+        assert args[args.index("--cap-drop") + 1] == "ALL"
+        assert args[args.index("--security-opt") + 1] == "no-new-privileges"
+        assert args[args.index("--tmpfs") + 1] == "/tmp"
+        assert "HOME=/tmp" in args
+
+    @pytest.mark.parametrize(
+        ("variable", "value", "read"),
+        [
+            (session_container.SESSION_IMAGE_ENV, "registry.example.com/session:1", _spec_image),
+            (session_container.SESSION_NETWORK_ENV, "tracker-agents", _spec_network),
+        ],
+        ids=["image", "network"],
+    )
+    async def test_overrides_from_env(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        variable: str,
+        value: str,
+        read: Callable[[dict[str, Any]], str],
+    ) -> None:
+        monkeypatch.setenv(variable, value)
+
+        env = await build_session_cli_env(
+            task_id=uuid.uuid4(), cwd=tmp_path / "repos" / "RR-1", claude_config_dir=""
+        )
+
+        assert read(json.loads(env[SESSION_DOCKER_SPEC_ENV])) == value
+
     async def test_parent_fork_without_artifacts(self, tmp_path: Path) -> None:
         args = await self._docker_args(
             tmp_path, task_id=uuid.uuid4(), config_dir="", with_artifacts=False
@@ -147,6 +204,86 @@ class TestSessionDockerArgs:
         assert [args[i + 1] for i, arg in enumerate(args) if arg == "-v"] == [
             f"{tmp_path}/repos/RR-1:{tmp_path}/repos/RR-1:rw",
         ]
+
+
+async def _run_in_session_image(
+    tmp_path: Path,
+    *,
+    program: str,
+    argv: list[str],
+) -> tuple[int, str]:
+    """
+    Команда обёртки `session_cli.py` для настоящего образа `tracker-session`
+    (как её запустит SDK), с секретами в окружении воркера; ``program`` —
+    вместо CLI в образе, чтобы заглянуть внутрь контейнера.
+    """
+    repos_dir = tmp_path / "repos" / "RR-1"
+    config_dir = tmp_path / "accounts" / "a"
+    artifacts_dir = tmp_path / "files" / "RR-1"
+    for directory in (repos_dir, config_dir, artifacts_dir):
+        directory.mkdir(parents=True)
+    environ = {
+        **os.environ,
+        **_WORKER_SECRETS,
+        **await build_session_cli_env(
+            task_id=uuid.uuid4(),
+            cwd=repos_dir,
+            claude_config_dir=str(config_dir),
+            artifacts_dir=artifacts_dir,
+        ),
+        "CLAUDE_CONFIG_DIR": str(config_dir),
+    }
+    command = session_cli.build_command(argv, environ)
+    command[command.index(session_container.DEFAULT_SESSION_IMAGE) + 1] = program
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        env=environ,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    output, _ = await process.communicate()
+    assert process.returncode is not None
+    return process.returncode, output.decode()
+
+
+_CONTAINER_PROBE = """
+env
+echo "uid=$(id -u)"
+echo "memory=$(cat /sys/fs/cgroup/memory.max)"
+test -e /var/run/docker.sock && echo "docker-sock=present"
+touch "$PWD/written-by-agent"
+"""
+
+
+@pytest.mark.usefixtures("session_roots")
+class TestSessionImage:
+    """
+    Образ `tracker-session` запускается обёрткой так, как это делает SDK (раздел 19.3).
+    """
+
+    async def test_cli_starts(self, tmp_path: Path) -> None:
+        exit_code, output = await _run_in_session_image(
+            tmp_path, program="claude", argv=["--version"]
+        )
+
+        assert exit_code == 0, output
+        assert "Claude Code" in output
+
+    async def test_container_isolation(self, tmp_path: Path) -> None:
+        exit_code, output = await _run_in_session_image(
+            tmp_path, program="sh", argv=["-c", _CONTAINER_PROBE]
+        )
+
+        assert exit_code == 0, output
+        assert not any(value in output for value in _WORKER_SECRETS.values())
+        assert not any(f"{name}=" in output for name in _WORKER_SECRETS)
+        assert f"CLAUDE_CONFIG_DIR={tmp_path}/accounts/a" in output
+        assert f"uid={os.getuid()}" in output
+        assert f"memory={4 * 1024**3}" in output
+        assert "docker-sock=present" not in output
+        written = tmp_path / "repos" / "RR-1" / "written-by-agent"
+        assert written.exists()
+        assert written.stat().st_uid == os.getuid()
 
 
 def test_session_image_cli_matches_worker_sdk() -> None:

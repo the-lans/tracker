@@ -65,7 +65,13 @@ from tests.fakes import (
     make_result_message,
     patch_plan_mode_signals,
 )
-from tests.worker_support import GIT_AUTHOR_ARGS, WorkerEnv, init_bare_origin, run_command
+from tests.worker_support import (
+    GIT_AUTHOR_ARGS,
+    WorkerEnv,
+    assert_cli_in_session_container,
+    init_bare_origin,
+    run_command,
+)
 
 if TYPE_CHECKING:
     from claude_agent_sdk import Message
@@ -790,6 +796,8 @@ class TestBridgeReconnect:
         reconnect_options = worker_env.options[1]
         assert reconnect_options.resume == "sess-worker"
         assert REMOTE_CONTROL_EXTRA_ARG in reconnect_options.extra_args
+        # Новый процесс CLI моста — снова в контейнере сессии (раздел 19.3).
+        assert_cli_in_session_container(reconnect_options, task.id)
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
         assert task.remote_control_status is RemoteControlStatus.CONNECTED
@@ -824,6 +832,27 @@ class TestBridgeReconnect:
         assert task.remote_control_status is RemoteControlStatus.DISCONNECTED
         assert await consume_bridge_reconnect(redis_client, task.id) is False
         assert len(worker_env.options) == 1
+
+
+class TestSessionContainer:
+    async def test_cli_runs_in_session_container(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """
+        Раздел 19.3: процесс CLI задачи — в контейнере сессии, не в контейнере воркера.
+        """
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        await _run_worker(task)
+
+        [options] = worker_env.options
+        assert_cli_in_session_container(options, task.id)
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
 
 
 class TestRestartAfterClearContext:
@@ -1261,6 +1290,8 @@ class TestFailureKinds:
         assert task.status is TaskStatus.DONE
         assert replacement.queries == ["шаг 1"]
         assert worker_env.options[-1].resume == "sess-worker"
+        # Восстановленный CLI — снова в контейнере сессии (раздел 19.3).
+        assert_cli_in_session_container(worker_env.options[-1], task.id)
 
 
 class TestWithoutLlmAccount:
