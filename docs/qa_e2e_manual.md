@@ -22,52 +22,66 @@ Git. Требования, на которые ссылаются кейсы, �
 
 ### 1.1 Стек трекера
 
-Секреты стенда задаются в `scripts/qa/qa.env` (в `.gitignore`), шаблон с
-описанием каждого значения — `scripts/qa/qa.env.example`. Из секретов вручную
-нужен только OAuth-клиент Google (Web application, в Authorized JavaScript
-origins — `https://localhost`, e-mail администратора — в тестовых
-пользователях); остальные секреты `.env` генерируются.
+Настройки стенда — `scripts/qa/qa.env` (в `.gitignore`), шаблон с описанием
+каждого значения — `scripts/qa/qa.env.example`. Вручную задаётся только
+OAuth-клиент Google (Web application, в Authorized JavaScript origins —
+`https://localhost`, e-mail администратора — в тестовых пользователях).
+Остальные секреты `.env` (ключ шифрования, пароли, VAPID-ключи Web Push)
+`stand.sh env` генерирует сам. Стек стенда — отдельный compose-проект
+`tracker-qa` (`COMPOSE_PROJECT_NAME` в `.env`): его volume и сеть не
+пересекаются с другим стеком трекера на машине.
 
-1. Заполнить настройки стенда и создать `.env` трекера (`DOMAIN=localhost`):
+1. Создать настройки и `.env` трекера (`DOMAIN=localhost`) и `frontend/.env`
+   (Client ID встраивается в сборку фронтенда):
    ```bash
    cp scripts/qa/qa.env.example scripts/qa/qa.env   # вписать GOOGLE_OAUTH_* и QA_ADMIN_EMAIL
-   scripts/qa/stand.sh env                           # существующий .env не перезаписывается
+   scripts/qa/stand.sh env
    ```
+   Повторный запуск безопасен: он переносит в `.env` новые значения из
+   `qa.env`, а сгенерированные секреты не меняет — ими уже зашифрованы данные
+   в volume.
 2. Собрать образы раннеров и сессии, поднять стек и заполнить начальные
    данные — первого администратора и периодические задачи (CLAUDE.md, раздел 4):
    ```bash
    docker build -t tracker-runner-python:latest runners/tracker-runner-python/
    docker build -t tracker-runner-bash:latest runners/tracker-runner-bash/
    docker build -t tracker-session:latest runners/tracker-session/
-   docker compose up -d
+   docker compose up -d --build
    scripts/qa/stand.sh seed
    ```
-3. Открыть `https://localhost` (принять локальный сертификат Caddy), войти
-   через Google e-mail'ом из `QA_ADMIN_EMAIL`.
-4. Завести LLM-аккаунт («LLM-аккаунты», каталог из `QA_CLAUDE_ACCOUNT_DIR`)
-   и войти в Claude в его каталоге:
+   После правки `GOOGLE_OAUTH_*` — `scripts/qa/stand.sh env && docker compose
+   up -d --build`: без пересборки фронтенд не знает Client ID.
+3. Доверить браузеру локальный сертификат Caddy — без этого service worker не
+   регистрируется и Web Push не работает:
+   ```bash
+   scripts/qa/stand.sh trust     # печатает команду добавления в системное хранилище
+   ```
+   После добавления сертификата перезапустить браузер.
+4. Поднять git-хост и мок (раздел 1.2) и заполнить справочники (раздел 1.3):
+   ```bash
+   scripts/qa/stand.sh up
+   scripts/qa/stand.sh data
+   ```
+5. Войти в Claude в каталоге LLM-аккаунта «QA» (`QA_CLAUDE_ACCOUNT_DIR`):
    ```bash
    docker compose exec -e CLAUDE_CONFIG_DIR=/data/claude-accounts/qa worker claude auth login
    docker compose exec -e CLAUDE_CONFIG_DIR=/data/claude-accounts/qa worker claude auth status
    ```
+6. Открыть `https://localhost`, войти через Google e-mail'ом из
+   `QA_ADMIN_EMAIL` и разрешить уведомления на запрос браузера.
 
 ### 1.2 Git-хост и моки внешних сервисов
 
 Тесты используют локальный git-хост по SSH и мок Jira/GitLab API — настоящие
-сервисы не нужны. Оба контейнера подключаются к сети compose:
+сервисы не нужны. `scripts/qa/stand.sh up` подключает оба контейнера к сети
+compose (`QA_NETWORK`, порт мока на хосте — `QA_MOCKS_PORT`).
 
-```bash
-scripts/qa/stand.sh up        # сеть и порт мока — QA_NETWORK и QA_MOCKS_PORT в qa.env
-```
-
-Скрипт печатает всё, что нужно ввести в UI:
-
-| Что | Значение | Куда |
-|---|---|---|
-| Адрес репозитория | `ssh://git@qa-git/srv/git/qa/qa-calc.git` | «Репозитории» → новый репозиторий `qa-calc`, базовая ветка `main` |
-| Deploy key | содержимое `.qa/deploy_key` (приватный ключ) | то же поле формы репозитория |
-| Jira URL | `http://qa-mocks:8090` | Админка → «Системные настройки» |
-| GitLab URL и токен | `http://qa-mocks:8090`, любой токен (например `qa-token`) | Админка → «Системные настройки» |
+| Что | Значение |
+|---|---|
+| Адрес репозитория | `ssh://git@qa-git/srv/git/qa/qa-calc.git`, базовая ветка `main` |
+| Deploy key | `.qa/deploy_key` (приватный ключ) |
+| Jira URL | `http://qa-mocks:8090` |
+| GitLab URL и токен | `http://qa-mocks:8090`, токен `qa-token` (мок принимает любой) |
 
 Репозиторий `qa-calc` (заготовка — `scripts/qa/seed/qa-calc`): `calc.py` с
 `add`/`subtract`/`multiply`, тесты на `unittest` (`python3 -m unittest -v`),
@@ -87,17 +101,26 @@ scripts/qa/stand.sh export
 git clone -b feature/RR-QA-1 .qa/qa-calc.git .qa/check && (cd .qa/check && python3 -m unittest -v)
 ```
 
-После тестирования — `scripts/qa/stand.sh down` (удаляет контейнеры, данные
-git-хоста и каталог `.qa/`).
+После тестирования — `scripts/qa/stand.sh down` (удаляет git-хост, мок и
+каталог `.qa/`) и `docker compose down -v` (стек трекера вместе с данными).
 
 ### 1.3 Справочники
 
+`scripts/qa/stand.sh data` (`scripts/qa/seed_qa_data.py`) заводит всё, что
+нужно кейсам; повторный запуск добавляет только недостающее. Записи
+принадлежат администратору из `QA_ADMIN_EMAIL`: вход через Google находит его
+по e-mail.
+
 | Раздел | Запись | Зачем |
 |---|---|---|
+| LLM-аккаунты | «QA», каталог `QA_CLAUDE_ACCOUNT_DIR` | Сессия задачи |
+| Репозитории | `qa-calc` — адрес и deploy key из раздела 1.2 | Клон, ветка задачи, push |
+| Системные настройки | Jira URL, GitLab URL и токен — мок | E2E-18, E2E-23, E2E-29 |
 | Переменные окружения | `QA_GREETING` = `Привет из QA` (глобальная) | Рендер `{{env.*}}` |
 | Переменные окружения | `QA_TOKEN` = `qa-secret-123`, секрет | Маскирование в предпросмотре и логах |
 | Библиотека промтов | «Ревью изменений» — `plain_prompt`: «Сделай ревью изменений в ветке {{task.code}}: перечисли риски и пропущенные тесты» | Ручной запуск из библиотеки |
 | Библиотека промтов | «Статус репозитория» — `slash_command`: `/status` | Слэш-команда из библиотеки |
+| Пайплайны | «QA: фича с тестами» (раздел 2) | Кейсы P0 и P1 |
 
 ### 1.4 Наблюдение во время прогона
 
@@ -142,7 +165,8 @@ WHERE tn.task_id = '<task_id>' ORDER BY tn.order_index;
 
 ## 2. Эталонный пайплайн «QA: фича с тестами»
 
-Создаётся в «Пайплайны» один раз и используется в кейсах P0 и P1. В нём все
+Создаётся `scripts/qa/stand.sh data` (тексты скриптов — `scripts/qa/pipeline/`)
+и используется в кейсах P0 и P1. В нём все
 пять типов нод, и вывод каждой ноды передаётся в следующую.
 
 | # | Название | Тип | Содержимое |
@@ -194,8 +218,8 @@ print(result.stdout + result.stderr)
 sys.exit(result.returncode)
 ```
 
-У ноды «Тесты» поставить `max_retries = 2`, `retry_base_delay_seconds = 5`
-(для кейса E2E-11).
+У ноды «Тесты» `max_retries = 2`, `retry_base_delay_seconds = 5` (для кейса
+E2E-11).
 
 ---
 
@@ -507,6 +531,7 @@ sys.exit(result.returncode)
 | E2E-27. Доступ | Вход с e-mail вне allowlist; обычный пользователь открывает чужую задачу по ссылке | Вход отклонён; чужая задача — 404 |
 | E2E-28. MCP с состоянием | Админка → MCP-серверы: включить `has_stateful_resource` без режима изоляции | Сохранение заблокировано (правило 3 CLAUDE.md) |
 | E2E-29. Статус MR | После E2E-08 принудительно запустить `sync_gitlab_merge_status`; затем `scripts/qa/stand.sh merge feature/RR-QA-1` и запустить ещё раз | Журнал `/_qa/requests` — запрос к `/api/v4/projects/.../merge_requests` с токеном (`authorized: true`); до слияния `task_repositories.merge_status` = `pushed`, после — `merged` (`task_repository_merge_status_synced`) |
+| E2E-30. Web Push | Уведомления разрешены (раздел 1.1, шаги 3 и 6). Закрыть вкладку трекера, браузер оставить открытым; пройти задачу до «Ревью плана» и до «Готово» (или уронить ноду, как в E2E-11) | Системные уведомления «Задача ожидает решения», «Задача выполнена» / «Задача завершилась с ошибкой» приходят при закрытой вкладке; клик открывает задачу. В `push_subscriptions` есть подписка администратора; в логах worker и session-worker нет `push_send_failed` |
 
 ---
 

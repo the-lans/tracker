@@ -229,12 +229,15 @@ scripts/
   smoke_frontend_image.sh — собирает продовый образ фронтенда и проверяет
                 SPA-фолбэк nginx (запускается в CI после make check)
   qa/          — стенд ручного E2E-тестирования (docs/qa_e2e_manual.md):
-                stand.sh (.env трекера из qa.env, seed, git-хост qa-git
-                по SSH и мок qa-mocks в сети compose; env/seed/up/merge/
-                export/down), qa.env.example — шаблон настроек и секретов
-                стенда (копия qa.env — в .gitignore), mock_providers.py — мок
-                Jira и GitLab API, git-server/ — образ git-хоста,
-                seed/qa-calc — тестовый репозиторий
+                stand.sh (.env и frontend/.env из qa.env с VAPID-ключами,
+                compose-проект tracker-qa, git-хост qa-git по SSH и мок
+                qa-mocks в его сети, справочники, сертификат Caddy;
+                env/seed/up/data/trust/merge/export/down), qa.env.example —
+                шаблон настроек и секретов стенда (копия qa.env — в
+                .gitignore), seed_qa_data.py — справочники и эталонный
+                пайплайн, pipeline/ — скрипты его script-нод,
+                mock_providers.py — мок Jira и GitLab API, git-server/ —
+                образ git-хоста, seed/qa-calc — тестовый репозиторий
 docs/        — техническая документация: ТЗ, implementation_plan.md (план
               реализации по этапам), migration.md (раздел 20.4 — процедура
               переноса на новый сервер), qa_e2e_manual.md (ручное E2E-
