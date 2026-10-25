@@ -111,7 +111,7 @@ async def delete_repository(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     _current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    """Правило 9 CLAUDE.md/раздел 3.2: репозиторий, привязанный к активной
+    """Правило 9 CLAUDE.md/раздел 3.2: репозиторий, привязанный к любой
     задаче, удалить нельзя (см. `services/integrity.py`).
 
     Даже когда guard пропускает (все связанные задачи — в терминальном
