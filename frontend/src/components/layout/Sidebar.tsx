@@ -17,6 +17,7 @@ import { UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { USER_ROLE_LABEL } from "@/lib/labels";
 import { UserAvatar } from "@/components/common/avatar/UserAvatar";
+import { CountBadge } from "@/components/common/feedback/CountBadge";
 
 interface NavItemDef {
   to: string;
@@ -43,11 +44,7 @@ function NavItem({ to, label, icon: Icon, badge }: NavItemDef) {
           )}
           <Icon className="size-[18px] shrink-0" />
           <span className="truncate">{label}</span>
-          {Boolean(badge) && (
-            <span className="ml-auto rounded-full bg-danger px-[7px] py-px text-caption font-bold text-on-danger">
-              {badge}
-            </span>
-          )}
+          <CountBadge count={badge} className="ml-auto" />
         </>
       )}
     </NavLink>
