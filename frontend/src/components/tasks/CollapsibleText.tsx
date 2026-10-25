@@ -12,17 +12,23 @@ export function CollapsibleText({
   filename,
   className,
   monospace,
+  live = false,
   renderText,
 }: {
   text: string;
   filename?: string;
   className?: string;
   monospace?: boolean;
+  /** Текст ещё генерируется — показывается целиком, по мере поступления (раздел 15.2). */
+  live?: boolean;
   /** Своё оформление видимой части текста (например, раскраска вывода скрипта). */
   renderText?: (text: string) => ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(text.length <= PREVIEW_LENGTH);
+  // `null` — пользователь не разворачивал: текст, выросший после показа
+  // (например, вывод скрипта вместо «(пусто)»), тоже остаётся свёрнутым.
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
   const isTruncatable = text.length > PREVIEW_LENGTH;
+  const expanded = !isTruncatable || (userExpanded ?? live);
   const shown = expanded ? text : `${text.slice(0, PREVIEW_LENGTH)}…`;
 
   return (
@@ -40,7 +46,7 @@ export function CollapsibleText({
         {isTruncatable && (
           <button
             type="button"
-            onClick={() => setExpanded((prev) => !prev)}
+            onClick={() => setUserExpanded(!expanded)}
             className="touch-hit whitespace-nowrap text-meta font-bold text-accent"
           >
             {expanded ? "Свернуть" : "Показать полностью →"}

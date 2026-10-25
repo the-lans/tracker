@@ -8,9 +8,8 @@ import { useSubmitDecision } from "@/hooks/useTasks";
 import { errorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import type { NodeLog } from "@/lib/types";
+import { CUSTOM_ANSWER_OPTION } from "@/lib/userInput";
 
-/** Ответ на вопрос агента своим текстом (`CUSTOM_ANSWER_OPTION` на бэкенде). */
-const CUSTOM_ANSWER_OPTION = "custom";
 
 /**
  * Универсальный виджет выбора (раздел 9.6 ТЗ) — единый механизм для

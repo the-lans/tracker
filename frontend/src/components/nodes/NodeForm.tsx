@@ -125,9 +125,9 @@ export function NodeForm({
         />
       </div>
       <div>
-        <Label>Тип ноды</Label>
+        <Label htmlFor="node-type">Тип ноды</Label>
         <Select value={nodeType} onValueChange={(v) => setNodeType(v as NodeType)}>
-          <SelectTrigger>
+          <SelectTrigger id="node-type">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

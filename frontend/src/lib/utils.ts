@@ -73,6 +73,7 @@ const INTERVAL_UNITS: Array<{ seconds: number; single: string; forms: [string, s
   { seconds: 86400, single: "каждый день", forms: ["день", "дня", "дней"] },
   { seconds: 3600, single: "каждый час", forms: ["час", "часа", "часов"] },
   { seconds: 60, single: "каждую минуту", forms: ["минуту", "минуты", "минут"] },
+  { seconds: 1, single: "каждую секунду", forms: ["секунду", "секунды", "секунд"] },
 ];
 
 /** Интервал периодической задачи словами: 300 → «каждые 5 минут», 604800 → «каждую неделю». */
@@ -83,7 +84,7 @@ export function formatInterval(seconds: number): string {
     if (count === 1) return unit.single;
     return `${plural(count, ["каждую", "каждые", "каждые"])} ${count} ${plural(count, unit.forms)}`;
   }
-  return `каждые ${seconds} ${plural(seconds, ["секунду", "секунды", "секунд"])}`;
+  return `каждые ${seconds} с`;
 }
 
 const FILE_SIZE_UNITS = ["Б", "КБ", "МБ", "ГБ"] as const;
@@ -93,10 +94,16 @@ const FILE_SIZE_STEP = 1024;
 export function formatFileSize(bytes: number): string {
   let value = bytes;
   let unit = 0;
-  while (value >= FILE_SIZE_STEP && unit < FILE_SIZE_UNITS.length - 1) {
+  const digitsOf = (current: number, currentUnit: number) => (currentUnit === 0 || current >= 10 ? 0 : 1);
+  const rounded = (current: number, currentUnit: number) => {
+    const factor = 10 ** digitsOf(current, currentUnit);
+    return Math.round(current * factor) / factor;
+  };
+  // Сравнивается округлённое значение: 1023,9 КБ показывается как «1 МБ», а не «1024 КБ».
+  while (rounded(value, unit) >= FILE_SIZE_STEP && unit < FILE_SIZE_UNITS.length - 1) {
     value /= FILE_SIZE_STEP;
     unit += 1;
   }
-  const digits = unit === 0 || value >= 10 ? 0 : 1;
+  const digits = digitsOf(value, unit);
   return `${value.toLocaleString("ru-RU", { maximumFractionDigits: digits })} ${FILE_SIZE_UNITS[unit]}`;
 }

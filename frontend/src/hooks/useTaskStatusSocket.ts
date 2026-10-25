@@ -21,6 +21,8 @@ function applyEvent(queryClient: QueryClient, taskId: string, payload: TaskSocke
     prev ? { ...prev, status: payload.status } : prev,
   );
   void queryClient.invalidateQueries({ queryKey: ["tasks", "list"] });
+  // Раздел 18.3: счётчик «ждут решения» меняется вместе со статусом, не дожидаясь опроса.
+  void queryClient.invalidateQueries({ queryKey: ["tasks", "awaiting-count"] });
   void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "node-logs"] });
   // Раздел 14.3: файлы, сохранённые агентом или скриптом, появляются без перезагрузки.
   void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "artifacts"] });

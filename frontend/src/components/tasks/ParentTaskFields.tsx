@@ -26,9 +26,9 @@ export function ParentTaskFields({
   return (
     <div className="flex flex-col gap-2">
       <div>
-        <Label>Родительская задача</Label>
+        <Label htmlFor="task-parent">Родительская задача</Label>
         <Select value={parentTaskId || NO_PARENT} onValueChange={selectParent}>
-          <SelectTrigger>
+          <SelectTrigger id="task-parent">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

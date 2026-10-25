@@ -35,14 +35,18 @@ export function TaskEnvVariableRow({
     });
   }
 
+  function stopEditing() {
+    setEditing(false);
+    setDraft("");
+  }
+
   function handleSave() {
     update.mutate(
       { variableId: variable.id, value: draft },
       {
         onSuccess: () => {
-          setEditing(false);
+          stopEditing();
           setRevealed(null);
-          setDraft("");
         },
         onError: toastError("Не удалось сохранить значение"),
       },
@@ -88,7 +92,7 @@ export function TaskEnvVariableRow({
           <Button size="sm" onClick={handleSave} disabled={update.isPending}>
             Сохранить
           </Button>
-          <Button size="sm" variant="secondary" onClick={() => setEditing(false)}>
+          <Button size="sm" variant="secondary" onClick={stopEditing}>
             Отмена
           </Button>
         </div>

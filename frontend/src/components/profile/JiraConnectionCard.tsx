@@ -78,6 +78,7 @@ function JiraConnectionForm({ profile, serverUrl }: { profile: User; serverUrl: 
             onConfirm={() =>
               disconnect.mutate(undefined, {
                 onSuccess: () => setEmail(""),
+                onError: toastError("Не удалось отключить Jira"),
               })
             }
           />
