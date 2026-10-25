@@ -40,17 +40,13 @@ backend-lint: $(BACKEND_VENV_MARKER)
 backend-typecheck: $(BACKEND_VENV_MARKER)
 	cd $(BACKEND_DIR) && .venv/bin/mypy . ../alembic/env.py ../scripts
 
-# pytest возвращает код 5, если не собрано ни одного теста — это ожидаемо,
-# пока backend/tests/ пуст (раздел с тестами появится вместе с прикладным
-# кодом), и не должно считаться ошибкой `make check`.
+# Раздел 21.3 ТЗ: покрытие бизнес-логики (services/) — не ниже 85%,
+# ниже — `make check` падает.
+SERVICES_COVERAGE_MIN = 85
+
 backend-test: $(BACKEND_VENV_MARKER)
-	@cd $(BACKEND_DIR) && .venv/bin/pytest; code=$$?; \
-	if [ $$code -eq 5 ]; then \
-		echo "pytest: тестов пока нет (exit 5) — не считается ошибкой"; \
-		exit 0; \
-	else \
-		exit $$code; \
-	fi
+	cd $(BACKEND_DIR) && .venv/bin/pytest --cov=services --cov-report= \
+		--cov-fail-under=$(SERVICES_COVERAGE_MIN)
 
 # --- frontend ---
 
