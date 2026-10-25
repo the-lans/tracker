@@ -86,7 +86,9 @@ async def get_task_record_or_404[TaskScopedT: _TaskScoped](
     task_id: uuid.UUID,
     not_found: str,
 ) -> TaskScopedT:
-    """Запись, принадлежащая задаче: запись другой задачи неотличима от отсутствующей."""
+    """
+    Запись, принадлежащая задаче: запись другой задачи неотличима от отсутствующей.
+    """
     record = await db_session.get(model, record_id)
     if record is None or record.task_id != task_id:
         raise NotFoundError(not_found)

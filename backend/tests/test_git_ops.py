@@ -59,7 +59,9 @@ def _make_task_repository(
 
 
 async def _clone_read_write(tmp_path: Path) -> tuple[Path, Repository, TaskRepository, Path]:
-    """Origin, репозиторий, его привязка к задаче (read-write) и клон рабочей ветки."""
+    """
+    Origin, репозиторий, его привязка к задаче (read-write) и клон рабочей ветки.
+    """
     origin = init_bare_origin(tmp_path)
     repository = _make_repository(git_url=str(origin))
     task_repository = _make_task_repository(role=RepositoryRole.READ_WRITE)

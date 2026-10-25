@@ -240,7 +240,9 @@ async def _remote_branch_exists(branch_name: str, *, repo_dir: Path, env: dict[s
 
 
 async def _checkout_work_branch(branch_name: str, *, repo_dir: Path, env: dict[str, str]) -> None:
-    """Рабочая ветка из origin, если она уже запушена, иначе — новая от базовой."""
+    """
+    Рабочая ветка из origin, если она уже запушена, иначе — новая от базовой.
+    """
     if await _remote_branch_exists(branch_name, repo_dir=repo_dir, env=env):
         await _run_git("fetch", "origin", f"{branch_name}:{branch_name}", cwd=repo_dir, env=env)
         await _run_git("checkout", branch_name, cwd=repo_dir, env=env)

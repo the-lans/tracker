@@ -175,8 +175,8 @@ async def run_pipeline_node_with_retry(
             logger.info("node_stopped_by_user", node_id=str(node.id), attempt=attempt)
             return NodeRunOutcome(node_log=node_log, success=False, stopped=True)
         final = await _final_attempt_outcome(
-            node_log,
-            outcome,
+            node_log=node_log,
+            outcome=outcome,
             node=node,
             attempt=attempt,
             stop_guard=stop_guard,
@@ -262,9 +262,9 @@ async def _run_pipeline_attempt(
 
 
 async def _final_attempt_outcome(
+    *,
     node_log: NodeLog,
     outcome: NodeExecutionOutcome,
-    *,
     node: Node,
     attempt: int,
     stop_guard: StopGuard | None,
@@ -392,7 +392,9 @@ async def _clear_session_context(
     node: Node,
     claude_session: ClaudeCodeSession,
 ) -> None:
-    """Нода `clear_context` (раздел 11.5): сессия обрывается, новая начнётся с чистого листа."""
+    """
+    Нода `clear_context` (раздел 11.5): сессия обрывается, новая начнётся с чистого листа.
+    """
     await ensure_clear_context_allowed(db_session, task.id)
     await claude_session.disconnect()
     task.session_id = None

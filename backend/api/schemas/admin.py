@@ -50,7 +50,9 @@ class UserResponse(BaseModel):
 
 
 class JiraConnectionUpdateRequest(BaseModel):
-    """Раздел 15.6: ``jira_token`` — `None` оставить сохранённый, пустая строка — удалить."""
+    """
+    Раздел 15.6: ``jira_token`` — `None` оставить сохранённый, пустая строка — удалить.
+    """
 
     jira_email: str | None = None
     jira_token: str | None = None

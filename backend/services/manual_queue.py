@@ -130,7 +130,9 @@ def _add_queued_request(
     node_id: uuid.UUID | None = None,
     raw_prompt_text: str | None = None,
 ) -> TaskManualRequestQueue:
-    """Новый запрос в конце FIFO-очереди задачи (правило 1); коммитит вызывающий."""
+    """
+    Новый запрос в конце FIFO-очереди задачи (правило 1); коммитит вызывающий.
+    """
     request = TaskManualRequestQueue(
         task_id=task_id,
         request_type=request_type,

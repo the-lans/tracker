@@ -53,7 +53,9 @@ async def load_task_node_rows(
     db_session: AsyncSession,
     task_id: uuid.UUID,
 ) -> list[tuple[TaskNode, Node]]:
-    """Снимок нод задачи (`task_nodes`) вместе с нодами, в порядке выполнения."""
+    """
+    Снимок нод задачи (`task_nodes`) вместе с нодами, в порядке выполнения.
+    """
     stmt = (
         sa.select(TaskNode, Node)
         .join(Node, Node.id == TaskNode.node_id)

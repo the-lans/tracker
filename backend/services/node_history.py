@@ -34,7 +34,9 @@ async def filter_node_logs(
     status: NodeLogStatus | None = None,
     trigger_type: NodeLogTriggerType | None = None,
 ) -> list[NodeLog]:
-    """Записи ``node_logs`` задачи по фильтрам ноды, статуса и источника (``None`` — любой)."""
+    """
+    Записи ``node_logs`` задачи по фильтрам ноды, статуса и источника (``None`` — любой).
+    """
     stmt = _history_stmt(task_id)
     filters = {NodeLog.node_id: node_id, NodeLog.status: status, NodeLog.trigger_type: trigger_type}
     for column, value in filters.items():

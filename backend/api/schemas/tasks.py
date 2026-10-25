@@ -220,7 +220,9 @@ class TaskNodeUpdateRequest(BaseModel):
 
 
 class ArtifactResponse(BaseModel):
-    """Раздел 14.3, 15.2: файл артефактов задачи; `path` — относительно её каталога."""
+    """
+    Раздел 14.3, 15.2: файл артефактов задачи; `path` — относительно её каталога.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 

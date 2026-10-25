@@ -135,7 +135,9 @@ async def run_script_node(
 
 
 def _write_script(repos_path: Path, script_content: str, script_language: ScriptLanguage) -> Path:
-    """Текст скрипта — файлом в смонтированном каталоге (не шаблонизируется, правило 4)."""
+    """
+    Текст скрипта — файлом в смонтированном каталоге (не шаблонизируется, правило 4).
+    """
     scripts_dir = repos_path / _SCRIPT_SUBDIR
     scripts_dir.mkdir(parents=True, exist_ok=True)
     script_path = scripts_dir / f"{uuid.uuid4()}.{_SCRIPT_SUFFIXES[script_language]}"
@@ -153,7 +155,9 @@ def _docker_run_args(
     task_mounts: list[str],
     env: Mapping[str, str],
 ) -> list[str]:
-    """Правило 4: без сети и привилегий, с лимитами и меткой дедлайна для уборки."""
+    """
+    Правило 4: без сети и привилегий, с лимитами и меткой дедлайна для уборки.
+    """
     return [
         "docker",
         "run",

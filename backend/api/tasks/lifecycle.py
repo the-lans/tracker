@@ -113,7 +113,9 @@ async def reset_task(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
-    """Раздел 14.2 «Вернуть в новые»: из `failed`/`done` — чтобы сменить пайплайн."""
+    """
+    Раздел 14.2 «Вернуть в новые»: из `failed`/`done` — чтобы сменить пайплайн.
+    """
     await get_task_or_404(db_session, task_id, current_user)
     updated = await reset_task_to_new(db_session, task_id=task_id)
     await db_session.refresh(updated)
@@ -142,7 +144,9 @@ async def clear_context(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
-    """Раздел 14.2: «очистить контекст» в `failed` — перезапуск начнёт новую сессию."""
+    """
+    Раздел 14.2: «очистить контекст» в `failed` — перезапуск начнёт новую сессию.
+    """
     task = await get_task_or_404(db_session, task_id, current_user)
     await clear_task_session_context(db_session, task=task)
     await db_session.refresh(task)

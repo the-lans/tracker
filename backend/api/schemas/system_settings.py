@@ -22,7 +22,9 @@ class SystemSettingsBody(BaseModel):
 
 
 class IntegrationsResponse(BaseModel):
-    """Раздел 15.5: токен GitLab не возвращается — только признак, что он сохранён."""
+    """
+    Раздел 15.5: токен GitLab не возвращается — только признак, что он сохранён.
+    """
 
     gitlab_url: str | None
     gitlab_token_set: bool

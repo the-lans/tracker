@@ -198,7 +198,9 @@ class ActiveNodeContext:
 
 
 async def _get_node_log(db_session: AsyncSession, node_log_id: uuid.UUID) -> NodeLog:
-    """Запись активной ноды: её отсутствие — ошибка реализации, а не сценарий."""
+    """
+    Запись активной ноды: её отсутствие — ошибка реализации, а не сценарий.
+    """
     node_log = await db_session.get(NodeLog, node_log_id)
     if node_log is None:
         message = f"node_log {node_log_id} не найден"

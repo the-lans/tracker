@@ -65,8 +65,8 @@ async def _make_task(db_session: AsyncSession) -> Task:
 
 async def _attach_repository(
     db_session: AsyncSession,
-    task: Task,
     *,
+    task: Task,
     origin: Path,
     name: str,
     role: RepositoryRole,
@@ -108,7 +108,7 @@ async def test_prepare_clones_repositories_on_task_branch(
     origin = _init_bare_origin(tmp_path, "backend")
     await _attach_repository(
         db_session,
-        task,
+        task=task,
         origin=origin,
         name="backend",
         role=RepositoryRole.READ_WRITE,
@@ -136,7 +136,7 @@ async def test_prepare_writes_template_files_to_task_root_not_into_repository(
     )
     await _attach_repository(
         db_session,
-        task,
+        task=task,
         origin=_init_bare_origin(tmp_path, "backend"),
         name="backend",
         role=RepositoryRole.READ_WRITE,
@@ -159,7 +159,7 @@ async def test_prepare_is_idempotent_and_keeps_agent_changes(
     template = await _make_template(db_session, {"CLAUDE.md": "из шаблона\n"})
     await _attach_repository(
         db_session,
-        task,
+        task=task,
         origin=_init_bare_origin(tmp_path, "backend"),
         name="backend",
         role=RepositoryRole.READ_WRITE,
@@ -196,14 +196,14 @@ async def test_push_pushes_read_write_repositories_and_marks_them_pushed(
     ro_origin = _init_bare_origin(tmp_path, "docs")
     rw = await _attach_repository(
         db_session,
-        task,
+        task=task,
         origin=rw_origin,
         name="backend",
         role=RepositoryRole.READ_WRITE,
     )
     ro = await _attach_repository(
         db_session,
-        task,
+        task=task,
         origin=ro_origin,
         name="docs",
         role=RepositoryRole.READ_ONLY,
@@ -257,7 +257,7 @@ class TestCleanupAndReclone:
         origin = _init_bare_origin(tmp_path, "backend")
         await _attach_repository(
             db_session,
-            task,
+            task=task,
             origin=origin,
             name="backend",
             role=RepositoryRole.READ_WRITE,
