@@ -1,4 +1,4 @@
-/** `null` — пользователь не менял: для новой ноды значение возьмёт backend из «Системных настроек». */
+/** `null` — поле пустое: backend возьмёт значение из «Системных настроек» и у новой ноды, и при правке. */
 export interface NodeExecutionValues {
   timeoutSeconds: number | null;
   maxRetries: number | null;

@@ -205,7 +205,7 @@ Backend и frontend — раздельные кодовые базы, взаим
 | `script_language` | enum (`python`, `bash`), nullable | Язык скрипта (для `script`) |
 | `script_content` | text, nullable | Текст скрипта |
 | `docker_image` | string, nullable | Переопределение Docker-образа раннера |
-| `timeout_seconds` | integer | Таймаут выполнения, по умолчанию 600, от 1 секунды до 24 часов (как в «Системных настройках»); применяется одинаково и к нодам пайплайна, и к запускам из библиотеки |
+| `timeout_seconds` | integer | Таймаут выполнения, по умолчанию 600, от 1 секунды до 24 часов (как в «Системных настройках»); применяется одинаково и к нодам пайплайна, и к запускам из библиотеки. Для `timeout_seconds`, `max_retries` и `retry_base_delay_seconds` пустое значение при создании и правке ноды означает текущее значение из «Системных настроек» (раздел 15.5) |
 | `max_retries` | integer | Максимум попыток, по умолчанию 3, от 1 до 10; **не применяется** к запускам из библиотеки |
 | `retry_base_delay_seconds` | integer | Базовая задержка retry, по умолчанию 5, от 0 до 3600 секунд |
 | `guide_url` | string, nullable | URL гайда Confluence для конкретной ноды |
@@ -372,8 +372,8 @@ Backend и frontend — раздельные кодовые базы, взаим
 | `auth_config_encrypted` | text | Данные авторизации |
 | `is_healthy` | boolean | Статус доступности (обновляется периодической задачей) |
 | `has_stateful_resource` | boolean | `true` — сервер управляет ресурсом, не допускающим одновременного использования несколькими процессами (браузерный профиль, файловая блокировка и аналогичное); требует обязательной настройки изоляции |
-| `isolation_mode` | enum (`none`, `isolated_flag`, `per_task_data_dir`), nullable | Способ изоляции при `has_stateful_resource = true`; обязателен к заполнению в этом случае |
-| `isolation_path_template` | string, nullable | Шаблон пути для режима `per_task_data_dir`, например `{{task.repos_path}}/.mcp-profiles/{{mcp_server.name}}`; рендерится тем же шаблонизатором, что описан в разделе 5, при подготовке конфигурации MCP для конкретной задачи |
+| `isolation_mode` | enum (`none`, `isolated_flag`, `per_task_data_dir`), nullable | Способ изоляции при `has_stateful_resource = true`; обязателен к заполнению в этом случае, у сервера без состояния не хранится (сбрасывается при сохранении) |
+| `isolation_path_template` | string, nullable | Шаблон пути только для режима `per_task_data_dir` (в других режимах сбрасывается при сохранении), например `{{task.repos_path}}/.mcp-profiles/{{mcp_server.name}}`; рендерится тем же шаблонизатором, что описан в разделе 5, при подготовке конфигурации MCP для конкретной задачи |
 
 #### Таблица `system_settings` («Системные настройки», раздел 15.5)
 

@@ -34,6 +34,23 @@ def validate_mcp_server_isolation(
         validate_isolation_path_template(isolation_path_template)
 
 
+def normalize_mcp_server_isolation(
+    *,
+    has_stateful_resource: bool,
+    isolation_mode: McpIsolationMode | None,
+    isolation_path_template: str | None,
+) -> tuple[McpIsolationMode | None, str | None]:
+    """
+    Раздел 3.1: режим изоляции хранится только у сервера с состоянием, шаблон
+    пути — только у режима `per_task_data_dir`; прежние значения сбрасываются.
+    """
+    if not has_stateful_resource:
+        return None, None
+    if isolation_mode is not McpIsolationMode.PER_TASK_DATA_DIR:
+        return isolation_mode, None
+    return isolation_mode, isolation_path_template
+
+
 def validate_isolation_path_template(isolation_path_template: str | None) -> None:
     """Раздел 10.5: путь обязан ссылаться на `{{task.repos_path}}`.
 

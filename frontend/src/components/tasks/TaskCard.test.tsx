@@ -10,7 +10,7 @@ function renderCard(task: Partial<Task>, currentUser = makeCurrentUser()) {
   return renderWithProviders(<TaskCard task={makeTask(task)} />, { currentUser });
 }
 
-const startButton = () => screen.queryByRole("button", { name: "Запустить задачу" });
+const START = { name: "Запустить задачу" };
 
 describe("TaskCard", () => {
   test("код и название ведут на страницу задачи", () => {
@@ -49,20 +49,20 @@ describe("TaskCard", () => {
       (status) => {
         renderCard({ status });
 
-        expect(startButton()).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", START)).not.toBeInTheDocument();
       },
     );
 
     test("без пайплайна запускать нечего", () => {
       renderCard({ status: TaskStatus.NEW, pipeline_id: null });
 
-      expect(startButton()).toBeDisabled();
+      expect(screen.getByRole("button", START)).toBeDisabled();
     });
 
     test("запуск отправляет start", async ({ api }) => {
       const { user } = renderCard({ status: TaskStatus.NEW });
 
-      await user.click(startButton()!);
+      await user.click(screen.getByRole("button", START));
 
       expect(api.mutations()).toEqual([{ method: "POST", path: "/tasks/t1/start", body: undefined }]);
     });
@@ -73,7 +73,7 @@ describe("TaskCard", () => {
       });
       const { user } = renderCard({ status: TaskStatus.NEW });
 
-      await user.click(startButton()!);
+      await user.click(screen.getByRole("button", START));
 
       await expect.poll(() => toasts.error.mock.calls).toEqual([
         ["У задачи нет LLM-аккаунта — доступны только скрипты"],

@@ -7,7 +7,7 @@ import { renderWithProviders } from "@/test/renderWithProviders";
 const PREVIEW_LENGTH = 320;
 const longText = `${"а".repeat(PREVIEW_LENGTH)}ХВОСТ`;
 
-const expandButton = () => screen.queryByRole("button", { name: "Показать полностью →" });
+const EXPAND = { name: "Показать полностью →" };
 
 describe("CollapsibleText", () => {
   test.for([
@@ -16,14 +16,14 @@ describe("CollapsibleText", () => {
   ])("текст длиной $length сворачивается: $collapsible", ({ length, collapsible }) => {
     renderWithProviders(<CollapsibleText text={"б".repeat(length)} />);
 
-    expect(expandButton() !== null).toBe(collapsible);
+    expect(screen.queryByRole("button", EXPAND) !== null).toBe(collapsible);
   });
 
   test("длинный текст свёрнут, разворачивается и сворачивается обратно", async () => {
     const { user } = renderWithProviders(<CollapsibleText text={longText} />);
 
     expect(screen.queryByText(/ХВОСТ/)).not.toBeInTheDocument();
-    await user.click(expandButton()!);
+    await user.click(screen.getByRole("button", EXPAND));
     expect(screen.getByText(/ХВОСТ/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Свернуть" }));
     expect(screen.queryByText(/ХВОСТ/)).not.toBeInTheDocument();
@@ -34,7 +34,7 @@ describe("CollapsibleText", () => {
 
     rerender(<CollapsibleText text={longText} />);
 
-    expect(expandButton()).toBeInTheDocument();
+    expect(screen.getByRole("button", EXPAND)).toBeInTheDocument();
     expect(screen.queryByText(/ХВОСТ/)).not.toBeInTheDocument();
   });
 

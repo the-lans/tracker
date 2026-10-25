@@ -20,8 +20,8 @@ export interface OutputLine {
 const ERROR_LINE =
   /\b(traceback|errors?|exception|failed|failures?|fatal|panic)\b|^\s*(E\s|!\s)|\b\w+Error\b/i;
 const WARNING_LINE = /\b(warn|warnings?|deprecated)\b|\b\w+Warning\b/i;
-// Итоги вида «5 passed, 0 failed» или «Found 0 errors» — не ошибка.
-const ZERO_COUNT = /\b0\s+(errors?|failed|failures?|warnings?)\b/gi;
+// Итоги вида «5 passed, 0 failed», «Found 0 errors» или «No errors found» — не ошибка.
+const ZERO_COUNT = /\b(0|no)\s+(errors?|failed|failures?|warnings?)\b/gi;
 const SUCCESS_LINE = /(\b(ok|passed|success|succeeded|done)\b|✓|✔)/i;
 
 // Путь: есть «/» или имя файла с расширением; строка в кавычках; число.

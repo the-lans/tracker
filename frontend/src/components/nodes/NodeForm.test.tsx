@@ -9,7 +9,10 @@ import { renderWithProviders } from "@/test/renderWithProviders";
 
 type Mode = "pipeline" | "library";
 
-function renderForm(api: MockedApi, { mode = "pipeline" as Mode, node }: { mode?: Mode; node?: NodeItem } = {}) {
+function renderForm(
+  api: MockedApi,
+  { mode = "pipeline" as Mode, node }: { mode?: Mode; node?: NodeItem } = {},
+) {
   api.respond("GET /system-settings", {
     default_timeout_seconds: 600,
     default_max_retries: 3,
@@ -17,7 +20,14 @@ function renderForm(api: MockedApi, { mode = "pipeline" as Mode, node }: { mode?
   });
   const onSaved = vi.fn();
   const view = renderWithProviders(
-    <NodeForm mode={mode} pipelineId={mode === "pipeline" ? "p1" : undefined} orderIndex={2} node={node} onSaved={onSaved} onCancel={() => {}} />,
+    <NodeForm
+      mode={mode}
+      pipelineId={mode === "pipeline" ? "p1" : undefined}
+      orderIndex={2}
+      node={node}
+      onSaved={onSaved}
+      onCancel={() => {}}
+    />,
   );
   return { ...view, onSaved };
 }
@@ -101,6 +111,9 @@ describe("NodeForm", () => {
         script_language: ScriptLanguage.PYTHON,
         script_content: "pytest -q",
         guide_url: null,
+        timeout_seconds: null,
+        max_retries: null,
+        retry_base_delay_seconds: null,
         is_skipped: false,
       });
       await expect.poll(() => onSaved.mock.calls.length).toBe(1);
@@ -121,13 +134,14 @@ describe("NodeForm", () => {
     });
 
     test.for([
-      { mode: "library" as Mode, node: undefined, description: "  ", enabled: false },
-      { mode: "library" as Mode, node: undefined, description: "Ищет уязвимости", enabled: true },
-      { mode: "library" as Mode, node: makeNode({ is_library_item: true }), description: "", enabled: true },
-      { mode: "pipeline" as Mode, node: undefined, description: "", enabled: true },
+      { mode: "library" as Mode, editing: false, description: "  ", enabled: false },
+      { mode: "library" as Mode, editing: false, description: "Ищет уязвимости", enabled: true },
+      { mode: "library" as Mode, editing: true, description: "", enabled: true },
+      { mode: "pipeline" as Mode, editing: false, description: "", enabled: true },
     ])(
-      "$mode, правка: $node.id, описание «$description» → сохранить: $enabled",
-      async ({ mode, node, description, enabled }, { api }) => {
+      "$mode, правка: $editing, описание «$description» → сохранить: $enabled",
+      async ({ mode, editing, description, enabled }, { api }) => {
+        const node = editing ? makeNode({ is_library_item: true }) : undefined;
         const { user } = renderForm(api, { mode, node });
 
         if (!node) await user.type(screen.getByLabelText("Название"), "Ревью");
@@ -172,9 +186,11 @@ describe("NodeForm", () => {
       await user.type(screen.getByLabelText("Название"), "Реализация");
       await user.click(save());
 
-      for (const field of ["timeout_seconds", "max_retries", "retry_base_delay_seconds"]) {
-        expect(savedBody(api)).not.toHaveProperty(field);
-      }
+      expect(savedBody(api)).toMatchObject({
+        timeout_seconds: null,
+        max_retries: null,
+        retry_base_delay_seconds: null,
+      });
     });
 
     test("введённые значения уходят числами", async ({ api }) => {
@@ -204,14 +220,14 @@ describe("NodeForm", () => {
       { label: "Таймаут (сек.)", field: "timeout_seconds" },
       { label: "Максимум попыток (retry)", field: "max_retries" },
       { label: "Базовая задержка retry (сек.)", field: "retry_base_delay_seconds" },
-    ])("очищенное поле «$label» не уходит нулём", async ({ label, field }, { api }) => {
+    ])("очищенное поле «$label» просит значение по умолчанию", async ({ label, field }, { api }) => {
       const { user } = renderForm(api, { node: makeNode() });
 
       await user.clear(screen.getByLabelText(label));
       await user.click(save());
 
       expect(screen.getByLabelText(label)).toHaveValue(null);
-      expect(savedBody(api)).not.toHaveProperty(field);
+      expect(savedBody(api)).toHaveProperty(field, null);
     });
   });
 });

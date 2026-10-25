@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 import type { NodeLog } from "@/lib/types";
 import { CUSTOM_ANSWER_OPTION } from "@/lib/userInput";
 
-
 /**
  * Универсальный виджет выбора (раздел 9.6 ТЗ) — единый механизм для
  * `plan_review`, вопросов агента и подтверждения действий («Разрешить» /

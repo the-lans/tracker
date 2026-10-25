@@ -89,6 +89,50 @@ async def test_update_to_stateful_without_isolation_mode_is_rejected(
     assert response.status_code == 422
 
 
+class TestIsolationCleanup:
+    """Раздел 3.1: при правке прежние режим и шаблон пути сбрасываются."""
+
+    @pytest.mark.parametrize(
+        ("patch", "expected"),
+        [
+            (
+                {
+                    "isolation_mode": McpIsolationMode.ISOLATED_FLAG.value,
+                    "isolation_path_template": None,
+                },
+                (McpIsolationMode.ISOLATED_FLAG.value, None),
+            ),
+            (
+                {
+                    "has_stateful_resource": False,
+                    "isolation_mode": None,
+                    "isolation_path_template": None,
+                },
+                (None, None),
+            ),
+        ],
+        ids=["isolated_flag", "stateless"],
+    )
+    async def test_stale_values_cleared(
+        self,
+        admin_client: AsyncClient,
+        patch: dict[str, Any],
+        expected: tuple[str | None, str | None],
+    ) -> None:
+        body = await _create(
+            admin_client,
+            name="playwright",
+            has_stateful_resource=True,
+            isolation_mode=McpIsolationMode.PER_TASK_DATA_DIR.value,
+            isolation_path_template="{{task.repos_path}}/.mcp-profiles/playwright",
+        )
+
+        await admin_client.patch(f"/mcp-servers/{body['id']}", json=patch)
+        stored = (await admin_client.get(f"/mcp-servers/{body['id']}")).json()
+
+        assert (stored["isolation_mode"], stored["isolation_path_template"]) == expected
+
+
 class TestUserAccess:
     """Раздел 10.5, 19.2: `user` выбирает серверы для своего шаблона, но не меняет их."""
 

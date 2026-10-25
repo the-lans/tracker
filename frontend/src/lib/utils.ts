@@ -89,21 +89,27 @@ export function formatInterval(seconds: number): string {
 
 const FILE_SIZE_UNITS = ["Б", "КБ", "МБ", "ГБ"] as const;
 const FILE_SIZE_STEP = 1024;
+/** Ниже этого значения размер показывается с одной цифрой после запятой: «3,4 МБ». */
+const FILE_SIZE_FRACTION_BELOW = 10;
+
+function fileSizeDigits(value: number, unit: number): number {
+  return unit === 0 || value >= FILE_SIZE_FRACTION_BELOW ? 0 : 1;
+}
+
+function roundFileSize(value: number, unit: number): number {
+  const factor = 10 ** fileSizeDigits(value, unit);
+  return Math.round(value * factor) / factor;
+}
 
 /** Размер файла для списка артефактов (раздел 15.2): «12 КБ», «3,4 МБ». */
 export function formatFileSize(bytes: number): string {
   let value = bytes;
   let unit = 0;
-  const digitsOf = (current: number, currentUnit: number) => (currentUnit === 0 || current >= 10 ? 0 : 1);
-  const rounded = (current: number, currentUnit: number) => {
-    const factor = 10 ** digitsOf(current, currentUnit);
-    return Math.round(current * factor) / factor;
-  };
   // Сравнивается округлённое значение: 1023,9 КБ показывается как «1 МБ», а не «1024 КБ».
-  while (rounded(value, unit) >= FILE_SIZE_STEP && unit < FILE_SIZE_UNITS.length - 1) {
+  while (roundFileSize(value, unit) >= FILE_SIZE_STEP && unit < FILE_SIZE_UNITS.length - 1) {
     value /= FILE_SIZE_STEP;
     unit += 1;
   }
-  const digits = digitsOf(value, unit);
+  const digits = fileSizeDigits(value, unit);
   return `${value.toLocaleString("ru-RU", { maximumFractionDigits: digits })} ${FILE_SIZE_UNITS[unit]}`;
 }
