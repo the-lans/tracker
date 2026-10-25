@@ -11,7 +11,7 @@ FRONTEND_MODULES_MARKER := $(FRONTEND_DIR)/node_modules/.installed
 
 .PHONY: check check-backend check-frontend \
 	backend-lint backend-typecheck backend-test \
-	frontend-lint frontend-typecheck \
+	frontend-lint frontend-typecheck frontend-test \
 	clean
 
 check: check-backend check-frontend
@@ -19,7 +19,7 @@ check: check-backend check-frontend
 
 check-backend: backend-lint backend-typecheck backend-test
 
-check-frontend: frontend-lint frontend-typecheck
+check-frontend: frontend-lint frontend-typecheck frontend-test
 
 # --- backend ---
 
@@ -59,6 +59,9 @@ frontend-lint: $(FRONTEND_MODULES_MARKER)
 
 frontend-typecheck: $(FRONTEND_MODULES_MARKER)
 	cd $(FRONTEND_DIR) && npm run typecheck
+
+frontend-test: $(FRONTEND_MODULES_MARKER)
+	cd $(FRONTEND_DIR) && npm test
 
 # --- прочее ---
 
