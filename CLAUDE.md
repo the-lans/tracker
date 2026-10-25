@@ -228,9 +228,17 @@ scripts/
                 (`updated_by = NULL`), повторный запуск идемпотентен
   smoke_frontend_image.sh — собирает продовый образ фронтенда и проверяет
                 SPA-фолбэк nginx (запускается в CI после make check)
+  qa/          — стенд ручного E2E-тестирования (docs/qa_e2e_manual.md):
+                stand.sh (.env трекера из qa.env, seed, git-хост qa-git
+                по SSH и мок qa-mocks в сети compose; env/seed/up/merge/
+                export/down), qa.env.example — шаблон настроек и секретов
+                стенда (копия qa.env — в .gitignore), mock_providers.py — мок
+                Jira и GitLab API, git-server/ — образ git-хоста,
+                seed/qa-calc — тестовый репозиторий
 docs/        — техническая документация: ТЗ, implementation_plan.md (план
               реализации по этапам), migration.md (раздел 20.4 — процедура
-              переноса на новый сервер), remote_control_findings.md
+              переноса на новый сервер), qa_e2e_manual.md (ручное E2E-
+              тестирование в браузере), remote_control_findings.md
               (верификация допущения раздела 6.3), design/ (HTML-референсы
               дашборда и страницы задачи), screen/ (скриншоты страницы задачи)
 .github/     — workflows/ci.yml (сборка образов раннеров → make check →
