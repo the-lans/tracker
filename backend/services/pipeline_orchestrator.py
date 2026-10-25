@@ -25,6 +25,7 @@ from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, TaskNode
 from services.failure_classification import is_transient_sdk_exception
+from services.node_history import load_node_log_history
 from services.nodes.clear_context import ensure_clear_context_allowed
 from services.nodes.dispatch import (
     NodeExecutionOutcome,
@@ -60,19 +61,6 @@ type SessionRecovery = Callable[[], Awaitable[None]]
 def compute_retry_delay_seconds(attempt_number: int, base_delay_seconds: int) -> float:
     """Экспоненциальный рост от `retry_base_delay_seconds` (раздел 11.7)."""
     return float(base_delay_seconds * (2 ** (attempt_number - 1)))
-
-
-async def _load_node_log_history(db_session: AsyncSession, task_id: uuid.UUID) -> list[NodeLog]:
-    # План и ответы пользователя пишет callback разрешений в своей сессии БД;
-    # без перечитывания здесь остались бы прежние значения (`expire_on_commit`
-    # выключен) и `{{node.plan_text}}`/`{{node.user_input}}` пришли бы пустыми.
-    stmt = (
-        sa.select(NodeLog)
-        .where(NodeLog.task_id == task_id)
-        .order_by(NodeLog.started_at, NodeLog.id)
-        .execution_options(populate_existing=True)
-    )
-    return list((await db_session.execute(stmt)).scalars().all())
 
 
 def _remember_session_id(task: Task, claude_session: ClaudeCodeSession) -> None:
@@ -171,7 +159,7 @@ async def run_pipeline_node_with_retry(
     """
     attempt = 1
     while True:
-        history = await _load_node_log_history(db_session, task.id)
+        history = await load_node_log_history(db_session, task.id)
         prompt = await resolve_node_prompt_or_none(
             db_session,
             node=node,

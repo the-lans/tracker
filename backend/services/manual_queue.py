@@ -40,6 +40,7 @@ from db.models.tasks import Task
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_library_prompt_attachable
+from services.node_history import load_node_log_history
 from services.nodes.dispatch import (
     execute_llm_node_with_timeout,
     execute_node,
@@ -247,19 +248,6 @@ async def cancel_manual_request(
     await db_session.commit()
 
 
-async def _load_node_log_history(db_session: AsyncSession, task_id: uuid.UUID) -> list[NodeLog]:
-    # План и ответы пользователя пишет callback разрешений в своей сессии БД;
-    # без перечитывания здесь остались бы прежние значения (`expire_on_commit`
-    # выключен) и `{{node.plan_text}}`/`{{node.user_input}}` пришли бы пустыми.
-    stmt = (
-        sa.select(NodeLog)
-        .where(NodeLog.task_id == task_id)
-        .order_by(NodeLog.started_at, NodeLog.id)
-        .execution_options(populate_existing=True)
-    )
-    return list((await db_session.execute(stmt)).scalars().all())
-
-
 def _activate_context(
     active_node_context: ActiveNodeContext | None,
     *,
@@ -313,7 +301,7 @@ async def _run_library_prompt(
     if task_library_prompt is not None:
         task_library_prompt.last_run_status = LibraryPromptRunStatus.RUNNING
 
-    history = await _load_node_log_history(db_session, task.id)
+    history = await load_node_log_history(db_session, task.id)
     prompt = await resolve_node_prompt_or_none(db_session, node=node, task=task, history=history)
     node_log = NodeLog(
         task_id=task.id,

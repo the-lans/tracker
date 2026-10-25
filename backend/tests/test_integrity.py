@@ -15,7 +15,7 @@ from db.models.enums import (
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
-from db.models.repositories import Repository
+from db.models.repositories import Repository, Template
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
 from services.errors import ConflictError
@@ -23,6 +23,7 @@ from services.integrity import (
     ensure_node_deletable,
     ensure_pipeline_deletable,
     ensure_repository_deletable,
+    ensure_template_deletable,
 )
 
 
@@ -117,6 +118,24 @@ def _reference(kind: str, *, task: Task, node: Node, user_id: uuid.UUID) -> obje
     )
 
 
+
+@pytest.mark.parametrize("kind", ["task_node", "node_log"])
+async def test_ensure_pipeline_deletable_rejects_pipeline_with_used_nodes(
+    db_session: AsyncSession,
+    kind: str,
+) -> None:
+    """После «Вернуть в новые» и смены пайплайна прежний остаётся в истории задачи."""
+    user = await _make_user(db_session)
+    node = await _make_node(db_session, created_by=user.id, in_pipeline=True)
+    task = await _make_task(db_session, created_by=user.id, status=TaskStatus.NEW)
+    db_session.add(_reference(kind, task=task, node=node, user_id=user.id))
+    await db_session.flush()
+
+    assert node.pipeline_id is not None
+    with pytest.raises(ConflictError):
+        await ensure_pipeline_deletable(db_session, node.pipeline_id)
+
+
 class TestEnsureNodeDeletable:
     """Раздел 3.2: ноду, которую использует задача, удалить нельзя."""
 
@@ -200,3 +219,27 @@ async def test_ensure_repository_deletable_depends_on_task_terminality(
     else:
         with pytest.raises(ConflictError):
             await ensure_repository_deletable(db_session, repository.id)
+
+
+class TestEnsureTemplateDeletable:
+    """Раздел 3.2: шаблон по умолчанию репозитория удалить нельзя."""
+
+    async def test_default_of_repository(self, db_session: AsyncSession) -> None:
+        user = await _make_user(db_session)
+        template = Template(name="шаблон", files={}, created_by=user.id)
+        db_session.add(template)
+        await db_session.flush()
+
+        await ensure_template_deletable(db_session, template.id)
+        db_session.add(
+            Repository(
+                name="repo",
+                git_url="git@example.com:x.git",
+                deploy_key_encrypted="enc",
+                default_template_id=template.id,
+            ),
+        )
+        await db_session.flush()
+
+        with pytest.raises(ConflictError, match="по умолчанию"):
+            await ensure_template_deletable(db_session, template.id)

@@ -87,10 +87,15 @@ export function NodeForm({
 
   function handlePreview() {
     preview.mutate(
-      {
-        text: promptTemplate,
-        scope: mode === "pipeline" ? "pipeline" : "library",
-      },
+      mode === "pipeline"
+        ? {
+            text: promptTemplate,
+            scope: "pipeline",
+            node_id: node?.id ?? null,
+            pipeline_id: pipelineId ?? null,
+            order_index: orderIndex ?? node?.order_index ?? null,
+          }
+        : { text: promptTemplate, scope: "library" },
       {
         onSuccess: (data) => setPreviewText(data.rendered_text),
         onError: (error) => {

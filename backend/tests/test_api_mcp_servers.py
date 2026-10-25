@@ -144,3 +144,23 @@ class TestUserAccess:
         response = await authed_client.request(method.upper(), url, json=payload)
 
         assert response.status_code == 403
+
+
+class TestDeleteLinkedToTemplate:
+    """Раздел 3.2: сервер шаблона не удаляется, шаблон удаляется вместе со связями."""
+
+    async def test_server_then_template(self, admin_client: AsyncClient) -> None:
+        server = await _create(admin_client)
+        template = await admin_client.post(
+            "/templates",
+            json={"name": "шаблон", "files": {}, "mcp_server_ids": [server["id"]]},
+        )
+        assert template.status_code == 201, template.text
+
+        server_response = await admin_client.delete(f"/mcp-servers/{server['id']}")
+        assert server_response.status_code == 409
+        assert "шаблон" in server_response.json()["error"]["message"]
+
+        template_response = await admin_client.delete(f"/templates/{template.json()['id']}")
+        assert template_response.status_code == 204
+        assert (await admin_client.delete(f"/mcp-servers/{server['id']}")).status_code == 204

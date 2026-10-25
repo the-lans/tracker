@@ -507,7 +507,12 @@ class TemplatePreviewRequest(BaseModel):
     text: str
     scope: str
     task_id: uuid.UUID | None = None
+    # Только для `scope = pipeline`: позиция ноды задаёт доступные `{{node.*}}`.
+    # У сохранённой ноды пайплайн и позиция берутся из `node_id`, у новой —
+    # из `pipeline_id`/`order_index`.
     node_id: uuid.UUID | None = None
+    pipeline_id: uuid.UUID | None = None
+    order_index: int | None = Field(default=None, ge=0)
 
 
 class TemplatePreviewResponse(BaseModel):

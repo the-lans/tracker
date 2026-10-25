@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 import uuid
 from unittest.mock import Mock, patch
 
@@ -11,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models.notifications import PushSubscription
 from db.models.users import User
 from services.push_notifications import (
+    PUSH_SEND_TIMEOUT_SECONDS,
     PushMessage,
     PywebpushSender,
     SubscriptionExpiredError,
@@ -147,3 +150,50 @@ def test_pywebpush_sender_reraises_non_expiry_errors() -> None:
                 subscription=subscription,
                 message=PushMessage(title="t", body="b", data={}),
             )
+
+
+class _BlockingSender:
+    """Медленная push-служба: отправка держит поток, пока не отпустят."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+
+    def send(self, *, subscription: PushSubscription, message: PushMessage) -> None:
+        self.release.wait(timeout=5)
+
+
+class TestSendDoesNotBlockLoop:
+    """Раздел 6.6: отправка не останавливает event loop вызывающего (пульс сессии)."""
+
+    async def test_loop_keeps_running(self, db_session: AsyncSession) -> None:
+        user = await _make_user(db_session)
+        await _make_subscription(db_session, user)
+        sender = _BlockingSender()
+        sending = asyncio.create_task(
+            send_push_to_user(
+                db_session,
+                user_id=user.id,
+                message=PushMessage(title="t", body="b", data={}),
+                sender=sender,
+            ),
+        )
+
+        await asyncio.sleep(0.05)
+        assert not sending.done()
+        sender.release.set()
+        await sending
+
+    def test_pywebpush_timeout_is_bounded(self) -> None:
+        subscription = PushSubscription(
+            user_id=uuid.uuid4(),
+            endpoint="https://push.example.com/x",
+            p256dh_key="p256dh",
+            auth_key="auth",
+        )
+        with patch("services.push_notifications.webpush") as webpush:
+            PywebpushSender().send(
+                subscription=subscription,
+                message=PushMessage(title="t", body="b", data={}),
+            )
+
+        assert webpush.call_args.kwargs["timeout"] == PUSH_SEND_TIMEOUT_SECONDS

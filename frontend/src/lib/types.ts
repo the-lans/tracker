@@ -503,7 +503,10 @@ export interface TemplatePreviewRequest {
   text: string;
   scope: "pipeline" | "library" | "freeform";
   task_id?: string | null;
+  /** Только для scope = "pipeline": позиция ноды задаёт доступные {{node.*}}. */
   node_id?: string | null;
+  pipeline_id?: string | null;
+  order_index?: number | null;
 }
 
 export interface TemplatePreviewResponse {

@@ -18,6 +18,7 @@ from db.models.enums import TaskStatus
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
+from db.models.repositories import Repository, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
 from services.errors import ConflictError
 
@@ -27,25 +28,42 @@ from services.errors import ConflictError
 _TERMINAL_TASK_STATUSES = (TaskStatus.DONE, TaskStatus.FAILED)
 
 
-async def ensure_pipeline_deletable(session: AsyncSession, pipeline_id: uuid.UUID) -> None:
-    """Запрещает удаление пайплайна, используемого хотя бы одной задачей."""
-    stmt = sa.select(Task.id).where(Task.pipeline_id == pipeline_id).limit(1)
-    if (await session.execute(stmt)).first() is not None:
-        raise ConflictError(
-            "Пайплайн используется хотя бы одной задачей — вместо удаления доступна архивация",
-        )
-
-
-async def _node_is_referenced(session: AsyncSession, node_id: uuid.UUID) -> bool:
-    """Нода привязана к задаче, выполнялась в ней или ждёт в очереди её ручных запросов."""
+async def _nodes_are_referenced(
+    session: AsyncSession,
+    node_ids: sa.Select[uuid.UUID],
+) -> bool:
+    """
+    Хотя бы одна из нод ``node_ids`` привязана к задаче, выполнялась в ней
+    или ждёт в очереди её ручных запросов.
+    """
     references = (
-        sa.select(TaskLibraryPrompt.id).where(TaskLibraryPrompt.node_id == node_id),
-        sa.select(TaskNode.id).where(TaskNode.node_id == node_id),
-        sa.select(NodeLog.id).where(NodeLog.node_id == node_id),
-        sa.select(TaskManualRequestQueue.id).where(TaskManualRequestQueue.node_id == node_id),
+        sa.select(TaskLibraryPrompt.id).where(TaskLibraryPrompt.node_id.in_(node_ids)),
+        sa.select(TaskNode.id).where(TaskNode.node_id.in_(node_ids)),
+        sa.select(NodeLog.id).where(NodeLog.node_id.in_(node_ids)),
+        sa.select(TaskManualRequestQueue.id).where(TaskManualRequestQueue.node_id.in_(node_ids)),
     )
     stmt = sa.select(sa.exists(sa.union_all(*references).subquery().select()))
     return bool(await session.scalar(stmt))
+
+
+async def _node_is_referenced(session: AsyncSession, node_id: uuid.UUID) -> bool:
+    return await _nodes_are_referenced(session, sa.select(Node.id).where(Node.id == node_id))
+
+
+async def ensure_pipeline_deletable(session: AsyncSession, pipeline_id: uuid.UUID) -> None:
+    """
+    Раздел 3.2: пайплайн, привязанный к задаче или чьи ноды использует
+    задача (прежний пайплайн после «Вернуть в новые»), удалить нельзя.
+    """
+    stmt = sa.select(Task.id).where(Task.pipeline_id == pipeline_id).limit(1)
+    pipeline_nodes = sa.select(Node.id).where(Node.pipeline_id == pipeline_id)
+    if (await session.execute(stmt)).first() is not None or await _nodes_are_referenced(
+        session,
+        pipeline_nodes,
+    ):
+        raise ConflictError(
+            "Пайплайн используется хотя бы одной задачей — вместо удаления доступна архивация",
+        )
 
 
 async def ensure_node_deletable(session: AsyncSession, node: Node) -> None:
@@ -102,6 +120,28 @@ async def ensure_llm_account_deletable(session: AsyncSession, llm_account_id: uu
     stmt = sa.select(Task.id).where(Task.llm_account_id == llm_account_id).limit(1)
     if (await session.execute(stmt)).first() is not None:
         raise ConflictError("LLM-аккаунт выбран у задачи — удалить его нельзя")
+
+
+async def ensure_mcp_server_deletable(session: AsyncSession, mcp_server_id: uuid.UUID) -> None:
+    """Раздел 3.2: MCP-сервер, подключённый к шаблону, удалить нельзя."""
+    stmt = (
+        sa.select(TemplateMcpServer.template_id)
+        .where(TemplateMcpServer.mcp_server_id == mcp_server_id)
+        .limit(1)
+    )
+    if (await session.execute(stmt)).first() is not None:
+        raise ConflictError(
+            "MCP-сервер подключён к шаблону — сначала отключите его в шаблонах",
+        )
+
+
+async def ensure_template_deletable(session: AsyncSession, template_id: uuid.UUID) -> None:
+    """Раздел 3.2: шаблон, назначенный репозиторию по умолчанию, удалить нельзя."""
+    stmt = sa.select(Repository.id).where(Repository.default_template_id == template_id).limit(1)
+    if (await session.execute(stmt)).first() is not None:
+        raise ConflictError(
+            "Шаблон назначен репозиторию по умолчанию — сначала снимите его в репозитории",
+        )
 
 
 async def count_library_prompt_usage(db_session: AsyncSession) -> list[tuple[uuid.UUID, int]]:

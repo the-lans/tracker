@@ -19,6 +19,7 @@ from db.models.users import User
 from db.session import get_session
 from services.crypto import encrypt
 from services.errors import NotFoundError
+from services.integrity import ensure_mcp_server_deletable
 from services.mcp_validation import validate_mcp_server_isolation
 
 router = APIRouter(prefix="/mcp-servers", tags=["mcp-servers"])
@@ -119,5 +120,6 @@ async def delete_mcp_server(
     _admin: Annotated[User, Depends(require_admin)],
 ) -> None:
     mcp_server = await _get_mcp_server_or_404(db_session, mcp_server_id)
+    await ensure_mcp_server_deletable(db_session, mcp_server_id)
     await db_session.delete(mcp_server)
     await db_session.commit()
