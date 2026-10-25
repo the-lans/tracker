@@ -44,8 +44,11 @@ def _started_since(entry: NodeLog, moment: datetime | None) -> bool:
 
 
 def _is_current_pipeline_run(entry: NodeLog, task: Task) -> bool:
+    # Без ноды — обращение воркера к агенту за разрешением конфликта ребейза
+    # (`services/rebase_resolution.py`): это не нода пайплайна.
     return (
-        entry.trigger_type is NodeLogTriggerType.PIPELINE
+        entry.node_id is not None
+        and entry.trigger_type is NodeLogTriggerType.PIPELINE
         and entry.status is NodeLogStatus.SUCCESS
         and _started_since(entry, task.reset_at)
     )
