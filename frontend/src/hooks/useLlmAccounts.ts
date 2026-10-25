@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
 import type { LlmAccount, LlmAccountCreateRequest, LlmAccountUpdateRequest } from "@/lib/types";
 
@@ -9,26 +10,22 @@ export function useLlmAccounts() {
 }
 
 export function useCreateLlmAccount() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: LlmAccountCreateRequest) => api.post<LlmAccount>("/llm-accounts", body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+  return useInvalidatingMutation(
+    (body: LlmAccountCreateRequest) => api.post<LlmAccount>("/llm-accounts", body),
+    [KEY],
+  );
 }
 
 export function useUpdateLlmAccount(llmAccountId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: LlmAccountUpdateRequest) =>
-      api.patch<LlmAccount>(`/llm-accounts/${llmAccountId}`, body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+  return useInvalidatingMutation(
+    (body: LlmAccountUpdateRequest) => api.patch<LlmAccount>(`/llm-accounts/${llmAccountId}`, body),
+    [KEY],
+  );
 }
 
 export function useDeleteLlmAccount() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (llmAccountId: string) => api.delete(`/llm-accounts/${llmAccountId}`),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+  return useInvalidatingMutation(
+    (llmAccountId: string) => api.delete(`/llm-accounts/${llmAccountId}`),
+    [KEY],
+  );
 }

@@ -1,5 +1,5 @@
 /**
- * Зеркало типов backend/db/models/enums.py и backend/api/schemas.py.
+ * Зеркало типов backend/db/models/enums.py и backend/api/schemas/.
  * Источник истины — сами эти файлы; при расхождении обновлять отсюда.
  */
 

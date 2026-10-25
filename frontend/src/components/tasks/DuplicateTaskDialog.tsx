@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { TaskFormFields } from "@/components/tasks/TaskFormFields";
 import { toTaskRequest, type TaskFormValues } from "@/components/tasks/taskForm.types";
 import { useDuplicateTask, useTaskRepositories } from "@/hooks/useTasks";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { Task, TaskRepository } from "@/lib/types";
 
 function initialValues(task: Task, repositories: TaskRepository[]): TaskFormValues {
@@ -46,7 +46,7 @@ function DuplicateTaskForm({
         navigate(`/tasks/${copy.id}`);
       },
       onError: (error) => {
-        toast.error(error instanceof ApiError ? error.message : "Не удалось дублировать задачу");
+        toast.error(errorMessage(error, "Не удалось дублировать задачу"));
       },
     });
   }

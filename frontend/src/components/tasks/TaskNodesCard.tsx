@@ -12,7 +12,7 @@ import {
   useTaskNodeDependents,
   useTaskNodes,
 } from "@/hooks/useTasks";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import {
   TaskStatus,
@@ -58,9 +58,7 @@ export function TaskNodesCard({
       {
         onError: (error) => {
           toast.error(
-            error instanceof ApiError
-              ? error.message
-              : "Не удалось изменить состав нод",
+            errorMessage(error, "Не удалось изменить состав нод"),
           );
         },
       },

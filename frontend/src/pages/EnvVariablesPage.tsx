@@ -5,10 +5,9 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EnvVariableForm } from "@/components/envVariables/EnvVariableForm";
 import { useDeleteEnvVariable, useEnvVariables, useRevealEnvVariable } from "@/hooks/useEnvVariables";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage, toastError } from "@/lib/errors";
 import { EnvVariableScope, type EnvVariable } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { EditButton } from "@/components/common/actions/EditButton";
@@ -16,6 +15,7 @@ import { ENV_SCOPE_LABEL } from "@/lib/labels";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { EntityFormDialog, type EditTarget } from "@/components/common/dialogs/EntityFormDialog";
 
 function RevealValue({ envVariableId }: { envVariableId: string }) {
   const [value, setValue] = useState<string | null>(null);
@@ -36,8 +36,7 @@ function RevealValue({ envVariableId }: { envVariableId: string }) {
       onClick={() =>
         reveal.mutate(envVariableId, {
           onSuccess: (data) => setValue(data.value),
-          onError: (error) =>
-            toast.error(error instanceof ApiError ? error.message : "Не удалось показать значение"),
+          onError: toastError("Не удалось показать значение"),
         })
       }
     >
@@ -49,7 +48,7 @@ function RevealValue({ envVariableId }: { envVariableId: string }) {
 export function EnvVariablesPage() {
   const { data: envVariables, isLoading } = useEnvVariables();
   const deleteEnvVariable = useDeleteEnvVariable();
-  const [dialogVariable, setDialogVariable] = useState<EnvVariable | "new" | null>(null);
+  const [dialogVariable, setDialogVariable] = useState<EditTarget<EnvVariable>>(null);
   // Раскрытое значение после правки устарело бы — сохранение сбрасывает все раскрытые.
   const [savedCount, setSavedCount] = useState(0);
 
@@ -100,7 +99,7 @@ export function EnvVariablesPage() {
                   deleteEnvVariable.mutate(envVariable.id, {
                     onError: (error) =>
                       toast.error(
-                        error instanceof ApiError ? error.message : "Не удалось удалить",
+                        errorMessage(error, "Не удалось удалить"),
                       ),
                   })}
               />
@@ -109,25 +108,23 @@ export function EnvVariablesPage() {
         </div>
       </div>
 
-      <Dialog open={dialogVariable !== null} onOpenChange={(open) => !open && setDialogVariable(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {dialogVariable === "new" ? "Новая переменная окружения" : "Редактировать переменную"}
-            </DialogTitle>
-          </DialogHeader>
-          {dialogVariable !== null && (
-            <EnvVariableForm
-              envVariable={dialogVariable === "new" ? undefined : dialogVariable}
-              onSaved={() => {
-                setDialogVariable(null);
-                setSavedCount((count) => count + 1);
-              }}
-              onCancel={() => setDialogVariable(null)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      <EntityFormDialog
+        target={dialogVariable}
+        onClose={() => setDialogVariable(null)}
+        createTitle="Новая переменная окружения"
+        editTitle="Редактировать переменную"
+      >
+        {(item, close) => (
+          <EnvVariableForm
+            envVariable={item}
+            onSaved={() => {
+              close();
+              setSavedCount((count) => count + 1);
+            }}
+            onCancel={close}
+          />
+        )}
+      </EntityFormDialog>
     </div>
   );
 }

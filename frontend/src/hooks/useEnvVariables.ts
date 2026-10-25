@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
 import type { EnvVariable, EnvVariableCreateRequest, EnvVariableUpdateRequest } from "@/lib/types";
 
@@ -9,28 +10,25 @@ export function useEnvVariables() {
 }
 
 export function useCreateEnvVariable() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: EnvVariableCreateRequest) => api.post<EnvVariable>("/env-variables", body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+  return useInvalidatingMutation(
+    (body: EnvVariableCreateRequest) => api.post<EnvVariable>("/env-variables", body),
+    [KEY],
+  );
 }
 
 export function useUpdateEnvVariable(envVariableId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: EnvVariableUpdateRequest) =>
+  return useInvalidatingMutation(
+    (body: EnvVariableUpdateRequest) =>
       api.patch<EnvVariable>(`/env-variables/${envVariableId}`, body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+    [KEY],
+  );
 }
 
 export function useDeleteEnvVariable() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (envVariableId: string) => api.delete(`/env-variables/${envVariableId}`),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+  return useInvalidatingMutation(
+    (envVariableId: string) => api.delete(`/env-variables/${envVariableId}`),
+    [KEY],
+  );
 }
 
 export function useRevealEnvVariable() {

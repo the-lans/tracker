@@ -1,4 +1,4 @@
-import { getStoredToken } from "@/stores/authStore";
+import { getStoredToken } from "@/stores/authContext";
 import type { ApiErrorBody } from "@/lib/types";
 
 /**

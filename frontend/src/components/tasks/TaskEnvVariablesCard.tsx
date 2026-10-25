@@ -1,12 +1,11 @@
 import { useState, type FormEvent } from "react";
 import { Plus } from "lucide-react";
-import { toast } from "sonner";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TaskEnvVariableRow } from "@/components/tasks/TaskEnvVariableRow";
 import { useCreateTaskEnvVariable, useTaskEnvVariables } from "@/hooks/useTaskEnvVariables";
-import { ApiError } from "@/lib/apiClient";
+import { toastError } from "@/lib/errors";
 import { TaskStatus, type Task } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 
@@ -29,8 +28,7 @@ export function TaskEnvVariablesCard({ task }: { task: Task }) {
           setKey("");
           setValue("");
         },
-        onError: (error) =>
-          toast.error(error instanceof ApiError ? error.message : "Не удалось добавить переменную"),
+        onError: toastError("Не удалось добавить переменную"),
       },
     );
   }

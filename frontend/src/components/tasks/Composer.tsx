@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useManualQueue, useSubmitFreeformPrompt } from "@/hooks/useTasks";
 import { useTemplatePreview } from "@/hooks/useTemplates";
 import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import { ManualRequestStatus, ManualRequestType, type TaskStatus } from "@/lib/types";
 
 /** Раздел 8, 15.2: свободный параметризованный промт — отдельно от поля
@@ -49,7 +49,7 @@ export function Composer({
       {
         onSuccess: (data) => setPreviewText(data.rendered_text),
         onError: (error) => {
-          toast.error(error instanceof ApiError ? error.message : "Ошибка предпросмотра");
+          toast.error(errorMessage(error, "Ошибка предпросмотра"));
           setPreviewText(null);
         },
       },
@@ -66,7 +66,7 @@ export function Composer({
         setOpen(false);
       },
       onError: (error) => {
-        toast.error(error instanceof ApiError ? error.message : "Не удалось отправить промт");
+        toast.error(errorMessage(error, "Не удалось отправить промт"));
       },
     });
   }

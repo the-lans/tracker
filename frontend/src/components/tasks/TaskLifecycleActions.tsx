@@ -5,15 +5,11 @@ import { ConfirmDialog } from "@/components/common/dialogs/ConfirmDialog";
 import { DuplicateTaskDialog } from "@/components/tasks/DuplicateTaskDialog";
 import { HEADER_BUTTON } from "@/styles/classes";
 import { useCleanupRepositories, useClearContext, useResetTask } from "@/hooks/useTasks";
-import { ApiError } from "@/lib/apiClient";
+import { toastError } from "@/lib/errors";
 import { TaskStatus, type Task } from "@/lib/types";
 import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
 
 type PendingAction = "cleanup" | "clear-context" | "reset" | null;
-
-function onError(fallback: string) {
-  return (error: Error) => toast.error(error instanceof ApiError ? error.message : fallback);
-}
 
 /** Раздел 14.2, 14.3: действия над задачей в `done`/`failed` — очистка
  * директории репозиториев, очистка контекста, возврат в новые, дублирование. */
@@ -31,7 +27,7 @@ export function TaskLifecycleActions({ task }: { task: Task }) {
         setPending(null);
         toast.success("Директория репозиториев очищена");
       },
-      onError: onError("Не удалось очистить репозитории"),
+      onError: toastError("Не удалось очистить репозитории"),
     });
   }
 
@@ -41,7 +37,7 @@ export function TaskLifecycleActions({ task }: { task: Task }) {
         setPending(null);
         toast.success("Контекст очищен — перезапуск начнёт новую сессию");
       },
-      onError: onError("Не удалось очистить контекст"),
+      onError: toastError("Не удалось очистить контекст"),
     });
   }
 
@@ -51,7 +47,7 @@ export function TaskLifecycleActions({ task }: { task: Task }) {
         setPending(null);
         toast.success("Задача снова в новых — можно сменить пайплайн и запустить");
       },
-      onError: onError("Не удалось вернуть задачу в новые"),
+      onError: toastError("Не удалось вернуть задачу в новые"),
     });
   }
 

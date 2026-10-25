@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { PlanCard } from "@/components/tasks/PlanCard";
 import { useSubmitDecision } from "@/hooks/useTasks";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import type { NodeLog } from "@/lib/types";
 
@@ -32,7 +32,7 @@ export function DecisionWidget({ taskId, log }: { taskId: string; log: NodeLog }
       { node_log_id: log.id, option_id: optionId, feedback_text: feedbackText || undefined },
       {
         onError: (error) => {
-          toast.error(error instanceof ApiError ? error.message : "Не удалось отправить решение");
+          toast.error(errorMessage(error, "Не удалось отправить решение"));
         },
       },
     );

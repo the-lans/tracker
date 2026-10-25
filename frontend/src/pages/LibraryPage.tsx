@@ -5,13 +5,13 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ShowArchivedToggle } from "@/components/common/actions/ShowArchivedToggle";
 import { NodeForm } from "@/components/nodes/NodeForm";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { NODE_TYPE_LABEL } from "@/lib/labels";
 import { useDeleteNode, useNodes, useUpdateNode } from "@/hooks/useNodes";
 import { ApiError } from "@/lib/apiClient";
+import { errorMessage, toastError } from "@/lib/errors";
 import type { NodeItem } from "@/lib/types";
 import { ArchiveToggleButton } from "@/components/common/actions/ArchiveToggleButton";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
@@ -19,6 +19,7 @@ import { OwnerLabel } from "@/components/common/avatar/OwnerLabel";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { EntityFormDialog, type EditTarget } from "@/components/common/dialogs/EntityFormDialog";
 
 function LibraryArchiveToggle({ node }: { node: NodeItem }) {
   const updateNode = useUpdateNode(node.id);
@@ -31,8 +32,7 @@ function LibraryArchiveToggle({ node }: { node: NodeItem }) {
         updateNode.mutate(
           { is_archived: !node.is_archived },
           {
-            onError: (error) =>
-              toast.error(error instanceof ApiError ? error.message : "Не удалось изменить"),
+            onError: toastError("Не удалось изменить"),
           },
         )
       }
@@ -44,14 +44,14 @@ function deleteErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 409) {
     return "Промт используется задачей — доступна только архивация";
   }
-  return error instanceof ApiError ? error.message : "Не удалось удалить";
+  return errorMessage(error, "Не удалось удалить");
 }
 
 export function LibraryPage() {
   const [includeArchived, setIncludeArchived] = useState(false);
   const { data: nodes, isLoading } = useNodes({ libraryOnly: true, includeArchived });
   const deleteNode = useDeleteNode();
-  const [dialogNode, setDialogNode] = useState<NodeItem | "new" | null>(null);
+  const [dialogNode, setDialogNode] = useState<EditTarget<NodeItem>>(null);
 
   return (
     <div className={PAGE_ROOT}>
@@ -59,13 +59,7 @@ export function LibraryPage() {
         title="Библиотека промтов"
         actions={
           <>
-            <label className="flex min-h-11 items-center gap-2.5 text-note text-text-2">
-              <Checkbox
-                checked={includeArchived}
-                onCheckedChange={(checked) => setIncludeArchived(checked === true)}
-              />
-              Показать архивные
-            </label>
+            <ShowArchivedToggle checked={includeArchived} onChange={setIncludeArchived} />
             <Button onClick={() => setDialogNode("new")}>
               <Plus className="size-4" /> Промт
             </Button>
@@ -111,23 +105,22 @@ export function LibraryPage() {
         </div>
       </div>
 
-      <Dialog open={dialogNode !== null} onOpenChange={(open) => !open && setDialogNode(null)}>
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>
-              {dialogNode === "new" ? "Новый промт библиотеки" : "Редактировать промт"}
-            </DialogTitle>
-          </DialogHeader>
-          {dialogNode !== null && (
-            <NodeForm
-              mode="library"
-              node={dialogNode === "new" ? undefined : dialogNode}
-              onSaved={() => setDialogNode(null)}
-              onCancel={() => setDialogNode(null)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      <EntityFormDialog
+        target={dialogNode}
+        onClose={() => setDialogNode(null)}
+        createTitle="Новый промт библиотеки"
+        editTitle="Редактировать промт"
+        contentClassName="max-w-xl"
+      >
+        {(item, close) => (
+          <NodeForm
+            mode="library"
+            node={item}
+            onSaved={close}
+            onCancel={close}
+          />
+        )}
+      </EntityFormDialog>
     </div>
   );
 }

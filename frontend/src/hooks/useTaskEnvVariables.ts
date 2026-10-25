@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
 import type { TaskEnvVariable } from "@/lib/types";
 
@@ -13,29 +14,26 @@ export function useTaskEnvVariables(taskId: string) {
 }
 
 export function useCreateTaskEnvVariable(taskId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: { key: string; value: string }) =>
+  return useInvalidatingMutation(
+    (body: { key: string; value: string }) =>
       api.post<TaskEnvVariable>(`/tasks/${taskId}/env-variables`, body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: keyOf(taskId) }),
-  });
+    [keyOf(taskId)],
+  );
 }
 
 export function useUpdateTaskEnvVariable(taskId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ variableId, value }: { variableId: string; value: string }) =>
+  return useInvalidatingMutation(
+    ({ variableId, value }: { variableId: string; value: string }) =>
       api.patch<TaskEnvVariable>(`/tasks/${taskId}/env-variables/${variableId}`, { value }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: keyOf(taskId) }),
-  });
+    [keyOf(taskId)],
+  );
 }
 
 export function useDeleteTaskEnvVariable(taskId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (variableId: string) => api.delete(`/tasks/${taskId}/env-variables/${variableId}`),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: keyOf(taskId) }),
-  });
+  return useInvalidatingMutation(
+    (variableId: string) => api.delete(`/tasks/${taskId}/env-variables/${variableId}`),
+    [keyOf(taskId)],
+  );
 }
 
 /** Правило 8: значение показывается только по явному нажатию. */

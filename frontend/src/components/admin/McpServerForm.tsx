@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DialogFooter } from "@/components/ui/dialog";
 import { useCreateMcpServer, useUpdateMcpServer } from "@/hooks/useMcpServers";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import { McpAuthType, McpIsolationMode, type McpServer } from "@/lib/types";
 import { MCP_ISOLATION_LABEL } from "@/lib/labels";
 
@@ -61,7 +61,7 @@ export function McpServerForm({
       isolation_path_template: hasStatefulResource ? isolationPathTemplate : null,
     };
     const onError = (error: unknown) =>
-      toast.error(error instanceof ApiError ? error.message : "Не удалось сохранить сервер");
+      toast.error(errorMessage(error, "Не удалось сохранить сервер"));
 
     if (server) {
       updateServer.mutate(body, { onSuccess: onSaved, onError });

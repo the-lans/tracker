@@ -8,7 +8,7 @@ import { ParentTaskFields } from "@/components/tasks/ParentTaskFields";
 import { TaskFormFields } from "@/components/tasks/TaskFormFields";
 import { EMPTY_TASK_FORM, toTaskRequest, type TaskFormValues } from "@/components/tasks/taskForm.types";
 import { useCreateTask } from "@/hooks/useTasks";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 
 export function CreateTaskDialog({
   open,
@@ -47,7 +47,7 @@ export function CreateTaskDialog({
           navigate(`/tasks/${task.id}`);
         },
         onError: (error) => {
-          toast.error(error instanceof ApiError ? error.message : "Не удалось создать задачу");
+          toast.error(errorMessage(error, "Не удалось создать задачу"));
         },
       },
     );

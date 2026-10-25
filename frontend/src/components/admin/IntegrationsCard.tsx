@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { useIntegrations, useUpdateIntegrations } from "@/hooks/useAdmin";
-import { ApiError } from "@/lib/apiClient";
+import { toastError } from "@/lib/errors";
 import type { Integrations } from "@/lib/types";
 
 function IntegrationsForm({ initial }: { initial: Integrations }) {
@@ -27,8 +27,7 @@ function IntegrationsForm({ initial }: { initial: Integrations }) {
           setToken("");
           toast.success("Интеграции сохранены");
         },
-        onError: (error) =>
-          toast.error(error instanceof ApiError ? error.message : "Не удалось сохранить"),
+        onError: toastError("Не удалось сохранить"),
       },
     );
   }

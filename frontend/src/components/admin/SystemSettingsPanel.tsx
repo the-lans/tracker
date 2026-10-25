@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useSystemSettings, useUpdateSystemSettings } from "@/hooks/useAdmin";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { SystemSettings } from "@/lib/types";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
@@ -41,9 +41,7 @@ function SettingsForm({ initial }: { initial: SystemSettings }) {
       onSuccess: () => toast.success("Настройки сохранены"),
       onError: (error) =>
         toast.error(
-          error instanceof ApiError
-            ? error.message
-            : "Не удалось сохранить настройки",
+          errorMessage(error, "Не удалось сохранить настройки"),
         ),
     });
   }

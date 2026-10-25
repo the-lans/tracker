@@ -1,6 +1,6 @@
 import { useUsers } from "@/hooks/useAdmin";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
-import { useAuth } from "@/stores/authStore";
+import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
 /**

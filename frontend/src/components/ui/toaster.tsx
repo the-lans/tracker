@@ -1,5 +1,5 @@
 import { Toaster as SonnerToaster } from "sonner";
-import { useTheme } from "@/stores/themeStore";
+import { useTheme } from "@/hooks/useTheme";
 
 export function Toaster() {
   const { theme } = useTheme();

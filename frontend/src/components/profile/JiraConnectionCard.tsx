@@ -12,7 +12,7 @@ import {
   useProfile,
   useUpdateJiraConnection,
 } from "@/hooks/useProfile";
-import { ApiError } from "@/lib/apiClient";
+import { toastError } from "@/lib/errors";
 import type { User } from "@/lib/types";
 
 function JiraConnectionForm({ profile, serverUrl }: { profile: User; serverUrl: string }) {
@@ -30,8 +30,7 @@ function JiraConnectionForm({ profile, serverUrl }: { profile: User; serverUrl: 
           setToken("");
           toast.success("Подключение к Jira сохранено");
         },
-        onError: (error) =>
-          toast.error(error instanceof ApiError ? error.message : "Не удалось сохранить"),
+        onError: toastError("Не удалось сохранить"),
       },
     );
   }

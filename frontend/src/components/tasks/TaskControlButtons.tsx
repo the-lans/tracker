@@ -12,14 +12,10 @@ import {
   useResumeTask,
   useStopTask,
 } from "@/hooks/useTasks";
-import { ApiError } from "@/lib/apiClient";
+import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { TaskStatus, type Task } from "@/lib/types";
 import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
-
-function onError(fallback: string) {
-  return (error: Error) => toast.error(error instanceof ApiError ? error.message : fallback);
-}
 
 /** Раздел 14.2: действия пользователя, доступные в текущем статусе задачи. */
 export function TaskControlButtons({ task }: { task: Task }) {
@@ -38,7 +34,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
         setStopConfirmOpen(false);
         toast.success("Задача останавливается");
       },
-      onError: onError("Не удалось остановить задачу"),
+      onError: toastError("Не удалось остановить задачу"),
     });
   }
 
@@ -55,7 +51,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
           onClick={() =>
             startTask.mutate(undefined, {
               onSuccess: () => toast.success("Задача поставлена в очередь"),
-              onError: onError("Не удалось запустить задачу"),
+              onError: toastError("Не удалось запустить задачу"),
             })
           }
         >
@@ -73,7 +69,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
           onClick={() =>
             cancelTask.mutate(undefined, {
               onSuccess: () => toast.success("Запуск отменён, автозапуск выключен"),
-              onError: onError("Не удалось отменить запуск"),
+              onError: toastError("Не удалось отменить запуск"),
             })
           }
         >
@@ -91,7 +87,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
           onClick={() =>
             pauseTask.mutate(undefined, {
               onSuccess: () => toast.success("Пауза наступит после текущей ноды"),
-              onError: onError("Не удалось приостановить задачу"),
+              onError: toastError("Не удалось приостановить задачу"),
             })
           }
         >
@@ -109,7 +105,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
           onClick={() =>
             resumeTask.mutate(undefined, {
               onSuccess: () => toast.success("Задача продолжает выполнение"),
-              onError: onError("Не удалось продолжить задачу"),
+              onError: toastError("Не удалось продолжить задачу"),
             })
           }
         >
@@ -139,7 +135,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
           onClick={() =>
             restartTask.mutate(undefined, {
               onSuccess: () => toast.success("Задача перезапускается с упавшей ноды"),
-              onError: onError("Не удалось перезапустить"),
+              onError: toastError("Не удалось перезапустить"),
             })
           }
         >

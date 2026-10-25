@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
 import { JIRA_SERVER_KEY } from "@/hooks/useProfile";
 import type {
@@ -31,11 +32,10 @@ export function useUsers(options: { enabled?: boolean } = {}) {
 }
 
 export function useUpdateUser(userId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: UserUpdateRequest) => api.patch<User>(`/users/${userId}`, body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: USERS_KEY }),
-  });
+  return useInvalidatingMutation(
+    (body: UserUpdateRequest) => api.patch<User>(`/users/${userId}`, body),
+    [USERS_KEY],
+  );
 }
 
 export function useAllowedEmails() {
@@ -46,19 +46,17 @@ export function useAllowedEmails() {
 }
 
 export function useCreateAllowedEmail() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (email: string) => api.post<AllowedEmail>("/allowed-emails", { email }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ALLOWED_EMAILS_KEY }),
-  });
+  return useInvalidatingMutation(
+    (email: string) => api.post<AllowedEmail>("/allowed-emails", { email }),
+    [ALLOWED_EMAILS_KEY],
+  );
 }
 
 export function useDeleteAllowedEmail() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (allowedEmailId: string) => api.delete(`/allowed-emails/${allowedEmailId}`),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ALLOWED_EMAILS_KEY }),
-  });
+  return useInvalidatingMutation(
+    (allowedEmailId: string) => api.delete(`/allowed-emails/${allowedEmailId}`),
+    [ALLOWED_EMAILS_KEY],
+  );
 }
 
 export function usePeriodicTasks() {
@@ -70,21 +68,18 @@ export function usePeriodicTasks() {
 }
 
 export function useUpdatePeriodicTask(periodicTaskId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: PeriodicTaskUpdateRequest) =>
+  return useInvalidatingMutation(
+    (body: PeriodicTaskUpdateRequest) =>
       api.patch<PeriodicTask>(`/periodic-tasks/${periodicTaskId}`, body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: PERIODIC_TASKS_KEY }),
-  });
+    [PERIODIC_TASKS_KEY],
+  );
 }
 
 export function useRunPeriodicTaskNow() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (periodicTaskId: string) =>
-      api.post<void>(`/periodic-tasks/${periodicTaskId}/run-now`),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: PERIODIC_TASKS_KEY }),
-  });
+  return useInvalidatingMutation(
+    (periodicTaskId: string) => api.post<void>(`/periodic-tasks/${periodicTaskId}/run-now`),
+    [PERIODIC_TASKS_KEY],
+  );
 }
 
 export interface AppLogFilters {

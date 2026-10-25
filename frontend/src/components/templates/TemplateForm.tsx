@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { DialogFooter } from "@/components/ui/dialog";
 import { useCreateTemplate, useUpdateTemplate } from "@/hooks/useTemplates";
 import { useMcpServers } from "@/hooks/useMcpServers";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { Template } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 
@@ -52,7 +52,7 @@ export function TemplateForm({
       files.filter((file) => file.path.trim()).map((file) => [file.path, file.content]),
     );
     const onError = (error: unknown) =>
-      toast.error(error instanceof ApiError ? error.message : "Не удалось сохранить шаблон");
+      toast.error(errorMessage(error, "Не удалось сохранить шаблон"));
     const mcp = { mcp_server_ids: mcpServerIds };
     if (template) {
       updateTemplate.mutate({ name, files: filesRecord, ...mcp }, { onSuccess: onSaved, onError });

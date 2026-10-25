@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { toast } from "sonner";
 import { BrandMark } from "@/components/layout/BrandMark";
-import { api, ApiError } from "@/lib/apiClient";
-import { useAuth } from "@/stores/authStore";
+import { api } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
+import { useAuth } from "@/hooks/useAuth";
 import type { LoginResponse } from "@/lib/types";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
@@ -32,7 +33,7 @@ export function LoginPage() {
             .then((data) => login({ token: data.session_token, user: data.user }))
             .catch((error: unknown) => {
               toast.error(
-                error instanceof ApiError ? error.message : "Не удалось войти через Google",
+                errorMessage(error, "Не удалось войти через Google"),
               );
             })
             .finally(() => setSigningIn(false));

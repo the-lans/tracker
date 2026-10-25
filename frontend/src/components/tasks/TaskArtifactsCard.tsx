@@ -13,7 +13,7 @@ import {
   useUploadTaskArtifact,
 } from "@/hooks/useTaskArtifacts";
 import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { Task } from "@/lib/types";
 
 // Пока задача работает, агент сохраняет файлы и между сменами статуса.
@@ -43,7 +43,7 @@ export function TaskArtifactsCard({ task }: { task: Task }) {
       upload.mutate(file, {
         onError: (error) =>
           toast.error(
-            error instanceof ApiError ? error.message : `Не удалось загрузить ${file.name}`,
+            errorMessage(error, `Не удалось загрузить ${file.name}`),
           ),
       });
     }

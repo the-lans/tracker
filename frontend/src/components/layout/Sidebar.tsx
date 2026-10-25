@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { BrandMark } from "@/components/layout/BrandMark";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
-import { useAuth } from "@/stores/authStore";
+import { useAuth } from "@/hooks/useAuth";
 import { useAwaitingDecisionCount } from "@/hooks/useTasks";
 import { UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";

@@ -18,7 +18,7 @@ import {
   useTaskLibraryPrompts,
 } from "@/hooks/useTasks";
 import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import { formatDateTime } from "@/lib/utils";
 import { LibraryPromptRunStatus, type NodeItem, type Task } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
@@ -60,7 +60,7 @@ export function TaskLibraryPromptsCard({
         setSelectedNodeId("");
       },
       onError: (error) => {
-        toast.error(error instanceof ApiError ? error.message : "Не удалось добавить промт");
+        toast.error(errorMessage(error, "Не удалось добавить промт"));
       },
     });
   }
@@ -69,7 +69,7 @@ export function TaskLibraryPromptsCard({
     runLibraryPrompt.mutate(taskLibraryPromptId, {
       onSuccess: () => toast.success("Промт поставлен на выполнение"),
       onError: (error) => {
-        toast.error(error instanceof ApiError ? error.message : "Не удалось запустить промт");
+        toast.error(errorMessage(error, "Не удалось запустить промт"));
       },
     });
   }
@@ -78,7 +78,7 @@ export function TaskLibraryPromptsCard({
     stopManualRequest.mutate(requestId, {
       onSuccess: () => toast.success("Промт останавливается"),
       onError: (error) => {
-        toast.error(error instanceof ApiError ? error.message : "Не удалось остановить промт");
+        toast.error(errorMessage(error, "Не удалось остановить промт"));
       },
     });
   }

@@ -6,7 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { usePeriodicTasks, useRunPeriodicTaskNow, useUpdatePeriodicTask } from "@/hooks/useAdmin";
 import { formatDateTime, formatInterval } from "@/lib/utils";
-import { ApiError } from "@/lib/apiClient";
+import { toastError } from "@/lib/errors";
 import { PeriodicScheduleType, type PeriodicTask } from "@/lib/types";
 import { PERIODIC_RUN_STATUS_LABEL, PERIODIC_RUN_STATUS_TONE } from "@/lib/labels";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
@@ -43,8 +43,7 @@ function PeriodicTaskRow({ task }: { task: PeriodicTask }) {
           updateTask.mutate(
             { is_enabled: checked },
             {
-              onError: (error) =>
-                toast.error(error instanceof ApiError ? error.message : "Не удалось изменить"),
+              onError: toastError("Не удалось изменить"),
             },
           )
         }
@@ -56,8 +55,7 @@ function PeriodicTaskRow({ task }: { task: PeriodicTask }) {
         onClick={() =>
           runNow.mutate(task.id, {
             onSuccess: () => toast.success("Задача запущена вне расписания"),
-            onError: (error) =>
-              toast.error(error instanceof ApiError ? error.message : "Не удалось запустить"),
+            onError: toastError("Не удалось запустить"),
           })
         }
       >

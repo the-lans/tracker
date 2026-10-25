@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
 import type { JiraAttachmentCopy, TaskArtifact } from "@/lib/types";
 
@@ -42,23 +43,20 @@ export function useJiraAttachmentCopy(taskId: string, enabled: boolean) {
       return copy;
     },
     enabled,
-    refetchInterval: (query) =>
-      query.state.data?.pending ? JIRA_COPY_REFETCH_INTERVAL_MS : false,
+    refetchInterval: (query) => (query.state.data?.pending ? JIRA_COPY_REFETCH_INTERVAL_MS : false),
   });
 }
 
 export function useUploadTaskArtifact(taskId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (file: File) => api.put<TaskArtifact>(artifactUrl(taskId, file.name), file),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: keyOf(taskId) }),
-  });
+  return useInvalidatingMutation(
+    (file: File) => api.put<TaskArtifact>(artifactUrl(taskId, file.name), file),
+    [keyOf(taskId)],
+  );
 }
 
 export function useDeleteTaskArtifact(taskId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (path: string) => api.delete(artifactUrl(taskId, path)),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: keyOf(taskId) }),
-  });
+  return useInvalidatingMutation(
+    (path: string) => api.delete(artifactUrl(taskId, path)),
+    [keyOf(taskId)],
+  );
 }

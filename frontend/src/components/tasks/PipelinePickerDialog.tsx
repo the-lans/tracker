@@ -14,7 +14,7 @@ import { PipelineNodesChecklist } from "@/components/tasks/PipelineNodesChecklis
 import { useDependentNodesGuard } from "@/hooks/useDependentNodesGuard";
 import { usePipelineNodeDependents, usePipelineNodes, usePipelines } from "@/hooks/usePipelines";
 import { useBindPipeline } from "@/hooks/useTasks";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { NodeItem, Task } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 
@@ -74,7 +74,7 @@ export function PipelinePickerDialog({
       {
         onSuccess: () => onOpenChange(false),
         onError: (error) => {
-          toast.error(error instanceof ApiError ? error.message : "Не удалось привязать пайплайн");
+          toast.error(errorMessage(error, "Не удалось привязать пайплайн"));
         },
       },
     );

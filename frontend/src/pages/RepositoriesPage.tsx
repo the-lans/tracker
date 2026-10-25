@@ -4,26 +4,26 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { RepositoryForm } from "@/components/repositories/RepositoryForm";
 import { useDeleteRepository, useRepositories } from "@/hooks/useRepositories";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { Repository } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { EditButton } from "@/components/common/actions/EditButton";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { EntityFormDialog, type EditTarget } from "@/components/common/dialogs/EntityFormDialog";
 
 export function RepositoriesPage() {
   const { data: repositories, isLoading } = useRepositories();
   const deleteRepository = useDeleteRepository();
-  const [dialogRepository, setDialogRepository] = useState<Repository | "new" | null>(null);
+  const [dialogRepository, setDialogRepository] = useState<EditTarget<Repository>>(null);
 
   function handleDelete(id: string) {
     deleteRepository.mutate(id, {
       onError: (error) => {
-        toast.error(error instanceof ApiError ? error.message : "Не удалось удалить репозиторий");
+        toast.error(errorMessage(error, "Не удалось удалить репозиторий"));
       },
     });
   }
@@ -68,25 +68,20 @@ export function RepositoriesPage() {
         </div>
       </div>
 
-      <Dialog
-        open={dialogRepository !== null}
-        onOpenChange={(open) => !open && setDialogRepository(null)}
+      <EntityFormDialog
+        target={dialogRepository}
+        onClose={() => setDialogRepository(null)}
+        createTitle="Новый репозиторий"
+        editTitle="Редактировать репозиторий"
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {dialogRepository === "new" ? "Новый репозиторий" : "Редактировать репозиторий"}
-            </DialogTitle>
-          </DialogHeader>
-          {dialogRepository !== null && (
-            <RepositoryForm
-              repository={dialogRepository === "new" ? undefined : dialogRepository}
-              onSaved={() => setDialogRepository(null)}
-              onCancel={() => setDialogRepository(null)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+        {(item, close) => (
+          <RepositoryForm
+            repository={item}
+            onSaved={close}
+            onCancel={close}
+          />
+        )}
+      </EntityFormDialog>
     </div>
   );
 }

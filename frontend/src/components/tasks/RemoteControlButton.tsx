@@ -1,7 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { useReconnectRemoteControl } from "@/hooks/useTasks";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import { RemoteControlStatus, type Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
@@ -18,7 +18,7 @@ export function RemoteControlButton({ task }: { task: Task }) {
     reconnect.mutate(undefined, {
       onSuccess: () => toast.success("Мост переподключится перед следующим обращением к сессии"),
       onError: (error) => {
-        toast.error(error instanceof ApiError ? error.message : "Не удалось переподключить сессию");
+        toast.error(errorMessage(error, "Не удалось переподключить сессию"));
       },
     });
   }

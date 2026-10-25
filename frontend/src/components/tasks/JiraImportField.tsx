@@ -1,12 +1,11 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Download } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useJiraIssueDraft, useJiraServer, useProfile } from "@/hooks/useProfile";
-import { ApiError } from "@/lib/apiClient";
+import { toastError } from "@/lib/errors";
 import { formatFileSize } from "@/lib/utils";
 import type { JiraIssueDraft } from "@/lib/types";
 
@@ -52,8 +51,7 @@ export function JiraImportField({
         setImported(draft);
         onImported(draft);
       },
-      onError: (error) =>
-        toast.error(error instanceof ApiError ? error.message : "Не удалось получить задачу Jira"),
+      onError: toastError("Не удалось получить задачу Jira"),
     });
   }
 

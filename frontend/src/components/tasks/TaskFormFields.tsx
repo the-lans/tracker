@@ -3,7 +3,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TaskRepositoryPicker } from "@/components/tasks/TaskRepositoryPicker";
 import { useLlmAccounts } from "@/hooks/useLlmAccounts";
-import { useAuth } from "@/stores/authStore";
+import { useAuth } from "@/hooks/useAuth";
 import type { TaskFormValues } from "@/components/tasks/taskForm.types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 
