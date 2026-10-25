@@ -93,47 +93,29 @@ async def run_script_node(
     """
     image = docker_image or DEFAULT_RUNNER_IMAGES[script_language]
     task_mounts = await task_mount_args(repos_path, artifacts_path)
-    scripts_dir = repos_path / _SCRIPT_SUBDIR
-    scripts_dir.mkdir(parents=True, exist_ok=True)
-    script_path = scripts_dir / f"{uuid.uuid4()}.{_SCRIPT_SUFFIXES[script_language]}"
-    script_path.write_text(script_content)
+    script_path = _write_script(repos_path, script_content, script_language)
     container_name = f"tracker-node-{uuid.uuid4()}"
 
     try:
         process = await asyncio.create_subprocess_exec(
-            "docker",
-            "run",
-            "--rm",
-            "--name",
-            container_name,
-            "--network",
-            "none",
-            f"--memory={_DEFAULT_MEMORY_LIMIT}",
-            f"--cpus={_DEFAULT_CPU_LIMIT}",
-            "--label",
-            f"{CONTAINER_DEADLINE_LABEL}={container_deadline(timeout_seconds)}",
-            *task_mounts,
-            *_env_args(env or {}),
-            "-w",
-            str(repos_path),
-            image,
-            str(script_path),
+            *_docker_run_args(
+                container_name=container_name,
+                image=image,
+                script_path=script_path,
+                repos_path=repos_path,
+                timeout_seconds=timeout_seconds,
+                task_mounts=task_mounts,
+                env=env or {},
+            ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        timed_out = False
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
-        except TimeoutError:
-            timed_out = True
-            await _force_stop_container(container_name)
-            stdout, stderr = await process.communicate()
-        except asyncio.CancelledError:
-            # Кнопка «Остановить» (раздел 7.3, 14.2) отменяет корутину ноды —
-            # контейнер при этом не должен продолжать работу в фоне.
-            await asyncio.shield(_force_stop_container(container_name))
-            logger.info("script_node_stopped", image=image)
-            raise
+        stdout, stderr, timed_out = await _communicate_until_deadline(
+            process,
+            container_name=container_name,
+            timeout_seconds=timeout_seconds,
+            image=image,
+        )
         exit_code = process.returncode if process.returncode is not None else -1
     finally:
         script_path.unlink(missing_ok=True)
@@ -150,6 +132,70 @@ async def run_script_node(
         stderr=stderr.decode(errors="replace"),
         timed_out=timed_out,
     )
+
+
+def _write_script(repos_path: Path, script_content: str, script_language: ScriptLanguage) -> Path:
+    """Текст скрипта — файлом в смонтированном каталоге (не шаблонизируется, правило 4)."""
+    scripts_dir = repos_path / _SCRIPT_SUBDIR
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    script_path = scripts_dir / f"{uuid.uuid4()}.{_SCRIPT_SUFFIXES[script_language]}"
+    script_path.write_text(script_content)
+    return script_path
+
+
+def _docker_run_args(
+    *,
+    container_name: str,
+    image: str,
+    script_path: Path,
+    repos_path: Path,
+    timeout_seconds: int,
+    task_mounts: list[str],
+    env: Mapping[str, str],
+) -> list[str]:
+    """Правило 4: без сети и привилегий, с лимитами и меткой дедлайна для уборки."""
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        container_name,
+        "--network",
+        "none",
+        f"--memory={_DEFAULT_MEMORY_LIMIT}",
+        f"--cpus={_DEFAULT_CPU_LIMIT}",
+        "--label",
+        f"{CONTAINER_DEADLINE_LABEL}={container_deadline(timeout_seconds)}",
+        *task_mounts,
+        *_env_args(env),
+        "-w",
+        str(repos_path),
+        image,
+        str(script_path),
+    ]
+
+
+async def _communicate_until_deadline(
+    process: asyncio.subprocess.Process,
+    *,
+    container_name: str,
+    timeout_seconds: int,
+    image: str,
+) -> tuple[bytes, bytes, bool]:
+    """Вывод контейнера; по таймауту или отмене контейнер останавливается."""
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+    except TimeoutError:
+        await _force_stop_container(container_name)
+        stdout, stderr = await process.communicate()
+        return stdout, stderr, True
+    except asyncio.CancelledError:
+        # Кнопка «Остановить» (раздел 7.3, 14.2) отменяет корутину ноды —
+        # контейнер при этом не должен продолжать работу в фоне.
+        await asyncio.shield(_force_stop_container(container_name))
+        logger.info("script_node_stopped", image=image)
+        raise
+    return stdout, stderr, False
 
 
 async def task_mount_args(repos_path: Path, artifacts_path: Path | None) -> list[str]:

@@ -10,10 +10,7 @@
 
 from __future__ import annotations
 
-import os
 import uuid
-
-from redis.asyncio import Redis
 
 from app_logging.config import get_logger
 from db.models.tasks import Task
@@ -24,6 +21,7 @@ from services.jira_import import (
     copy_jira_attachments,
     new_jira_http_client,
 )
+from services.redis_connection import redis_connection
 from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import celery_app
 
@@ -48,11 +46,8 @@ async def _copy(*, task_id: uuid.UUID, user_id: uuid.UUID, key: str) -> None:
 
 
 async def _clear_pending(task_id: uuid.UUID) -> None:
-    redis_client = Redis.from_url(os.environ["REDIS_URL"])
-    try:
+    async with redis_connection() as redis_client:
         await clear_attachment_copy_pending(redis_client, task_id)
-    finally:
-        await redis_client.aclose()
 
 
 async def copy_jira_attachments_async(*, task_id: uuid.UUID, user_id: uuid.UUID, key: str) -> None:

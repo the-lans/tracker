@@ -91,6 +91,20 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
 }
 
 
+async def lock_task(db_session: AsyncSession, task_id: uuid.UUID) -> Task | None:
+    """
+    Строка задачи под `SELECT … FOR UPDATE` до конца транзакции, с
+    перечитанными полями: решение принимается по актуальному статусу.
+    """
+    locked: Task | None = await db_session.scalar(
+        sa.select(Task)
+        .where(Task.id == task_id)
+        .with_for_update()
+        .execution_options(populate_existing=True),
+    )
+    return locked
+
+
 async def _current_run_filter(
     db_session: AsyncSession,
     task_id: uuid.UUID,

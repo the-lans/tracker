@@ -28,7 +28,6 @@ from db.models.enums import (
     LibraryPromptRunStatus,
     ManualRequestStatus,
     ManualRequestType,
-    NodeLogStatus,
     NodeLogTriggerType,
     NodeType,
     TaskStatus,
@@ -41,6 +40,7 @@ from services.distributed_lock import LockNotAcquiredError, acquire_task_operati
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_library_prompt_attachable
 from services.node_history import load_node_log_history
+from services.node_runs import apply_node_outcome, mark_node_log_stopped, start_node_log
 from services.nodes.dispatch import (
     execute_llm_node_with_timeout,
     execute_node,
@@ -65,12 +65,14 @@ from services.templating import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
     from pathlib import Path
 
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from clients.claude_agent import ClaudeCodeSession
+    from services.nodes.dispatch import NodeExecutionOutcome
     from services.plan_mode import ActiveNodeContext
 
 # Раздел 17.5: "Обработка очереди task_manual_request_queue обязана быть
@@ -119,6 +121,29 @@ async def _ensure_task_has_llm_account(db_session: AsyncSession, task_id: uuid.U
         raise ValidationError("Промт выполняет LLM — выберите у задачи LLM-аккаунт")
 
 
+def _add_queued_request(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    request_type: ManualRequestType,
+    requested_by: uuid.UUID,
+    node_id: uuid.UUID | None = None,
+    raw_prompt_text: str | None = None,
+) -> TaskManualRequestQueue:
+    """Новый запрос в конце FIFO-очереди задачи (правило 1); коммитит вызывающий."""
+    request = TaskManualRequestQueue(
+        task_id=task_id,
+        request_type=request_type,
+        node_id=node_id,
+        raw_prompt_text=raw_prompt_text,
+        requested_by=requested_by,
+        status=ManualRequestStatus.QUEUED,
+        requested_at=datetime.now(UTC),
+    )
+    db_session.add(request)
+    return request
+
+
 async def enqueue_library_prompt_run(
     db_session: AsyncSession,
     *,
@@ -130,15 +155,13 @@ async def enqueue_library_prompt_run(
         raise ValidationError(f"Тип ноды {node.node_type} недопустим для библиотеки промтов")
     if requires_llm_account(node):
         await _ensure_task_has_llm_account(db_session, task_library_prompt.task_id)
-    request = TaskManualRequestQueue(
+    request = _add_queued_request(
+        db_session,
         task_id=task_library_prompt.task_id,
         request_type=ManualRequestType.LIBRARY_PROMPT,
-        node_id=node.id,
         requested_by=requested_by,
-        status=ManualRequestStatus.QUEUED,
-        requested_at=datetime.now(UTC),
+        node_id=node.id,
     )
-    db_session.add(request)
     task_library_prompt.last_run_status = LibraryPromptRunStatus.QUEUED
     await db_session.commit()
     logger.info(
@@ -160,15 +183,13 @@ async def enqueue_freeform_prompt_run(
     # здесь же, до постановки в очередь, а не только на предпросмотре.
     validate_template_variables(raw_prompt_text, scope=RenderScope.FREEFORM)
     await _ensure_task_has_llm_account(db_session, task_id)
-    request = TaskManualRequestQueue(
+    request = _add_queued_request(
+        db_session,
         task_id=task_id,
         request_type=ManualRequestType.FREEFORM_PROMPT,
-        raw_prompt_text=raw_prompt_text,
         requested_by=requested_by,
-        status=ManualRequestStatus.QUEUED,
-        requested_at=datetime.now(UTC),
+        raw_prompt_text=raw_prompt_text,
     )
-    db_session.add(request)
     await db_session.commit()
     logger.info("freeform_prompt_enqueued", task_id=str(task_id))
     return request
@@ -266,15 +287,44 @@ def _activate_context(
         )
 
 
-def _manual_stop_guard(redis_client: Redis, request: TaskManualRequestQueue) -> StopGuard:
-    return StopGuard(redis_client=redis_client, task_id=request.task_id)
+async def _run_stoppable_request(
+    execution: Awaitable[NodeExecutionOutcome],
+    *,
+    request: TaskManualRequestQueue,
+    node_type: NodeType | None,
+    claude_session: ClaudeCodeSession,
+    redis_client: Redis,
+) -> NodeExecutionOutcome | None:
+    """
+    Выполнение ручного запроса; ``None`` — его остановили кнопкой ■ этого
+    запроса (раздел 7.3) или «Остановить» всей задачи (14.2).
+    """
+    guard = StopGuard(redis_client=redis_client, task_id=request.task_id)
+
+    async def stop_requested() -> bool:
+        if await is_manual_stop_requested(redis_client, request.task_id, request.id):
+            return True
+        return await guard.is_stop_requested()
+
+    return await run_node_execution(
+        execution,
+        node_type=node_type,
+        claude_session=claude_session,
+        stop_guard=guard,
+        is_stop_requested=stop_requested,
+    )
 
 
-async def _manual_stop_requested(guard: StopGuard, request: TaskManualRequestQueue) -> bool:
-    """Кнопка ■ этого запроса (раздел 7.3) или «Остановить» всей задачи (14.2)."""
-    if await is_manual_stop_requested(guard.redis_client, guard.task_id, request.id):
-        return True
-    return await guard.is_stop_requested()
+def _settle_library_prompt_run(
+    task_library_prompt: TaskLibraryPrompt | None,
+    *,
+    status: LibraryPromptRunStatus,
+    node_log: NodeLog,
+) -> None:
+    """Итог запуска в таблице системных промтов задачи (раздел 7.3)."""
+    if task_library_prompt is not None:
+        task_library_prompt.last_run_status = status
+        task_library_prompt.last_run_at = node_log.finished_at
 
 
 async def _run_library_prompt(
@@ -303,25 +353,19 @@ async def _run_library_prompt(
 
     history = await load_node_log_history(db_session, task.id)
     prompt = await resolve_node_prompt_or_none(db_session, node=node, task=task, history=history)
-    node_log = NodeLog(
-        task_id=task.id,
-        node_id=node.id,
-        trigger_type=NodeLogTriggerType.LIBRARY_MANUAL,
-        triggered_by=request.requested_by,
-        rendered_prompt=logged_prompt(node, prompt),
-        status=NodeLogStatus.RUNNING,
-        started_at=datetime.now(UTC),
+    node_log = await start_node_log(
+        db_session,
+        NodeLog(
+            task_id=task.id,
+            node_id=node.id,
+            trigger_type=NodeLogTriggerType.LIBRARY_MANUAL,
+            triggered_by=request.requested_by,
+            rendered_prompt=logged_prompt(node, prompt),
+        ),
     )
-    db_session.add(node_log)
-    await db_session.commit()
     _activate_context(active_node_context, node_log=node_log, task=task)
 
-    guard = _manual_stop_guard(redis_client, request)
-
-    async def stop_requested() -> bool:
-        return await _manual_stop_requested(guard, request)
-
-    outcome = await run_node_execution(
+    outcome = await _run_stoppable_request(
         execute_node(
             node,
             prompt=sent_prompt(prompt),
@@ -331,35 +375,29 @@ async def _run_library_prompt(
             runner_image=await resolve_runner_image(db_session, node),
             script_env=await resolve_script_env_or_none(db_session, node=node, task=task),
         ),
+        request=request,
         node_type=node.node_type,
         claude_session=claude_session,
-        stop_guard=guard,
-        is_stop_requested=stop_requested,
+        redis_client=redis_client,
     )
 
-    node_log.finished_at = datetime.now(UTC)
     if outcome is None:
-        node_log.status = NodeLogStatus.STOPPED
-        if node.node_type is not NodeType.SCRIPT:
-            # Раздел 6.4: полученная до остановки часть ответа не теряется.
-            node_log.llm_output_text = claude_session.take_partial_turn_text()
-        if task_library_prompt is not None:
-            task_library_prompt.last_run_status = LibraryPromptRunStatus.STOPPED
-            task_library_prompt.last_run_at = node_log.finished_at
+        mark_node_log_stopped(node_log, node_type=node.node_type, claude_session=claude_session)
+        _settle_library_prompt_run(
+            task_library_prompt,
+            status=LibraryPromptRunStatus.STOPPED,
+            node_log=node_log,
+        )
         await db_session.commit()
         logger.info("library_prompt_run_stopped", node_id=str(node.id))
         return
 
-    node_log.llm_output_text = outcome.llm_output_text
-    node_log.script_stdout = outcome.script_stdout
-    node_log.script_exit_code = outcome.script_exit_code
-    node_log.status = NodeLogStatus.SUCCESS if outcome.success else NodeLogStatus.FAILED
-
-    if task_library_prompt is not None:
-        task_library_prompt.last_run_status = (
-            LibraryPromptRunStatus.SUCCESS if outcome.success else LibraryPromptRunStatus.FAILED
-        )
-        task_library_prompt.last_run_at = node_log.finished_at
+    apply_node_outcome(node_log, outcome)
+    _settle_library_prompt_run(
+        task_library_prompt,
+        status=LibraryPromptRunStatus.SUCCESS if outcome.success else LibraryPromptRunStatus.FAILED,
+        node_log=node_log,
+    )
 
     await db_session.commit()
     await record_sdk_failure(outcome, task_id=task.id, node_id=node.id, source=_LOG_SOURCE)
@@ -389,48 +427,39 @@ async def _run_freeform_prompt(
 ) -> None:
     assert request.raw_prompt_text is not None
     prompt = await render_freeform_prompt(db_session, task=task, text=request.raw_prompt_text)
-    node_log = NodeLog(
-        task_id=task.id,
-        trigger_type=NodeLogTriggerType.FREEFORM_MANUAL,
-        triggered_by=request.requested_by,
-        rendered_prompt=prompt.display,
-        status=NodeLogStatus.RUNNING,
-        started_at=datetime.now(UTC),
+    node_log = await start_node_log(
+        db_session,
+        NodeLog(
+            task_id=task.id,
+            trigger_type=NodeLogTriggerType.FREEFORM_MANUAL,
+            triggered_by=request.requested_by,
+            rendered_prompt=prompt.display,
+        ),
     )
-    db_session.add(node_log)
-    await db_session.commit()
     _activate_context(active_node_context, node_log=node_log, task=task)
 
     # Свободный промт (раздел 8) — всегда обычный текст, без своей ноды и
     # без понятия node_type: `execute_node` здесь не подходит (ему нужен
     # реальный Node для диспетчеризации script/LLM), вызывается LLM-ветка
     # напрямую.
-    guard = _manual_stop_guard(redis_client, request)
-
-    async def stop_requested() -> bool:
-        return await _manual_stop_requested(guard, request)
-
-    outcome = await run_node_execution(
+    outcome = await _run_stoppable_request(
         execute_llm_node_with_timeout(
             claude_session,
             prompt.text,
             timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
         ),
+        request=request,
         node_type=None,
         claude_session=claude_session,
-        stop_guard=guard,
-        is_stop_requested=stop_requested,
+        redis_client=redis_client,
     )
 
-    node_log.finished_at = datetime.now(UTC)
     if outcome is None:
-        node_log.status = NodeLogStatus.STOPPED
-        node_log.llm_output_text = claude_session.take_partial_turn_text()
+        mark_node_log_stopped(node_log, node_type=None, claude_session=claude_session)
         await db_session.commit()
         logger.info("freeform_prompt_run_stopped")
         return
-    node_log.llm_output_text = outcome.llm_output_text
-    node_log.status = NodeLogStatus.SUCCESS if outcome.success else NodeLogStatus.FAILED
+    apply_node_outcome(node_log, outcome)
     await db_session.commit()
     await record_sdk_failure(outcome, task_id=task.id, node_id=None, source=_LOG_SOURCE)
     logger.info(

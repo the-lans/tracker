@@ -17,7 +17,9 @@ from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken
 
-__all__ = ["DecryptionError", "decrypt", "encrypt"]
+__all__ = ["DecryptionError", "decrypt", "encrypt", "fernet_from_env"]
+
+_ENCRYPTION_KEY_ENV = "SECRET_ENCRYPTION_KEY"
 
 
 class DecryptionError(Exception):
@@ -29,10 +31,17 @@ def _derive_fernet_key(secret: str) -> bytes:
     return base64.urlsafe_b64encode(digest)
 
 
-@lru_cache(maxsize=1)
+@lru_cache
+def fernet_from_env(env_name: str) -> Fernet:
+    """
+    Fernet по секрету из переменной окружения ``env_name`` — произвольной
+    строке, приводимой к ключу Fernet через SHA-256.
+    """
+    return Fernet(_derive_fernet_key(os.environ[env_name]))
+
+
 def _fernet() -> Fernet:
-    secret = os.environ["SECRET_ENCRYPTION_KEY"]
-    return Fernet(_derive_fernet_key(secret))
+    return fernet_from_env(_ENCRYPTION_KEY_ENV)
 
 
 def encrypt(value: str) -> str:

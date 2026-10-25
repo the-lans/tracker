@@ -25,6 +25,7 @@ from app_logging.config import get_logger
 from db.models.enums import ParentSummaryStatus, TaskStatus
 from db.models.tasks import Task, TaskParentSummary
 from services.errors import ConflictError
+from services.task_status import lock_task
 from services.task_workspace import task_root
 
 if TYPE_CHECKING:
@@ -72,12 +73,7 @@ async def cleanup_task_repositories(
     # Строка задачи блокируется до коммита: «Перезапустить» ставит воркер в
     # очередь, не меняя статус, — его захват (`UPDATE ... WHERE status`)
     # дождётся конца очистки, и клонирование не пойдёт параллельно с удалением.
-    locked = await db_session.scalar(
-        sa.select(Task)
-        .where(Task.id == task.id)
-        .with_for_update()
-        .execution_options(populate_existing=True),
-    )
+    locked = await lock_task(db_session, task.id)
     if locked is None or locked.status not in CLEANABLE_STATUSES:
         raise ConflictError("Очистить репозитории можно только у завершённой или упавшей задачи")
     if await _summary_in_progress(db_session, locked):

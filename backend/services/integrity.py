@@ -27,6 +27,10 @@ from services.errors import ConflictError
 # к запрету удаления привязанного репозитория (раздел 3.2 ТЗ).
 _TERMINAL_TASK_STATUSES = (TaskStatus.DONE, TaskStatus.FAILED)
 
+TEMPLATE_IS_REPOSITORY_DEFAULT = (
+    "Шаблон назначен репозиторию по умолчанию — сначала снимите его в репозитории"
+)
+
 
 async def _nodes_are_referenced(
     session: AsyncSession,
@@ -48,6 +52,18 @@ async def _nodes_are_referenced(
 
 async def _node_is_referenced(session: AsyncSession, node_id: uuid.UUID) -> bool:
     return await _nodes_are_referenced(session, sa.select(Node.id).where(Node.id == node_id))
+
+
+async def commit_or_conflict(session: AsyncSession, *, message: str) -> None:
+    """
+    Коммит удаления, которому мешает ссылка, появившаяся после проверки
+    (или не выражаемая проверкой): вместо сырой `IntegrityError` — 409.
+    """
+    try:
+        await session.commit()
+    except sa.exc.IntegrityError as exc:
+        await session.rollback()
+        raise ConflictError(message) from exc
 
 
 async def ensure_pipeline_deletable(session: AsyncSession, pipeline_id: uuid.UUID) -> None:
@@ -139,9 +155,7 @@ async def ensure_template_deletable(session: AsyncSession, template_id: uuid.UUI
     """Раздел 3.2: шаблон, назначенный репозиторию по умолчанию, удалить нельзя."""
     stmt = sa.select(Repository.id).where(Repository.default_template_id == template_id).limit(1)
     if (await session.execute(stmt)).first() is not None:
-        raise ConflictError(
-            "Шаблон назначен репозиторию по умолчанию — сначала снимите его в репозитории",
-        )
+        raise ConflictError(TEMPLATE_IS_REPOSITORY_DEFAULT)
 
 
 async def count_library_prompt_usage(db_session: AsyncSession) -> list[tuple[uuid.UUID, int]]:

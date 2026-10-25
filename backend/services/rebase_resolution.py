@@ -17,17 +17,17 @@ conflict`, который ставит периодическая задача. 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 
 from app_logging.config import get_logger
-from db.models.enums import MergeStatus, NodeLogStatus, NodeLogTriggerType, RepositoryRole
+from db.models.enums import MergeStatus, NodeLogTriggerType, RepositoryRole
 from db.models.logs import NodeLog
 from db.models.tasks import TaskRepository
 from services.git_ops import is_rebased_onto_base
 from services.manual_queue import DEFAULT_FREEFORM_TIMEOUT_SECONDS
+from services.node_runs import apply_node_outcome, start_node_log
 from services.nodes.dispatch import execute_llm_node_with_timeout
 from services.task_workspace import load_task_repositories
 
@@ -148,15 +148,10 @@ async def resolve_rebase_conflict(
         return True
 
     prompt = build_rebase_resolution_prompt(outdated)
-    node_log = NodeLog(
-        task_id=task.id,
-        trigger_type=NodeLogTriggerType.PIPELINE,
-        rendered_prompt=prompt,
-        status=NodeLogStatus.RUNNING,
-        started_at=datetime.now(UTC),
+    node_log = await start_node_log(
+        db_session,
+        NodeLog(task_id=task.id, trigger_type=NodeLogTriggerType.PIPELINE, rendered_prompt=prompt),
     )
-    db_session.add(node_log)
-    await db_session.commit()
     if active_node_context is not None:
         active_node_context.activate(node_log_id=node_log.id, task_id=task.id)
 
@@ -168,9 +163,7 @@ async def resolve_rebase_conflict(
     still_outdated = await find_outdated_repositories(db_session, task=task, workspace=workspace)
     resolved = outcome.success and not still_outdated
 
-    node_log.finished_at = datetime.now(UTC)
-    node_log.llm_output_text = outcome.llm_output_text
-    node_log.status = NodeLogStatus.SUCCESS if resolved else NodeLogStatus.FAILED
+    apply_node_outcome(node_log, outcome, success=resolved)
     await db_session.commit()
     if resolved:
         await _clear_conflict_marks(db_session, task)

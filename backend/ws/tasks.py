@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -40,6 +39,7 @@ from services.access import authorize_task_stream
 from services.auth_tokens import InvalidSessionTokenError, verify_session_token
 from services.errors import NotFoundError, UnauthorizedError
 from services.output_stream import output_channel_name
+from services.redis_connection import redis_connection
 
 router = APIRouter()
 
@@ -200,15 +200,13 @@ async def task_status_stream(websocket: WebSocket, task_id: uuid.UUID) -> None:
     async def check_access() -> int | None:
         return await _access_denied_close_code(user_id=user_id, task_id=task_id)
 
-    redis_client = Redis.from_url(os.environ["REDIS_URL"])
-    try:
-        await serve_task_events(
-            websocket,
-            task_id=task_id,
-            redis_client=redis_client,
-            check_access=check_access,
-        )
-    except WebSocketDisconnect:
-        logger.info("ws_task_status_disconnected", task_id=str(task_id))
-    finally:
-        await redis_client.aclose()
+    async with redis_connection() as redis_client:
+        try:
+            await serve_task_events(
+                websocket,
+                task_id=task_id,
+                redis_client=redis_client,
+                check_access=check_access,
+            )
+        except WebSocketDisconnect:
+            logger.info("ws_task_status_disconnected", task_id=str(task_id))

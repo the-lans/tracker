@@ -224,6 +224,30 @@ async def _existing_repository_env(
         yield env
 
 
+async def _remote_branch_exists(branch_name: str, *, repo_dir: Path, env: dict[str, str]) -> bool:
+    _, remote_heads, _ = await _run_git(
+        "ls-remote",
+        "--heads",
+        "origin",
+        branch_name,
+        cwd=repo_dir,
+        env=env,
+    )
+    # `ls-remote` сравнивает шаблон с концом имени ссылки: без точной
+    # проверки `archive/feature/RR-1` сошла бы за `feature/RR-1`.
+    branch_ref = f"{_HEAD_REF_PREFIX}{branch_name}"
+    return any(line.split("\t")[-1] == branch_ref for line in remote_heads.splitlines())
+
+
+async def _checkout_work_branch(branch_name: str, *, repo_dir: Path, env: dict[str, str]) -> None:
+    """Рабочая ветка из origin, если она уже запушена, иначе — новая от базовой."""
+    if await _remote_branch_exists(branch_name, repo_dir=repo_dir, env=env):
+        await _run_git("fetch", "origin", f"{branch_name}:{branch_name}", cwd=repo_dir, env=env)
+        await _run_git("checkout", branch_name, cwd=repo_dir, env=env)
+    else:
+        await _run_git("checkout", "-b", branch_name, cwd=repo_dir, env=env)
+
+
 async def clone_task_repository(
     *,
     repository: Repository,
@@ -253,34 +277,7 @@ async def clone_task_repository(
             cwd=repos_root,
             env=env,
         )
-        _, remote_heads, _ = await _run_git(
-            "ls-remote",
-            "--heads",
-            "origin",
-            task_repository.branch_name,
-            cwd=target_dir,
-            env=env,
-        )
-        # `ls-remote` сравнивает шаблон с концом имени ссылки: без точной
-        # проверки `archive/feature/RR-1` сошла бы за `feature/RR-1`.
-        branch_ref = f"{_HEAD_REF_PREFIX}{task_repository.branch_name}"
-        if any(line.split("\t")[-1] == branch_ref for line in remote_heads.splitlines()):
-            await _run_git(
-                "fetch",
-                "origin",
-                f"{task_repository.branch_name}:{task_repository.branch_name}",
-                cwd=target_dir,
-                env=env,
-            )
-            await _run_git("checkout", task_repository.branch_name, cwd=target_dir, env=env)
-        else:
-            await _run_git(
-                "checkout",
-                "-b",
-                task_repository.branch_name,
-                cwd=target_dir,
-                env=env,
-            )
+        await _checkout_work_branch(task_repository.branch_name, repo_dir=target_dir, env=env)
 
     logger.info(
         "repository_cloned",

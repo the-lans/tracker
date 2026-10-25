@@ -21,7 +21,8 @@ from db.models.enums import PeriodicScheduleType
 from db.models.periodic import PeriodicTask
 from db.models.users import User
 from db.session import get_session
-from services.errors import NotFoundError, ValidationError
+from services.access import get_or_404
+from services.errors import ValidationError
 from tasks.celery_app import celery_app
 
 router = APIRouter(prefix="/periodic-tasks", tags=["admin-periodic-tasks"])
@@ -31,10 +32,12 @@ async def _get_periodic_task_or_404(
     db_session: AsyncSession,
     periodic_task_id: uuid.UUID,
 ) -> PeriodicTask:
-    periodic_task = await db_session.get(PeriodicTask, periodic_task_id)
-    if periodic_task is None:
-        raise NotFoundError(f"Периодическая задача {periodic_task_id} не найдена")
-    return periodic_task
+    return await get_or_404(
+        db_session,
+        PeriodicTask,
+        periodic_task_id,
+        not_found=f"Периодическая задача {periodic_task_id} не найдена",
+    )
 
 
 @router.get("", response_model=list[PeriodicTaskResponse])

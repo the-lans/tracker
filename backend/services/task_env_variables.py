@@ -19,8 +19,9 @@ import sqlalchemy as sa
 from app_logging.config import get_logger
 from db.models.enums import TaskStatus
 from db.models.env_vars import TaskEnvVariable
+from services.access import get_task_record_or_404
 from services.crypto import decrypt, encrypt
-from services.errors import ConflictError, NotFoundError, ValidationError
+from services.errors import ConflictError, ValidationError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,9 +45,13 @@ async def _get_variable(
     task: Task,
     variable_id: uuid.UUID,
 ) -> TaskEnvVariable:
-    variable = await db_session.get(TaskEnvVariable, variable_id)
-    if variable is None or variable.task_id != task.id:
-        raise NotFoundError(f"Переменная {variable_id} не найдена у этой задачи")
+    variable = await get_task_record_or_404(
+        db_session,
+        TaskEnvVariable,
+        variable_id,
+        task_id=task.id,
+        not_found=f"Переменная {variable_id} не найдена у этой задачи",
+    )
     return variable
 
 

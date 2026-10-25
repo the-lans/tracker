@@ -18,14 +18,11 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
+from clients.http_errors import HttpFailure, classify_status
 from services.errors import ExternalServiceError, NotFoundError
 
 _ISSUE_PATH = "/rest/api/2/issue/{key}"
 _ISSUE_FIELDS = "summary,description,attachment"
-_SERVER_ERROR_THRESHOLD = 500
-_CLIENT_ERROR_THRESHOLD = 400
-_TRANSIENT_CLIENT_STATUSES = frozenset({httpx.codes.REQUEST_TIMEOUT, httpx.codes.TOO_MANY_REQUESTS})
-_ACCESS_DENIED_STATUSES = frozenset({httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN})
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,13 +95,14 @@ class JiraClient:
         status = response.status_code
         if status == httpx.codes.NOT_FOUND:
             raise NotFoundError(f"{what} не найдена в Jira")
-        if status >= _SERVER_ERROR_THRESHOLD or status in _TRANSIENT_CLIENT_STATUSES:
+        failure = classify_status(status)
+        if failure is HttpFailure.TRANSIENT:
             message = f"Jira вернула {status} — повторите позже"
             raise ExternalServiceError(message, is_transient=True)
-        if status in _ACCESS_DENIED_STATUSES:
+        if failure is HttpFailure.ACCESS_DENIED:
             message = f"Jira отклонила токен ({status}) — проверьте подключение в профиле"
             raise ExternalServiceError(message, is_transient=False)
-        if status >= _CLIENT_ERROR_THRESHOLD:
+        if failure is HttpFailure.CLIENT_ERROR:
             raise ExternalServiceError(f"Jira вернула {status}: {what}", is_transient=False)
 
     async def _get(self, url: str, *, params: dict[str, str] | None = None) -> httpx.Response:

@@ -48,7 +48,8 @@ from app_logging.config import get_logger
 from db.models.enums import NodeLogStatus, PermissionMode, TaskStatus
 from db.models.logs import NodeLog
 from db.models.tasks import Task
-from services.errors import ConflictError, NotFoundError, ValidationError
+from services.access import get_task_record_or_404
+from services.errors import ConflictError, ValidationError
 from services.task_signal import (
     TaskSignalSubscription,
     publish_task_signal,
@@ -196,6 +197,15 @@ class ActiveNodeContext:
         logger.info("decision_wait_cancelled", node_log_id=str(self.node_log_id))
 
 
+async def _get_node_log(db_session: AsyncSession, node_log_id: uuid.UUID) -> NodeLog:
+    """Запись активной ноды: её отсутствие — ошибка реализации, а не сценарий."""
+    node_log = await db_session.get(NodeLog, node_log_id)
+    if node_log is None:
+        message = f"node_log {node_log_id} не найден"
+        raise ValueError(message)
+    return node_log
+
+
 async def _mark_awaiting_decision(
     db_session: AsyncSession,
     *,
@@ -204,10 +214,7 @@ async def _mark_awaiting_decision(
     pending_plan_text: str | None,
     pending_options: list[dict[str, str]],
 ) -> None:
-    node_log = await db_session.get(NodeLog, node_log_id)
-    if node_log is None:
-        message = f"node_log {node_log_id} не найден"
-        raise ValueError(message)
+    node_log = await _get_node_log(db_session, node_log_id)
     node_log.status = NodeLogStatus.AWAITING_DECISION
     node_log.pending_question = pending_question
     node_log.pending_plan_text = pending_plan_text
@@ -255,9 +262,13 @@ async def record_user_decision(
     `node_logs.user_input_text` ожидающей записи, ожидающий callback
     будится сигналом задачи.
     """
-    node_log = await db_session.get(NodeLog, node_log_id)
-    if node_log is None or node_log.task_id != task.id:
-        raise NotFoundError(f"Запись node_logs {node_log_id} не найдена у этой задачи")
+    node_log = await get_task_record_or_404(
+        db_session,
+        NodeLog,
+        node_log_id,
+        task_id=task.id,
+        not_found=f"Запись node_logs {node_log_id} не найдена у этой задачи",
+    )
     if node_log.status is not NodeLogStatus.AWAITING_DECISION:
         raise ValidationError("Эта запись не ожидает решения")
     node_log.user_input_text = encode_decision(option_id, feedback_text=feedback_text)
@@ -379,10 +390,7 @@ async def _record_plan_auto_accept(
     task_id: uuid.UUID,
     plan_text: str | None,
 ) -> None:
-    node_log = await db_session.get(NodeLog, node_log_id)
-    if node_log is None:
-        message = f"node_log {node_log_id} не найден"
-        raise ValueError(message)
+    node_log = await _get_node_log(db_session, node_log_id)
     node_log.pending_plan_text = plan_text
     node_log.user_input_text = PlanDecisionOption.ACCEPT_AUTO
     # Как и при решении пользователя: принятый план — успешная запись, по
@@ -466,6 +474,30 @@ def _set_session_mode(mode: PermissionMode) -> list[PermissionUpdate]:
     return [PermissionUpdate(type="setMode", mode=mode.value, destination="session")]
 
 
+async def _record_plan_decision(
+    db_session: AsyncSession,
+    *,
+    node_log_id: uuid.UUID,
+    task_id: uuid.UUID,
+    decision: PlanDecisionResult,
+) -> None:
+    """
+    Принятый план завершает ноду и меняет режим задачи; «Доработать план»
+    возвращает ноду в работу (правило 7: без retry).
+    """
+    node_log = await db_session.get(NodeLog, node_log_id)
+    if node_log is not None:
+        node_log.finished_at = datetime.now(UTC)
+        node_log.status = NodeLogStatus.SUCCESS if decision.allow else NodeLogStatus.RUNNING
+    if decision.allow and decision.updated_permission_mode is not None:
+        await _set_task_permission_mode(
+            db_session,
+            task_id=task_id,
+            mode=decision.updated_permission_mode,
+        )
+    await db_session.commit()
+
+
 def build_can_use_tool_callback(
     *,
     context: ActiveNodeContext,
@@ -481,8 +513,54 @@ def build_can_use_tool_callback(
     плану, которое callback передаёт сессии через `setMode` и записывает в
     `tasks.current_permission_mode`.
     """
+    callback = _PermissionCallback(
+        context=context,
+        session_factory=session_factory,
+        redis_client=redis_client,
+        decision_wait_timeout_seconds=decision_wait_timeout_seconds,
+    )
+    return callback.can_use_tool
 
-    async def await_decision(
+
+PermissionResult = PermissionResultAllow | PermissionResultDeny
+
+
+@dataclass(slots=True)
+class _PermissionCallback:
+    context: ActiveNodeContext
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]]
+    redis_client: Redis
+    decision_wait_timeout_seconds: float | None
+
+    async def can_use_tool(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        _permission_context: ToolPermissionContext,
+    ) -> PermissionResult:
+        context = self.context
+        active = context.node_log_id is not None and context.task_id is not None
+        if tool_name in INTERCEPTED_TOOLS:
+            if not active:
+                return PermissionResultDeny(message="Нет активной ноды для обработки решения")
+            if tool_name == EXIT_PLAN_MODE_TOOL:
+                return await self._review_plan(tool_input)
+            return await self._answer_questions(tool_input)
+        if context.plan_mode:
+            return PermissionResultDeny(message=PLAN_MODE_WRITE_DENIED, interrupt=False)
+        if not active:
+            return PermissionResultAllow()
+        assert context.task_id is not None
+        async with self.session_factory() as db_session:
+            mode = await _task_permission_mode(db_session, task_id=context.task_id)
+        if mode is not PermissionMode.DEFAULT:
+            # Раздел 3.1: пока пользователь не выбрал «подтверждать каждое
+            # действие», задача работает автономно.
+            return PermissionResultAllow()
+        return await self._approve_action(tool_name, tool_input)
+
+    async def _await_decision(
+        self,
         *,
         awaiting_status: TaskStatus,
         question: str | None,
@@ -490,6 +568,7 @@ def build_can_use_tool_callback(
         options: list[dict[str, str]],
     ) -> str | None:
         """Решение пользователя в виджете (9.6); `None` — истёк таймаут ожидания."""
+        context = self.context
         assert context.node_log_id is not None and context.task_id is not None
         node_log_id, task_id = context.node_log_id, context.task_id
         resume_status: TaskStatus | None = None
@@ -499,8 +578,8 @@ def build_can_use_tool_callback(
         # коммита перехода, а лишний возврат безопасен — это compare-and-swap.
         context.track_decision_wait()
         try:
-            async with subscribe_task_signal(redis_client, task_id) as signals:
-                async with session_factory() as db_session:
+            async with subscribe_task_signal(self.redis_client, task_id) as signals:
+                async with self.session_factory() as db_session:
                     await _mark_awaiting_decision(
                         db_session,
                         node_log_id=node_log_id,
@@ -518,10 +597,10 @@ def build_can_use_tool_callback(
                         )
                 logger.info("awaiting_user_decision", node_log_id=str(node_log_id))
                 return await _wait_for_resolution(
-                    session_factory=session_factory,
+                    session_factory=self.session_factory,
                     signals=signals,
                     node_log_id=node_log_id,
-                    timeout=decision_wait_timeout_seconds,
+                    timeout=self.decision_wait_timeout_seconds,
                 )
         finally:
             # И после решения, и после таймаута, и при отмене хода (таймаут
@@ -529,7 +608,7 @@ def build_can_use_tool_callback(
             # остаться в ожидании.
             context.untrack_decision_wait()
             if resume_status is not None:
-                async with session_factory() as db_session:
+                async with self.session_factory() as db_session:
                     await leave_decision_status(
                         db_session,
                         task_id=task_id,
@@ -537,9 +616,16 @@ def build_can_use_tool_callback(
                         resume_status=resume_status,
                     )
 
-    async def answer_questions(
-        tool_input: dict[str, Any],
-    ) -> PermissionResultAllow | PermissionResultDeny:
+    async def _finish_question(self, user_input_text: str) -> None:
+        assert self.context.node_log_id is not None
+        async with self.session_factory() as db_session:
+            await _finish_question(
+                db_session,
+                node_log_id=self.context.node_log_id,
+                user_input_text=user_input_text,
+            )
+
+    async def _answer_questions(self, tool_input: dict[str, Any]) -> PermissionResult:
         questions = [item for item in tool_input.get("questions") or [] if isinstance(item, dict)]
         if not questions:
             return PermissionResultDeny(message="Нет вопросов для пользователя")
@@ -547,7 +633,7 @@ def build_can_use_tool_callback(
         for question in questions:
             text = str(question.get("question", ""))
             options = _question_options(question)
-            resolution = await await_decision(
+            resolution = await self._await_decision(
                 awaiting_status=TaskStatus.AWAITING_INPUT,
                 question=text,
                 plan_text=None,
@@ -556,20 +642,15 @@ def build_can_use_tool_callback(
             if resolution is None:
                 return PermissionResultDeny(message=DECISION_TIMEOUT_DENIED)
             answers[text] = answer_from_resolution(resolution, options)
-        assert context.node_log_id is not None
-        async with session_factory() as db_session:
-            await _finish_question(
-                db_session,
-                node_log_id=context.node_log_id,
-                user_input_text="\n".join(f"{q}: {a}" for q, a in answers.items()),
-            )
+        await self._finish_question("\n".join(f"{q}: {a}" for q, a in answers.items()))
         return PermissionResultAllow(updated_input={**tool_input, "answers": answers})
 
-    async def approve_action(
+    async def _approve_action(
+        self,
         tool_name: str,
         tool_input: dict[str, Any],
-    ) -> PermissionResultAllow | PermissionResultDeny:
-        resolution = await await_decision(
+    ) -> PermissionResult:
+        resolution = await self._await_decision(
             awaiting_status=TaskStatus.AWAITING_INPUT,
             question=describe_tool_call(tool_name, tool_input),
             plan_text=None,
@@ -578,13 +659,7 @@ def build_can_use_tool_callback(
         if resolution is None:
             return PermissionResultDeny(message=DECISION_TIMEOUT_DENIED)
         option_id, feedback_text = parse_decision(resolution)
-        assert context.node_log_id is not None
-        async with session_factory() as db_session:
-            await _finish_question(
-                db_session,
-                node_log_id=context.node_log_id,
-                user_input_text=resolution,
-            )
+        await self._finish_question(resolution)
         if option_id == TOOL_APPROVAL_ALLOW:
             return PermissionResultAllow()
         message = "Пользователь запретил это действие"
@@ -592,13 +667,12 @@ def build_can_use_tool_callback(
             message = f"{message}: {feedback_text}"
         return PermissionResultDeny(message=message, interrupt=False)
 
-    async def review_plan(
-        tool_input: dict[str, Any],
-    ) -> PermissionResultAllow | PermissionResultDeny:
+    async def _review_plan(self, tool_input: dict[str, Any]) -> PermissionResult:
+        context = self.context
         assert context.node_log_id is not None and context.task_id is not None
         plan_text = tool_input.get("plan")
         if context.auto_accept_plan:
-            async with session_factory() as db_session:
+            async with self.session_factory() as db_session:
                 await _record_plan_auto_accept(
                     db_session,
                     node_log_id=context.node_log_id,
@@ -610,7 +684,7 @@ def build_can_use_tool_callback(
             return PermissionResultAllow(
                 updated_permissions=_set_session_mode(PermissionMode.ACCEPT_EDITS),
             )
-        resolution = await await_decision(
+        resolution = await self._await_decision(
             awaiting_status=TaskStatus.PLAN_REVIEW,
             question=None,
             plan_text=plan_text,
@@ -620,18 +694,13 @@ def build_can_use_tool_callback(
             return PermissionResultDeny(message=DECISION_TIMEOUT_DENIED)
         option_id, feedback_text = parse_decision(resolution)
         decision = apply_plan_decision(option_id, feedback_text=feedback_text)
-        async with session_factory() as db_session:
-            node_log = await db_session.get(NodeLog, context.node_log_id)
-            if node_log is not None:
-                node_log.finished_at = datetime.now(UTC)
-                node_log.status = NodeLogStatus.SUCCESS if decision.allow else NodeLogStatus.RUNNING
-            if decision.allow and decision.updated_permission_mode is not None:
-                await _set_task_permission_mode(
-                    db_session,
-                    task_id=context.task_id,
-                    mode=decision.updated_permission_mode,
-                )
-            await db_session.commit()
+        async with self.session_factory() as db_session:
+            await _record_plan_decision(
+                db_session,
+                node_log_id=context.node_log_id,
+                task_id=context.task_id,
+                decision=decision,
+            )
         if not decision.allow:
             return PermissionResultDeny(message=decision.feedback_text or "", interrupt=False)
         context.plan_mode = False
@@ -640,30 +709,3 @@ def build_can_use_tool_callback(
         return PermissionResultAllow(
             updated_permissions=_set_session_mode(decision.updated_permission_mode),
         )
-
-    async def can_use_tool(
-        tool_name: str,
-        tool_input: dict[str, Any],
-        _permission_context: ToolPermissionContext,
-    ) -> PermissionResultAllow | PermissionResultDeny:
-        active = context.node_log_id is not None and context.task_id is not None
-        if tool_name in INTERCEPTED_TOOLS:
-            if not active:
-                return PermissionResultDeny(message="Нет активной ноды для обработки решения")
-            if tool_name == EXIT_PLAN_MODE_TOOL:
-                return await review_plan(tool_input)
-            return await answer_questions(tool_input)
-        if context.plan_mode:
-            return PermissionResultDeny(message=PLAN_MODE_WRITE_DENIED, interrupt=False)
-        if not active:
-            return PermissionResultAllow()
-        assert context.task_id is not None
-        async with session_factory() as db_session:
-            mode = await _task_permission_mode(db_session, task_id=context.task_id)
-        if mode is not PermissionMode.DEFAULT:
-            # Раздел 3.1: пока пользователь не выбрал «подтверждать каждое
-            # действие», задача работает автономно.
-            return PermissionResultAllow()
-        return await approve_action(tool_name, tool_input)
-
-    return can_use_tool

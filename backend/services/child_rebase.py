@@ -14,8 +14,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import sqlalchemy as sa
-
 from app_logging.config import get_logger
 from db.models.enums import MergeStatus, TaskStatus
 from db.models.repositories import Repository
@@ -23,6 +21,7 @@ from db.models.tasks import TaskRepository
 from services.errors import ConflictError
 from services.git_ops import RebaseConflictError, has_uncommitted_changes, rebase_onto_base_branch
 from services.task_status import transition_task_status
+from services.task_workspace import load_task_repositories
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -41,17 +40,10 @@ async def _requested_rebases(
     db_session: AsyncSession,
     task: Task,
 ) -> list[tuple[TaskRepository, Repository]]:
-    stmt = (
-        sa.select(TaskRepository, Repository)
-        .join(Repository, Repository.id == TaskRepository.repository_id)
-        .where(
-            TaskRepository.task_id == task.id,
-            TaskRepository.rebase_requested_at.is_not(None),
-        )
-    )
     return [
         (task_repository, repository)
-        for task_repository, repository in (await db_session.execute(stmt)).all()
+        for task_repository, repository in await load_task_repositories(db_session, task.id)
+        if task_repository.rebase_requested_at is not None
     ]
 
 

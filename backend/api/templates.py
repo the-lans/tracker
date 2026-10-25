@@ -15,8 +15,11 @@ from db.models.repositories import Template, TemplateMcpServer
 from db.models.users import User
 from db.session import get_session
 from services.access import get_template_for_user, owner_filter
-from services.errors import ConflictError
-from services.integrity import ensure_template_deletable
+from services.integrity import (
+    TEMPLATE_IS_REPOSITORY_DEFAULT,
+    commit_or_conflict,
+    ensure_template_deletable,
+)
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 
@@ -145,11 +148,5 @@ async def delete_template(
     await ensure_template_deletable(db_session, template_id)
     await _replace_mcp_server_links(db_session, template_id=template_id, mcp_server_ids=[])
     await db_session.delete(template)
-    try:
-        await db_session.commit()
-    except sa.exc.IntegrityError as exc:
-        # Репозиторий выбрал шаблон по умолчанию уже после проверки.
-        await db_session.rollback()
-        raise ConflictError(
-            "Шаблон назначен репозиторию по умолчанию — сначала снимите его в репозитории",
-        ) from exc
+    # Репозиторий мог выбрать шаблон по умолчанию уже после проверки.
+    await commit_or_conflict(db_session, message=TEMPLATE_IS_REPOSITORY_DEFAULT)

@@ -1,4 +1,4 @@
-"""Роутер `api/tasks.py` — жизненный цикл задачи (раздел 2.3, 2.4, 7, 8, 9.6 ТЗ)."""
+"""Роутер `api/tasks/` — жизненный цикл задачи (раздел 2.3, 2.4, 7, 8, 9.6 ТЗ)."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from services.task_control import (
     read_task_control,
 )
 from services.task_signal import wait_for_task_signal
-from tests.factories import make_llm_account
+from tests.factories import make_llm_account, make_repository
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -239,7 +239,7 @@ async def test_start_task_transitions_to_queued_and_enqueues_session_worker(
     task_body = await _create_task(authed_client)
     enqueued_task_ids: list[str] = []
     monkeypatch.setattr(
-        "api.tasks.run_task_session",
+        "api.tasks.lifecycle.run_task_session",
         SimpleNamespace(delay=enqueued_task_ids.append),
     )
 
@@ -260,7 +260,10 @@ async def test_start_task_rejects_task_not_in_new_status(
     assert task is not None
     task.status = TaskStatus.DONE
     await db_session.flush()
-    monkeypatch.setattr("api.tasks.run_task_session", SimpleNamespace(delay=lambda _task_id: None))
+    monkeypatch.setattr(
+        "api.tasks.lifecycle.run_task_session",
+        SimpleNamespace(delay=lambda _task_id: None),
+    )
 
     response = await authed_client.post(f"/tasks/{task_body['id']}/start")
 
@@ -483,10 +486,7 @@ async def test_cancel_manual_queue_request_rejects_already_processed(
 
 
 async def _make_repository(db_session: AsyncSession, name: str = "backend") -> Repository:
-    repository = Repository(name=name, git_url="git@example.com:x.git", deploy_key_encrypted="k")
-    db_session.add(repository)
-    await db_session.flush()
-    return repository
+    return await make_repository(db_session, name=name)
 
 
 async def test_create_task_attaches_repositories_and_llm_account(
@@ -600,7 +600,7 @@ async def test_restart_task_reruns_failed_node(
     await db_session.flush()
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     monkeypatch.setattr(
-        "api.tasks.run_task_session",
+        "api.tasks.lifecycle.run_task_session",
         SimpleNamespace(delay=lambda *args, **kwargs: calls.append((args, kwargs))),
     )
 
@@ -616,7 +616,7 @@ async def test_restart_task_rejects_task_not_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     task_body = await _create_task(authed_client)
-    monkeypatch.setattr("api.tasks.run_task_session", SimpleNamespace(delay=None))
+    monkeypatch.setattr("api.tasks.lifecycle.run_task_session", SimpleNamespace(delay=None))
 
     response = await authed_client.post(f"/tasks/{task_body['id']}/restart")
 
