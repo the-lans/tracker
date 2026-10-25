@@ -13,6 +13,8 @@ Celery-задачи — синхронные функции (`@celery_app.task`)
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -39,9 +41,8 @@ from services.llm_accounts import restore_expired_rate_limits
 from services.log_rotation import resolve_archive_root, rotate_node_logs
 from services.manual_queue import STALE_QUEUED_REQUEST_AGE, expire_stale_manual_queue_requests
 from services.periodic_tasks import mark_periodic_task_running, record_periodic_task_run
-from services.remote_control import check_task_bridge
+from services.remote_control import check_session_bridges
 from services.system_settings import get_gitlab_credentials
-from services.task_workspace import resolve_repos_root
 from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import celery_app
 from tasks.session_worker import run_task_session
@@ -96,6 +97,16 @@ def _run_periodic(name: str, body: Callable[[AsyncSession], Awaitable[None]]) ->
     run_with_fresh_pool(_run_periodic_async(name, body))
 
 
+@asynccontextmanager
+async def _redis_client() -> AsyncIterator[Redis]:
+    """Клиент Redis на один запуск периодической задачи — в её event loop."""
+    redis_client = Redis.from_url(os.environ["REDIS_URL"])
+    try:
+        yield redis_client
+    finally:
+        await redis_client.aclose()
+
+
 @celery_app.task(name="check_scheduled_tasks_for_autostart")
 def check_scheduled_tasks_for_autostart() -> None:
     async def body(db_session: AsyncSession) -> None:
@@ -119,15 +130,12 @@ def check_llm_account_limits() -> None:
 @celery_app.task(name="cleanup_stale_worktrees")
 def cleanup_stale_worktrees() -> None:
     async def body(db_session: AsyncSession) -> None:
-        redis_client = Redis.from_url(os.environ["REDIS_URL"])
-        try:
+        async with _redis_client() as redis_client:
             reminded = await maintenance_tasks.send_cleanup_reminders(
                 db_session,
                 redis_client=redis_client,
                 now=datetime.now(UTC),
             )
-        finally:
-            await redis_client.aclose()
         logger.info("cleanup_reminders_sent", count=len(reminded))
 
     _run_periodic("cleanup_stale_worktrees", body)
@@ -136,15 +144,12 @@ def cleanup_stale_worktrees() -> None:
 @celery_app.task(name="detect_awaiting_input_timeout")
 def detect_awaiting_input_timeout() -> None:
     async def body(db_session: AsyncSession) -> None:
-        redis_client = Redis.from_url(os.environ["REDIS_URL"])
-        try:
+        async with _redis_client() as redis_client:
             reminded = await maintenance_tasks.send_awaiting_decision_reminders(
                 db_session,
                 redis_client=redis_client,
                 now=datetime.now(UTC),
             )
-        finally:
-            await redis_client.aclose()
         logger.info("awaiting_decision_reminders_sent", count=len(reminded))
 
     _run_periodic("detect_awaiting_input_timeout", body)
@@ -171,21 +176,17 @@ def sync_gitlab_merge_status() -> None:
             (task_repository, repository, task)
             for task_repository, repository, task in (await db_session.execute(stmt)).all()
         ]
-        redis_client = Redis.from_url(os.environ["REDIS_URL"])
-        try:
-            async with httpx.AsyncClient() as http_client:
-                await gitlab_sync.sync_merge_statuses(
-                    db_session,
-                    rows=rows,
-                    gitlab_client=GitlabClient(
-                        base_url=credentials.url,
-                        token=credentials.token,
-                        http_client=http_client,
-                    ),
-                    redis_client=redis_client,
-                )
-        finally:
-            await redis_client.aclose()
+        async with _redis_client() as redis_client, httpx.AsyncClient() as http_client:
+            await gitlab_sync.sync_merge_statuses(
+                db_session,
+                rows=rows,
+                gitlab_client=GitlabClient(
+                    base_url=credentials.url,
+                    token=credentials.token,
+                    http_client=http_client,
+                ),
+                redis_client=redis_client,
+            )
 
     _run_periodic("sync_gitlab_merge_status", body)
 
@@ -193,14 +194,14 @@ def sync_gitlab_merge_status() -> None:
 @celery_app.task(name="rebase_child_branches_on_parent_merge")
 def rebase_child_branches_on_parent_merge() -> None:
     async def body(db_session: AsyncSession) -> None:
-        repos_root = resolve_repos_root()
         merged = await gitlab_sync.find_merged_parents_with_children(db_session)
-        for parent_task_repository in merged:
-            await gitlab_sync.rebase_child_task_repositories_on_parent_merge(
-                db_session,
-                parent_task_repository=parent_task_repository,
-                repos_root=repos_root,
-            )
+        async with _redis_client() as redis_client:
+            for parent_task_repository in merged:
+                await gitlab_sync.request_child_rebases_on_parent_merge(
+                    db_session,
+                    parent_task_repository=parent_task_repository,
+                    redis_client=redis_client,
+                )
 
     _run_periodic("rebase_child_branches_on_parent_merge", body)
 
@@ -209,6 +210,8 @@ def rebase_child_branches_on_parent_merge() -> None:
 def purge_orphaned_docker_containers() -> None:
     async def body(_db_session: AsyncSession) -> None:
         await maintenance_tasks.purge_orphaned_docker_containers()
+        async with _redis_client() as redis_client:
+            await maintenance_tasks.purge_orphaned_session_containers(redis_client)
 
     _run_periodic("purge_orphaned_docker_containers", body)
 
@@ -241,15 +244,12 @@ def rotate_task_logs() -> None:
 @celery_app.task(name="revoke_stale_sshfs_keys")
 def revoke_stale_sshfs_keys() -> None:
     async def body(db_session: AsyncSession) -> None:
-        redis_client = Redis.from_url(os.environ["REDIS_URL"])
-        try:
+        async with _redis_client() as redis_client:
             reminded = await maintenance_tasks.revoke_stale_sshfs_keys(
                 db_session,
                 redis_client=redis_client,
                 now=datetime.now(UTC),
             )
-        finally:
-            await redis_client.aclose()
         logger.info("stale_ssh_key_reminders_sent", count=len(reminded))
 
     _run_periodic("revoke_stale_sshfs_keys", body)
@@ -279,13 +279,8 @@ def deprovision_inactive_users() -> None:
 @celery_app.task(name="check_remote_control_bridges")
 def check_remote_control_bridges() -> None:
     async def body(db_session: AsyncSession) -> None:
-        tasks = await maintenance_tasks.find_tasks_requiring_remote_control_check(db_session)
-        redis_client = Redis.from_url(os.environ["REDIS_URL"])
-        try:
-            for task in tasks:
-                await check_task_bridge(db_session, task=task, redis_client=redis_client)
-        finally:
-            await redis_client.aclose()
+        async with _redis_client() as redis_client:
+            await check_session_bridges(db_session, redis_client=redis_client)
 
     _run_periodic("check_remote_control_bridges", body)
 

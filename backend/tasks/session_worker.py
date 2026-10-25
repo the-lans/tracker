@@ -34,6 +34,7 @@ from db.models.mcp import McpServer
 from db.models.repositories import Repository, TemplateMcpServer
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
 from db.session import async_session_factory
+from services.child_rebase import apply_requested_rebases
 from services.claude_config import ensure_history_retention, history_retention_days
 from services.errors import ConflictError
 from services.llm_accounts import record_rate_limit
@@ -55,7 +56,12 @@ from services.pipeline_orchestrator import CheckpointDecision, StopGuard, run_pi
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
 from services.remote_control import record_bridge_status
-from services.session_heartbeat import keep_session_heartbeat
+from services.session_container import SESSION_CLI_PATH, build_session_cli_env
+from services.session_heartbeat import (
+    SESSION_OWNER_WAIT_SECONDS,
+    SessionAlreadyOwnedError,
+    keep_session_heartbeat,
+)
 from services.session_lifecycle import plan_session_start
 from services.task_artifacts import task_artifacts_dir
 from services.task_control import (
@@ -206,10 +212,14 @@ class _SessionControl:
         """
         `False` — агент не справился, задачу надо переводить в `failed`.
 
-        Конфликт узнаётся и по статусу, и по признаку в `task_repositories`:
-        после неудачной автообработки и перезапуска из `failed` статус уже
+        Сначала — ребейзы, запрошенные после слияния ветки родителя
+        (`services/child_rebase.py`): они могут и создать конфликт. Конфликт
+        узнаётся и по статусу, и по признаку в `task_repositories`: после
+        неудачной автообработки и перезапуска из `failed` статус уже
         `in_progress`, а ветка всё ещё не перебазирована.
         """
+        await self.db_session.refresh(self.task)
+        await apply_requested_rebases(self.db_session, task=self.task, workspace=self.workspace)
         await self.db_session.refresh(self.task)
         in_conflict_status = self.task.status is TaskStatus.REBASE_CONFLICT
         if not in_conflict_status and not await has_unresolved_rebase_conflict(
@@ -393,31 +403,55 @@ async def _run_task_session_async(
         if task is None:
             logger.warning("task_not_found", task_id=str(task_id))
             return
-        if not await _claim_task(db_session, task, continuation=continuation):
-            return
-
         redis_client = Redis.from_url(os.environ["REDIS_URL"])
         try:
-            if not continuation:
-                # Команда, адресованная прошлому прогону, к этому не относится.
-                await clear_task_control(redis_client, task_id)
-            async with keep_session_heartbeat(redis_client, task_id):
-                await _run_claimed_task(
+            # Раздел 17.4: сначала владение сессией, затем статус — второй
+            # исполнитель той же задачи уходит, ничего не изменив.
+            async with keep_session_heartbeat(
+                redis_client,
+                task_id,
+                acquire_timeout=SESSION_OWNER_WAIT_SECONDS,
+            ):
+                if not await _claim_task(db_session, task, continuation=continuation):
+                    return
+                await _run_owned_session(
                     db_session,
                     task=task,
                     redis_client=redis_client,
                     start_after_order_index=start_after_order_index,
+                    continuation=continuation,
                 )
-        except Exception as exc:
-            # Раздел 17.3: любая ошибка сессии переводит задачу в `failed`,
-            # а не оставляет её в `in_progress` навсегда.
-            logger.exception("task_session_failed", task_id=str(task_id))
-            await fail_task_after_error(db_session, task_id=task_id, error=exc)
+        except SessionAlreadyOwnedError:
+            logger.info("task_session_already_owned", task_id=str(task_id))
         finally:
-            try:
-                await _settle_bridge_request(db_session, task_id=task_id, redis_client=redis_client)
-            finally:
-                await redis_client.aclose()
+            await redis_client.aclose()
+
+
+async def _run_owned_session(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    redis_client: Redis,
+    start_after_order_index: int | None,
+    continuation: bool,
+) -> None:
+    try:
+        if not continuation:
+            # Команда, адресованная прошлому прогону, к этому не относится.
+            await clear_task_control(redis_client, task.id)
+        await _run_claimed_task(
+            db_session,
+            task=task,
+            redis_client=redis_client,
+            start_after_order_index=start_after_order_index,
+        )
+    except Exception as exc:
+        # Раздел 17.3: любая ошибка сессии переводит задачу в `failed`,
+        # а не оставляет её в `in_progress` навсегда.
+        logger.exception("task_session_failed", task_id=str(task.id))
+        await fail_task_after_error(db_session, task_id=task.id, error=exc)
+    finally:
+        await _settle_bridge_request(db_session, task_id=task.id, redis_client=redis_client)
 
 
 async def _claude_config_dir(db_session: AsyncSession, task: Task) -> str:
@@ -457,15 +491,23 @@ async def _summarize_parent_in_fork(
     # После очистки репозиториев родителя его папки может не быть, а resume
     # ищет историю сессии по рабочей директории.
     parent_root.mkdir(parents=True, exist_ok=True)
+    parent_config_dir = await _claude_config_dir(db_session, parent)
     options = build_claude_agent_options(
         resume_session_id=parent.session_id,
         cwd=str(parent_root),
         permission_mode=None,
         mcp_servers={},
-        claude_config_dir=await _claude_config_dir(db_session, parent),
+        claude_config_dir=parent_config_dir,
         enable_remote_control=False,
         can_use_tool=deny_all_tools,
         fork_session=True,
+        cli_path=str(SESSION_CLI_PATH),
+        # Контейнер пересказа — часть сессии дочерней задачи: метка её.
+        cli_env=await build_session_cli_env(
+            task_id=child.id,
+            cwd=parent_root,
+            claude_config_dir=parent_config_dir,
+        ),
     )
     ensure_history_retention(options.env["CLAUDE_CONFIG_DIR"], days=history_retention_days())
     fork = ClaudeCodeSession(ClaudeSDKClient(options=options))
@@ -570,6 +612,16 @@ async def _run_claimed_task(
         redis_client=redis_client,
     )
     has_llm = task.llm_account_id is not None
+    cli_env = (
+        await build_session_cli_env(
+            task_id=task.id,
+            cwd=workspace,
+            claude_config_dir=claude_config_dir,
+            artifacts_dir=artifacts_dir,
+        )
+        if has_llm
+        else {}
+    )
 
     def make_client(
         *,
@@ -587,6 +639,8 @@ async def _run_claimed_task(
             enable_remote_control=enable_remote_control,
             can_use_tool=can_use_tool,
             add_dirs=[str(artifacts_dir)],
+            cli_path=str(SESSION_CLI_PATH),
+            cli_env=cli_env,
         )
         return ClaudeSDKClient(options=options)
 

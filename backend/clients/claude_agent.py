@@ -19,7 +19,7 @@ Celery-таска на весь активный жизненный цикл с�
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol
 
 from claude_agent_sdk import (
@@ -110,6 +110,8 @@ def build_claude_agent_options(
     can_use_tool: CanUseTool | None = None,
     fork_session: bool = False,
     add_dirs: Sequence[str] = (),
+    cli_path: str | None = None,
+    cli_env: Mapping[str, str] | None = None,
 ) -> ClaudeAgentOptions:
     """Собирает `ClaudeAgentOptions` для сессии задачи (раздел 6.1, 19.5).
 
@@ -125,6 +127,8 @@ def build_claude_agent_options(
     продолжает чужую историю в новой сессии, не меняя исходную, — так
     пересказывается история родительской задачи. ``add_dirs`` — каталоги вне
     ``cwd``, с которыми сессии можно работать: артефакты задачи (раздел 14.3).
+    ``cli_path`` и ``cli_env`` — обёртка, запускающая CLI в контейнере сессии,
+    и её настройки (раздел 19.3, `services/session_container.py`).
     """
     extra_args: dict[str, str | None] = {}
     if enable_remote_control:
@@ -140,6 +144,7 @@ def build_claude_agent_options(
         extra_args=extra_args,
         fork_session=fork_session,
         add_dirs=list(add_dirs),
+        cli_path=cli_path,
     )
 
     return ClaudeAgentOptions(
@@ -148,7 +153,8 @@ def build_claude_agent_options(
         cwd=cwd,
         permission_mode=permission_mode,  # type: ignore[arg-type]
         mcp_servers=mcp_servers,
-        env={"CLAUDE_CONFIG_DIR": claude_config_dir},
+        env={**(cli_env or {}), "CLAUDE_CONFIG_DIR": claude_config_dir},
+        cli_path=cli_path,
         extra_args=extra_args,
         can_use_tool=can_use_tool,
         include_partial_messages=True,

@@ -17,16 +17,16 @@ from pathlib import Path
 import pytest
 
 from db.models.enums import ScriptLanguage
-from services.nodes import script as script_module
-from services.nodes.script import (
+from services import docker_mounts
+from services.docker_mounts import (
     RepositoryMountError,
     RootMount,
     parse_root_mount,
     resolve_root_mount,
-    run_script_node,
     subpath_mount_args,
-    task_mount_args,
 )
+from services.nodes import script as script_module
+from services.nodes.script import run_script_node, task_mount_args
 
 _GENEROUS_TIMEOUT_SECONDS = 30
 
@@ -247,7 +247,7 @@ class TestTaskMounts:
         async def fake_resolve(root: Path) -> RootMount | None:
             return mounts[str(root.resolve())]
 
-        monkeypatch.setattr(script_module, "resolve_root_mount", fake_resolve)
+        monkeypatch.setattr(docker_mounts, "resolve_root_mount", fake_resolve)
         repos_path = tmp_path / "repos" / "RR-10001"
         artifacts_path = user_files_root / "RR-10001"
 
@@ -284,7 +284,7 @@ class TestResolveRootMount:
 
     @pytest.fixture(autouse=True)
     def _clean_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(script_module, "_root_mount_cache", {})
+        monkeypatch.setattr(docker_mounts, "_root_mount_cache", {})
 
     def _inspect_results(
         self,
@@ -297,7 +297,7 @@ class TestResolveRootMount:
             calls.append(1)
             return results[len(calls) - 1]
 
-        monkeypatch.setattr(script_module, "_inspect_root_mount", fake_inspect)
+        monkeypatch.setattr(docker_mounts, "_inspect_root_mount", fake_inspect)
         return calls
 
     async def test_retry_after_failure(
@@ -307,7 +307,7 @@ class TestResolveRootMount:
     ) -> None:
         marker = tmp_path / ".dockerenv"
         marker.touch()
-        monkeypatch.setattr(script_module, "_CONTAINER_MARKER", marker)
+        monkeypatch.setattr(docker_mounts, "_CONTAINER_MARKER", marker)
         mount = RootMount(type="volume", name="v", source="/x")
         calls = self._inspect_results(monkeypatch, [None, mount, None])
 
@@ -318,7 +318,7 @@ class TestResolveRootMount:
         assert len(calls) == 2
 
     async def test_outside_container(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(script_module, "_CONTAINER_MARKER", tmp_path / "absent")
+        monkeypatch.setattr(docker_mounts, "_CONTAINER_MARKER", tmp_path / "absent")
         self._inspect_results(monkeypatch, [None])
 
         assert await resolve_root_mount(tmp_path) is None

@@ -156,8 +156,8 @@ async def test_find_tasks_requiring_remote_control_check_matches_active_statuses
 
     assert in_progress.id in found_ids
     assert done.id not in found_ids
-    # Раздел 3.1: у задачи без LLM-аккаунта сессии Claude Code и моста нет.
-    assert scripts_only.id not in found_ids
+    # Раздел 6.6: моста нет, но потерянный воркер переводит в `failed` и её.
+    assert scripts_only.id in found_ids
 
 
 async def _run_labelled_container(deadline: int) -> str:

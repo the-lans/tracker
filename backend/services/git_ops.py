@@ -9,6 +9,12 @@ Deploy-ключ репозитория хранится в БД зашифров
 никогда не попадает на диск постоянно — на время каждой git-операции он
 пишется во временный файл с правами 0600 и передаётся `git` через
 переменную окружения ``GIT_SSH_COMMAND``, удаляется сразу после операции.
+
+Рабочую директорию меняют агент и script-ноды, поэтому git воркера не
+исполняет ничего из репозитория (раздел 19.3, решение №22 плана): хуки и
+`fsmonitor` отключены параметрами командной строки, системный и глобальный
+конфиг не читаются, а локальный `.git/config` перед каждой операцией
+сводится к белому списку ключей с `origin` из `repositories.git_url`.
 """
 
 from __future__ import annotations
@@ -40,6 +46,50 @@ _DEFAULT_GIT_IDENTITY = {
     "GIT_COMMITTER_NAME": "AI Tracker",
     "GIT_COMMITTER_EMAIL": "tracker@localhost",
 }
+# Системный и глобальный конфиг не читаются, git ничего не спрашивает.
+_ISOLATED_GIT_ENV = {
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_TERMINAL_PROMPT": "0",
+}
+# Параметры командной строки сильнее локального конфига: даже если его
+# успели изменить после очистки, хуки и `fsmonitor` не запустятся.
+_HARDENING_ARGS = (
+    "-c",
+    f"core.hooksPath={os.devnull}",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "protocol.ext.allow=never",
+)
+# Ключи локального конфига, без которых репозиторий и рабочая ветка не
+# работают; всё остальное (фильтры, `include`, `gpg.program`,
+# `core.sshCommand`, `url.*.insteadOf` и т. п.) удаляется.
+_LOCAL_CONFIG_ALLOWED_KEYS = frozenset(
+    {
+        "core.repositoryformatversion",
+        "core.filemode",
+        "core.bare",
+        "core.logallrefupdates",
+        "core.ignorecase",
+        "core.precomposeunicode",
+        "core.symlinks",
+    },
+)
+_LOCAL_CONFIG_ALLOWED_PREFIXES = ("extensions.",)
+_BRANCH_SECTION = "branch."
+_BRANCH_ALLOWED_SUFFIXES = (".remote", ".merge")
+_ORIGIN_URL_KEY = "remote.origin.url"
+_ORIGIN_FETCH_KEY = "remote.origin.fetch"
+_ORIGIN_FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*"
+
+
+_REBASE_STATE_DIRS = ("rebase-merge", "rebase-apply")
+
+
+def _rebase_in_progress(repo_dir: Path) -> bool:
+    git_dir = repo_dir / ".git"
+    return any((git_dir / state_dir).exists() for state_dir in _REBASE_STATE_DIRS)
 
 
 class RebaseConflictError(Exception):
@@ -61,6 +111,7 @@ async def _deploy_key_env(repository: Repository) -> AsyncIterator[dict[str, str
         yield {
             **_DEFAULT_GIT_IDENTITY,
             **os.environ,
+            **_ISOLATED_GIT_ENV,
             "GIT_SSH_COMMAND": (
                 f"ssh -i {key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
             ),
@@ -77,6 +128,7 @@ async def _run_git(
 ) -> tuple[int, str, str]:
     process = await asyncio.create_subprocess_exec(
         "git",
+        *_HARDENING_ARGS,
         *args,
         cwd=str(cwd),
         env=env,
@@ -91,6 +143,85 @@ async def _run_git(
             is_transient=False,
         )
     return returncode, stdout.decode(), stderr.decode()
+
+
+def _is_allowed_local_key(key: str) -> bool:
+    if key in _LOCAL_CONFIG_ALLOWED_KEYS or key.startswith(_LOCAL_CONFIG_ALLOWED_PREFIXES):
+        return True
+    return key.startswith(_BRANCH_SECTION) and key.endswith(_BRANCH_ALLOWED_SUFFIXES)
+
+
+ConfigEntry = tuple[str, str]
+
+
+def _parse_config_entries(listing: str) -> list[ConfigEntry]:
+    """Вывод ``git config --list -z``: записи ``ключ\\nзначение`` через NUL."""
+    entries = []
+    for record in listing.split("\0"):
+        if record:
+            key, _, value = record.partition("\n")
+            entries.append((key, value))
+    return entries
+
+
+async def _read_config_file(
+    path: Path, *, repo_dir: Path, env: dict[str, str]
+) -> list[ConfigEntry]:
+    _, listing, _ = await _run_git(
+        "config",
+        "--file",
+        str(path),
+        "--no-includes",
+        "--list",
+        "-z",
+        cwd=repo_dir,
+        env=env,
+    )
+    return _parse_config_entries(listing)
+
+
+async def _write_config_file(
+    path: Path,
+    entries: list[ConfigEntry],
+    *,
+    repo_dir: Path,
+    env: dict[str, str],
+) -> None:
+    path.unlink(missing_ok=True)
+    for key, value in entries:
+        await _run_git("config", "--file", str(path), "--add", key, value, cwd=repo_dir, env=env)
+
+
+async def sanitize_local_config(*, repo_dir: Path, git_url: str, env: dict[str, str]) -> None:
+    """
+    Пересобирает `.git/config` из белого списка ключей; `origin` — адрес из
+    `repositories.git_url` и стандартный refspec (раздел 19.3). Новый файл
+    подменяет старый целиком.
+    """
+    config_path = repo_dir / ".git" / "config"
+    entries = await _read_config_file(config_path, repo_dir=repo_dir, env=env)
+    allowed = [(key, value) for key, value in entries if _is_allowed_local_key(key)]
+    origin = [(_ORIGIN_URL_KEY, git_url), (_ORIGIN_FETCH_KEY, _ORIGIN_FETCH_REFSPEC)]
+
+    clean_path = config_path.with_name("config.tracker-clean")
+    await _write_config_file(clean_path, [*allowed, *origin], repo_dir=repo_dir, env=env)
+    clean_path.replace(config_path)
+
+    kept_keys = {key for key, _ in [*allowed, *origin]}
+    dropped = sorted({key for key, _ in entries} - kept_keys)
+    if dropped:
+        logger.warning("git_local_config_sanitized", repo_dir=str(repo_dir), dropped_keys=dropped)
+
+
+@asynccontextmanager
+async def _existing_repository_env(
+    repository: Repository,
+    repo_dir: Path,
+) -> AsyncIterator[dict[str, str]]:
+    """Окружение git с deploy-ключом для уже клонированного репозитория — после очистки конфига."""
+    async with _deploy_key_env(repository) as env:
+        await sanitize_local_config(repo_dir=repo_dir, git_url=repository.git_url, env=env)
+        yield env
 
 
 async def clone_task_repository(
@@ -176,7 +307,7 @@ async def push_task_repository(
         )
         return
 
-    async with _deploy_key_env(repository) as env:
+    async with _existing_repository_env(repository, repo_dir) as env:
         await _run_git("push", "origin", task_repository.branch_name, cwd=repo_dir, env=env)
 
     logger.info(
@@ -198,7 +329,7 @@ async def rebase_onto_base_branch(
     `RebaseConflictError` — вызывающий код (оркестратор, этап 6/10) обязан
     перевести задачу в статус `rebase_conflict` (раздел 14).
     """
-    async with _deploy_key_env(repository) as env:
+    async with _existing_repository_env(repository, repo_dir) as env:
         await _run_git("fetch", "origin", task_repository.base_branch, cwd=repo_dir, env=env)
         returncode, _stdout, stderr = await _run_git(
             "rebase",
@@ -215,7 +346,10 @@ async def rebase_onto_base_branch(
                 cwd=repo_dir,
                 env=env,
             )
-            await _run_git("rebase", "--abort", cwd=repo_dir, env=env)
+            # Ребейз мог и не начаться (например, на грязном дереве) — тогда
+            # отменять нечего, а `--abort` сам завершился бы ошибкой.
+            if _rebase_in_progress(repo_dir):
+                await _run_git("rebase", "--abort", cwd=repo_dir, env=env)
             logger.warning(
                 "repository_rebase_conflict",
                 repository_id=str(repository.id),
@@ -234,7 +368,11 @@ async def rebase_onto_base_branch(
     )
 
 
-_REBASE_STATE_DIRS = ("rebase-merge", "rebase-apply")
+async def has_uncommitted_changes(*, repository: Repository, repo_dir: Path) -> bool:
+    """Незакоммиченные или неотслеживаемые изменения рабочей директории."""
+    async with _existing_repository_env(repository, repo_dir) as env:
+        _, status, _ = await _run_git("status", "--porcelain", cwd=repo_dir, env=env)
+    return bool(status.strip())
 
 
 async def is_rebased_onto_base(
@@ -246,10 +384,9 @@ async def is_rebased_onto_base(
     """Проверка результата автообработки `rebase_conflict` (раздел 14):
     ребейз завершён и рабочая ветка уже содержит актуальную ``base_branch``.
     """
-    git_dir = repo_dir / ".git"
-    if any((git_dir / state_dir).exists() for state_dir in _REBASE_STATE_DIRS):
+    if _rebase_in_progress(repo_dir):
         return False
-    async with _deploy_key_env(repository) as env:
+    async with _existing_repository_env(repository, repo_dir) as env:
         await _run_git("fetch", "origin", task_repository.base_branch, cwd=repo_dir, env=env)
         returncode, _stdout, _stderr = await _run_git(
             "merge-base",

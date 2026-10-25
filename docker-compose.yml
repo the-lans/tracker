@@ -64,6 +64,10 @@ services:
       TRACKER_LOG_ARCHIVE_ROOT: /data/log-archive
       # Раздел 6.4: срок хранения истории сессий Claude Code (cleanupPeriodDays).
       CLAUDE_SESSION_RETENTION_DAYS: ${CLAUDE_SESSION_RETENTION_DAYS:-36500}
+      # Раздел 19.3: CLI запускается в контейнере сессии той же версии, что
+      # SDK (runners/tracker-session) — пробный `claude -v` с запуском
+      # контейнера перед каждой сессией не нужен.
+      CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK: "1"
     volumes:
       - task_repos:/data/repos
       - user_files:/data/user-files

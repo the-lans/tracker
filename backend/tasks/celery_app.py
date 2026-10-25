@@ -18,6 +18,11 @@ import os
 from celery import Celery
 
 SESSIONS_QUEUE = "sessions"
+# Раздел 17.4: сообщение, которое воркер взял, но не подтвердил (отложенное
+# продолжение после `clear_context`), Redis вернёт в очередь лишь через этот
+# срок — заведомо дольше, чем второй исполнитель ждёт владения сессией
+# (`services/session_heartbeat.SESSION_OWNER_WAIT_SECONDS`).
+BROKER_VISIBILITY_TIMEOUT_SECONDS = 24 * 60 * 60
 
 celery_app = Celery(
     "tracker",
@@ -37,6 +42,7 @@ celery_app.conf.update(
     task_routes={"run_task_session": {"queue": SESSIONS_QUEUE}},
     # Долгие задачи: процесс не резервирует следующие сообщения, пока занят.
     worker_prefetch_multiplier=1,
+    broker_transport_options={"visibility_timeout": BROKER_VISIBILITY_TIMEOUT_SECONDS},
     # Раздел 16.1: расписание читается из таблицы `periodic_tasks`.
     beat_scheduler="tasks.periodic_scheduler:DatabaseScheduler",
 )

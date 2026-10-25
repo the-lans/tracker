@@ -87,6 +87,9 @@ class TaskRepository(UUIDPrimaryKeyMixin, Base):
         pg_enum(MergeStatus, name="merge_status"),
         default=MergeStatus.NOT_PUSHED,
     )
+    # Раздел 16.2: ветку родителя слили — ребейз на новую базу выполнит воркер
+    # задачи в ближайшей точке между нодами и очистит отметку.
+    rebase_requested_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
 
 class TaskParentSummary(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

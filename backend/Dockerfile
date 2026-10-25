@@ -28,6 +28,8 @@ RUN ln -s "$(python -c 'import claude_agent_sdk, pathlib; print(pathlib.Path(cla
 COPY backend/ backend/
 COPY alembic/ alembic/
 COPY scripts/ scripts/
+# Обёртка `cli_path` SDK: запускает CLI в контейнере сессии (раздел 19.3).
+RUN chmod +x backend/session_cli.py
 
 WORKDIR /app/backend
 

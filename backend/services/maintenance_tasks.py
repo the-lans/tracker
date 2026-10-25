@@ -40,6 +40,9 @@ from db.models.tasks import Task
 from db.models.users import User
 from services.nodes.script import CONTAINER_DEADLINE_LABEL
 from services.notifications import NotificationEvent, notify_task_event, notify_user_event
+from services.session_container import SESSION_CONTAINER_PREFIX, SESSION_TASK_LABEL
+from services.session_heartbeat import is_session_alive
+from services.task_status import SESSION_ACTIVE_STATUSES
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -159,19 +162,11 @@ async def send_awaiting_decision_reminders(
 
 async def find_tasks_requiring_remote_control_check(db_session: AsyncSession) -> list[Task]:
     """
-    Раздел 6.6: `check_remote_control_bridges` — активные задачи с сессией
-    Claude Code; у задачи без LLM-аккаунта моста нет (раздел 3.1).
+    Раздел 6.6: `check_remote_control_bridges` — все задачи, сессию которых
+    держит воркер, в том числе без LLM-аккаунта: моста у них нет, но
+    потерянный воркер переводит в `failed` и их.
     """
-    active_statuses = (
-        TaskStatus.IN_PROGRESS,
-        TaskStatus.PAUSED,
-        TaskStatus.AWAITING_INPUT,
-        TaskStatus.PLAN_REVIEW,
-    )
-    stmt = sa.select(Task).where(
-        Task.status.in_(active_statuses),
-        Task.llm_account_id.is_not(None),
-    )
+    stmt = sa.select(Task).where(Task.status.in_(SESSION_ACTIVE_STATUSES))
     return list((await db_session.execute(stmt)).scalars().all())
 
 
@@ -233,6 +228,42 @@ async def purge_orphaned_docker_containers(
             await _run_docker("stop", name)
             stopped.append(name)
             logger.warning("orphaned_container_purged", container_name=name)
+    return stopped
+
+
+def _task_id_or_none(raw: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(raw.strip())
+    except ValueError:
+        return None
+
+
+async def purge_orphaned_session_containers(redis_client: Redis) -> list[str]:
+    """
+    Раздел 16.2, 19.3: контейнер сессии (`tracker-session-*`) живёт, пока
+    воркер держит сессию его задачи. Нет пульса сессии — контейнер пережил
+    свой воркер и останавливается (`--rm` удаляет его сам).
+    """
+    listing = await _run_docker(
+        "ps",
+        "--filter",
+        f"name={SESSION_CONTAINER_PREFIX}",
+        "--format",
+        f'{{{{.Names}}}}\t{{{{.Label "{SESSION_TASK_LABEL}"}}}}',
+    )
+    stopped: list[str] = []
+    for line in listing.splitlines():
+        name, _, task_raw = line.partition("\t")
+        task_id = _task_id_or_none(task_raw)
+        if not name.strip() or task_id is None:
+            continue
+        if await is_session_alive(redis_client, task_id):
+            continue
+        await _run_docker("stop", name)
+        stopped.append(name)
+        logger.warning(
+            "orphaned_session_container_purged", container_name=name, task_id=str(task_id)
+        )
     return stopped
 
 
