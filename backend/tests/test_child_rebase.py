@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+import sqlalchemy as sa
 
 from db.models.enums import MergeStatus, RepositoryRole, TaskStatus
 from db.models.repositories import Repository
@@ -110,6 +111,31 @@ class TestApplyRequestedRebases:
             "?? draft.txt",
         )
         assert not (child.repo_dir / ".git" / "rebase-merge").exists()
+
+    async def test_requested_by_other_process(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        """
+        Флаг ставит периодическая задача в своей сессии БД, а запись уже
+        загружена в долгоживущую сессию воркера без флага.
+        """
+        child = await _child_task(db_session, tmp_path, status=TaskStatus.IN_PROGRESS)
+        child.task_repository.rebase_requested_at = None
+        await db_session.commit()
+        await db_session.execute(
+            sa.update(TaskRepository)
+            .where(TaskRepository.id == child.task_repository.id)
+            .values(rebase_requested_at=datetime.now(UTC))
+            .execution_options(synchronize_session=False),
+        )
+        push_base_update(tmp_path, child.origin, "other.txt", "не конфликтует\n")
+
+        await _apply(db_session, child)
+
+        assert (child.repo_dir / "other.txt").exists()
+        assert child.task_repository.rebase_requested_at is None
 
     async def test_nothing_requested(self, db_session: AsyncSession, tmp_path: Path) -> None:
         child = await _child_task(db_session, tmp_path, status=TaskStatus.IN_PROGRESS)

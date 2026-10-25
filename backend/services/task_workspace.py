@@ -74,11 +74,15 @@ async def load_task_repositories(
     db_session: AsyncSession,
     task_id: uuid.UUID,
 ) -> list[tuple[TaskRepository, Repository]]:
+    # Флаг ребейза и статус слияния пишут периодические задачи в своих
+    # сессиях БД; без перечитывания долгоживущая сессия воркера (`expire_on_commit`
+    # выключен) видела бы значения на момент первой загрузки.
     stmt = (
         sa.select(TaskRepository, Repository)
         .join(Repository, Repository.id == TaskRepository.repository_id)
         .where(TaskRepository.task_id == task_id)
         .order_by(Repository.name)
+        .execution_options(populate_existing=True)
     )
     return [(row[0], row[1]) for row in (await db_session.execute(stmt)).all()]
 

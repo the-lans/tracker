@@ -18,6 +18,7 @@ import pytest
 import sqlalchemy as sa
 from claude_agent_sdk import ClaudeAgentOptions, PermissionResultAllow, ProcessError
 from claude_agent_sdk.types import ToolPermissionContext
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.claude_agent import REMOTE_CONTROL_EXTRA_ARG
 from db.models.enums import (
@@ -38,6 +39,7 @@ from db.models.mcp import McpServer
 from db.models.pipelines import Node, TaskNode
 from db.models.repositories import Repository, Template, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
+from services import gitlab_sync
 from services import task_status as task_status_module
 from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
@@ -76,7 +78,6 @@ from tests.worker_support import (
 if TYPE_CHECKING:
     from claude_agent_sdk import Message
     from redis.asyncio import Redis
-    from sqlalchemy.ext.asyncio import AsyncSession
 
 _REPOSITORY_NAME = "backend"
 
@@ -621,6 +622,108 @@ class TestConflictAfterRestart:
         branch = build_branch_name(task.code)
         merged = run_command("git", "show", f"{branch}:README.md", cwd=origin)
         assert merged == "обе правки объединены\n"
+
+
+class TestChildRebaseOnParentMerge:
+    """
+    Раздел 21.2, сценарий 10: ветку родителя слили — периодическая задача
+    в своей сессии БД отмечает ребейз, воркер дочерней задачи выполняет его
+    перед следующей нодой, и ветка уходит в origin уже на новой базе.
+    """
+
+    async def test_worker_rebases_before_next_node(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        worker_env: WorkerEnv,
+        tmp_path: Path,
+    ) -> None:
+        origin = init_bare_origin(tmp_path)
+        parent_dir = tmp_path / "parent"
+        run_command("git", "clone", str(origin), str(parent_dir), cwd=tmp_path)
+        run_command("git", "checkout", "-b", "feature/RR-parent", cwd=parent_dir)
+        (parent_dir / "parent.txt").write_text("работа родителя\n")
+        run_command("git", "add", "parent.txt", cwd=parent_dir)
+        run_command("git", *GIT_AUTHOR_ARGS, "commit", "-m", "работа родителя", cwd=parent_dir)
+        run_command("git", "push", "origin", "feature/RR-parent", cwd=parent_dir)
+
+        task = await _make_task(db_session, status=TaskStatus.QUEUED, origin=origin)
+        [child_repository] = (
+            await db_session.execute(
+                sa.select(TaskRepository).where(TaskRepository.task_id == task.id),
+            )
+        ).scalars()
+        child_repository.base_branch = "feature/RR-parent"
+        parent = await make_task(db_session, created_by=task.created_by, status=TaskStatus.DONE)
+        task.parent_task_id = parent.id
+        parent_repository = TaskRepository(
+            task_id=parent.id,
+            repository_id=child_repository.repository_id,
+            role=RepositoryRole.READ_WRITE,
+            branch_name="feature/RR-parent",
+            base_branch="main",
+            merge_status=MergeStatus.MERGED,
+        )
+        db_session.add(parent_repository)
+        await db_session.flush()
+        await _add_node(db_session, task, order_index=0)
+        await _add_node(db_session, task, order_index=1)
+        repo_dir = worker_env.repos_root / task.code / _REPOSITORY_NAME
+
+        async def parent_merged_during_first_node() -> None:
+            if len(worker_env.client.queries) != 1:
+                return
+            (repo_dir / "child.txt").write_text("работа дочерней задачи\n")
+            run_command("git", "add", "child.txt", cwd=repo_dir)
+            run_command("git", *GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
+            # Слияние ветки родителя в main и ещё один коммит в main после него.
+            run_command("git", "checkout", "-B", "main", "origin/main", cwd=parent_dir)
+            run_command("git", "merge", "--ff-only", "feature/RR-parent", cwd=parent_dir)
+            (parent_dir / "after_merge.txt").write_text("после слияния\n")
+            run_command("git", "add", "after_merge.txt", cwd=parent_dir)
+            run_command("git", *GIT_AUTHOR_ARGS, "commit", "-m", "после слияния", cwd=parent_dir)
+            run_command("git", "push", "origin", "main", cwd=parent_dir)
+            await _run_periodic_rebase_request(db_session, redis_client)
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(2),
+            on_query=parent_merged_during_first_node,
+        )
+
+        await _run_worker(task)
+
+        assert await _refreshed_status(db_session, task) is TaskStatus.DONE
+        # Чистый ребейз агенту не поручается.
+        assert worker_env.client.queries == ["шаг 0", "шаг 1"]
+        await db_session.refresh(child_repository)
+        assert child_repository.base_branch == "main"
+        assert child_repository.rebase_requested_at is None
+        branch = build_branch_name(task.code)
+        pushed = run_command("git", "ls-tree", "--name-only", branch, cwd=origin).split()
+        assert {"after_merge.txt", "child.txt", "parent.txt"} <= set(pushed)
+
+
+async def _run_periodic_rebase_request(db_session: AsyncSession, redis_client: Redis) -> None:
+    """
+    Тело `rebase_child_branches_on_parent_merge` в отдельной сессии БД, как
+    в процессе `worker`: объекты воркера сессии об отметке не знают.
+    """
+    periodic_session = AsyncSession(
+        bind=db_session.bind,
+        join_transaction_mode="create_savepoint",
+        expire_on_commit=False,
+    )
+    try:
+        for parent_task_repository in await gitlab_sync.find_merged_parents_with_children(
+            periodic_session,
+        ):
+            await gitlab_sync.request_child_rebases_on_parent_merge(
+                periodic_session,
+                parent_task_repository=parent_task_repository,
+                redis_client=redis_client,
+            )
+    finally:
+        await periodic_session.close()
 
 
 class TestPauseRace:
