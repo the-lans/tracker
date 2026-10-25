@@ -85,6 +85,7 @@ export function makeTaskNode(overrides: Partial<TaskNodeItem> = {}): TaskNodeIte
     node_id: "n1",
     order_index: 0,
     is_enabled: true,
+    pause_after: false,
     name: "Реализация",
     node_type: NodeType.PLAIN_PROMPT,
     editable: true,

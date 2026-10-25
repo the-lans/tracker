@@ -214,7 +214,7 @@ alembic/
                  SFTP, токен GitLab в system_settings, уникальность
                  task_nodes, подключение к Jira, tasks.reset_at, адрес Jira
                  в system_settings, task_repositories.rebase_requested_at,
-                 tasks.context_cleared_at); новые миграции пишут DDL
+                 tasks.context_cleared_at, task_nodes.pause_after); новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
@@ -424,7 +424,9 @@ Postgres из `backend/tests/conftest.py`:
     после запуска — через «Вернуть в новые» из `failed`/`done`,
     `POST /tasks/{id}/reset`); в `failed` — только для нод с `order_index >
     tasks.last_failed_order_index` (`services/task_nodes.py`,
-    `PATCH /tasks/{id}/nodes/{task_node_id}`).
+    `PATCH /tasks/{id}/nodes/{task_node_id}`). Отметка «пауза после»
+    (`task_nodes.pause_after`) — управление прогоном, а не состав: меняется
+    в любом статусе, после успеха ноды задача встаёт в `paused`.
 12. **Celery-задачи обязаны быть идемпотентными**: проверка текущего
     состояния перед изменением, распределённая блокировка Redis (`SET NX` +
     TTL) для критичных операций (пуш в Git, обработка очереди).

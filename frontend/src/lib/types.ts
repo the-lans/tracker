@@ -356,9 +356,17 @@ export interface TaskNodeItem {
   node_id: string;
   order_index: number;
   is_enabled: boolean;
+  /** Раздел 13.1: после успеха ноды задача встаёт на паузу. */
+  pause_after: boolean;
   name: string;
   node_type: NodeType;
   editable: boolean;
+}
+
+/** Раздел 13.1, 13.2: `is_enabled` — по правилу редактируемости, `pause_after` — в любом статусе. */
+export interface TaskNodeUpdateRequest {
+  is_enabled?: boolean;
+  pause_after?: boolean;
 }
 
 /** Раздел 3.1, 15.2: переменная уровня задачи; значение — только через reveal. */

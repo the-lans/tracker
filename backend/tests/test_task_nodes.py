@@ -13,7 +13,7 @@ from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
 from db.models.users import User
 from services.errors import ConflictError, NotFoundError
-from services.task_nodes import list_task_nodes, set_task_node_enabled
+from services.task_nodes import list_task_nodes, set_task_node_enabled, set_task_node_pause_after
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -148,3 +148,47 @@ async def test_node_of_another_task_is_not_found(db_session: AsyncSession) -> No
             task_node_id=other_nodes[0].id,
             is_enabled=False,
         )
+
+
+class TestPauseAfter:
+    """Раздел 13.2: отметка «пауза после» — не состав нод, меняется в любом статусе."""
+
+    @pytest.mark.parametrize("status", list(TaskStatus))
+    async def test_toggled_in_any_status(
+        self,
+        db_session: AsyncSession,
+        status: TaskStatus,
+    ) -> None:
+        task, task_nodes = await _make_task_with_nodes(
+            db_session,
+            status=status,
+            last_failed_order_index=0 if status is TaskStatus.FAILED else None,
+            node_count=2,
+        )
+
+        await set_task_node_pause_after(
+            db_session,
+            task=task,
+            task_node_id=task_nodes[0].id,
+            pause_after=True,
+        )
+
+        views = await list_task_nodes(db_session, task)
+        assert [view.pause_after for view in views] == [True, False]
+        assert [view.is_enabled for view in views] == [True, True]
+
+    async def test_node_of_another_task_is_not_found(self, db_session: AsyncSession) -> None:
+        task, _ = await _make_task_with_nodes(db_session, status=TaskStatus.NEW, node_count=1)
+        _other, other_nodes = await _make_task_with_nodes(
+            db_session,
+            status=TaskStatus.NEW,
+            node_count=1,
+        )
+
+        with pytest.raises(NotFoundError):
+            await set_task_node_pause_after(
+                db_session,
+                task=task,
+                task_node_id=other_nodes[0].id,
+                pause_after=True,
+            )

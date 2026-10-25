@@ -1,24 +1,17 @@
-import { Check, Lock } from "lucide-react";
-import { toast } from "sonner";
+import { Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { DependentNodesDialog } from "@/components/tasks/DependentNodesDialog";
-import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
-import { NODE_TYPE_LABEL } from "@/lib/labels";
+import { TaskNodeRow } from "@/components/tasks/TaskNodeRow";
 import { useDependentNodesGuard } from "@/hooks/useDependentNodesGuard";
-import {
-  useSetTaskNodeEnabled,
-  useTaskNodeDependents,
-  useTaskNodes,
-} from "@/hooks/useTasks";
-import { errorMessage } from "@/lib/errors";
-import { cn } from "@/lib/utils";
+import { useTaskNodeDependents, useTaskNodes, useUpdateTaskNode } from "@/hooks/useTasks";
+import { toastError } from "@/lib/errors";
 import {
   TaskStatus,
   type NodeLog,
   type Task,
   type TaskNodeItem,
+  type TaskNodeUpdateRequest,
 } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 
@@ -48,32 +41,25 @@ export function TaskNodesCard({
   onChangePipeline: () => void;
 }) {
   const { data: taskNodes } = useTaskNodes(task.id, true);
-  const setTaskNodeEnabled = useSetTaskNodeEnabled(task.id);
+  const updateTaskNode = useUpdateTaskNode(task.id);
   const taskNodeDependents = useTaskNodeDependents(task.id);
   const dependentsGuard = useDependentNodesGuard();
 
-  function setNodeEnabled(taskNodeId: string, isEnabled: boolean) {
-    setTaskNodeEnabled.mutate(
-      { taskNodeId, isEnabled },
-      {
-        onError: (error) => {
-          toast.error(
-            errorMessage(error, "Не удалось изменить состав нод"),
-          );
-        },
-      },
-    );
+  function updateNode(taskNodeId: string, body: TaskNodeUpdateRequest, failure: string) {
+    updateTaskNode.mutate({ taskNodeId, ...body }, { onError: toastError(failure) });
   }
 
   function toggleNode(taskNode: TaskNodeItem, isEnabled: boolean) {
+    const setEnabled = () =>
+      updateNode(taskNode.id, { is_enabled: isEnabled }, "Не удалось изменить состав нод");
     if (isEnabled) {
-      setNodeEnabled(taskNode.id, true);
+      setEnabled();
       return;
     }
     void dependentsGuard.guard(
       taskNode.name,
       () => taskNodeDependents.mutateAsync(taskNode.id),
-      () => setNodeEnabled(taskNode.id, false),
+      setEnabled,
     );
   }
 
@@ -114,51 +100,23 @@ export function TaskNodesCard({
               hint="Пайплайн был пуст в момент привязки, поэтому задаче нечего выполнять. Добавьте ноды в разделе «Пайплайны» кнопкой «+ Нода» и создайте задачу заново."
             />
           )}
-          {(taskNodes ?? []).map((taskNode) => {
-            const done = successfulPipelineNodeIds.has(taskNode.node_id);
-            const isCurrent = taskNode.node_id === currentNodeId;
-            return (
-              <label
-                key={taskNode.id}
-                className={cn(
-                  "flex items-center gap-2.5 border-t border-border py-2 first:border-t-0",
-                  isCurrent &&
-                    "-mx-2 rounded-lg border-t-0 bg-accent-tint px-2",
-                  !taskNode.is_enabled && "text-text-3",
-                )}
-              >
-                <Checkbox
-                  checked={taskNode.is_enabled}
-                  disabled={
-                    !taskNode.editable ||
-                    setTaskNodeEnabled.isPending ||
-                    taskNodeDependents.isPending
-                  }
-                  aria-label={`Включить ноду ${taskNode.name}`}
-                  onCheckedChange={(checked) =>
-                    toggleNode(taskNode, checked === true)
-                  }
-                />
-                <NodeTypeIcon
-                  type={taskNode.node_type}
-                  className="size-[15px] shrink-0 text-text-2"
-                />
-                <div className="min-w-0 flex-1 truncate text-note font-bold" title={taskNode.name}>
-                  {taskNode.name}
-                </div>
-                {done ? (
-                  <Check
-                    className="size-3.5 shrink-0 text-success"
-                    aria-label="выполнено"
-                  />
-                ) : (
-                  <div className="text-caption font-bold uppercase tracking-wide text-text-3">
-                    {NODE_TYPE_LABEL[taskNode.node_type]}
-                  </div>
-                )}
-              </label>
-            );
-          })}
+          {(taskNodes ?? []).map((taskNode) => (
+            <TaskNodeRow
+              key={taskNode.id}
+              taskNode={taskNode}
+              done={successfulPipelineNodeIds.has(taskNode.node_id)}
+              isCurrent={taskNode.node_id === currentNodeId}
+              busy={updateTaskNode.isPending || taskNodeDependents.isPending}
+              onToggleEnabled={(isEnabled) => toggleNode(taskNode, isEnabled)}
+              onTogglePause={(pauseAfter) =>
+                updateNode(
+                  taskNode.id,
+                  { pause_after: pauseAfter },
+                  "Не удалось изменить паузу после ноды",
+                )
+              }
+            />
+          ))}
         </div>
         <div className="mt-2 flex items-center gap-1.5 text-caption text-text-3">
           <Lock className="size-3" />

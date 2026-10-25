@@ -70,6 +70,7 @@ async def _add_node(
     *,
     order_index: int,
     is_enabled: bool = True,
+    pause_after: bool = False,
     **node_kwargs: object,
 ) -> Node:
     defaults: dict[str, object] = {
@@ -89,7 +90,13 @@ async def _add_node(
     db_session.add(node)
     await db_session.flush()
     db_session.add(
-        TaskNode(task_id=task.id, node_id=node.id, order_index=order_index, is_enabled=is_enabled),
+        TaskNode(
+            task_id=task.id,
+            node_id=node.id,
+            order_index=order_index,
+            is_enabled=is_enabled,
+            pause_after=pause_after,
+        ),
     )
     await db_session.flush()
     return node
@@ -817,3 +824,146 @@ class TestNodeOutputOnRetry:
             (NodeLogStatus.FAILED, "используем: ответ A"),
             (NodeLogStatus.SUCCESS, "используем: ответ A"),
         ]
+
+
+class TestPauseAfterNode:
+    """Раздел 13.1: после успешной ноды с отметкой «пауза после» — пауза."""
+
+    async def _task(
+        self,
+        db_session: AsyncSession,
+        flags: list[tuple[bool, bool]],
+    ) -> Task:
+        """``flags`` — (включена, пауза после) для нод 0, 1, …"""
+        task = await _make_task_with_pipeline(db_session)
+        for order_index, (is_enabled, pause_after) in enumerate(flags):
+            await _add_node(
+                db_session,
+                task,
+                order_index=order_index,
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template=f"шаг {order_index}",
+                is_enabled=is_enabled,
+                pause_after=pause_after,
+            )
+        return task
+
+    async def test_pauses_after_flagged_nodes(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await self._task(db_session, [(True, True), (True, False), (True, True)])
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 3)
+        paused_after: list[int] = []
+
+        async def pause() -> CheckpointDecision:
+            paused_after.append(len(fake.queries))
+            return CheckpointDecision.CONTINUE
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            pause_after_node=pause,
+        )
+
+        assert paused_after == [1, 3]
+        assert outcome.completed is True
+
+    async def test_no_pause_after_failed_or_disabled(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await self._task(db_session, [(False, True), (True, True)])
+        failing_turn: list[Message] = [
+            make_assistant_error("authentication_failed"),
+            make_result_message(is_error=True),
+        ]
+        fake = FakeClaudeAgentClient(messages_per_query=[failing_turn])
+        paused: list[bool] = []
+
+        async def pause() -> CheckpointDecision:
+            paused.append(True)
+            return CheckpointDecision.CONTINUE
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            pause_after_node=pause,
+        )
+
+        assert paused == []
+        assert outcome.failed_order_index == 1
+
+    @pytest.mark.parametrize(
+        ("flags", "resume_at"),
+        [
+            ([(True, True), (False, False), (True, False)], 2),
+            ([(True, False), (True, True), (False, False)], 3),
+        ],
+        ids=["next_enabled_node", "after_last_node"],
+    )
+    async def test_stop_on_pause(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        flags: list[tuple[bool, bool]],
+        resume_at: int,
+    ) -> None:
+        task = await self._task(db_session, flags)
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 3)
+
+        async def stop() -> CheckpointDecision:
+            return CheckpointDecision.STOP
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            pause_after_node=stop,
+        )
+
+        assert (outcome.completed, outcome.stopped) == (False, True)
+        assert outcome.failed_order_index == resume_at
+
+    async def test_flag_set_during_node(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await self._task(db_session, [(True, False), (True, False)])
+
+        async def user_sets_flag() -> None:
+            # Отметку ставит API в своей транзакции — объект оркестратора о ней не знает.
+            await db_session.execute(
+                sa.update(TaskNode)
+                .where(TaskNode.task_id == task.id, TaskNode.order_index == 0)
+                .values(pause_after=True)
+                .execution_options(synchronize_session=False),
+            )
+
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()]] * 2,
+            on_query=user_sets_flag,
+        )
+        paused_after: list[int] = []
+
+        async def pause() -> CheckpointDecision:
+            paused_after.append(len(fake.queries))
+            return CheckpointDecision.CONTINUE
+
+        await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            pause_after_node=pause,
+        )
+
+        assert paused_after == [1]

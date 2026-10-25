@@ -14,6 +14,7 @@ import type {
   TaskLibraryPrompt,
   TaskLibraryPromptItem,
   TaskNodeItem,
+  TaskNodeUpdateRequest,
   TaskRepository,
   TaskUpdateRequest,
 } from "@/lib/types";
@@ -298,12 +299,12 @@ export function useTaskNodeDependents(taskId: string) {
   });
 }
 
-/** Раздел 13.1, 13.2: включение/отключение ноды задачи. */
-export function useSetTaskNodeEnabled(taskId: string) {
+/** Раздел 13.1, 13.2: включение ноды задачи и отметка «пауза после». */
+export function useUpdateTaskNode(taskId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ taskNodeId, isEnabled }: { taskNodeId: string; isEnabled: boolean }) =>
-      api.patch<TaskNodeItem>(`/tasks/${taskId}/nodes/${taskNodeId}`, { is_enabled: isEnabled }),
+    mutationFn: ({ taskNodeId, ...body }: TaskNodeUpdateRequest & { taskNodeId: string }) =>
+      api.patch<TaskNodeItem>(`/tasks/${taskId}/nodes/${taskNodeId}`, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: taskKeys.nodes(taskId) });
     },

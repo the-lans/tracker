@@ -803,6 +803,50 @@ async def test_failed_task_locks_nodes_up_to_failure_point(
     assert [node["editable"] for node in listed] == [False, False, True]
 
 
+class TestPauseAfterNode:
+    """Раздел 13.1, 13.2: отметка «пауза после» меняется и у запущенной задачи."""
+
+    async def test_set_while_running(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 2)
+        task = await db_session.get(Task, uuid.UUID(task_body["id"]))
+        assert task is not None
+        task.status = TaskStatus.IN_PROGRESS
+        await db_session.flush()
+
+        response = await authed_client.patch(
+            f"/tasks/{task_body['id']}/nodes/{nodes[0]['id']}",
+            json={"pause_after": True},
+        )
+        listed = (await authed_client.get(f"/tasks/{task_body['id']}/nodes")).json()
+
+        assert response.status_code == 200, response.text
+        assert response.json()["pause_after"] is True
+        assert [(node["pause_after"], node["is_enabled"]) for node in listed] == [
+            (True, True),
+            (False, True),
+        ]
+
+    async def test_empty_body_rejected(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 1)
+
+        response = await authed_client.patch(
+            f"/tasks/{task_body['id']}/nodes/{nodes[0]['id']}",
+            json={},
+        )
+
+        assert response.status_code == 422
+
+
 # --- Ручные запросы: активная сессия, список, кнопка ■ (раздел 7.3, 8.2) ---
 
 

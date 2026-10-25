@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from db.models.enums import (
     LibraryPromptRunStatus,
@@ -210,13 +211,26 @@ class TaskNodeResponse(BaseModel):
     node_id: uuid.UUID
     order_index: int
     is_enabled: bool
+    pause_after: bool
     name: str
     node_type: NodeType
     editable: bool
 
 
 class TaskNodeUpdateRequest(BaseModel):
-    is_enabled: bool
+    """
+    Раздел 13.1, 13.2: включение ноды — по правилу редактируемости, отметка
+    «пауза после» — в любом статусе.
+    """
+
+    is_enabled: bool | None = None
+    pause_after: bool | None = None
+
+    @model_validator(mode="after")
+    def _require_change(self) -> Self:
+        if self.is_enabled is None and self.pause_after is None:
+            raise ValueError("Нужно передать is_enabled или pause_after")
+        return self
 
 
 class ArtifactResponse(BaseModel):

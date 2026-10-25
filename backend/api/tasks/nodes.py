@@ -24,7 +24,11 @@ from db.models.users import User
 from db.session import get_session
 from services.node_dependencies import find_task_node_dependents
 from services.node_history import filter_node_logs
-from services.task_nodes import list_task_nodes, set_task_node_enabled
+from services.task_nodes import (
+    list_task_nodes,
+    set_task_node_enabled,
+    set_task_node_pause_after,
+)
 
 router = APIRouter(prefix=TASKS_PREFIX, tags=TASKS_TAGS)
 
@@ -51,12 +55,20 @@ async def update_task_node(
 ) -> TaskNodeResponse:
     """Раздел 13.1, 13.2 (правило 11 CLAUDE.md)."""
     task = await get_task_or_404(db_session, task_id, current_user)
-    await set_task_node_enabled(
-        db_session,
-        task=task,
-        task_node_id=task_node_id,
-        is_enabled=body.is_enabled,
-    )
+    if body.is_enabled is not None:
+        await set_task_node_enabled(
+            db_session,
+            task=task,
+            task_node_id=task_node_id,
+            is_enabled=body.is_enabled,
+        )
+    if body.pause_after is not None:
+        await set_task_node_pause_after(
+            db_session,
+            task=task,
+            task_node_id=task_node_id,
+            pause_after=body.pause_after,
+        )
     views = await list_task_nodes(db_session, task)
     return TaskNodeResponse.model_validate(next(v for v in views if v.id == task_node_id))
 

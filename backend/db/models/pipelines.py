@@ -90,3 +90,5 @@ class TaskNode(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     node_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("nodes.id"))
     order_index: Mapped[int] = mapped_column(sa.Integer)
     is_enabled: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    # Раздел 13.1: после успеха ноды задача встаёт в `paused`.
+    pause_after: Mapped[bool] = mapped_column(sa.Boolean, default=False)

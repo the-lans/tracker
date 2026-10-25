@@ -33,6 +33,7 @@ class TaskNodeView:
     node_id: uuid.UUID
     order_index: int
     is_enabled: bool
+    pause_after: bool
     name: str
     node_type: NodeType
     editable: bool
@@ -72,12 +73,28 @@ async def list_task_nodes(db_session: AsyncSession, task: Task) -> list[TaskNode
             node_id=node.id,
             order_index=task_node.order_index,
             is_enabled=task_node.is_enabled,
+            pause_after=task_node.pause_after,
             name=node.name,
             node_type=node.node_type,
             editable=is_task_node_editable(task, task_node),
         )
         for task_node, node in await load_task_node_rows(db_session, task.id)
     ]
+
+
+async def _get_task_node_or_404(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    task_node_id: uuid.UUID,
+) -> TaskNode:
+    return await get_task_record_or_404(
+        db_session,
+        TaskNode,
+        task_node_id,
+        task_id=task.id,
+        not_found=f"Нода {task_node_id} не найдена у этой задачи",
+    )
 
 
 async def set_task_node_enabled(
@@ -87,13 +104,7 @@ async def set_task_node_enabled(
     task_node_id: uuid.UUID,
     is_enabled: bool,
 ) -> TaskNode:
-    task_node = await get_task_record_or_404(
-        db_session,
-        TaskNode,
-        task_node_id,
-        task_id=task.id,
-        not_found=f"Нода {task_node_id} не найдена у этой задачи",
-    )
+    task_node = await _get_task_node_or_404(db_session, task=task, task_node_id=task_node_id)
     if not is_task_node_editable(task, task_node):
         if task.status is TaskStatus.FAILED:
             message = "Нода уже выполнялась в этом прогоне — менять её нельзя (раздел 13.2)"
@@ -107,6 +118,30 @@ async def set_task_node_enabled(
         task_id=str(task.id),
         task_node_id=str(task_node_id),
         is_enabled=is_enabled,
+    )
+    return task_node
+
+
+async def set_task_node_pause_after(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    task_node_id: uuid.UUID,
+    pause_after: bool,
+) -> TaskNode:
+    """
+    Раздел 13.1, 13.2: отметка «пауза после» — управление прогоном, а не
+    состав нод, поэтому меняется в любом статусе; оркестратор перечитывает
+    её по завершении ноды.
+    """
+    task_node = await _get_task_node_or_404(db_session, task=task, task_node_id=task_node_id)
+    task_node.pause_after = pause_after
+    await db_session.commit()
+    logger.info(
+        "task_node_pause_toggled",
+        task_id=str(task.id),
+        task_node_id=str(task_node_id),
+        pause_after=pause_after,
     )
     return task_node
 

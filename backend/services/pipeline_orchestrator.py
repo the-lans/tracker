@@ -93,6 +93,10 @@ class CheckpointDecision(StrEnum):
 # паузу и остановку (раздел 14.2), конфликт ребейза (раздел 14).
 type Checkpoint = Callable[[int], Awaitable[CheckpointDecision]]
 
+# Вызывается после успешной ноды с отметкой «пауза после» (раздел 13.1):
+# владелец сессии ставит задачу на паузу и ждёт «Продолжить» или «Остановить».
+type PausePoint = Callable[[], Awaitable[CheckpointDecision]]
+
 
 @dataclass(frozen=True, slots=True)
 class StopGuard:
@@ -368,6 +372,14 @@ def _nodes_to_run(
     rows: list[tuple[TaskNode, Node]],
     *,
     start_after_order_index: int | None,
+) -> list[tuple[TaskNode, Node]]:
+    return list(_iter_nodes_to_run(rows, start_after_order_index=start_after_order_index))
+
+
+def _iter_nodes_to_run(
+    rows: list[tuple[TaskNode, Node]],
+    *,
+    start_after_order_index: int | None,
 ) -> Iterator[tuple[TaskNode, Node]]:
     """
     Ноды после точки продолжения; отключённые пропускаются без записи
@@ -384,6 +396,28 @@ def _nodes_to_run(
             )
             continue
         yield task_node, node
+
+
+def _resume_order_index(
+    runnable: list[tuple[TaskNode, Node]],
+    *,
+    position: int,
+    rows: list[tuple[TaskNode, Node]],
+) -> int:
+    """
+    Точка перезапуска после остановки на паузе за нодой ``position``:
+    следующая включённая нода, а после последней — индекс за последней
+    нодой задачи (перезапуск ничего не повторяет, раздел 14.1).
+    """
+    if position + 1 < len(runnable):
+        return runnable[position + 1][0].order_index
+    return rows[-1][0].order_index + 1
+
+
+async def _should_pause_after(db_session: AsyncSession, task_node: TaskNode) -> bool:
+    """Отметку могли поставить, пока нода выполнялась (раздел 13.2), — она перечитывается."""
+    await db_session.refresh(task_node, ["pause_after"])
+    return task_node.pause_after
 
 
 async def _clear_session_context(
@@ -426,6 +460,7 @@ async def run_pipeline(
     checkpoint: Checkpoint | None = None,
     stop_guard: StopGuard | None = None,
     recover_session: SessionRecovery | None = None,
+    pause_after_node: PausePoint | None = None,
 ) -> PipelineRunOutcome:
     """Итерирует `task_nodes` в порядке `order_index` (раздел 13.3).
 
@@ -437,11 +472,13 @@ async def run_pipeline(
     ``active_node_context``/``stop_guard``/``recover_session`` — см.
     `run_pipeline_node_with_retry`.
     ``checkpoint`` вызывается перед каждой включённой нодой; `STOP`
-    завершает прогон до её выполнения.
+    завершает прогон до её выполнения. ``pause_after_node`` — после успешной
+    ноды с отметкой «пауза после»; `STOP` на этой паузе завершает прогон.
     """
     rows = await load_task_node_rows(db_session, task.id)
+    runnable = _nodes_to_run(rows, start_after_order_index=start_after_order_index)
 
-    for task_node, node in _nodes_to_run(rows, start_after_order_index=start_after_order_index):
+    for position, (task_node, node) in enumerate(runnable):
         if checkpoint is not None:
             decision = await checkpoint(task_node.order_index)
             if decision is CheckpointDecision.STOP:
@@ -481,5 +518,13 @@ async def run_pipeline(
                 failed_order_index=task_node.order_index,
                 stopped=outcome.stopped,
             )
+        if pause_after_node is not None and await _should_pause_after(db_session, task_node):
+            logger.info("pipeline_paused_after_node", order_index=task_node.order_index)
+            if await pause_after_node() is CheckpointDecision.STOP:
+                return PipelineRunOutcome(
+                    completed=False,
+                    failed_order_index=_resume_order_index(runnable, position=position, rows=rows),
+                    stopped=True,
+                )
 
     return PipelineRunOutcome(completed=True)

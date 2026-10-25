@@ -309,6 +309,18 @@ class _SessionControl:
             return await self._stay_paused()
         return CheckpointDecision.CONTINUE
 
+    async def pause_after_node(self) -> CheckpointDecision:
+        """
+        Раздел 13.1: отметка «пауза после» — та же пауза, что по кнопке.
+        Нажатая заодно кнопка «Приостановить» второй паузы не даёт: «Продолжить»
+        заменяет её команду в том же ключе.
+        """
+        command = await self._serve_between_nodes(status=TaskStatus.IN_PROGRESS)
+        if command is TaskControlCommand.STOP:
+            return CheckpointDecision.STOP
+        logger.info("task_paused_after_node", task_id=str(self.task.id))
+        return await self._stay_paused()
+
     async def _stay_paused(self) -> CheckpointDecision:
         """
         Раздел 14.2 «Приостановить»: сессия удерживается, ручные запросы
@@ -796,6 +808,7 @@ async def _run_connected_session(
         start_after_order_index=start_after_order_index,
         active_node_context=control.active_node_context,
         checkpoint=control.checkpoint,
+        pause_after_node=control.pause_after_node,
         stop_guard=StopGuard(redis_client=control.redis_client, task_id=task.id),
         recover_session=control.recover_session,
     )

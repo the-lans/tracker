@@ -35,6 +35,10 @@ function checkbox(name: string) {
   return screen.findByRole("checkbox", { name: `Включить ноду ${name}` });
 }
 
+function pauseButton(name: string) {
+  return screen.findByRole("button", { name: `Пауза после ноды ${name}` });
+}
+
 function renderCard(
   api: MockedApi,
   {
@@ -175,6 +179,54 @@ describe("TaskNodesCard", () => {
       await user.click(await checkbox(tests.name));
 
       await expect.poll(() => toasts.error.mock.calls).toEqual([[message]]);
+    });
+  });
+
+  describe("пауза после ноды", () => {
+    test.for([TaskStatus.NEW, TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.FAILED])(
+      "%s: отметка меняется и после запуска",
+      async (status, { api }) => {
+        const { user } = renderCard(api, { status, nodes: [{ ...analysis, editable: false }] });
+
+        await user.click(await pauseButton(analysis.name));
+
+        expect(api.mutations()).toEqual([
+          { method: "PATCH", path: `${NODES_PATH}/tn1`, body: { pause_after: true } },
+        ]);
+      },
+    );
+
+    test.for([
+      { pauseAfter: false, sent: true },
+      { pauseAfter: true, sent: false },
+    ])("pause_after=$pauseAfter → нажатие отправляет $sent", async ({ pauseAfter, sent }, { api }) => {
+      const { user } = renderCard(api, { nodes: [{ ...tests, pause_after: pauseAfter }] });
+
+      const button = await pauseButton(tests.name);
+      expect(button).toHaveAttribute("aria-pressed", String(pauseAfter));
+      await user.click(button);
+
+      expect(api.mutations()).toEqual([
+        { method: "PATCH", path: `${NODES_PATH}/tn2`, body: { pause_after: sent } },
+      ]);
+    });
+
+    test("у очистки контекста паузы нет", async ({ api }) => {
+      renderCard(api, {
+        nodes: [makeTaskNode({ id: "tn4", name: "Сброс", node_type: NodeType.CLEAR_CONTEXT })],
+      });
+
+      expect(await checkbox("Сброс")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Пауза после ноды Сброс" })).not.toBeInTheDocument();
+    });
+
+    test("ошибка показывается уведомлением", async ({ api, toasts }) => {
+      api.respond(`PATCH ${NODES_PATH}/tn1`, { error: { status: 404, message: "Нода не найдена" } });
+      const { user } = renderCard(api);
+
+      await user.click(await pauseButton(analysis.name));
+
+      await expect.poll(() => toasts.error.mock.calls).toEqual([["Нода не найдена"]]);
     });
   });
 });
