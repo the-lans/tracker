@@ -29,6 +29,7 @@ from services.task_nodes import (
     set_task_node_pause_after,
     update_custom_task_node,
 )
+from services.task_status import reset_task_to_new
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -491,6 +492,17 @@ class TestCustomNodesLifecycle:
         assert await _names(db_session, task) == ["node-0"]
         assert await db_session.get(Node, unused.node_id) is None
         assert await db_session.get(Node, executed.node_id) is not None
+
+    async def test_reset_keeps_custom_nodes(self, db_session: AsyncSession) -> None:
+        task, _ = await _new_task(db_session, 1)
+        await _add(db_session, task, after=None)
+        task.status = TaskStatus.FAILED
+        task.last_failed_order_index = 0
+        await db_session.commit()
+
+        await reset_task_to_new(db_session, task_id=task.id)
+
+        assert await _names(db_session, task) == ["Уточнения", "node-0"]
 
     async def test_duplicate_copies_custom_nodes(self, db_session: AsyncSession) -> None:
         source, task_nodes = await _new_task(db_session, 1)

@@ -875,6 +875,37 @@ class TestPauseAfterNode:
         assert paused_after == [1, 3]
         assert outcome.completed is True
 
+    async def test_flag_on_clear_context_ignored(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        await _add_node(
+            db_session,
+            task,
+            order_index=0,
+            node_type=NodeType.CLEAR_CONTEXT,
+            pause_after=True,
+        )
+        fake = FakeClaudeAgentClient(messages_per_query=[])
+        paused: list[bool] = []
+
+        async def pause() -> CheckpointDecision:
+            paused.append(True)
+            return CheckpointDecision.CONTINUE
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            pause_after_node=pause,
+        )
+
+        assert outcome.context_cleared_at_order_index == 0
+        assert paused == []
+
     async def test_no_pause_after_failed_or_disabled(
         self,
         db_session: AsyncSession,

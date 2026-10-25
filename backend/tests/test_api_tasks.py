@@ -917,6 +917,37 @@ class TestCustomTaskNodes:
 
         assert response.status_code == status, response.text
 
+    async def test_pause_after_set_on_insert(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 1)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/nodes",
+            json={**self._PROMPT, "pause_after": True},
+        )
+
+        assert response.status_code == 201, response.text
+        assert (response.json()["pause_after"], response.json()["is_enabled"]) == (True, True)
+
+    async def test_pipeline_node_not_attached_as_library_prompt(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 1)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/library-prompts",
+            json={"node_id": nodes[0]["node_id"]},
+        )
+
+        assert response.status_code == 409
+
     async def test_pipeline_node_not_deleted(
         self,
         authed_client: AsyncClient,

@@ -1494,6 +1494,32 @@ class TestPauseAfterNode:
         assert task.status is final_status
         assert task.last_failed_order_index == resume_at
 
+    async def test_restart_after_stop_on_last_node_finishes(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 14.1: перезапуск после «Остановить» на последней ноде ничего не повторяет."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0, pause_after=True)
+
+        async def while_paused(observed: list[TaskStatus]) -> None:
+            await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+
+        _patch_pause_wait(monkeypatch, while_paused)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+        await _run_worker(task)
+        await db_session.refresh(task)
+        assert (task.status, task.last_failed_order_index) == (TaskStatus.FAILED, 1)
+
+        await _run_worker(task, start_after_order_index=0)
+
+        assert worker_env.client.queries == ["шаг 0"]
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+
     async def test_button_pause_not_doubled(
         self,
         db_session: AsyncSession,
