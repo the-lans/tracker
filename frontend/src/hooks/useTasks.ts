@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/apiClient";
+import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import type {
   BindPipelineRequest,
   DecisionRequest,
@@ -13,7 +14,9 @@ import type {
   TaskDuplicateRequest,
   TaskLibraryPrompt,
   TaskLibraryPromptItem,
+  TaskCustomNodeCreateRequest,
   TaskNodeItem,
+  TaskNodeUpdateRequest,
   TaskRepository,
   TaskUpdateRequest,
 } from "@/lib/types";
@@ -298,16 +301,32 @@ export function useTaskNodeDependents(taskId: string) {
   });
 }
 
-/** Раздел 13.1, 13.2: включение/отключение ноды задачи. */
-export function useSetTaskNodeEnabled(taskId: string) {
+/** Раздел 13.1, 13.2: включение ноды задачи и отметка «пауза после». */
+export function useUpdateTaskNode(taskId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ taskNodeId, isEnabled }: { taskNodeId: string; isEnabled: boolean }) =>
-      api.patch<TaskNodeItem>(`/tasks/${taskId}/nodes/${taskNodeId}`, { is_enabled: isEnabled }),
+    mutationFn: ({ taskNodeId, ...body }: TaskNodeUpdateRequest & { taskNodeId: string }) =>
+      api.patch<TaskNodeItem>(`/tasks/${taskId}/nodes/${taskNodeId}`, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: taskKeys.nodes(taskId) });
     },
   });
+}
+
+/** Раздел 13.1: свой промт между нодами снимка задачи. */
+export function useCreateTaskNode(taskId: string) {
+  return useInvalidatingMutation(
+    (body: TaskCustomNodeCreateRequest) => api.post<TaskNodeItem>(`/tasks/${taskId}/nodes`, body),
+    [taskKeys.nodes(taskId)],
+  );
+}
+
+/** Раздел 3.2, 13.1: удаляется только свой промт без истории. */
+export function useDeleteTaskNode(taskId: string) {
+  return useInvalidatingMutation(
+    (taskNodeId: string) => api.delete(`/tasks/${taskId}/nodes/${taskNodeId}`),
+    [taskKeys.nodes(taskId)],
+  );
 }
 
 /** Раздел 14.2: пауза/продолжение/остановка исполняет воркер — статус

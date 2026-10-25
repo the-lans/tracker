@@ -117,6 +117,28 @@ async def _current_run_filter(
     return [] if reset_at is None else [NodeLog.started_at >= reset_at]
 
 
+async def restart_point_started(db_session: AsyncSession, task: Task) -> bool:
+    """
+    Раздел 13.2: нода на точке перезапуска (`last_failed_order_index`) уже
+    начинала выполняться в текущем прогоне — упала или прервана. После
+    остановки на паузе и сбоя за последней нодой точка указывает на ещё не
+    начатую ноду или за конец снимка.
+    """
+    if task.last_failed_order_index is None:
+        return False
+    stmt = sa.select(
+        sa.exists().where(
+            TaskNode.task_id == task.id,
+            TaskNode.order_index == task.last_failed_order_index,
+            NodeLog.task_id == task.id,
+            NodeLog.node_id == TaskNode.node_id,
+            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+            *await _current_run_filter(db_session, task.id),
+        ),
+    )
+    return bool(await db_session.scalar(stmt))
+
+
 async def _ensure_done_invariant(db_session: AsyncSession, task_id: uuid.UUID) -> None:
     """Раздел 17.5: переход в `done` невозможен, пока хотя бы одна включённая
     нода пайплайна не имеет записи `node_logs` со статусом `success`."""

@@ -93,6 +93,10 @@ class CheckpointDecision(StrEnum):
 # паузу и остановку (раздел 14.2), конфликт ребейза (раздел 14).
 type Checkpoint = Callable[[int], Awaitable[CheckpointDecision]]
 
+# Вызывается после успешной ноды с отметкой «пауза после» (раздел 13.1):
+# владелец сессии ставит задачу на паузу и ждёт «Продолжить» или «Остановить».
+type PausePoint = Callable[[], Awaitable[CheckpointDecision]]
+
 
 @dataclass(frozen=True, slots=True)
 class StopGuard:
@@ -386,6 +390,12 @@ def _nodes_to_run(
         yield task_node, node
 
 
+async def _should_pause_after(db_session: AsyncSession, task_node: TaskNode) -> bool:
+    """Отметку могли поставить, пока нода выполнялась (раздел 13.2), — она перечитывается."""
+    await db_session.refresh(task_node, ["pause_after"])
+    return task_node.pause_after
+
+
 async def _clear_session_context(
     db_session: AsyncSession,
     *,
@@ -426,6 +436,7 @@ async def run_pipeline(
     checkpoint: Checkpoint | None = None,
     stop_guard: StopGuard | None = None,
     recover_session: SessionRecovery | None = None,
+    pause_after_node: PausePoint | None = None,
 ) -> PipelineRunOutcome:
     """Итерирует `task_nodes` в порядке `order_index` (раздел 13.3).
 
@@ -437,7 +448,8 @@ async def run_pipeline(
     ``active_node_context``/``stop_guard``/``recover_session`` — см.
     `run_pipeline_node_with_retry`.
     ``checkpoint`` вызывается перед каждой включённой нодой; `STOP`
-    завершает прогон до её выполнения.
+    завершает прогон до её выполнения. ``pause_after_node`` — после успешной
+    ноды с отметкой «пауза после»; `STOP` на этой паузе завершает прогон.
     """
     rows = await load_task_node_rows(db_session, task.id)
 
@@ -481,5 +493,15 @@ async def run_pipeline(
                 failed_order_index=task_node.order_index,
                 stopped=outcome.stopped,
             )
+        if pause_after_node is not None and await _should_pause_after(db_session, task_node):
+            logger.info("pipeline_paused_after_node", order_index=task_node.order_index)
+            if await pause_after_node() is CheckpointDecision.STOP:
+                # Раздел 13.2, 14.1: перезапуск продолжит сразу за этой нодой —
+                # туда же можно вставить свой промт.
+                return PipelineRunOutcome(
+                    completed=False,
+                    failed_order_index=task_node.order_index + 1,
+                    stopped=True,
+                )
 
     return PipelineRunOutcome(completed=True)

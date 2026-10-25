@@ -38,15 +38,15 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | Компонент | Версия |
 |---|---|
 | Python | 3.12* |
-| FastAPI (async) | 0.143.2 |
+| FastAPI (async) | 0.159.1 |
 | Uvicorn[standard] | 0.54.0* (ASGI-сервер, не назван в ТЗ напрямую) |
-| SQLAlchemy (async) | 2.1.4 |
+| SQLAlchemy (async) | 2.1.6 |
 | asyncpg | 0.32.0* (асинхронный драйвер Postgres для SQLAlchemy async) |
-| Alembic | 1.20.0 |
+| Alembic | 1.20.1 |
 | Celery | 5.6.3 |
 | redis-py | 8.1.0 |
 | structlog | 26.1.0 |
-| claude-agent-sdk | 0.2.168 |
+| claude-agent-sdk | 0.2.172 |
 | asyncssh | 2.24.1* (SFTP-шлюз, раздел 19.6) |
 | httpx | 0.28.1* (клиенты GitLab и Jira, тесты API) |
 | cryptography | 50.0.2* (шифрование секретов и токена сессии, раздел 19.4) |
@@ -63,17 +63,17 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | Node.js | 26* (образ сборки `frontend/Dockerfile`; CI — 22) |
 | React | 19.3.1 |
 | react-dom | 19.3.1* |
-| Vite | 8.3.4 |
+| Vite | 8.3.5 |
 | @vitejs/plugin-react | 6.1.1* |
-| TanStack Query | 5.104.3 |
-| shadcn (CLI) | 4.21.5 |
-| Tailwind CSS / PostCSS / Autoprefixer | 4.3.3 / 8.5.30 / 10.6.1* (требуются shadcn/ui) |
+| TanStack Query | 5.104.5 |
+| shadcn (CLI) | 4.22.1 |
+| Tailwind CSS / PostCSS / Autoprefixer | 4.3.3 / 8.5.31 / 10.6.1* (требуются shadcn/ui) |
 | TypeScript | 6.0.3 |
-| ESLint / typescript-eslint | 10.12.0 / 8.71.2 |
+| ESLint / typescript-eslint | 10.13.0 / 8.72.0 |
 | Vitest / jsdom | 5.0.5* / 30.1.3* |
 | Testing Library (react / dom / jest-dom / user-event) | 16.3.3* / 10.4.2* / 7.0.1* / 14.6.8* |
 
-TypeScript закреплён на 6.0.3, а не на новом мажоре 7.x: `typescript-eslint@8.71.2`
+TypeScript закреплён на 6.0.3, а не на новом мажоре 7.x: `typescript-eslint@8.72.0`
 пока требует `typescript < 6.1.0` (проверено `npm view typescript-eslint
 peerDependencies`) — апгрейд до TS 7 ждёт апгрейда этой цепочки, иначе
 `npm ls` покажет конфликт. `@vitejs/plugin-react` закреплён на 6.1.1:
@@ -214,7 +214,8 @@ alembic/
                  SFTP, токен GitLab в system_settings, уникальность
                  task_nodes, подключение к Jira, tasks.reset_at, адрес Jira
                  в system_settings, task_repositories.rebase_requested_at,
-                 tasks.context_cleared_at); новые миграции пишут DDL
+                 tasks.context_cleared_at, task_nodes.pause_after, nodes.task_id —
+                 свои ноды задачи); новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
@@ -423,8 +424,15 @@ Postgres из `backend/tests/conftest.py`:
     статусе `new` (там же пайплайн меняется — снимок заменяется целиком;
     после запуска — через «Вернуть в новые» из `failed`/`done`,
     `POST /tasks/{id}/reset`); в `failed` — только для нод с `order_index >
-    tasks.last_failed_order_index` (`services/task_nodes.py`,
-    `PATCH /tasks/{id}/nodes/{task_node_id}`).
+    tasks.last_failed_order_index` и для ноды на самой точке перезапуска,
+    если она не начинала выполняться в текущем прогоне (остановка на паузе
+    после ноды ставит точку сразу за ней) (`services/task_nodes.py`,
+    `PATCH /tasks/{id}/nodes/{task_node_id}`). По тем же правилам между
+    нодами снимка вставляются, правятся и удаляются свои промты задачи
+    (`nodes.task_id`, `POST`/`DELETE /tasks/{id}/nodes…`); своя нода с
+    историей `node_logs` не удаляется. Отметка «пауза после»
+    (`task_nodes.pause_after`) — управление прогоном, а не состав: меняется
+    в любом статусе, после успеха ноды задача встаёт в `paused`.
 12. **Celery-задачи обязаны быть идемпотентными**: проверка текущего
     состояния перед изменением, распределённая блокировка Redis (`SET NX` +
     TTL) для критичных операций (пуш в Git, обработка очереди).

@@ -27,24 +27,26 @@ class Pipeline(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
 
 
 class Node(UUIDPrimaryKeyMixin, Base):
-    """Нода пайплайна и системный промт библиотеки — одна сущность (3.1).
+    """Нода пайплайна, системный промт библиотеки и своя нода задачи — одна сущность (3.1).
 
-    ``pipeline_id IS NULL`` — самостоятельный промт библиотеки;
-    ``is_library_item`` дублирует этот факт явным полем (ТЗ: "хранится
-    отдельно для явности и быстрой фильтрации") — согласованность между
-    ними защищена ``CheckConstraint`` ниже.
+    У ноды заполнено ровно одно из ``pipeline_id`` и ``task_id``, у промта
+    библиотеки — ни одно; ``is_library_item`` дублирует этот факт явным
+    полем (ТЗ: "хранится отдельно для явности и быстрой фильтрации") —
+    согласованность защищена ``CheckConstraint`` ниже.
     """
 
     __tablename__ = "nodes"
     __table_args__ = (
         sa.CheckConstraint(
-            "(is_library_item AND pipeline_id IS NULL) "
-            "OR (NOT is_library_item AND pipeline_id IS NOT NULL)",
+            "(is_library_item AND pipeline_id IS NULL AND task_id IS NULL) "
+            "OR (NOT is_library_item AND num_nonnulls(pipeline_id, task_id) = 1)",
             name="ck_nodes_is_library_item_matches_pipeline_id",
         ),
     )
 
     pipeline_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("pipelines.id"))
+    # Раздел 13.1: своя нода, вставленная в снимок `task_nodes` только этой задачи.
+    task_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("tasks.id"), index=True)
     order_index: Mapped[int | None] = mapped_column(sa.Integer)
     name: Mapped[str] = mapped_column(sa.String)
     description: Mapped[str | None] = mapped_column(sa.Text)
@@ -90,3 +92,5 @@ class TaskNode(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     node_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("nodes.id"))
     order_index: Mapped[int] = mapped_column(sa.Integer)
     is_enabled: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    # Раздел 13.1: после успеха ноды задача встаёт в `paused`.
+    pause_after: Mapped[bool] = mapped_column(sa.Boolean, default=False)

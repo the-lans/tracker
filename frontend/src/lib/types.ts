@@ -356,9 +356,35 @@ export interface TaskNodeItem {
   node_id: string;
   order_index: number;
   is_enabled: boolean;
+  /** Раздел 13.1: после успеха ноды задача встаёт на паузу. */
+  pause_after: boolean;
   name: string;
   node_type: NodeType;
   editable: boolean;
+  /** Раздел 13.1: свой промт задачи; текст приходит только у него. */
+  is_custom: boolean;
+  prompt_template: string | null;
+  command_invocation: string | null;
+}
+
+/** Раздел 13.1: свой промт задачи — промт или слэш-команда. */
+export interface TaskCustomNodeContent {
+  name: string;
+  node_type: NodeType;
+  prompt_template: string | null;
+  command_invocation: string | null;
+}
+
+/** `after_task_node_id` — нода, после которой вставить; `null` — в начало. */
+export interface TaskCustomNodeCreateRequest extends TaskCustomNodeContent {
+  after_task_node_id: string | null;
+}
+
+/** Раздел 13.1, 13.2: `is_enabled` и `content` — по правилу редактируемости, `pause_after` — в любом статусе. */
+export interface TaskNodeUpdateRequest {
+  is_enabled?: boolean;
+  pause_after?: boolean;
+  content?: TaskCustomNodeContent;
 }
 
 /** Раздел 3.1, 15.2: переменная уровня задачи; значение — только через reveal. */

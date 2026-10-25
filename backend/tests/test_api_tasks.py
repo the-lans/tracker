@@ -38,7 +38,7 @@ from services.task_control import (
     read_task_control,
 )
 from services.task_signal import wait_for_task_signal
-from tests.factories import make_llm_account, make_repository
+from tests.factories import make_llm_account, make_node_log, make_repository
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -786,7 +786,7 @@ async def test_failed_task_locks_nodes_up_to_failure_point(
     assert task is not None
     task.status = TaskStatus.FAILED
     task.last_failed_order_index = 1
-    await db_session.flush()
+    await make_node_log(db_session, task_id=task.id, node_id=uuid.UUID(nodes[1]["node_id"]))
 
     locked = await authed_client.patch(
         f"/tasks/{task_body['id']}/nodes/{nodes[1]['id']}",
@@ -801,6 +801,185 @@ async def test_failed_task_locks_nodes_up_to_failure_point(
     assert locked.status_code == 409
     assert allowed.status_code == 200
     assert [node["editable"] for node in listed] == [False, False, True]
+
+
+class TestPauseAfterNode:
+    """Раздел 13.1, 13.2: отметка «пауза после» меняется и у запущенной задачи."""
+
+    async def test_set_while_running(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 2)
+        task = await db_session.get(Task, uuid.UUID(task_body["id"]))
+        assert task is not None
+        task.status = TaskStatus.IN_PROGRESS
+        await db_session.flush()
+
+        response = await authed_client.patch(
+            f"/tasks/{task_body['id']}/nodes/{nodes[0]['id']}",
+            json={"pause_after": True},
+        )
+        listed = (await authed_client.get(f"/tasks/{task_body['id']}/nodes")).json()
+
+        assert response.status_code == 200, response.text
+        assert response.json()["pause_after"] is True
+        assert [(node["pause_after"], node["is_enabled"]) for node in listed] == [
+            (True, True),
+            (False, True),
+        ]
+
+    async def test_empty_body_rejected(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 1)
+
+        response = await authed_client.patch(
+            f"/tasks/{task_body['id']}/nodes/{nodes[0]['id']}",
+            json={},
+        )
+
+        assert response.status_code == 422
+
+
+class TestCustomTaskNodes:
+    """Раздел 13.1: свои промты задачи — вставка, правка, удаление и изоляция от `/nodes`."""
+
+    _PROMPT = {"name": "Уточнения", "node_type": "plain_prompt", "prompt_template": "Спроси"}
+
+    async def _insert(
+        self,
+        client: AsyncClient,
+        task_body: dict[str, Any],
+        after: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        response = await client.post(
+            f"/tasks/{task_body['id']}/nodes",
+            json={**self._PROMPT, "after_task_node_id": after["id"] if after else None},
+        )
+        assert response.status_code == 201, response.text
+        created: dict[str, Any] = response.json()
+        return created
+
+    async def test_insert_edit_delete(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 2)
+        path = f"/tasks/{task_body['id']}/nodes"
+
+        created = await self._insert(authed_client, task_body, nodes[0])
+        edited = await authed_client.patch(
+            f"{path}/{created['id']}",
+            json={"content": {**self._PROMPT, "prompt_template": "Спроси про CSV"}},
+        )
+        listed = (await authed_client.get(path)).json()
+        deleted = await authed_client.delete(f"{path}/{created['id']}")
+
+        assert (created["is_custom"], created["order_index"]) == (True, 1)
+        assert edited.json()["prompt_template"] == "Спроси про CSV"
+        assert [node["name"] for node in listed] == ["node-0", "Уточнения", "node-1"]
+        assert [node["prompt_template"] for node in listed] == [None, "Спроси про CSV", None]
+        assert deleted.status_code == 204
+        assert [node["name"] for node in (await authed_client.get(path)).json()] == [
+            "node-0",
+            "node-1",
+        ]
+
+    @pytest.mark.parametrize(
+        ("body", "status"),
+        [
+            ({"node_type": "script"}, 422),
+            ({"node_type": "slash_command", "command_invocation": "/review"}, 201),
+        ],
+    )
+    async def test_node_types(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        body: dict[str, Any],
+        status: int,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 1)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/nodes",
+            json={**self._PROMPT, **body},
+        )
+
+        assert response.status_code == status, response.text
+
+    async def test_pause_after_set_on_insert(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 1)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/nodes",
+            json={**self._PROMPT, "pause_after": True},
+        )
+
+        assert response.status_code == 201, response.text
+        assert (response.json()["pause_after"], response.json()["is_enabled"]) == (True, True)
+
+    async def test_pipeline_node_not_attached_as_library_prompt(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 1)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/library-prompts",
+            json={"node_id": nodes[0]["node_id"]},
+        )
+
+        assert response.status_code == 409
+
+    async def test_pipeline_node_not_deleted(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 1)
+
+        response = await authed_client.delete(f"/tasks/{task_body['id']}/nodes/{nodes[0]['id']}")
+
+        assert response.status_code == 409
+
+    async def test_hidden_from_library_and_builder(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 1)
+        created = await self._insert(authed_client, task_body, None)
+        node_id = created["node_id"]
+
+        listed = (await authed_client.get("/nodes")).json()
+        fetched = await authed_client.patch(f"/nodes/{node_id}", json={"name": "чужое"})
+        attached = await authed_client.post(
+            f"/tasks/{task_body['id']}/library-prompts",
+            json={"node_id": node_id},
+        )
+
+        assert node_id not in {node["id"] for node in listed}
+        assert fetched.status_code == 404
+        assert attached.status_code == 409
 
 
 # --- Ручные запросы: активная сессия, список, кнопка ■ (раздел 7.3, 8.2) ---

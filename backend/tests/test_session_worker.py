@@ -56,6 +56,7 @@ from services.task_control import (
     request_bridge_reconnect,
     request_task_control,
 )
+from services.task_nodes import CustomNodeDraft, add_custom_task_node
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name
 from tasks import session_worker
@@ -128,6 +129,7 @@ async def _add_node(
     *,
     order_index: int,
     node_type: NodeType = NodeType.PLAIN_PROMPT,
+    pause_after: bool = False,
 ) -> Node:
     node = Node(
         created_by=task.created_by,
@@ -145,7 +147,14 @@ async def _add_node(
     )
     db_session.add(node)
     await db_session.flush()
-    db_session.add(TaskNode(task_id=task.id, node_id=node.id, order_index=order_index))
+    db_session.add(
+        TaskNode(
+            task_id=task.id,
+            node_id=node.id,
+            order_index=order_index,
+            pause_after=pause_after,
+        ),
+    )
     await db_session.flush()
     return node
 
@@ -1416,3 +1425,219 @@ class TestWithoutLlmAccount:
         assert task.status is TaskStatus.DONE
         assert worker_env.options == []
         assert task.remote_control_status is not RemoteControlStatus.CONNECTED
+
+
+class TestPauseAfterNode:
+    """Раздел 13.1, 14.1: отметка «пауза после» — та же пауза, что по кнопке."""
+
+    async def test_dialog_on_pause_then_resume(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0, pause_after=True)
+        await _add_node(db_session, task, order_index=1)
+
+        async def while_paused(observed: list[TaskStatus]) -> None:
+            await db_session.refresh(task)
+            observed.append(task.status)
+            await _enqueue_freeform(db_session, task, "уточняющий вопрос")
+            await request_task_control(redis_client, task.id, TaskControlCommand.RESUME)
+
+        observed = _patch_pause_wait(monkeypatch, while_paused)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(3))
+
+        await _run_worker(task)
+
+        assert observed == [TaskStatus.PAUSED]
+        assert worker_env.client.queries == ["шаг 0", "уточняющий вопрос", "шаг 1"]
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+
+    @pytest.mark.parametrize(
+        ("command", "final_status", "resume_at"),
+        [
+            (TaskControlCommand.RESUME, TaskStatus.DONE, None),
+            (TaskControlCommand.STOP, TaskStatus.FAILED, 1),
+        ],
+        ids=["resume", "stop"],
+    )
+    async def test_pause_after_last_node(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+        command: TaskControlCommand,
+        final_status: TaskStatus,
+        resume_at: int | None,
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0, pause_after=True)
+
+        async def while_paused(observed: list[TaskStatus]) -> None:
+            await db_session.refresh(task)
+            observed.append(task.status)
+            await request_task_control(redis_client, task.id, command)
+
+        observed = _patch_pause_wait(monkeypatch, while_paused)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        await _run_worker(task)
+
+        # Пауза наступает до пуша и `done`.
+        assert observed == [TaskStatus.PAUSED]
+        await db_session.refresh(task)
+        assert task.status is final_status
+        assert task.last_failed_order_index == resume_at
+
+    async def test_restart_after_stop_on_last_node_finishes(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 14.1: перезапуск после «Остановить» на последней ноде ничего не повторяет."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0, pause_after=True)
+
+        async def while_paused(observed: list[TaskStatus]) -> None:
+            await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+
+        _patch_pause_wait(monkeypatch, while_paused)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+        await _run_worker(task)
+        await db_session.refresh(task)
+        assert (task.status, task.last_failed_order_index) == (TaskStatus.FAILED, 1)
+
+        await _run_worker(task, start_after_order_index=0)
+
+        assert worker_env.client.queries == ["шаг 0"]
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+
+    async def test_prompt_at_stop_point_runs_on_restart(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 13.2: после «Остановить» на паузе свой промт вставляется сразу за нодой."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0, pause_after=True)
+        await _add_node(db_session, task, order_index=1)
+
+        async def while_paused(observed: list[TaskStatus]) -> None:
+            await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+
+        _patch_pause_wait(monkeypatch, while_paused)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+        await _run_worker(task)
+        await db_session.refresh(task)
+        first = await db_session.scalar(
+            sa.select(TaskNode).where(TaskNode.task_id == task.id, TaskNode.order_index == 0),
+        )
+        assert first is not None
+        await add_custom_task_node(
+            db_session,
+            task=task,
+            after_task_node_id=first.id,
+            draft=CustomNodeDraft(
+                name="Уточнения",
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template="уточни",
+            ),
+        )
+
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(2))
+        await _run_worker(task, start_after_order_index=0)
+
+        assert worker_env.client.queries == ["уточни", "шаг 1"]
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+
+    async def test_button_pause_not_doubled(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0, pause_after=True)
+        await _add_node(db_session, task, order_index=1)
+
+        async def user_presses_pause() -> None:
+            if len(worker_env.client.queries) == 1:
+                await request_task_control(redis_client, task.id, TaskControlCommand.PAUSE)
+
+        async def while_paused(observed: list[TaskStatus]) -> None:
+            observed.append(TaskStatus.PAUSED)
+            await request_task_control(redis_client, task.id, TaskControlCommand.RESUME)
+
+        observed = _patch_pause_wait(monkeypatch, while_paused)
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(2),
+            on_query=user_presses_pause,
+        )
+
+        await _run_worker(task)
+
+        assert observed == [TaskStatus.PAUSED]
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+
+    async def test_custom_prompt_then_dialog(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 1.2, сценарий 2: свой промт с вопросами, ответы в диалоге, дальше пайплайн."""
+        task = await _make_task(db_session, status=TaskStatus.NEW)
+        await _add_node(db_session, task, order_index=0)
+        await _add_node(db_session, task, order_index=1)
+        first = await db_session.scalar(
+            sa.select(TaskNode).where(TaskNode.task_id == task.id, TaskNode.order_index == 0),
+        )
+        assert first is not None
+        await add_custom_task_node(
+            db_session,
+            task=task,
+            after_task_node_id=first.id,
+            draft=CustomNodeDraft(
+                name="Вопросы",
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template="задай вопросы",
+            ),
+            pause_after=True,
+        )
+        task.status = TaskStatus.QUEUED
+        await db_session.commit()
+
+        async def while_paused(observed: list[TaskStatus]) -> None:
+            await db_session.refresh(task)
+            observed.append(task.status)
+            await _enqueue_freeform(db_session, task, "ответы на вопросы")
+            await request_task_control(redis_client, task.id, TaskControlCommand.RESUME)
+
+        observed = _patch_pause_wait(monkeypatch, while_paused)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(4))
+
+        await _run_worker(task)
+
+        assert observed == [TaskStatus.PAUSED]
+        assert worker_env.client.queries == [
+            "шаг 0",
+            "задай вопросы",
+            "ответы на вопросы",
+            "шаг 1",
+        ]
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE

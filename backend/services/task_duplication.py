@@ -37,15 +37,44 @@ if TYPE_CHECKING:
 logger = get_logger("task_duplication")
 
 
+async def _copy_custom_node(db_session: AsyncSession, node: Node, *, target: Task) -> Node:
+    """Раздел 13.1: своя нода принадлежит одной задаче — копия получает свою."""
+    copy = Node(
+        task_id=target.id,
+        name=node.name,
+        description=node.description,
+        node_type=node.node_type,
+        prompt_template=node.prompt_template,
+        command_invocation=node.command_invocation,
+        timeout_seconds=node.timeout_seconds,
+        max_retries=node.max_retries,
+        retry_base_delay_seconds=node.retry_base_delay_seconds,
+        is_skipped=False,
+        is_library_item=False,
+        is_archived=False,
+        created_by=target.created_by,
+    )
+    db_session.add(copy)
+    await db_session.flush()
+    return copy
+
+
 async def _copy_task_nodes(db_session: AsyncSession, *, source: Task, target: Task) -> None:
-    stmt = sa.select(TaskNode).where(TaskNode.task_id == source.id)
-    for task_node in (await db_session.execute(stmt)).scalars().all():
+    stmt = (
+        sa.select(TaskNode, Node)
+        .join(Node, Node.id == TaskNode.node_id)
+        .where(TaskNode.task_id == source.id)
+    )
+    for task_node, node in (await db_session.execute(stmt)).all():
+        if node.task_id is not None:
+            node = await _copy_custom_node(db_session, node, target=target)
         db_session.add(
             TaskNode(
                 task_id=target.id,
-                node_id=task_node.node_id,
+                node_id=node.id,
                 order_index=task_node.order_index,
                 is_enabled=task_node.is_enabled,
+                pause_after=task_node.pause_after,
             ),
         )
 

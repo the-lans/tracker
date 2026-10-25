@@ -7,8 +7,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import LlmAccountStatus, UserRole
+from db.models.enums import LlmAccountStatus, NodeLogStatus, NodeLogTriggerType, UserRole
 from db.models.llm import LlmAccount
+from db.models.logs import NodeLog
 from db.models.pipelines import Pipeline
 from db.models.repositories import Repository
 from db.models.tasks import Task
@@ -82,6 +83,25 @@ async def make_task(
     db_session.add(task)
     await db_session.flush()
     return task
+
+
+async def make_node_log(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    node_id: uuid.UUID,
+    status: NodeLogStatus = NodeLogStatus.FAILED,
+) -> NodeLog:
+    """Выполнение ноды пайплайна задачи — по умолчанию упавшее (точка перезапуска)."""
+    node_log = NodeLog(
+        task_id=task_id,
+        node_id=node_id,
+        trigger_type=NodeLogTriggerType.PIPELINE,
+        status=status,
+    )
+    db_session.add(node_log)
+    await db_session.flush()
+    return node_log
 
 
 async def make_pipeline(db_session: AsyncSession, *, created_by: uuid.UUID) -> Pipeline:

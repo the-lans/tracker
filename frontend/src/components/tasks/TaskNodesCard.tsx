@@ -1,31 +1,36 @@
-import { Check, Lock } from "lucide-react";
-import { toast } from "sonner";
+import { Fragment, useState } from "react";
+import { Lock, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDialog } from "@/components/common/dialogs/ConfirmDialog";
 import { DependentNodesDialog } from "@/components/tasks/DependentNodesDialog";
-import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
-import { NODE_TYPE_LABEL } from "@/lib/labels";
+import {
+  TaskCustomNodeDialog,
+  type CustomNodeTarget,
+} from "@/components/tasks/TaskCustomNodeDialog";
+import { TaskNodeRow } from "@/components/tasks/TaskNodeRow";
 import { useDependentNodesGuard } from "@/hooks/useDependentNodesGuard";
 import {
-  useSetTaskNodeEnabled,
+  useDeleteTaskNode,
   useTaskNodeDependents,
   useTaskNodes,
+  useUpdateTaskNode,
 } from "@/hooks/useTasks";
-import { errorMessage } from "@/lib/errors";
-import { cn } from "@/lib/utils";
+import { toastError } from "@/lib/errors";
+import { insertOrderIndex, isPositionEditable } from "@/lib/taskNodes";
 import {
   TaskStatus,
   type NodeLog,
   type Task,
   type TaskNodeItem,
+  type TaskNodeUpdateRequest,
 } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 
 /** Раздел 13.2, 15.2: пояснение к блокировке чекбоксов нод. */
 function nodesHint(status: TaskStatus): string {
   if (status === TaskStatus.NEW)
-    return "Снимите галочку, чтобы пропустить ноду в этой задаче";
+    return "Снимите галочку, чтобы пропустить ноду в этой задаче, или вставьте свой промт кнопкой «+ Промт»";
   if (status === TaskStatus.FAILED) {
     return "Пройденные и упавшая ноды уже выполнены — менять можно только ноды после точки сбоя. Чтобы сменить пайплайн, верните задачу в новые";
   }
@@ -35,8 +40,9 @@ function nodesHint(status: TaskStatus): string {
   return "Состав нод заблокирован — задача уже запущена";
 }
 
-/** Раздел 13.1–13.3, 15.2: ноды задачи с чекбоксами включения; при
- * отключении ноды, на вывод которой ссылаются следующие, — предупреждение. */
+/** Раздел 13.1–13.3, 15.2: ноды задачи с чекбоксами включения и своими
+ * промтами; при отключении ноды, на вывод которой ссылаются следующие, —
+ * предупреждение. */
 export function TaskNodesCard({
   task,
   nodeLogs,
@@ -48,32 +54,52 @@ export function TaskNodesCard({
   onChangePipeline: () => void;
 }) {
   const { data: taskNodes } = useTaskNodes(task.id, true);
-  const setTaskNodeEnabled = useSetTaskNodeEnabled(task.id);
+  const updateTaskNode = useUpdateTaskNode(task.id);
   const taskNodeDependents = useTaskNodeDependents(task.id);
   const dependentsGuard = useDependentNodesGuard();
+  const deleteTaskNode = useDeleteTaskNode(task.id);
+  const [customTarget, setCustomTarget] = useState<CustomNodeTarget>(null);
+  const [deleting, setDeleting] = useState<TaskNodeItem | null>(null);
+  const nodes = taskNodes ?? [];
 
-  function setNodeEnabled(taskNodeId: string, isEnabled: boolean) {
-    setTaskNodeEnabled.mutate(
-      { taskNodeId, isEnabled },
-      {
-        onError: (error) => {
-          toast.error(
-            errorMessage(error, "Не удалось изменить состав нод"),
-          );
-        },
-      },
+  function canInsertAfter(after: TaskNodeItem | null): boolean {
+    return isPositionEditable(task, nodes, insertOrderIndex(nodes, after));
+  }
+
+  function confirmDelete() {
+    if (!deleting) return;
+    deleteTaskNode.mutate(deleting.id, {
+      onSuccess: () => setDeleting(null),
+      onError: toastError("Не удалось удалить свой промт"),
+    });
+  }
+
+  function updateNode(
+    taskNodeId: string,
+    body: TaskNodeUpdateRequest,
+    failure: string,
+  ) {
+    updateTaskNode.mutate(
+      { taskNodeId, ...body },
+      { onError: toastError(failure) },
     );
   }
 
   function toggleNode(taskNode: TaskNodeItem, isEnabled: boolean) {
+    const setEnabled = () =>
+      updateNode(
+        taskNode.id,
+        { is_enabled: isEnabled },
+        "Не удалось изменить состав нод",
+      );
     if (isEnabled) {
-      setNodeEnabled(taskNode.id, true);
+      setEnabled();
       return;
     }
     void dependentsGuard.guard(
       taskNode.name,
       () => taskNodeDependents.mutateAsync(taskNode.id),
-      () => setNodeEnabled(taskNode.id, false),
+      setEnabled,
     );
   }
 
@@ -114,51 +140,40 @@ export function TaskNodesCard({
               hint="Пайплайн был пуст в момент привязки, поэтому задаче нечего выполнять. Добавьте ноды в разделе «Пайплайны» кнопкой «+ Нода» и создайте задачу заново."
             />
           )}
-          {(taskNodes ?? []).map((taskNode) => {
-            const done = successfulPipelineNodeIds.has(taskNode.node_id);
-            const isCurrent = taskNode.node_id === currentNodeId;
-            return (
-              <label
-                key={taskNode.id}
-                className={cn(
-                  "flex items-center gap-2.5 border-t border-border py-2 first:border-t-0",
-                  isCurrent &&
-                    "-mx-2 rounded-lg border-t-0 bg-accent-tint px-2",
-                  !taskNode.is_enabled && "text-text-3",
-                )}
-              >
-                <Checkbox
-                  checked={taskNode.is_enabled}
-                  disabled={
-                    !taskNode.editable ||
-                    setTaskNodeEnabled.isPending ||
-                    taskNodeDependents.isPending
-                  }
-                  aria-label={`Включить ноду ${taskNode.name}`}
-                  onCheckedChange={(checked) =>
-                    toggleNode(taskNode, checked === true)
+          {taskNodes && canInsertAfter(null) && (
+            <InsertPromptButton
+              label="Вставить свой промт в начало"
+              onClick={() => setCustomTarget({ kind: "insert", after: null })}
+            />
+          )}
+          {nodes.map((taskNode) => (
+            <Fragment key={taskNode.id}>
+              <TaskNodeRow
+                taskNode={taskNode}
+                done={successfulPipelineNodeIds.has(taskNode.node_id)}
+                isCurrent={taskNode.node_id === currentNodeId}
+                busy={updateTaskNode.isPending || taskNodeDependents.isPending}
+                onToggleEnabled={(isEnabled) => toggleNode(taskNode, isEnabled)}
+                onTogglePause={(pauseAfter) =>
+                  updateNode(
+                    taskNode.id,
+                    { pause_after: pauseAfter },
+                    "Не удалось изменить паузу после ноды",
+                  )
+                }
+                onEdit={() => setCustomTarget({ kind: "edit", taskNode })}
+                onDelete={() => setDeleting(taskNode)}
+              />
+              {canInsertAfter(taskNode) && (
+                <InsertPromptButton
+                  label={`Вставить свой промт после ноды ${taskNode.name}`}
+                  onClick={() =>
+                    setCustomTarget({ kind: "insert", after: taskNode })
                   }
                 />
-                <NodeTypeIcon
-                  type={taskNode.node_type}
-                  className="size-[15px] shrink-0 text-text-2"
-                />
-                <div className="min-w-0 flex-1 truncate text-note font-bold" title={taskNode.name}>
-                  {taskNode.name}
-                </div>
-                {done ? (
-                  <Check
-                    className="size-3.5 shrink-0 text-success"
-                    aria-label="выполнено"
-                  />
-                ) : (
-                  <div className="text-caption font-bold uppercase tracking-wide text-text-3">
-                    {NODE_TYPE_LABEL[taskNode.node_type]}
-                  </div>
-                )}
-              </label>
-            );
-          })}
+              )}
+            </Fragment>
+          ))}
         </div>
         <div className="mt-2 flex items-center gap-1.5 text-caption text-text-3">
           <Lock className="size-3" />
@@ -170,6 +185,44 @@ export function TaskNodesCard({
         onConfirm={dependentsGuard.confirm}
         onCancel={dependentsGuard.cancel}
       />
+      <TaskCustomNodeDialog
+        taskId={task.id}
+        taskNodes={nodes}
+        target={customTarget}
+        onClose={() => setCustomTarget(null)}
+      />
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title="Удалить свой промт?"
+        description={`Промт «${deleting?.name ?? ""}» будет удалён из этой задачи. Если он уже выполнялся, удалить нельзя — его можно отключить.`}
+        confirmLabel="Удалить"
+        danger
+        pending={deleteTaskNode.isPending}
+        onConfirm={confirmDelete}
+      />
     </>
+  );
+}
+
+/** Раздел 15.2: вставка своего промта на это место состава. */
+function InsertPromptButton({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className="touch-hit flex items-center gap-1 self-start py-0.5 text-caption font-bold text-text-3 hover:text-accent"
+    >
+      <Plus className="size-3" />
+      Промт
+    </button>
   );
 }

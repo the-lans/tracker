@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from clients.claude_agent import ClaudeCodeSession
 from db.models.enums import (
     NodeLogStatus,
+    NodeLogTriggerType,
     NodeType,
     ScriptLanguage,
     TaskStatus,
@@ -30,6 +31,7 @@ from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
 from db.models.users import User
 from services.crypto import encrypt
+from services.errors import ValidationError
 from services.pipeline_orchestrator import (
     CheckpointDecision,
     StopGuard,
@@ -39,6 +41,7 @@ from services.pipeline_orchestrator import (
 from services.plan_mode import ActiveNodeContext
 from services.system_settings import update_integrations
 from services.task_control import TaskControlCommand, request_task_control
+from services.task_status import transition_task_status
 from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
@@ -70,6 +73,7 @@ async def _add_node(
     *,
     order_index: int,
     is_enabled: bool = True,
+    pause_after: bool = False,
     **node_kwargs: object,
 ) -> Node:
     defaults: dict[str, object] = {
@@ -89,7 +93,13 @@ async def _add_node(
     db_session.add(node)
     await db_session.flush()
     db_session.add(
-        TaskNode(task_id=task.id, node_id=node.id, order_index=order_index, is_enabled=is_enabled),
+        TaskNode(
+            task_id=task.id,
+            node_id=node.id,
+            order_index=order_index,
+            is_enabled=is_enabled,
+            pause_after=pause_after,
+        ),
     )
     await db_session.flush()
     return node
@@ -817,3 +827,253 @@ class TestNodeOutputOnRetry:
             (NodeLogStatus.FAILED, "используем: ответ A"),
             (NodeLogStatus.SUCCESS, "используем: ответ A"),
         ]
+
+
+class TestPauseAfterNode:
+    """Раздел 13.1: после успешной ноды с отметкой «пауза после» — пауза."""
+
+    async def _task(
+        self,
+        db_session: AsyncSession,
+        flags: list[tuple[bool, bool]],
+    ) -> Task:
+        """``flags`` — (включена, пауза после) для нод 0, 1, …"""
+        task = await _make_task_with_pipeline(db_session)
+        for order_index, (is_enabled, pause_after) in enumerate(flags):
+            await _add_node(
+                db_session,
+                task,
+                order_index=order_index,
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template=f"шаг {order_index}",
+                is_enabled=is_enabled,
+                pause_after=pause_after,
+            )
+        return task
+
+    async def test_pauses_after_flagged_nodes(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await self._task(db_session, [(True, True), (True, False), (True, True)])
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 3)
+        paused_after: list[int] = []
+
+        async def pause() -> CheckpointDecision:
+            paused_after.append(len(fake.queries))
+            return CheckpointDecision.CONTINUE
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            pause_after_node=pause,
+        )
+
+        assert paused_after == [1, 3]
+        assert outcome.completed is True
+
+    async def test_flag_on_clear_context_ignored(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        await _add_node(
+            db_session,
+            task,
+            order_index=0,
+            node_type=NodeType.CLEAR_CONTEXT,
+            pause_after=True,
+        )
+        fake = FakeClaudeAgentClient(messages_per_query=[])
+        paused: list[bool] = []
+
+        async def pause() -> CheckpointDecision:
+            paused.append(True)
+            return CheckpointDecision.CONTINUE
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            pause_after_node=pause,
+        )
+
+        assert outcome.context_cleared_at_order_index == 0
+        assert paused == []
+
+    async def test_no_pause_after_failed_or_disabled(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await self._task(db_session, [(False, True), (True, True)])
+        failing_turn: list[Message] = [
+            make_assistant_error("authentication_failed"),
+            make_result_message(is_error=True),
+        ]
+        fake = FakeClaudeAgentClient(messages_per_query=[failing_turn])
+        paused: list[bool] = []
+
+        async def pause() -> CheckpointDecision:
+            paused.append(True)
+            return CheckpointDecision.CONTINUE
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            pause_after_node=pause,
+        )
+
+        assert paused == []
+        assert outcome.failed_order_index == 1
+
+    @pytest.mark.parametrize(
+        ("flags", "resume_at"),
+        [
+            # Отключённая следующая нода — тоже точка перезапуска: туда
+            # можно вставить свой промт (раздел 13.2).
+            ([(True, True), (False, False), (True, False)], 1),
+            ([(True, False), (True, False), (True, True)], 3),
+        ],
+        ids=["next_node", "after_last_node"],
+    )
+    async def test_stop_on_pause(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        flags: list[tuple[bool, bool]],
+        resume_at: int,
+    ) -> None:
+        task = await self._task(db_session, flags)
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 3)
+
+        async def stop() -> CheckpointDecision:
+            return CheckpointDecision.STOP
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            pause_after_node=stop,
+        )
+
+        assert (outcome.completed, outcome.stopped) == (False, True)
+        assert outcome.failed_order_index == resume_at
+
+    async def test_flag_set_during_node(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await self._task(db_session, [(True, False), (True, False)])
+
+        async def user_sets_flag() -> None:
+            # Отметку ставит API в своей транзакции — объект оркестратора о ней не знает.
+            await db_session.execute(
+                sa.update(TaskNode)
+                .where(TaskNode.task_id == task.id, TaskNode.order_index == 0)
+                .values(pause_after=True)
+                .execution_options(synchronize_session=False),
+            )
+
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()]] * 2,
+            on_query=user_sets_flag,
+        )
+        paused_after: list[int] = []
+
+        async def pause() -> CheckpointDecision:
+            paused_after.append(len(fake.queries))
+            return CheckpointDecision.CONTINUE
+
+        await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            pause_after_node=pause,
+        )
+
+        assert paused_after == [1]
+
+
+class TestCustomTaskNode:
+    """Раздел 13.1: своя нода задачи выполняется как нода пайплайна на своём месте."""
+
+    async def _task_with_custom_node(self, db_session: AsyncSession) -> tuple[Task, Node]:
+        task = await _make_task_with_pipeline(db_session)
+        prompts = ["шаг 0", "уточни: {{node.llm_output}}", "шаг 1: {{node.llm_output}}"]
+        nodes = [
+            await _add_node(
+                db_session,
+                task,
+                order_index=order_index,
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template=prompt,
+            )
+            for order_index, prompt in enumerate(prompts)
+        ]
+        custom = nodes[1]
+        custom.pipeline_id, custom.task_id = None, task.id
+        await db_session.flush()
+        return task, custom
+
+    async def test_runs_between_pipeline_nodes(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task, custom = await self._task_with_custom_node(db_session)
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    AssistantMessage(content=[TextBlock(text=text)], model="claude"),
+                    make_result_message(),
+                ]
+                for text in ("ответ 0", "ответ свой", "ответ 1")
+            ],
+        )
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+        )
+
+        assert outcome.completed is True
+        assert fake.queries == ["шаг 0", "уточни: ответ 0", "шаг 1: ответ свой"]
+        logs = await _node_logs_for(db_session, task.id)
+        assert [log.node_id for log in logs][1] == custom.id
+
+    async def test_done_requires_custom_node_success(self, db_session: AsyncSession) -> None:
+        task, custom = await self._task_with_custom_node(db_session)
+        stmt = sa.select(TaskNode.node_id).where(TaskNode.task_id == task.id)
+        for node_id in await db_session.scalars(stmt):
+            if node_id != custom.id:
+                db_session.add(
+                    NodeLog(
+                        task_id=task.id,
+                        node_id=node_id,
+                        trigger_type=NodeLogTriggerType.PIPELINE,
+                        status=NodeLogStatus.SUCCESS,
+                    ),
+                )
+        task.status = TaskStatus.IN_PROGRESS
+        await db_session.flush()
+
+        with pytest.raises(ValidationError):
+            await transition_task_status(
+                db_session,
+                task_id=task.id,
+                from_status=TaskStatus.IN_PROGRESS,
+                to_status=TaskStatus.DONE,
+            )

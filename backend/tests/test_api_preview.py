@@ -6,10 +6,11 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import NodeType
-from db.models.pipelines import Node, Pipeline
+from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
 from db.models.users import User
 from services.templating import RenderScope
@@ -104,26 +105,27 @@ class TestFreeformPreviewSlashCommand:
         assert response.json()["rendered_text"] == "/review {{task.title}}"
 
 
+async def _pipeline_with_prompt(db_session: AsyncSession, user: User) -> Pipeline:
+    pipeline = Pipeline(name="пайплайн", created_by=user.id)
+    db_session.add(pipeline)
+    await db_session.flush()
+    db_session.add(
+        Node(
+            created_by=user.id,
+            pipeline_id=pipeline.id,
+            order_index=0,
+            name="промт",
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="Сделай",
+            is_library_item=False,
+        ),
+    )
+    await db_session.flush()
+    return pipeline
+
+
 class TestPipelineNodePreview:
     """Раздел 5.1: предпросмотр ноды пайплайна видит предыдущие ноды, как сохранение."""
-
-    async def _pipeline_with_prompt(self, db_session: AsyncSession, user: User) -> Pipeline:
-        pipeline = Pipeline(name="пайплайн", created_by=user.id)
-        db_session.add(pipeline)
-        await db_session.flush()
-        db_session.add(
-            Node(
-                created_by=user.id,
-                pipeline_id=pipeline.id,
-                order_index=0,
-                name="промт",
-                node_type=NodeType.PLAIN_PROMPT,
-                prompt_template="Сделай",
-                is_library_item=False,
-            ),
-        )
-        await db_session.flush()
-        return pipeline
 
     @pytest.mark.parametrize(("order_index", "status"), [(1, 200), (0, 422)])
     async def test_new_node_position(
@@ -134,7 +136,7 @@ class TestPipelineNodePreview:
         order_index: int,
         status: int,
     ) -> None:
-        pipeline = await self._pipeline_with_prompt(db_session, current_user)
+        pipeline = await _pipeline_with_prompt(db_session, current_user)
 
         response = await authed_client.post(
             "/templates/preview",
@@ -154,7 +156,7 @@ class TestPipelineNodePreview:
         db_session: AsyncSession,
         current_user: User,
     ) -> None:
-        pipeline = await self._pipeline_with_prompt(db_session, current_user)
+        pipeline = await _pipeline_with_prompt(db_session, current_user)
         node = Node(
             created_by=current_user.id,
             pipeline_id=pipeline.id,
@@ -178,3 +180,42 @@ class TestPipelineNodePreview:
         )
 
         assert response.status_code == 200, response.text
+
+
+class TestCustomTaskNodePreview:
+    """Раздел 13.1: предпросмотр своей ноды видит предыдущие ноды задачи."""
+
+    @pytest.mark.parametrize(("order_index", "status"), [(1, 200), (0, 422)])
+    async def test_position_in_task(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        order_index: int,
+        status: int,
+    ) -> None:
+        pipeline = await _pipeline_with_prompt(db_session, current_user)
+        task = Task(
+            code="RR-12345",
+            title="Экспорт",
+            description="d",
+            created_by=current_user.id,
+            pipeline_id=pipeline.id,
+        )
+        db_session.add(task)
+        await db_session.flush()
+        node_id = await db_session.scalar(sa.select(Node.id).where(Node.pipeline_id == pipeline.id))
+        db_session.add(TaskNode(task_id=task.id, node_id=node_id, order_index=0))
+        await db_session.flush()
+
+        response = await authed_client.post(
+            "/templates/preview",
+            json={
+                "text": "Итог: {{node.llm_output}}",
+                "scope": RenderScope.PIPELINE.value,
+                "task_id": str(task.id),
+                "order_index": order_index,
+            },
+        )
+
+        assert response.status_code == status, response.text
