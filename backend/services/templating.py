@@ -37,6 +37,7 @@ TASK_FIELDS = frozenset(
         "title",
         "description",
         "guide_url",
+        "jira_issue_url",
         "status",
         "pipeline_id",
         "llm_account_id",

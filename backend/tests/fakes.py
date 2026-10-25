@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -17,6 +20,9 @@ from claude_agent_sdk import (
     TextBlock,
 )
 from claude_agent_sdk.types import AssistantMessageError, RateLimitStatus
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def make_result_message(*, is_error: bool = False, session_id: str = "sess-1") -> ResultMessage:
@@ -139,3 +145,19 @@ class FakeClaudeAgentClient:
                     return
         finally:
             self.concurrent_calls -= 1
+
+
+def patch_plan_mode_signals(
+    monkeypatch: pytest.MonkeyPatch,
+    wait: Callable[..., Awaitable[bool]],
+) -> None:
+    """
+    Подмена подписки `services.plan_mode` на сигналы задачи: каждое ожидание
+    сигнала — вызов ``wait`` (ход пользователя в тесте).
+    """
+
+    @asynccontextmanager
+    async def signals(*_args: object, **_kwargs: object) -> AsyncIterator[SimpleNamespace]:
+        yield SimpleNamespace(wait=wait)
+
+    monkeypatch.setattr("services.plan_mode.subscribe_task_signal", signals)

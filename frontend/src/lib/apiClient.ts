@@ -1,4 +1,4 @@
-import { getStoredToken } from "@/stores/authStore";
+import { getStoredToken } from "@/stores/authContext";
 import type { ApiErrorBody } from "@/lib/types";
 
 /**
@@ -108,12 +108,13 @@ export const api = {
   getBlob,
 };
 
+/** Адрес WebSocket без токена: адрес попадает в журналы запросов (раздел 18.1). */
 export function wsUrl(path: string): string {
-  const token = getStoredToken();
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const url = new URL(`${protocol}//${window.location.host}${path}`);
-  if (token) {
-    url.searchParams.set("token", token);
-  }
-  return url.toString();
+  return `${protocol}//${window.location.host}${path}`;
+}
+
+/** Первое сообщение сокета задачи — токен сессии (раздел 18.1). */
+export function wsAuthMessage(): string {
+  return JSON.stringify({ type: "auth", token: getStoredToken() ?? "" });
 }

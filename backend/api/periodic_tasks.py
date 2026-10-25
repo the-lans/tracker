@@ -17,11 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import require_admin
 from api.schemas import PeriodicTaskResponse, PeriodicTaskUpdateRequest
-from db.models.enums import PeriodicScheduleType
 from db.models.periodic import PeriodicTask
 from db.models.users import User
 from db.session import get_session
-from services.errors import NotFoundError, ValidationError
+from services.access import get_or_404
+from services.periodic_tasks import update_periodic_task as update_periodic_task_settings
 from tasks.celery_app import celery_app
 
 router = APIRouter(prefix="/periodic-tasks", tags=["admin-periodic-tasks"])
@@ -31,10 +31,12 @@ async def _get_periodic_task_or_404(
     db_session: AsyncSession,
     periodic_task_id: uuid.UUID,
 ) -> PeriodicTask:
-    periodic_task = await db_session.get(PeriodicTask, periodic_task_id)
-    if periodic_task is None:
-        raise NotFoundError(f"Периодическая задача {periodic_task_id} не найдена")
-    return periodic_task
+    return await get_or_404(
+        db_session,
+        PeriodicTask,
+        periodic_task_id,
+        not_found=f"Периодическая задача {periodic_task_id} не найдена",
+    )
 
 
 @router.get("", response_model=list[PeriodicTaskResponse])
@@ -63,26 +65,14 @@ async def update_periodic_task(
     admin: Annotated[User, Depends(require_admin)],
 ) -> PeriodicTask:
     periodic_task = await _get_periodic_task_or_404(db_session, periodic_task_id)
-    if body.interval_seconds is not None:
-        if periodic_task.schedule_type is not PeriodicScheduleType.INTERVAL:
-            raise ValidationError(
-                f"Задача {periodic_task.name} использует {periodic_task.schedule_type}, "
-                "а не interval — interval_seconds не применим",
-            )
-        periodic_task.interval_seconds = body.interval_seconds
-    if body.crontab_expression is not None:
-        if periodic_task.schedule_type is not PeriodicScheduleType.CRONTAB:
-            raise ValidationError(
-                f"Задача {periodic_task.name} использует {periodic_task.schedule_type}, "
-                "а не crontab — crontab_expression не применим",
-            )
-        periodic_task.crontab_expression = body.crontab_expression
-    if body.is_enabled is not None:
-        periodic_task.is_enabled = body.is_enabled
-    periodic_task.updated_by = admin.id
-    await db_session.commit()
-    await db_session.refresh(periodic_task)
-    return periodic_task
+    return await update_periodic_task_settings(
+        db_session,
+        periodic_task=periodic_task,
+        interval_seconds=body.interval_seconds,
+        crontab_expression=body.crontab_expression,
+        is_enabled=body.is_enabled,
+        updated_by=admin.id,
+    )
 
 
 @router.post("/{periodic_task_id}/run-now", status_code=202)

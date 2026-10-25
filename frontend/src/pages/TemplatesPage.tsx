@@ -4,10 +4,9 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { TemplateForm } from "@/components/templates/TemplateForm";
 import { useDeleteTemplate, useTemplates } from "@/hooks/useTemplates";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { Template } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { EditButton } from "@/components/common/actions/EditButton";
@@ -16,6 +15,7 @@ import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { plural } from "@/lib/utils";
+import { EntityFormDialog, type EditTarget } from "@/components/common/dialogs/EntityFormDialog";
 
 function fileCountLabel(count: number): string {
   return `${count} ${plural(count, ["файл", "файла", "файлов"])}`;
@@ -24,7 +24,7 @@ function fileCountLabel(count: number): string {
 export function TemplatesPage() {
   const { data: templates, isLoading } = useTemplates();
   const deleteTemplate = useDeleteTemplate();
-  const [dialogTemplate, setDialogTemplate] = useState<Template | "new" | null>(null);
+  const [dialogTemplate, setDialogTemplate] = useState<EditTarget<Template>>(null);
 
   return (
     <div className={PAGE_ROOT}>
@@ -61,7 +61,7 @@ export function TemplatesPage() {
                     deleteTemplate.mutate(template.id, {
                       onError: (error) =>
                         toast.error(
-                          error instanceof ApiError ? error.message : "Не удалось удалить",
+                          errorMessage(error, "Не удалось удалить"),
                         ),
                     })}
                 />
@@ -75,20 +75,21 @@ export function TemplatesPage() {
         </div>
       </div>
 
-      <Dialog open={dialogTemplate !== null} onOpenChange={(open) => !open && setDialogTemplate(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{dialogTemplate === "new" ? "Новый шаблон" : "Редактировать шаблон"}</DialogTitle>
-          </DialogHeader>
-          {dialogTemplate !== null && (
-            <TemplateForm
-              template={dialogTemplate === "new" ? undefined : dialogTemplate}
-              onSaved={() => setDialogTemplate(null)}
-              onCancel={() => setDialogTemplate(null)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      <EntityFormDialog
+        target={dialogTemplate}
+        onClose={() => setDialogTemplate(null)}
+        createTitle="Новый шаблон"
+        editTitle="Редактировать шаблон"
+        contentClassName="max-w-2xl"
+      >
+        {(item, close) => (
+          <TemplateForm
+            template={item}
+            onSaved={close}
+            onCancel={close}
+          />
+        )}
+      </EntityFormDialog>
     </div>
   );
 }

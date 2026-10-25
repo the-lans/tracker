@@ -18,6 +18,7 @@ import pytest
 import sqlalchemy as sa
 from claude_agent_sdk import ClaudeAgentOptions, PermissionResultAllow, ProcessError
 from claude_agent_sdk.types import ToolPermissionContext
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.claude_agent import REMOTE_CONTROL_EXTRA_ARG
 from db.models.enums import (
@@ -32,14 +33,13 @@ from db.models.enums import (
     RepositoryRole,
     ScriptLanguage,
     TaskStatus,
-    UserRole,
 )
 from db.models.logs import NodeLog
 from db.models.mcp import McpServer
-from db.models.pipelines import Node, Pipeline, TaskNode
+from db.models.pipelines import Node, TaskNode
 from db.models.repositories import Repository, Template, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
-from db.models.users import User
+from services import gitlab_sync
 from services import task_status as task_status_module
 from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
@@ -59,21 +59,28 @@ from services.task_control import (
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name
 from tasks import session_worker
-from tests.factories import make_llm_account, make_user
+from tests.factories import make_llm_account, make_pipeline, make_repository, make_task, make_user
 from tests.fakes import (
     FakeClaudeAgentClient,
     make_assistant_error,
     make_rate_limit_event,
     make_result_message,
+    patch_plan_mode_signals,
 )
-from tests.worker_support import GIT_AUTHOR_ARGS, WorkerEnv, init_bare_origin, run_command
+from tests.worker_support import (
+    GIT_AUTHOR_ARGS,
+    WorkerEnv,
+    assert_cli_in_session_container,
+    init_bare_origin,
+    run_command,
+)
 
 if TYPE_CHECKING:
     from claude_agent_sdk import Message
     from redis.asyncio import Redis
-    from sqlalchemy.ext.asyncio import AsyncSession
 
 _REPOSITORY_NAME = "backend"
+
 
 
 async def _make_task(
@@ -81,31 +88,27 @@ async def _make_task(
     *,
     status: TaskStatus,
     origin: Path | None = None,
+    with_llm_account: bool = True,
 ) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    pipeline = Pipeline(name="p", is_archived=False, created_by=user.id)
-    db_session.add(pipeline)
-    await db_session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
+    user = await make_user(db_session)
+    pipeline = await make_pipeline(db_session, created_by=user.id)
+    llm_account_id = None
+    if with_llm_account:
+        llm_account_id = (await make_llm_account(db_session, owner_id=user.id)).id
+    task = await make_task(
+        db_session,
         created_by=user.id,
         pipeline_id=pipeline.id,
         status=status,
+        llm_account_id=llm_account_id,
     )
-    db_session.add(task)
-    await db_session.flush()
     if origin is not None:
-        repository = Repository(
+        repository = await make_repository(
+            db_session,
             name=_REPOSITORY_NAME,
             git_url=str(origin),
-            deploy_key_encrypted=encrypt("не используется"),
+            deploy_key="не используется",
         )
-        db_session.add(repository)
-        await db_session.flush()
         db_session.add(
             TaskRepository(
                 task_id=task.id,
@@ -621,6 +624,108 @@ class TestConflictAfterRestart:
         assert merged == "обе правки объединены\n"
 
 
+class TestChildRebaseOnParentMerge:
+    """
+    Раздел 21.2, сценарий 10: ветку родителя слили — периодическая задача
+    в своей сессии БД отмечает ребейз, воркер дочерней задачи выполняет его
+    перед следующей нодой, и ветка уходит в origin уже на новой базе.
+    """
+
+    async def test_worker_rebases_before_next_node(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        worker_env: WorkerEnv,
+        tmp_path: Path,
+    ) -> None:
+        origin = init_bare_origin(tmp_path)
+        parent_dir = tmp_path / "parent"
+        run_command("git", "clone", str(origin), str(parent_dir), cwd=tmp_path)
+        run_command("git", "checkout", "-b", "feature/RR-parent", cwd=parent_dir)
+        (parent_dir / "parent.txt").write_text("работа родителя\n")
+        run_command("git", "add", "parent.txt", cwd=parent_dir)
+        run_command("git", *GIT_AUTHOR_ARGS, "commit", "-m", "работа родителя", cwd=parent_dir)
+        run_command("git", "push", "origin", "feature/RR-parent", cwd=parent_dir)
+
+        task = await _make_task(db_session, status=TaskStatus.QUEUED, origin=origin)
+        [child_repository] = (
+            await db_session.execute(
+                sa.select(TaskRepository).where(TaskRepository.task_id == task.id),
+            )
+        ).scalars()
+        child_repository.base_branch = "feature/RR-parent"
+        parent = await make_task(db_session, created_by=task.created_by, status=TaskStatus.DONE)
+        task.parent_task_id = parent.id
+        parent_repository = TaskRepository(
+            task_id=parent.id,
+            repository_id=child_repository.repository_id,
+            role=RepositoryRole.READ_WRITE,
+            branch_name="feature/RR-parent",
+            base_branch="main",
+            merge_status=MergeStatus.MERGED,
+        )
+        db_session.add(parent_repository)
+        await db_session.flush()
+        await _add_node(db_session, task, order_index=0)
+        await _add_node(db_session, task, order_index=1)
+        repo_dir = worker_env.repos_root / task.code / _REPOSITORY_NAME
+
+        async def parent_merged_during_first_node() -> None:
+            if len(worker_env.client.queries) != 1:
+                return
+            (repo_dir / "child.txt").write_text("работа дочерней задачи\n")
+            run_command("git", "add", "child.txt", cwd=repo_dir)
+            run_command("git", *GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
+            # Слияние ветки родителя в main и ещё один коммит в main после него.
+            run_command("git", "checkout", "-B", "main", "origin/main", cwd=parent_dir)
+            run_command("git", "merge", "--ff-only", "feature/RR-parent", cwd=parent_dir)
+            (parent_dir / "after_merge.txt").write_text("после слияния\n")
+            run_command("git", "add", "after_merge.txt", cwd=parent_dir)
+            run_command("git", *GIT_AUTHOR_ARGS, "commit", "-m", "после слияния", cwd=parent_dir)
+            run_command("git", "push", "origin", "main", cwd=parent_dir)
+            await _run_periodic_rebase_request(db_session, redis_client)
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(2),
+            on_query=parent_merged_during_first_node,
+        )
+
+        await _run_worker(task)
+
+        assert await _refreshed_status(db_session, task) is TaskStatus.DONE
+        # Чистый ребейз агенту не поручается.
+        assert worker_env.client.queries == ["шаг 0", "шаг 1"]
+        await db_session.refresh(child_repository)
+        assert child_repository.base_branch == "main"
+        assert child_repository.rebase_requested_at is None
+        branch = build_branch_name(task.code)
+        pushed = run_command("git", "ls-tree", "--name-only", branch, cwd=origin).split()
+        assert {"after_merge.txt", "child.txt", "parent.txt"} <= set(pushed)
+
+
+async def _run_periodic_rebase_request(db_session: AsyncSession, redis_client: Redis) -> None:
+    """
+    Тело `rebase_child_branches_on_parent_merge` в отдельной сессии БД, как
+    в процессе `worker`: объекты воркера сессии об отметке не знают.
+    """
+    periodic_session = AsyncSession(
+        bind=db_session.bind,
+        join_transaction_mode="create_savepoint",
+        expire_on_commit=False,
+    )
+    try:
+        for parent_task_repository in await gitlab_sync.find_merged_parents_with_children(
+            periodic_session,
+        ):
+            await gitlab_sync.request_child_rebases_on_parent_merge(
+                periodic_session,
+                parent_task_repository=parent_task_repository,
+                redis_client=redis_client,
+            )
+    finally:
+        await periodic_session.close()
+
+
 class TestPauseRace:
     async def test_survives_concurrent_conflict(
         self,
@@ -707,18 +812,18 @@ class TestQuestionDuringPausedPrompt:
         statuses_while_asking: list[TaskStatus] = []
         answers: list[str] = []
 
-        async def user_answers(_redis: Any, _task_id: uuid.UUID, *, timeout: float | None) -> bool:
+        async def user_answers(*, timeout: float | None) -> bool:
             await db_session.refresh(task)
             statuses_while_asking.append(task.status)
             pending = await db_session.scalar(
                 sa.select(NodeLog).where(NodeLog.status == NodeLogStatus.AWAITING_DECISION),
             )
             assert pending is not None
-            pending.user_input_text = "main"
+            pending.user_input_text = "0"
             await db_session.commit()
             return True
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_answers)
+        patch_plan_mode_signals(monkeypatch, user_answers)
 
         async def agent_behaviour() -> None:
             if len(worker_env.client.queries) == 1:
@@ -726,14 +831,20 @@ class TestQuestionDuringPausedPrompt:
             if worker_env.client.queries[-1] == "вопрос на паузе":
                 can_use_tool = worker_env.options[0].can_use_tool
                 assert can_use_tool is not None
+                question = {
+                    "question": "Какую базу?",
+                    "header": "База",
+                    "options": [{"label": "main"}, {"label": "dev"}],
+                    "multiSelect": False,
+                }
                 result = await can_use_tool(
                     "AskUserQuestion",
-                    {"question": "Какую базу?", "options": ["main", "dev"]},
+                    {"questions": [question]},
                     ToolPermissionContext(),
                 )
                 assert isinstance(result, PermissionResultAllow)
                 assert result.updated_input is not None
-                answers.append(result.updated_input["answer"])
+                answers.append(result.updated_input["answers"]["Какую базу?"])
 
         async def while_paused(observed: list[TaskStatus]) -> None:
             await db_session.refresh(task)
@@ -788,6 +899,8 @@ class TestBridgeReconnect:
         reconnect_options = worker_env.options[1]
         assert reconnect_options.resume == "sess-worker"
         assert REMOTE_CONTROL_EXTRA_ARG in reconnect_options.extra_args
+        # Новый процесс CLI моста — снова в контейнере сессии (раздел 19.3).
+        assert_cli_in_session_container(reconnect_options, task.id)
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
         assert task.remote_control_status is RemoteControlStatus.CONNECTED
@@ -822,6 +935,27 @@ class TestBridgeReconnect:
         assert task.remote_control_status is RemoteControlStatus.DISCONNECTED
         assert await consume_bridge_reconnect(redis_client, task.id) is False
         assert len(worker_env.options) == 1
+
+
+class TestSessionContainer:
+    async def test_cli_runs_in_session_container(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """
+        Раздел 19.3: процесс CLI задачи — в контейнере сессии, не в контейнере воркера.
+        """
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        await _run_worker(task)
+
+        [options] = worker_env.options
+        assert_cli_in_session_container(options, task.id)
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
 
 
 class TestRestartAfterClearContext:
@@ -962,7 +1096,7 @@ class TestNodeTimeoutWhileAwaitingDecision:
             await asyncio.Event().wait()
             return False
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_never_answers)
+        patch_plan_mode_signals(monkeypatch, user_never_answers)
 
         class HangingClient(FakeClaudeAgentClient):
             async def interrupt(self) -> None:
@@ -1105,7 +1239,7 @@ class TestPlanRevision:
             await db_session.commit()
             return True
 
-        monkeypatch.setattr("services.plan_mode.wait_for_task_signal", user_decides)
+        patch_plan_mode_signals(monkeypatch, user_decides)
 
         async def agent_plans_twice() -> None:
             can_use_tool = worker_env.options[0].can_use_tool
@@ -1259,3 +1393,26 @@ class TestFailureKinds:
         assert task.status is TaskStatus.DONE
         assert replacement.queries == ["шаг 1"]
         assert worker_env.options[-1].resume == "sess-worker"
+        # Восстановленный CLI — снова в контейнере сессии (раздел 19.3).
+        assert_cli_in_session_container(worker_env.options[-1], task.id)
+
+
+class TestWithoutLlmAccount:
+    async def test_scripts_only_pipeline_done(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Раздел 3.1: задача из одних скриптов работает без LLM-аккаунта и без CLI."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED, with_llm_account=False)
+        script = await _add_node(db_session, task, order_index=0, node_type=NodeType.SCRIPT)
+        script.script_language = ScriptLanguage.PYTHON
+        script.script_content = 'print("ok")'
+        await db_session.flush()
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert worker_env.options == []
+        assert task.remote_control_status is not RemoteControlStatus.CONNECTED

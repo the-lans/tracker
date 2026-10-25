@@ -1,4 +1,4 @@
-import { useAuth } from "@/stores/authStore";
+import { useAuth } from "@/hooks/useAuth";
 import { UserRole } from "@/lib/types";
 
 export function useIsAdmin(): boolean {

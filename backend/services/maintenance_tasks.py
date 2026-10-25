@@ -38,7 +38,11 @@ from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.tasks import Task
 from db.models.users import User
+from services.nodes.script import CONTAINER_DEADLINE_LABEL
 from services.notifications import NotificationEvent, notify_task_event, notify_user_event
+from services.session_container import SESSION_CONTAINER_PREFIX, SESSION_TASK_LABEL
+from services.session_heartbeat import is_session_alive
+from services.task_status import SESSION_ACTIVE_STATUSES
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -157,14 +161,12 @@ async def send_awaiting_decision_reminders(
 
 
 async def find_tasks_requiring_remote_control_check(db_session: AsyncSession) -> list[Task]:
-    """Раздел 6.6: `check_remote_control_bridges` — активные задачи."""
-    active_statuses = (
-        TaskStatus.IN_PROGRESS,
-        TaskStatus.PAUSED,
-        TaskStatus.AWAITING_INPUT,
-        TaskStatus.PLAN_REVIEW,
-    )
-    stmt = sa.select(Task).where(Task.status.in_(active_statuses))
+    """
+    Раздел 6.6: `check_remote_control_bridges` — все задачи, сессию которых
+    держит воркер, в том числе без LLM-аккаунта: моста у них нет, но
+    потерянный воркер переводит в `failed` и их.
+    """
+    stmt = sa.select(Task).where(Task.status.in_(SESSION_ACTIVE_STATUSES))
     return list((await db_session.execute(stmt)).scalars().all())
 
 
@@ -195,32 +197,73 @@ async def purge_orphaned_docker_containers(
     now: datetime | None = None,
     grace_period: timedelta = DEFAULT_ORPHANED_CONTAINER_GRACE_PERIOD,
 ) -> list[str]:
-    """Раздел 16.2: останавливает контейнеры script-нод (`tracker-node-*`,
-    см. `services/nodes/script.py`), запущенные дольше ``grace_period``.
+    """Раздел 16.2: останавливает зависшие контейнеры script-нод (`tracker-node-*`).
 
-    В норме script-нода сама останавливает свой контейнер по истечении
-    `timeout_seconds` (`services/nodes/script.py`) — эта задача ловит те,
-    что пережили родительский процесс backend (например, при аварийном
-    перезапуске воркера).
+    Зависший — переживший свой дедлайн из метки `tracker.deadline` (старт +
+    `timeout_seconds` ноды + запас, `services/nodes/script.py`): в норме нода
+    сама останавливает контейнер по таймауту, а сюда попадают пережившие
+    процесс воркера. Контейнер без метки (запущен до её появления) —
+    зависший, если работает дольше ``grace_period``.
     """
     now = now or datetime.now(UTC)
-    names_output = await _run_docker(
+    listing = await _run_docker(
         "ps",
         "--filter",
         "name=tracker-node-",
         "--format",
-        "{{.Names}}",
+        f'{{{{.Names}}}}\t{{{{.Label "{CONTAINER_DEADLINE_LABEL}"}}}}',
     )
-    names = [name for name in names_output.splitlines() if name.strip()]
 
     stopped: list[str] = []
-    for name in names:
-        started_at_raw = await _run_docker("inspect", "--format", "{{.State.StartedAt}}", name)
-        started_at = _parse_docker_timestamp(started_at_raw)
-        if now - started_at > grace_period:
+    for line in listing.splitlines():
+        name, _, deadline_raw = line.partition("\t")
+        if not name.strip():
+            continue
+        if deadline_raw.strip().isdigit():
+            expired = now.timestamp() > int(deadline_raw)
+        else:
+            started_at_raw = await _run_docker("inspect", "--format", "{{.State.StartedAt}}", name)
+            expired = now - _parse_docker_timestamp(started_at_raw) > grace_period
+        if expired:
             await _run_docker("stop", name)
             stopped.append(name)
-            logger.warning("orphaned_container_purged", container_name=name, started_at=started_at)
+            logger.warning("orphaned_container_purged", container_name=name)
+    return stopped
+
+
+def _task_id_or_none(raw: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(raw.strip())
+    except ValueError:
+        return None
+
+
+async def purge_orphaned_session_containers(redis_client: Redis) -> list[str]:
+    """
+    Раздел 16.2, 19.3: контейнер сессии (`tracker-session-*`) живёт, пока
+    воркер держит сессию его задачи. Нет пульса сессии — контейнер пережил
+    свой воркер и останавливается (`--rm` удаляет его сам).
+    """
+    listing = await _run_docker(
+        "ps",
+        "--filter",
+        f"name={SESSION_CONTAINER_PREFIX}",
+        "--format",
+        f'{{{{.Names}}}}\t{{{{.Label "{SESSION_TASK_LABEL}"}}}}',
+    )
+    stopped: list[str] = []
+    for line in listing.splitlines():
+        name, _, task_raw = line.partition("\t")
+        task_id = _task_id_or_none(task_raw)
+        if not name.strip() or task_id is None:
+            continue
+        if await is_session_alive(redis_client, task_id):
+            continue
+        await _run_docker("stop", name)
+        stopped.append(name)
+        logger.warning(
+            "orphaned_session_container_purged", container_name=name, task_id=str(task_id)
+        )
     return stopped
 
 

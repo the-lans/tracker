@@ -20,7 +20,6 @@ from db.models.enums import (
     NodeType,
     ParentSummaryStatus,
     TaskStatus,
-    UserRole,
 )
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
@@ -31,7 +30,9 @@ from services.manual_queue import process_manual_queue_once
 from services.parent_summary import deny_all_tools
 from services.task_control import TaskControlCommand, request_task_control
 from tasks import session_worker
+from tests.factories import make_llm_account, make_user
 from tests.fakes import FakeClaudeAgentClient, make_result_message
+from tests.worker_support import assert_cli_in_session_container
 
 if TYPE_CHECKING:
     from claude_agent_sdk import Message
@@ -49,11 +50,6 @@ def _answer(text: str) -> list[Message]:
     return [AssistantMessage(content=[TextBlock(text=text)], model="claude"), make_result_message()]
 
 
-async def _make_user(db_session: AsyncSession) -> User:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    return user
 
 
 async def _make_parent(
@@ -70,6 +66,7 @@ async def _make_parent(
         created_by=user.id,
         status=status,
         session_id=session_id,
+        llm_account_id=(await make_llm_account(db_session, owner_id=user.id)).id,
     )
     db_session.add(parent)
     await db_session.flush()
@@ -89,6 +86,7 @@ async def _make_child(db_session: AsyncSession, user: User, parent: Task) -> Tas
         parent_task_id=parent.id,
         use_parent_summary=True,
         status=TaskStatus.QUEUED,
+        llm_account_id=(await make_llm_account(db_session, owner_id=user.id)).id,
     )
     db_session.add(child)
     await db_session.flush()
@@ -148,7 +146,7 @@ class TestBusyParent:
         redis_client: Redis,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(
             db_session,
             user,
@@ -202,7 +200,7 @@ class TestBusyParent:
         worker_env: WorkerEnv,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(
             db_session,
             user,
@@ -241,7 +239,7 @@ class TestBusyParent:
         redis_client: Redis,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(
             db_session,
             user,
@@ -270,7 +268,7 @@ class TestIdleParent:
         db_session: AsyncSession,
         worker_env: WorkerEnv,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(
             db_session,
             user,
@@ -292,6 +290,8 @@ class TestIdleParent:
         assert fork_options.cwd == str(worker_env.repos_root / parent.code)
         assert fork_options.can_use_tool is deny_all_tools
         assert fork_options.mcp_servers == {}
+        # Контейнер пересказа — часть сессии дочерней задачи (раздел 19.3).
+        assert_cli_in_session_container(fork_options, child.id)
         assert fork_client.disconnected is True
         assert _SUMMARY in worker_env.client.queries[0]
         [parent_log] = await _logs(db_session, parent)
@@ -304,7 +304,7 @@ class TestIdleParent:
         db_session: AsyncSession,
         worker_env: WorkerEnv,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(db_session, user, status=TaskStatus.NEW, session_id=None)
         child = await _make_child(db_session, user, parent)
         worker_env.client = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
@@ -327,7 +327,7 @@ class TestRestart:
         db_session: AsyncSession,
         worker_env: WorkerEnv,
     ) -> None:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         parent = await _make_parent(
             db_session,
             user,

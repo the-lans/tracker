@@ -17,33 +17,39 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-import sqlalchemy as sa
 from claude_agent_sdk import ClaudeSDKError
 
 from app_logging.config import get_logger
 from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType
 from db.models.logs import NodeLog
-from db.models.pipelines import Node, TaskNode
+from db.models.pipelines import Node
 from services.failure_classification import is_transient_sdk_exception
+from services.node_history import load_node_context_history
+from services.node_runs import apply_node_outcome, mark_node_log_stopped, start_node_log
 from services.nodes.clear_context import ensure_clear_context_allowed
 from services.nodes.dispatch import (
     NodeExecutionOutcome,
     execute_node,
+    logged_prompt,
     record_sdk_failure,
     resolve_node_prompt_or_none,
     resolve_script_env_or_none,
+    sent_prompt,
 )
+from services.session_context import forget_task_session
 from services.system_settings import resolve_runner_image
 from services.task_control import TaskControlCommand, read_task_control, run_stoppable
+from services.task_nodes import load_task_node_rows
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterator
     from pathlib import Path
 
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from clients.claude_agent import ClaudeCodeSession
+    from db.models.pipelines import TaskNode
     from db.models.tasks import Task
     from services.plan_mode import ActiveNodeContext
 
@@ -58,19 +64,6 @@ type SessionRecovery = Callable[[], Awaitable[None]]
 def compute_retry_delay_seconds(attempt_number: int, base_delay_seconds: int) -> float:
     """Экспоненциальный рост от `retry_base_delay_seconds` (раздел 11.7)."""
     return float(base_delay_seconds * (2 ** (attempt_number - 1)))
-
-
-async def _load_node_log_history(db_session: AsyncSession, task_id: uuid.UUID) -> list[NodeLog]:
-    # План и ответы пользователя пишет callback разрешений в своей сессии БД;
-    # без перечитывания здесь остались бы прежние значения (`expire_on_commit`
-    # выключен) и `{{node.plan_text}}`/`{{node.user_input}}` пришли бы пустыми.
-    stmt = (
-        sa.select(NodeLog)
-        .where(NodeLog.task_id == task_id)
-        .order_by(NodeLog.started_at, NodeLog.id)
-        .execution_options(populate_existing=True)
-    )
-    return list((await db_session.execute(stmt)).scalars().all())
 
 
 def _remember_session_id(task: Task, claude_session: ClaudeCodeSession) -> None:
@@ -169,113 +162,168 @@ async def run_pipeline_node_with_retry(
     """
     attempt = 1
     while True:
-        history = await _load_node_log_history(db_session, task.id)
-        prompt = await resolve_node_prompt_or_none(
+        node_log, outcome = await _run_pipeline_attempt(
             db_session,
-            node=node,
             task=task,
-            history=history,
+            node=node,
+            attempt=attempt,
+            claude_session=claude_session,
+            repos_path=repos_path,
+            active_node_context=active_node_context,
+            stop_guard=stop_guard,
         )
-        node_log = NodeLog(
+        if outcome is None:
+            logger.info("node_stopped_by_user", node_id=str(node.id), attempt=attempt)
+            return NodeRunOutcome(node_log=node_log, success=False, stopped=True)
+        final = await _final_attempt_outcome(
+            node_log=node_log,
+            outcome=outcome,
+            node=node,
+            attempt=attempt,
+            stop_guard=stop_guard,
+            can_recover_session=recover_session is not None,
+        )
+        if final is not None:
+            return final
+        await _prepare_retry(
+            outcome,
+            node=node,
+            attempt=attempt,
+            recover_session=recover_session,
+        )
+        attempt += 1
+
+
+async def _run_pipeline_attempt(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    node: Node,
+    attempt: int,
+    claude_session: ClaudeCodeSession,
+    repos_path: Path,
+    active_node_context: ActiveNodeContext | None,
+    stop_guard: StopGuard | None,
+) -> tuple[NodeLog, NodeExecutionOutcome | None]:
+    """
+    Одна попытка — своя запись `node_logs`, итог зафиксирован в БД;
+    ``None`` вместо итога — остановка пользователем.
+    """
+    history = await load_node_context_history(db_session, task)
+    prompt = await resolve_node_prompt_or_none(db_session, node=node, task=task, history=history)
+    node_log = await start_node_log(
+        db_session,
+        NodeLog(
             task_id=task.id,
             node_id=node.id,
             trigger_type=NodeLogTriggerType.PIPELINE,
             attempt_number=attempt,
-            rendered_prompt=prompt if node.node_type is not NodeType.SLASH_COMMAND else None,
-            status=NodeLogStatus.RUNNING,
-            started_at=datetime.now(UTC),
+            rendered_prompt=logged_prompt(node, prompt),
+        ),
+    )
+    if active_node_context is not None:
+        active_node_context.activate(
+            node_log_id=node_log.id,
+            task_id=task.id,
+            auto_accept_plan=task.auto_accept_plan,
+            # Раздел 9.1: пока план не принят, изменения запрещены.
+            plan_mode=node.node_type is NodeType.PLAN_PROMPT,
         )
-        db_session.add(node_log)
-        await db_session.commit()
 
-        if active_node_context is not None:
-            active_node_context.activate(
-                node_log_id=node_log.id,
-                task_id=task.id,
-                auto_accept_plan=task.auto_accept_plan,
-            )
-
-        outcome = await _run_attempt(
-            run_node_execution(
-                execute_node(
-                    node,
-                    prompt=prompt,
-                    claude_session=claude_session,
-                    repos_path=repos_path,
-                    timeout_seconds=node.timeout_seconds,
-                    db_session=db_session,
-                    node_log_id=node_log.id,
-                    runner_image=await resolve_runner_image(db_session, node),
-                    script_env=await resolve_script_env_or_none(db_session, node=node, task=task),
-                ),
-                node_type=node.node_type,
+    outcome = await _run_attempt(
+        run_node_execution(
+            execute_node(
+                node,
+                prompt=sent_prompt(prompt),
                 claude_session=claude_session,
-                stop_guard=stop_guard,
+                repos_path=repos_path,
+                timeout_seconds=node.timeout_seconds,
+                db_session=db_session,
+                node_log_id=node_log.id,
+                runner_image=await resolve_runner_image(db_session, node),
+                script_env=await resolve_script_env_or_none(db_session, node=node, task=task),
             ),
-            node_id=node.id,
+            node_type=node.node_type,
             claude_session=claude_session,
-        )
+            stop_guard=stop_guard,
+        ),
+        node_id=node.id,
+        claude_session=claude_session,
+    )
 
-        _remember_session_id(task, claude_session)
-        node_log.finished_at = datetime.now(UTC)
-        if outcome is None:
-            node_log.status = NodeLogStatus.STOPPED
-            if node.node_type is not NodeType.SCRIPT:
-                # Раздел 6.4: полученная до остановки часть ответа не теряется.
-                node_log.llm_output_text = claude_session.take_partial_turn_text()
-            await db_session.commit()
-            logger.info("node_stopped_by_user", node_id=str(node.id), attempt=attempt)
-            return NodeRunOutcome(node_log=node_log, success=False, stopped=True)
-        node_log.llm_output_text = outcome.llm_output_text
-        node_log.script_stdout = outcome.script_stdout
-        node_log.script_exit_code = outcome.script_exit_code
-        node_log.status = NodeLogStatus.SUCCESS if outcome.success else NodeLogStatus.FAILED
+    _remember_session_id(task, claude_session)
+    if outcome is None:
+        mark_node_log_stopped(node_log, node_type=node.node_type, claude_session=claude_session)
         await db_session.commit()
-        await record_sdk_failure(outcome, task_id=task.id, node_id=node.id, source=_LOG_SOURCE)
+        return node_log, None
+    apply_node_outcome(node_log, outcome)
+    await db_session.commit()
+    await record_sdk_failure(outcome, task_id=task.id, node_id=node.id, source=_LOG_SOURCE)
+    return node_log, outcome
 
-        if outcome.success:
-            logger.info("node_succeeded", node_id=str(node.id), attempt=attempt)
-            return NodeRunOutcome(node_log=node_log, success=True)
 
-        if not outcome.is_transient or (outcome.session_lost and recover_session is None):
-            # Раздел 17.3: постоянный сбой повтором не лечится — задача
-            # сразу уходит в `failed` с уведомлением автора.
-            logger.warning(
-                "node_failed_permanent",
-                node_id=str(node.id),
-                attempt=attempt,
-                error=outcome.error_message,
-            )
-            return NodeRunOutcome(node_log=node_log, success=False)
+async def _final_attempt_outcome(
+    *,
+    node_log: NodeLog,
+    outcome: NodeExecutionOutcome,
+    node: Node,
+    attempt: int,
+    stop_guard: StopGuard | None,
+    can_recover_session: bool,
+) -> NodeRunOutcome | None:
+    """Итог ноды после попытки; ``None`` — попытку нужно повторить."""
+    if outcome.success:
+        logger.info("node_succeeded", node_id=str(node.id), attempt=attempt)
+        return NodeRunOutcome(node_log=node_log, success=True)
 
-        if attempt >= node.max_retries:
-            logger.warning(
-                "node_failed_exhausted_retries",
-                node_id=str(node.id),
-                attempts=attempt,
-                error=outcome.error_message,
-            )
-            return NodeRunOutcome(node_log=node_log, success=False)
-
-        if stop_guard is not None and await stop_guard.is_stop_requested():
-            # Остановка, пришедшая вместе со сбоем, — повторять ноду незачем.
-            return NodeRunOutcome(node_log=node_log, success=False, stopped=True)
-
-        delay = compute_retry_delay_seconds(attempt, node.retry_base_delay_seconds)
+    if not outcome.is_transient or (outcome.session_lost and not can_recover_session):
+        # Раздел 17.3: постоянный сбой повтором не лечится — задача
+        # сразу уходит в `failed` с уведомлением автора.
         logger.warning(
-            "node_retry_scheduled",
+            "node_failed_permanent",
             node_id=str(node.id),
             attempt=attempt,
-            delay_seconds=delay,
             error=outcome.error_message,
         )
-        await asyncio.sleep(delay)
-        if outcome.session_lost and recover_session is not None:
-            # Сбой переподключения уходит выше: воркер переведёт задачу в
-            # `failed` (`services/task_status.py::fail_task_after_error`).
-            await recover_session()
-            logger.info("session_recovered_for_retry", node_id=str(node.id), attempt=attempt)
-        attempt += 1
+        return NodeRunOutcome(node_log=node_log, success=False)
+
+    if attempt >= node.max_retries:
+        logger.warning(
+            "node_failed_exhausted_retries",
+            node_id=str(node.id),
+            attempts=attempt,
+            error=outcome.error_message,
+        )
+        return NodeRunOutcome(node_log=node_log, success=False)
+
+    if stop_guard is not None and await stop_guard.is_stop_requested():
+        # Остановка, пришедшая вместе со сбоем, — повторять ноду незачем.
+        return NodeRunOutcome(node_log=node_log, success=False, stopped=True)
+    return None
+
+
+async def _prepare_retry(
+    outcome: NodeExecutionOutcome,
+    *,
+    node: Node,
+    attempt: int,
+    recover_session: SessionRecovery | None,
+) -> None:
+    """Пауза перед повтором (раздел 11.7) и переподключение упавшей сессии."""
+    delay = compute_retry_delay_seconds(attempt, node.retry_base_delay_seconds)
+    logger.warning(
+        "node_retry_scheduled",
+        node_id=str(node.id),
+        attempt=attempt,
+        delay_seconds=delay,
+        error=outcome.error_message,
+    )
+    await asyncio.sleep(delay)
+    if outcome.session_lost and recover_session is not None:
+        # Сбой переподключения уходит выше: воркер переведёт задачу в
+        # `failed` (`services/task_status.py::fail_task_after_error`).
+        await recover_session()
+        logger.info("session_recovered_for_retry", node_id=str(node.id), attempt=attempt)
 
 
 async def _run_attempt(
@@ -316,6 +364,57 @@ class PipelineRunOutcome:
     stopped: bool = False
 
 
+def _nodes_to_run(
+    rows: list[tuple[TaskNode, Node]],
+    *,
+    start_after_order_index: int | None,
+) -> Iterator[tuple[TaskNode, Node]]:
+    """
+    Ноды после точки продолжения; отключённые пропускаются без записи
+    `node_logs` (раздел 13.3).
+    """
+    for task_node, node in rows:
+        if start_after_order_index is not None and task_node.order_index <= start_after_order_index:
+            continue
+        if not task_node.is_enabled:
+            logger.info(
+                "node_skipped_disabled",
+                node_id=str(node.id),
+                order_index=task_node.order_index,
+            )
+            continue
+        yield task_node, node
+
+
+async def _clear_session_context(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    node: Node,
+    claude_session: ClaudeCodeSession,
+) -> None:
+    """
+    Нода `clear_context` (раздел 11.5): сессия обрывается, новая начнётся с чистого листа.
+    """
+    await ensure_clear_context_allowed(db_session, task.id)
+    await claude_session.disconnect()
+    forget_task_session(task)
+    now = datetime.now(UTC)
+    # Успешная запись нужна инварианту перехода в `done` (раздел 17.5):
+    # без неё пайплайн с clear_context никогда бы не завершился.
+    db_session.add(
+        NodeLog(
+            task_id=task.id,
+            node_id=node.id,
+            trigger_type=NodeLogTriggerType.PIPELINE,
+            status=NodeLogStatus.SUCCESS,
+            started_at=now,
+            finished_at=now,
+        ),
+    )
+    await db_session.commit()
+
+
 async def run_pipeline(
     db_session: AsyncSession,
     *,
@@ -340,25 +439,9 @@ async def run_pipeline(
     ``checkpoint`` вызывается перед каждой включённой нодой; `STOP`
     завершает прогон до её выполнения.
     """
-    stmt = (
-        sa.select(TaskNode, Node)
-        .join(Node, Node.id == TaskNode.node_id)
-        .where(TaskNode.task_id == task.id)
-        .order_by(TaskNode.order_index)
-    )
-    rows = (await db_session.execute(stmt)).all()
+    rows = await load_task_node_rows(db_session, task.id)
 
-    for task_node, node in rows:
-        if start_after_order_index is not None and task_node.order_index <= start_after_order_index:
-            continue
-        if not task_node.is_enabled:
-            logger.info(
-                "node_skipped_disabled",
-                node_id=str(node.id),
-                order_index=task_node.order_index,
-            )
-            continue
-
+    for task_node, node in _nodes_to_run(rows, start_after_order_index=start_after_order_index):
         if checkpoint is not None:
             decision = await checkpoint(task_node.order_index)
             if decision is CheckpointDecision.STOP:
@@ -370,23 +453,12 @@ async def run_pipeline(
                 )
 
         if node.node_type is NodeType.CLEAR_CONTEXT:
-            await ensure_clear_context_allowed(db_session, task.id)
-            await claude_session.disconnect()
-            task.session_id = None
-            now = datetime.now(UTC)
-            # Успешная запись нужна инварианту перехода в `done` (раздел 17.5):
-            # без неё пайплайн с clear_context никогда бы не завершился.
-            db_session.add(
-                NodeLog(
-                    task_id=task.id,
-                    node_id=node.id,
-                    trigger_type=NodeLogTriggerType.PIPELINE,
-                    status=NodeLogStatus.SUCCESS,
-                    started_at=now,
-                    finished_at=now,
-                ),
+            await _clear_session_context(
+                db_session,
+                task=task,
+                node=node,
+                claude_session=claude_session,
             )
-            await db_session.commit()
             logger.info("session_context_cleared", order_index=task_node.order_index)
             return PipelineRunOutcome(
                 completed=False,

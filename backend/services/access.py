@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import sqlalchemy as sa
 
@@ -26,6 +26,10 @@ from services.errors import NotFoundError, UnauthorizedError
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import InstrumentedAttribute
+
+class _TaskScoped(Protocol):
+    @property
+    def task_id(self) -> uuid.UUID: ...
 
 OwnedRecord = Task | Pipeline | Node | Template | LlmAccount
 OwnedModel = type[Task] | type[Pipeline] | type[Node] | type[Template] | type[LlmAccount]
@@ -57,6 +61,37 @@ async def _get_owned(
     record: OwnedRecord | None = await db_session.get(model, record_id)
     if record is None or not can_access(record, user):
         raise NotFoundError(f"{label} {record_id} не найден(а)")
+    return record
+
+
+async def get_or_404[RecordT](
+    db_session: AsyncSession,
+    model: type[RecordT],
+    record_id: uuid.UUID,
+    *,
+    not_found: str,
+) -> RecordT:
+    """Общая запись (без владельца): нет её — 404 с текстом ``not_found``."""
+    record = await db_session.get(model, record_id)
+    if record is None:
+        raise NotFoundError(not_found)
+    return record
+
+
+async def get_task_record_or_404[TaskScopedT: _TaskScoped](
+    db_session: AsyncSession,
+    model: type[TaskScopedT],
+    record_id: uuid.UUID,
+    *,
+    task_id: uuid.UUID,
+    not_found: str,
+) -> TaskScopedT:
+    """
+    Запись, принадлежащая задаче: запись другой задачи неотличима от отсутствующей.
+    """
+    record = await db_session.get(model, record_id)
+    if record is None or record.task_id != task_id:
+        raise NotFoundError(not_found)
     return record
 
 

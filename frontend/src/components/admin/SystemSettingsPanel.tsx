@@ -5,10 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useSystemSettings, useUpdateSystemSettings } from "@/hooks/useAdmin";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { SystemSettings } from "@/lib/types";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
+import { IntegrationsCard } from "@/components/admin/IntegrationsCard";
 
 type NumericField =
   | "default_timeout_seconds"
@@ -40,9 +41,7 @@ function SettingsForm({ initial }: { initial: SystemSettings }) {
       onSuccess: () => toast.success("Настройки сохранены"),
       onError: (error) =>
         toast.error(
-          error instanceof ApiError
-            ? error.message
-            : "Не удалось сохранить настройки",
+          errorMessage(error, "Не удалось сохранить настройки"),
         ),
     });
   }
@@ -89,7 +88,7 @@ function SettingsForm({ initial }: { initial: SystemSettings }) {
   );
 }
 
-/** Раздел 15.5: значения по умолчанию для новых нод — уже созданные ноды не меняются. */
+/** Раздел 15.5: значения по умолчанию для новых нод (уже созданные не меняются) и интеграция с GitLab. */
 export function SystemSettingsPanel() {
   const { data: settings, isLoading } = useSystemSettings();
 
@@ -105,6 +104,7 @@ export function SystemSettingsPanel() {
         {isLoading && <LoadingState />}
         {settings && <SettingsForm initial={settings} />}
       </Card>
+      <IntegrationsCard />
     </div>
   );
 }

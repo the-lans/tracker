@@ -4,19 +4,19 @@ import { ArrowDown, ArrowLeft, ArrowUp, Layers, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { NodeForm } from "@/components/nodes/NodeForm";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { NODE_TYPE_LABEL } from "@/lib/labels";
 import { usePipeline, usePipelineNodes } from "@/hooks/usePipelines";
 import { useDeleteNode, useUpdateNode } from "@/hooks/useNodes";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { NodeItem } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 import { cn } from "@/lib/utils";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { EntityFormDialog, type EditTarget } from "@/components/common/dialogs/EntityFormDialog";
 
 function ReorderButtons({ node, neighbor }: { node: NodeItem; neighbor?: NodeItem }) {
   const updateThis = useUpdateNode(node.id);
@@ -49,7 +49,7 @@ export function PipelineDetailPage() {
   const { data: pipeline } = usePipeline(pipelineId);
   const { data: nodes, isLoading } = usePipelineNodes(pipelineId);
   const deleteNode = useDeleteNode();
-  const [dialogNode, setDialogNode] = useState<NodeItem | "new" | null>(null);
+  const [dialogNode, setDialogNode] = useState<EditTarget<NodeItem>>(null);
 
   const sorted = [...(nodes ?? [])].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
   const nextOrderIndex = sorted.length > 0 ? (sorted[sorted.length - 1]!.order_index ?? 0) + 1 : 0;
@@ -95,7 +95,7 @@ export function PipelineDetailPage() {
                   deleteNode.mutate(node.id, {
                     onError: (error) =>
                       toast.error(
-                        error instanceof ApiError ? error.message : "Не удалось удалить ноду",
+                        errorMessage(error, "Не удалось удалить ноду"),
                       ),
                   })}
               />
@@ -112,23 +112,26 @@ export function PipelineDetailPage() {
         </div>
       </div>
 
-      <Dialog open={dialogNode !== null} onOpenChange={(open) => !open && setDialogNode(null)}>
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>{dialogNode === "new" ? "Новая нода" : "Редактировать ноду"}</DialogTitle>
-          </DialogHeader>
-          {dialogNode !== null && pipelineId && (
+      <EntityFormDialog
+        target={dialogNode}
+        onClose={() => setDialogNode(null)}
+        createTitle="Новая нода"
+        editTitle="Редактировать ноду"
+        contentClassName="max-w-xl"
+      >
+        {(item, close) =>
+          pipelineId && (
             <NodeForm
               mode="pipeline"
               pipelineId={pipelineId}
-              orderIndex={dialogNode === "new" ? nextOrderIndex : undefined}
-              node={dialogNode === "new" ? undefined : dialogNode}
-              onSaved={() => setDialogNode(null)}
-              onCancel={() => setDialogNode(null)}
+              orderIndex={item === undefined ? nextOrderIndex : undefined}
+              node={item}
+              onSaved={close}
+              onCancel={close}
             />
-          )}
-        </DialogContent>
-      </Dialog>
+          )
+        }
+      </EntityFormDialog>
     </div>
   );
 }

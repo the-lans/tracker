@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { NodeDependent } from "@/lib/types";
 import type { PendingNodeDisable } from "@/components/tasks/dependentNodes.types";
 
@@ -22,7 +22,7 @@ export function useDependentNodesGuard() {
       }
       setPending({ nodeName, dependents, proceed });
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "Не удалось проверить зависимые ноды");
+      toast.error(errorMessage(error, "Не удалось проверить зависимые ноды"));
     }
   }
 

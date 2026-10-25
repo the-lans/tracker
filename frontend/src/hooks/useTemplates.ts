@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
 import type {
   Template,
@@ -15,28 +16,24 @@ export function useTemplates() {
 }
 
 export function useCreateTemplate() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: TemplateCreateRequest) => api.post<Template>("/templates", body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+  return useInvalidatingMutation(
+    (body: TemplateCreateRequest) => api.post<Template>("/templates", body),
+    [KEY],
+  );
 }
 
 export function useUpdateTemplate(templateId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: TemplateUpdateRequest) =>
-      api.patch<Template>(`/templates/${templateId}`, body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+  return useInvalidatingMutation(
+    (body: TemplateUpdateRequest) => api.patch<Template>(`/templates/${templateId}`, body),
+    [KEY],
+  );
 }
 
 export function useDeleteTemplate() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (templateId: string) => api.delete(`/templates/${templateId}`),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+  return useInvalidatingMutation(
+    (templateId: string) => api.delete(`/templates/${templateId}`),
+    [KEY],
+  );
 }
 
 /** Раздел 5.1: предпросмотр рендеринга — общий эндпоинт для конструктора

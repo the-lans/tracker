@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +21,8 @@ from celery.beat import ScheduleEntry, Scheduler
 from app_logging.config import get_logger
 from db.models.enums import PeriodicScheduleType
 from db.session import async_session_factory
-from services.periodic_tasks import list_enabled_periodic_tasks
+from services.periodic_tasks import CRONTAB_FIELD_COUNT, list_enabled_periodic_tasks
+from tasks.async_runner import run_with_fresh_pool
 
 if TYPE_CHECKING:
     from db.models.periodic import PeriodicTask
@@ -30,13 +30,10 @@ if TYPE_CHECKING:
 logger = get_logger("periodic_scheduler")
 
 _REFRESH_INTERVAL_SECONDS = 10.0
-_CRONTAB_FIELD_COUNT = 5
-
-
 def parse_crontab_expression(expression: str) -> tuple[str, str, str, str, str]:
     """Стандартный 5-польный cron (`минута час день_месяца месяц день_недели`)."""
     parts = expression.split()
-    if len(parts) != _CRONTAB_FIELD_COUNT:
+    if len(parts) != CRONTAB_FIELD_COUNT:
         message = f"crontab_expression должен состоять из 5 полей: {expression!r}"
         raise ValueError(message)
     minute, hour, day_of_month, month_of_year, day_of_week = parts
@@ -87,7 +84,7 @@ class DatabaseScheduler(Scheduler):  # type: ignore[misc]  # celery без py.ty
 
     def _load_schedule_from_db(self) -> dict[str, ScheduleEntry]:
         try:
-            periodic_tasks = asyncio.run(_fetch_enabled_periodic_tasks())
+            periodic_tasks = run_with_fresh_pool(_fetch_enabled_periodic_tasks())
         except Exception as exc:  # noqa: BLE001 — сбой обновления расписания не должен ронять Beat
             logger.error("periodic_schedule_refresh_failed", error=str(exc))
             return self._cached_schedule

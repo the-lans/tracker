@@ -18,9 +18,10 @@ from clients.claude_agent import ClaudeCodeSession
 from db.models.enums import AppLogLevel, NodeLogStatus, NodeType
 from db.models.logs import NodeLog
 from services.failure_classification import is_transient_assistant_error
+from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.nodes.script import ScriptExecutionResult, run_script_node
 from services.task_artifacts import task_artifacts_dir
-from services.template_context import render_for_task, resolve_task_env
+from services.template_context import RenderedText, render_for_task, resolve_task_env
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -37,9 +38,9 @@ async def resolve_node_prompt(
     *,
     node: Node,
     task: Task,
-    history: list[NodeLog],
-) -> str:
-    """Возвращает итоговый текст для отправки в сессию.
+    history: NodeContextHistory = EMPTY_NODE_CONTEXT_HISTORY,
+) -> RenderedText:
+    """Возвращает итоговый текст для отправки в сессию и его показываемый вид.
 
     ``slash_command``: `command_invocation` буквально, БЕЗ шаблонизатора
     (раздел 4) — единственная ветка, минующая `render_for_task`.
@@ -48,7 +49,7 @@ async def resolve_node_prompt(
         if node.command_invocation is None:
             message = "У ноды slash_command не заполнен command_invocation"
             raise ValueError(message)
-        return node.command_invocation
+        return RenderedText.literal(node.command_invocation)
 
     if node.prompt_template is None:
         message = f"У ноды {node.node_type} не заполнен prompt_template"
@@ -67,12 +68,27 @@ async def resolve_node_prompt_or_none(
     *,
     node: Node,
     task: Task,
-    history: list[NodeLog],
-) -> str | None:
+    history: NodeContextHistory = EMPTY_NODE_CONTEXT_HISTORY,
+) -> RenderedText | None:
     """`None` для `script`-нод (у них нет промта); иначе — `resolve_node_prompt`."""
     if node.node_type is NodeType.SCRIPT:
         return None
     return await resolve_node_prompt(db_session, node=node, task=task, history=history)
+
+
+def logged_prompt(node: Node, prompt: RenderedText | None) -> str | None:
+    """
+    `node_logs.rendered_prompt`: промт с замаскированными секретами
+    (раздел 19.4); у слэш-команды и скрипта записи промта нет.
+    """
+    if prompt is None or node.node_type is NodeType.SLASH_COMMAND:
+        return None
+    return prompt.display
+
+
+def sent_prompt(prompt: RenderedText | None) -> str | None:
+    """Текст, который уходит в сессию: с настоящими значениями переменных."""
+    return prompt.text if prompt is not None else None
 
 
 async def resolve_script_env_or_none(
@@ -171,6 +187,11 @@ async def execute_llm_node_with_timeout(
         )
 
 
+# Раздел 11.4: пути задачи в окружении script-контейнера.
+SCRIPT_REPOS_PATH_ENV = "TASK_REPOS_PATH"
+SCRIPT_ARTIFACTS_PATH_ENV = "TASK_ARTIFACTS_PATH"
+
+
 async def execute_script_node(
     node: Node,
     *,
@@ -190,14 +211,21 @@ async def execute_script_node(
     if node.script_content is None or node.script_language is None:
         message = "У ноды script не заполнены script_content/script_language"
         raise ValueError(message)
+    artifacts_path = task_artifacts_dir(repos_path.name)
     result: ScriptExecutionResult = await run_script_node(
         script_content=node.script_content,
         script_language=node.script_language,
         docker_image=runner_image or node.docker_image,
         repos_path=repos_path,
         timeout_seconds=node.timeout_seconds,
-        env=env,
-        artifacts_path=task_artifacts_dir(repos_path.name),
+        # Текст скрипта шаблонизатор не обрабатывает — пути задачи скрипт
+        # узнаёт из окружения; переменные задачи их не перекрывают.
+        env={
+            **(env or {}),
+            SCRIPT_REPOS_PATH_ENV: str(repos_path),
+            SCRIPT_ARTIFACTS_PATH_ENV: str(artifacts_path),
+        },
+        artifacts_path=artifacts_path,
     )
     success = result.exit_code == 0 and not result.timed_out
     error_message = None

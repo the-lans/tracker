@@ -1,9 +1,9 @@
 """Обёртка над GitLab REST API v4 (раздел 16.2 ТЗ).
 
-Решение №5 плана реализации: токен GitLab API — один общий на систему,
-берётся из `env_variables` (`scope = global`), не отдельное поле в
-`repositories` — этот клиент принимает уже готовый токен, ответственность
-за его выбор — у вызывающего кода.
+Токен GitLab API — один общий на систему, хранится в системных настройках
+(`services/system_settings.get_gitlab_credentials`, решение №19 плана), а
+не в `repositories` или `env_variables`: этот клиент принимает уже готовый
+токен, ответственность за его выбор — у вызывающего кода.
 """
 
 from __future__ import annotations
@@ -13,28 +13,20 @@ from typing import Any
 import httpx
 
 from app_logging.config import get_logger
+from clients.http_errors import HttpFailure, classify_status
 from services.errors import ExternalServiceError
 
 logger = get_logger("gitlab_client")
 
-# Решение №5 плана: адрес и токен GitLab — глобальные `env_variables` с этими
-# ключами. Это настройки интеграции, в script-контейнеры они не передаются
-# (раздел 11.4 ТЗ).
-GITLAB_URL_ENV_KEY = "GITLAB_URL"
-GITLAB_TOKEN_ENV_KEY = "GITLAB_TOKEN"
-
 _API_BASE_PATH = "/api/v4"
-_SERVER_ERROR_THRESHOLD = 500
-_CLIENT_ERROR_THRESHOLD = 400
-# Раздел 17.3: таймаут запроса и упор в лимит — временные, хотя это 4xx.
-_TRANSIENT_CLIENT_STATUSES = frozenset({httpx.codes.REQUEST_TIMEOUT, httpx.codes.TOO_MANY_REQUESTS})
-# Неверный или просроченный токен — сбой настройки всей интеграции, а не
-# конкретного репозитория (токен один на систему, решение №5 плана).
-_ACCESS_DENIED_STATUSES = frozenset({httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN})
 
 
 class GitlabAccessDeniedError(ExternalServiceError):
-    """GitLab отклонил токен (401/403): повтор по другим репозиториям бесполезен."""
+    """
+    GitLab отклонил токен (401/403): неверный или просроченный токен — сбой
+    настройки всей интеграции (токен один на систему, решение №19 плана), и
+    повтор по другим репозиториям бесполезен.
+    """
 
     def __init__(self, message: str) -> None:
         super().__init__(message, is_transient=False)
@@ -73,14 +65,13 @@ class GitlabClient:
             raise ExternalServiceError(message, is_transient=True) from exc
 
         status = response.status_code
-        if status >= _SERVER_ERROR_THRESHOLD or status in _TRANSIENT_CLIENT_STATUSES:
-            message = f"GitLab вернул {status} для {path}"
-            raise ExternalServiceError(message, is_transient=True)
-        if status in _ACCESS_DENIED_STATUSES:
-            message = f"GitLab отклонил токен API ({status})"
-            raise GitlabAccessDeniedError(message)
-        if status >= _CLIENT_ERROR_THRESHOLD:
-            message = f"GitLab вернул {response.status_code} для {path}: {response.text}"
+        failure = classify_status(status)
+        if failure is HttpFailure.TRANSIENT:
+            raise ExternalServiceError(f"GitLab вернул {status} для {path}", is_transient=True)
+        if failure is HttpFailure.ACCESS_DENIED:
+            raise GitlabAccessDeniedError(f"GitLab отклонил токен API ({status})")
+        if failure is HttpFailure.CLIENT_ERROR:
+            message = f"GitLab вернул {status} для {path}: {response.text}"
             raise ExternalServiceError(message, is_transient=False)
         return response.json()
 

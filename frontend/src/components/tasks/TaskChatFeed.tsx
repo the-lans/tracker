@@ -28,11 +28,13 @@ const EMPTY_FEED: Record<"new" | "queued" | "other", { title: string; hint: stri
 export function TaskChatFeed({
   taskId,
   taskStatus,
+  hasLlmAccount,
   nodeLogs,
   header,
 }: {
   taskId: string;
   taskStatus: TaskStatus;
+  hasLlmAccount: boolean;
   nodeLogs: NodeLog[];
   header: ReactNode;
 }) {
@@ -93,7 +95,7 @@ export function TaskChatFeed({
         ))}
       </div>
 
-      <Composer taskId={taskId} taskStatus={taskStatus} />
+      <Composer taskId={taskId} taskStatus={taskStatus} hasLlmAccount={hasLlmAccount} />
     </div>
   );
 }

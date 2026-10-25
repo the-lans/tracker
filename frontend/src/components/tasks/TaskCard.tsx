@@ -5,7 +5,7 @@ import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { TASK_STATUS_META } from "@/components/tasks/taskStatusMeta";
 import { useStartTask } from "@/hooks/useTasks";
 import { formatRelativeShort } from "@/lib/utils";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import { TaskStatus, type Task } from "@/lib/types";
 import { OwnerLabel } from "@/components/common/avatar/OwnerLabel";
 
@@ -56,7 +56,7 @@ export function TaskCard({ task }: { task: Task }) {
               event.preventDefault();
               startTask.mutate(undefined, {
                 onError: (error) => {
-                  toast.error(error instanceof ApiError ? error.message : "Не удалось запустить");
+                  toast.error(errorMessage(error, "Не удалось запустить"));
                 },
               });
             }}

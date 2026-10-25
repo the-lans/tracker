@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 import uuid
 from unittest.mock import Mock, patch
 
@@ -11,12 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models.notifications import PushSubscription
 from db.models.users import User
 from services.push_notifications import (
+    PUSH_SEND_TIMEOUT_SECONDS,
     PushMessage,
     PywebpushSender,
     SubscriptionExpiredError,
     WebPushSender,
     send_push_to_user,
 )
+from tests.factories import make_user
 
 
 class _RecordingSender:
@@ -37,11 +41,6 @@ class _AlwaysFailingSender:
         raise RuntimeError("network error")
 
 
-async def _make_user(db_session: AsyncSession) -> User:
-    user = User(id=uuid.uuid4(), email=f"{uuid.uuid4()}@example.com", is_active=True)
-    db_session.add(user)
-    await db_session.flush()
-    return user
 
 
 async def _make_subscription(db_session: AsyncSession, user: User) -> PushSubscription:
@@ -57,7 +56,7 @@ async def _make_subscription(db_session: AsyncSession, user: User) -> PushSubscr
 
 
 async def test_sends_to_every_subscription_of_the_user(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
+    user = await make_user(db_session)
     await _make_subscription(db_session, user)
     await _make_subscription(db_session, user)
     sender: WebPushSender = _RecordingSender()
@@ -73,7 +72,7 @@ async def test_sends_to_every_subscription_of_the_user(db_session: AsyncSession)
 
 
 async def test_expired_subscription_is_deleted(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
+    user = await make_user(db_session)
     subscription = await _make_subscription(db_session, user)
 
     await send_push_to_user(
@@ -89,7 +88,7 @@ async def test_expired_subscription_is_deleted(db_session: AsyncSession) -> None
 async def test_generic_send_failure_does_not_raise_or_delete_subscription(
     db_session: AsyncSession,
 ) -> None:
-    user = await _make_user(db_session)
+    user = await make_user(db_session)
     subscription = await _make_subscription(db_session, user)
 
     await send_push_to_user(
@@ -103,7 +102,7 @@ async def test_generic_send_failure_does_not_raise_or_delete_subscription(
 
 
 async def test_no_subscriptions_is_a_no_op(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
+    user = await make_user(db_session)
 
     await send_push_to_user(
         db_session,
@@ -147,3 +146,50 @@ def test_pywebpush_sender_reraises_non_expiry_errors() -> None:
                 subscription=subscription,
                 message=PushMessage(title="t", body="b", data={}),
             )
+
+
+class _BlockingSender:
+    """Медленная push-служба: отправка держит поток, пока не отпустят."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+
+    def send(self, *, subscription: PushSubscription, message: PushMessage) -> None:
+        self.release.wait(timeout=5)
+
+
+class TestSendDoesNotBlockLoop:
+    """Раздел 6.6: отправка не останавливает event loop вызывающего (пульс сессии)."""
+
+    async def test_loop_keeps_running(self, db_session: AsyncSession) -> None:
+        user = await make_user(db_session)
+        await _make_subscription(db_session, user)
+        sender = _BlockingSender()
+        sending = asyncio.create_task(
+            send_push_to_user(
+                db_session,
+                user_id=user.id,
+                message=PushMessage(title="t", body="b", data={}),
+                sender=sender,
+            ),
+        )
+
+        await asyncio.sleep(0.05)
+        assert not sending.done()
+        sender.release.set()
+        await sending
+
+    def test_pywebpush_timeout_is_bounded(self) -> None:
+        subscription = PushSubscription(
+            user_id=uuid.uuid4(),
+            endpoint="https://push.example.com/x",
+            p256dh_key="p256dh",
+            auth_key="auth",
+        )
+        with patch("services.push_notifications.webpush") as webpush:
+            PywebpushSender().send(
+                subscription=subscription,
+                message=PushMessage(title="t", body="b", data={}),
+            )
+
+        assert webpush.call_args.kwargs["timeout"] == PUSH_SEND_TIMEOUT_SECONDS

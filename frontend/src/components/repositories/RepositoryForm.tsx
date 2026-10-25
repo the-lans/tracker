@@ -7,7 +7,7 @@ import { DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCreateRepository, useUpdateRepository } from "@/hooks/useRepositories";
 import { useTemplates } from "@/hooks/useTemplates";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { Repository } from "@/lib/types";
 
 // Radix Select не принимает пустую строку как значение пункта.
@@ -43,7 +43,7 @@ export function RepositoryForm({
 
   function handleSave() {
     const onError = (error: unknown) =>
-      toast.error(error instanceof ApiError ? error.message : "Не удалось сохранить репозиторий");
+      toast.error(errorMessage(error, "Не удалось сохранить репозиторий"));
     const defaultTemplateId = templateId === NO_TEMPLATE ? null : templateId;
     if (repository) {
       // Ключ хранится зашифрованным и не отдаётся API: пустое поле — оставить прежний.

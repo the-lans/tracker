@@ -1,11 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
-import type {
-  NodeDependent,
-  NodeItem,
-  Pipeline,
-  PipelineDependentsRequest,
-} from "@/lib/types";
+import type { NodeDependent, NodeItem, Pipeline, PipelineDependentsRequest } from "@/lib/types";
 
 const pipelineKeys = {
   all: ["pipelines"] as const,
@@ -17,8 +13,7 @@ const pipelineKeys = {
 export function usePipelines(includeArchived = false) {
   return useQuery({
     queryKey: pipelineKeys.list(includeArchived),
-    queryFn: () =>
-      api.get<Pipeline[]>("/pipelines", { include_archived: includeArchived }),
+    queryFn: () => api.get<Pipeline[]>("/pipelines", { include_archived: includeArchived }),
   });
 }
 
@@ -47,11 +42,10 @@ export function usePipelineNodeDependents(pipelineId: string) {
 }
 
 export function useCreatePipeline() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (name: string) => api.post<Pipeline>("/pipelines", { name }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: pipelineKeys.all }),
-  });
+  return useInvalidatingMutation(
+    (name: string) => api.post<Pipeline>("/pipelines", { name }),
+    [pipelineKeys.all],
+  );
 }
 
 export function useUpdatePipeline(pipelineId: string) {
@@ -67,9 +61,8 @@ export function useUpdatePipeline(pipelineId: string) {
 }
 
 export function useDeletePipeline() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (pipelineId: string) => api.delete(`/pipelines/${pipelineId}`),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: pipelineKeys.all }),
-  });
+  return useInvalidatingMutation(
+    (pipelineId: string) => api.delete(`/pipelines/${pipelineId}`),
+    [pipelineKeys.all],
+  );
 }

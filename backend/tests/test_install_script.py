@@ -197,7 +197,7 @@ class TestRestore:
             "claude_accounts.tar.gz",
             "sftp_host_keys.tar.gz",
             "docker compose run --rm backend alembic upgrade head",
-            "docker compose up -d backend worker beat sftp frontend caddy backup",
+            "docker compose up -d backend worker session-worker beat sftp frontend caddy backup",
         ]
         positions = [
             next(index for index, call in enumerate(docker_calls) if expected in call)
@@ -268,6 +268,64 @@ class TestRestore:
         result = _run_bash(
             f'exec bash "{_INSTALL_SCRIPT}" "$@"',
             "--bogus",
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 2
+
+
+class TestUpdate:
+    """Раздел 20.6: обновление пересобирает все образы, в том числе вне compose."""
+
+    def test_steps_in_order(self, stubs: Path, install_dir: Path) -> None:
+        (install_dir / ".env").write_text("SECRET_ENCRYPTION_KEY=ключ\nSFTP_DB_PASSWORD=пароль\n")
+
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--update",
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        calls = _calls(stubs)
+        expected_order = [
+            "pull --ff-only",
+            "docker compose build backend frontend",
+            "docker build -t tracker-runner-python:latest",
+            "docker build -t tracker-runner-bash:latest",
+            "docker build -t tracker-session:latest",
+            "docker compose up -d --wait postgres redis",
+            "alembic upgrade head",
+            "seed_periodic_tasks.py",
+            "docker compose up -d backend worker session-worker beat sftp frontend caddy backup",
+        ]
+        positions = [
+            next(index for index, call in enumerate(calls) if expected in call)
+            for expected in expected_order
+        ]
+        assert positions == sorted(positions)
+        assert not any("seed_admin_allowlist" in call or "git clone" in call for call in calls)
+        assert (install_dir / ".env").read_text().count("SFTP_DB_PASSWORD=") == 1
+
+    def test_requires_installation(self, stubs: Path, install_dir: Path) -> None:
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--update",
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode != 0
+        assert not any(call.startswith("docker") for call in _calls(stubs))
+
+    def test_not_with_restore(self, tmp_path: Path, stubs: Path, install_dir: Path) -> None:
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--update",
+            "--restore",
+            str(_make_restore_dir(tmp_path)),
             stubs=stubs,
             install_dir=install_dir,
         )

@@ -134,7 +134,10 @@ export function useDuplicateTask(taskId: string) {
 }
 
 /** Раздел 14.2, 14.3: действия над завершённой/упавшей задачей, возвращающие её. */
-function useTaskLifecycleAction(taskId: string, action: "cleanup-repositories" | "clear-context") {
+function useTaskLifecycleAction(
+  taskId: string,
+  action: "cleanup-repositories" | "clear-context" | "reset",
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => api.post<Task>(`/tasks/${taskId}/${action}`),
@@ -151,6 +154,11 @@ export function useCleanupRepositories(taskId: string) {
 
 export function useClearContext(taskId: string) {
   return useTaskLifecycleAction(taskId, "clear-context");
+}
+
+/** Раздел 14.2 «Вернуть в новые»: из `failed`/`done` — чтобы сменить пайплайн. */
+export function useResetTask(taskId: string) {
+  return useTaskLifecycleAction(taskId, "reset");
 }
 
 /** Раздел 6.5: новая попытка поднять мост — статус обновит воркер. */

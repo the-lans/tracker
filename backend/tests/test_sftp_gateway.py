@@ -26,7 +26,7 @@ from sftp_gateway.auth import ConnectionLimiter
 from sftp_gateway.config import GatewayConfig
 from sftp_gateway.host_key import load_or_create_host_key
 from sftp_gateway.server import check_database, start_server
-from tests.factories import SAMPLE_ED25519_KEY, make_user
+from tests.factories import SAMPLE_ED25519_KEY, make_task, make_user
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -130,10 +130,7 @@ async def _sftp_user(db_session: AsyncSession, *, role: UserRole = UserRole.USER
 
 
 async def _task(db_session: AsyncSession, owner_id: uuid.UUID) -> Task:
-    task = Task(code=f"RR-{uuid.uuid4().hex[:6]}", title="t", description="d", created_by=owner_id)
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    return await make_task(db_session, created_by=owner_id)
 
 
 @asynccontextmanager

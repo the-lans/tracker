@@ -1,30 +1,17 @@
-import uuid
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import NodeLogStatus, NodeLogTriggerType, TaskStatus, UserRole
+from db.models.enums import NodeLogStatus, NodeLogTriggerType, TaskStatus
 from db.models.logs import NodeLog
 from db.models.tasks import Task
-from db.models.users import User
 from services.errors import ConflictError
 from services.nodes.clear_context import ensure_clear_context_allowed
+from tests.factories import make_task
 
 
 async def _make_task(db_session: AsyncSession) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
-        created_by=user.id,
-        status=TaskStatus.IN_PROGRESS,
-    )
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    return await make_task(db_session, status=TaskStatus.IN_PROGRESS)
 
 
 async def test_clear_context_allowed_when_no_blocking_node_logs(db_session: AsyncSession) -> None:

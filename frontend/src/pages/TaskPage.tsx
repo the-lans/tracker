@@ -8,6 +8,8 @@ import { TaskLogsPanel } from "@/components/tasks/TaskLogsPanel";
 import { TaskWorkspaceTabs, type WorkspaceView } from "@/components/tasks/TaskWorkspaceTabs";
 import { TaskControlButtons } from "@/components/tasks/TaskControlButtons";
 import { RemoteControlButton } from "@/components/tasks/RemoteControlButton";
+import { RemoteControlNotice } from "@/components/tasks/RemoteControlNotice";
+import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { useTask, useTaskNodeLogs } from "@/hooks/useTasks";
 import { useTaskStatusSocket } from "@/hooks/useTaskStatusSocket";
 import { cn } from "@/lib/utils";
@@ -31,6 +33,8 @@ export function TaskPage() {
   // На десктопе правая панель видна всегда; «Обзор» — только мобильная вкладка.
   const workspaceView: WorkspaceView = mobileTab === "logs" ? "logs" : "dialogue";
   const workspaceTabs = <TaskWorkspaceTabs value={workspaceView} onChange={setMobileTab} />;
+  // Мост есть только у живой сессии Claude Code (раздел 6.5, 3.1).
+  const hasBridge = task.llm_account_id !== null && SESSION_ACTIVE_STATUSES.includes(task.status);
 
   return (
     <div className="flex h-full flex-col short:h-auto">
@@ -54,8 +58,9 @@ export function TaskPage() {
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <TaskControlButtons task={task} />
-          <RemoteControlButton task={task} />
+          {hasBridge && <RemoteControlButton task={task} />}
         </div>
+        {hasBridge && <RemoteControlNotice />}
       </div>
 
       <div className="flex border-b border-border xl:hidden">
@@ -107,6 +112,7 @@ export function TaskPage() {
             <TaskChatFeed
               taskId={task.id}
               taskStatus={task.status}
+              hasLlmAccount={task.llm_account_id !== null}
               nodeLogs={nodeLogs ?? []}
               header={workspaceTabs}
             />

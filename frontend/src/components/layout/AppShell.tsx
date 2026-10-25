@@ -4,6 +4,8 @@ import { Menu } from "lucide-react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { CountBadge } from "@/components/common/feedback/CountBadge";
+import { useAwaitingDecisionCount } from "@/hooks/useTasks";
 import { ensurePushSubscription } from "@/lib/push";
 
 const TITLES: Record<string, string> = {
@@ -21,6 +23,7 @@ const TITLES: Record<string, string> = {
 export function AppShell() {
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const { data: awaitingCount } = useAwaitingDecisionCount();
 
   useEffect(() => {
     // Раздел 18.1: "подписка запрашивается при первом входе" — AppShell
@@ -44,8 +47,20 @@ export function AppShell() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-3 short:py-0 lg:hidden">
-          <Button variant="ghost" size="icon" onClick={() => setMobileNavOpen(true)}>
+          {/* Раздел 18.3: счётчик ожидающих решения виден и без открытого меню. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="relative"
+            aria-label={
+              awaitingCount?.count
+                ? `Меню, ожидают решения: ${awaitingCount.count}`
+                : "Меню"
+            }
+            onClick={() => setMobileNavOpen(true)}
+          >
             <Menu className="size-5" />
+            <CountBadge count={awaitingCount?.count} className="absolute -right-1 -top-1" />
           </Button>
           <h1 className="text-title font-extrabold">
             {TITLES[location.pathname] ?? "Tracker"}

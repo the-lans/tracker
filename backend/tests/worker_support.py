@@ -8,12 +8,20 @@ Redis воркера — тестовыми (в общей откатываем�
 
 from __future__ import annotations
 
+import json
 import subprocess
+import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
+from services.session_container import (
+    SESSION_CLI_PATH,
+    SESSION_DOCKER_SPEC_ENV,
+    SESSION_TASK_LABEL,
+)
 from tasks import session_worker
 from tests.fakes import FakeClaudeAgentClient
 
@@ -56,17 +64,14 @@ class SharedSession:
         return None
 
 
-class KeepOpenRedis:
-    """Воркер закрывает свой клиент Redis — тестовый закрывать нельзя."""
-
-    def __init__(self, redis_client: Redis) -> None:
-        self._redis_client = redis_client
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._redis_client, name)
-
-    async def aclose(self) -> None:
-        return None
+def assert_cli_in_session_container(options: ClaudeAgentOptions, task_id: uuid.UUID) -> None:
+    """
+    Раздел 19.3: CLI запускается обёрткой `session_cli.py` в контейнере
+    сессии с меткой задачи, а не в контейнере воркера.
+    """
+    assert options.cli_path == str(SESSION_CLI_PATH)
+    spec = json.loads(options.env[SESSION_DOCKER_SPEC_ENV])
+    assert f"{SESSION_TASK_LABEL}={task_id}" in spec["docker_args"]
 
 
 @dataclass
@@ -100,12 +105,16 @@ def install_worker_env(
 ) -> WorkerEnv:
     env = WorkerEnv(repos_root=tmp_path / "repos")
     monkeypatch.setenv("TRACKER_REPOS_ROOT", str(env.repos_root))
+    # Каталоги LLM-аккаунтов тестовых задач — во временной директории теста.
+    monkeypatch.setattr("tests.factories.DEFAULT_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
     monkeypatch.setattr(session_worker, "async_session_factory", lambda: SharedSession(db_session))
-    monkeypatch.setattr(
-        session_worker,
-        "Redis",
-        SimpleNamespace(from_url=lambda _url: KeepOpenRedis(redis_client)),
-    )
+
+    @asynccontextmanager
+    async def shared_redis() -> AsyncIterator[Redis]:
+        # Общий клиент теста: воркер получает его вместо нового подключения.
+        yield redis_client
+
+    monkeypatch.setattr(session_worker, "redis_connection", shared_redis)
     monkeypatch.setattr(
         session_worker,
         "ClaudeSDKClient",

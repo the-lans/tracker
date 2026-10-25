@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DialogFooter } from "@/components/ui/dialog";
 import { useCreateEnvVariable, useUpdateEnvVariable } from "@/hooks/useEnvVariables";
 import { useRepositories } from "@/hooks/useRepositories";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import { EnvVariableScope, type EnvVariable } from "@/lib/types";
 import { ENV_SCOPE_LABEL } from "@/lib/labels";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
@@ -37,7 +37,7 @@ export function EnvVariableForm({
 
   function handleSave() {
     const onError = (error: unknown) =>
-      toast.error(error instanceof ApiError ? error.message : "Не удалось сохранить переменную");
+      toast.error(errorMessage(error, "Не удалось сохранить переменную"));
     if (envVariable) {
       // Значение хранится зашифрованным: пустое поле — оставить прежнее.
       updateEnvVariable.mutate(

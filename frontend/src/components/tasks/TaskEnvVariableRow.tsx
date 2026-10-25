@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Eye, Pencil } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -8,13 +7,9 @@ import {
   useRevealTaskEnvVariable,
   useUpdateTaskEnvVariable,
 } from "@/hooks/useTaskEnvVariables";
-import { ApiError } from "@/lib/apiClient";
+import { toastError } from "@/lib/errors";
 import type { TaskEnvVariable } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
-
-function onError(fallback: string) {
-  return (error: Error) => toast.error(error instanceof ApiError ? error.message : fallback);
-}
 
 /** Одна переменная задачи: значение скрыто, пока не нажато «Показать» (правило 8). */
 export function TaskEnvVariableRow({
@@ -36,7 +31,7 @@ export function TaskEnvVariableRow({
   function handleReveal() {
     reveal.mutate(variable.id, {
       onSuccess: (data) => setRevealed(data.value),
-      onError: onError("Не удалось показать значение"),
+      onError: toastError("Не удалось показать значение"),
     });
   }
 
@@ -49,7 +44,7 @@ export function TaskEnvVariableRow({
           setRevealed(null);
           setDraft("");
         },
-        onError: onError("Не удалось сохранить значение"),
+        onError: toastError("Не удалось сохранить значение"),
       },
     );
   }
@@ -76,7 +71,7 @@ export function TaskEnvVariableRow({
               pending={remove.isPending}
               iconClassName="size-3.5"
               onConfirm={() =>
-                remove.mutate(variable.id, { onError: onError("Не удалось удалить переменную") })}
+                remove.mutate(variable.id, { onError: toastError("Не удалось удалить переменную") })}
             />
           </>
         )}

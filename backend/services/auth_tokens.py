@@ -14,15 +14,13 @@ Fernet-подписанный непрозрачный токен, а не JWT, 
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
-import os
 import uuid
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken
+
+from services.crypto import fernet_from_env
 
 DEFAULT_SESSION_TTL = timedelta(days=7)
 
@@ -30,15 +28,11 @@ DEFAULT_SESSION_TTL = timedelta(days=7)
 class InvalidSessionTokenError(Exception): ...
 
 
-def _derive_fernet_key(secret: str) -> bytes:
-    digest = hashlib.sha256(secret.encode("utf-8")).digest()
-    return base64.urlsafe_b64encode(digest)
+_SESSION_KEY_ENV = "SESSION_SECRET_KEY"
 
 
-@lru_cache(maxsize=1)
 def _fernet() -> Fernet:
-    secret = os.environ["SESSION_SECRET_KEY"]
-    return Fernet(_derive_fernet_key(secret))
+    return fernet_from_env(_SESSION_KEY_ENV)
 
 
 def issue_session_token(user_id: uuid.UUID, *, ttl: timedelta = DEFAULT_SESSION_TTL) -> str:
@@ -54,7 +48,7 @@ def verify_session_token(token: str) -> uuid.UUID:
     токен подделан или истёк."""
     try:
         raw = _fernet().decrypt(token.encode("ascii"))
-    except InvalidToken as exc:
+    except (InvalidToken, UnicodeEncodeError) as exc:
         raise InvalidSessionTokenError("Токен сессии недействителен") from exc
 
     payload = json.loads(raw)

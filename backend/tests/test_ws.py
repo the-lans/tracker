@@ -27,6 +27,7 @@ from db.models.enums import TaskStatus, UserRole
 from db.models.tasks import Task
 from db.models.users import User
 from db.session import async_session_factory
+from services.auth_tokens import issue_session_token
 from services.output_stream import output_channel_name, publish_output_delta
 from ws.tasks import (
     _access_denied_close_code,
@@ -36,30 +37,57 @@ from ws.tasks import (
 )
 
 
-def test_rejects_connection_without_token() -> None:
-    from main import app
+class TestAuthMessage:
+    """Раздел 18.1: токен — первым сообщением, а не в адресе соединения."""
 
-    with (
-        pytest.raises(WebSocketDisconnect) as exc_info,
-        TestClient(app).websocket_connect(f"/ws/tasks/{uuid.uuid4()}/status"),
-    ):
-        pass
+    @pytest.mark.parametrize(
+        "first_message",
+        [
+            {"type": "auth"},
+            {"type": "auth", "token": "not-a-real-token"},
+            {"type": "auth", "token": "токен"},
+            {"type": "status"},
+        ],
+        ids=["no_token", "invalid_token", "non_ascii_token", "wrong_type"],
+    )
+    def test_rejected(self, first_message: dict[str, Any]) -> None:
+        from main import app
 
-    assert exc_info.value.code == 4401
+        with (
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            TestClient(app).websocket_connect(f"/ws/tasks/{uuid.uuid4()}/status") as websocket,
+        ):
+            websocket.send_json(first_message)
+            websocket.receive_json()
 
+        assert exc_info.value.code == 4401
 
-def test_rejects_connection_with_invalid_token() -> None:
-    from main import app
+    def test_silent_client_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from main import app
 
-    with (
-        pytest.raises(WebSocketDisconnect) as exc_info,
-        TestClient(app).websocket_connect(
-            f"/ws/tasks/{uuid.uuid4()}/status?token=not-a-real-token",
-        ),
-    ):
-        pass
+        monkeypatch.setattr("ws.tasks.AUTH_TIMEOUT_SECONDS", 0.1)
+        with (
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            TestClient(app).websocket_connect(f"/ws/tasks/{uuid.uuid4()}/status") as websocket,
+        ):
+            websocket.receive_json()
 
-    assert exc_info.value.code == 4401
+        assert exc_info.value.code == 4401
+
+    def test_token_in_url_ignored(self) -> None:
+        """Старый способ — токен в адресе — больше не авторизует."""
+        from main import app
+
+        token = issue_session_token(uuid.uuid4())
+        url = f"/ws/tasks/{uuid.uuid4()}/status?token={token}"
+        with (
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            TestClient(app).websocket_connect(url) as websocket,
+        ):
+            websocket.send_json({"type": "hello"})
+            websocket.receive_json()
+
+        assert exc_info.value.code == 4401
 
 
 async def test_fetch_status_returns_none_for_unknown_task(run_migrations: None) -> None:
@@ -190,6 +218,40 @@ class TestServeTaskEvents:
         await asyncio.wait_for(serving, timeout=5)
 
         assert dict(await redis_client.pubsub_numsub(channel))[channel.encode()] == 0
+
+
+class TestAccessRecheck:
+    async def test_lost_access_closes_stream(
+        self,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 19.2: заблокированный посреди потока пользователь отключается."""
+        monkeypatch.setattr("ws.tasks.ACCESS_RECHECK_POLLS", 1)
+        monkeypatch.setattr("ws.tasks._POLL_INTERVAL_SECONDS", 0.01)
+        checks: list[int | None] = [None, 4401]
+
+        async def check_access() -> int | None:
+            return checks.pop(0)
+
+        async def fetch_status(_task_id: uuid.UUID) -> TaskStatus | None:
+            return TaskStatus.IN_PROGRESS
+
+        async def send(_payload: dict[str, Any]) -> None:
+            return None
+
+        close_code = await asyncio.wait_for(
+            stream_task_events(
+                send,
+                task_id=uuid.uuid4(),
+                redis_client=redis_client,
+                fetch_status=fetch_status,
+                check_access=check_access,
+            ),
+            timeout=5,
+        )
+
+        assert close_code == 4401
 
 
 class TestAccessDeniedCloseCode:

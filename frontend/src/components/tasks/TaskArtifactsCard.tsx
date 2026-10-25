@@ -4,10 +4,20 @@ import { toast } from "sonner";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { TaskArtifactRow } from "@/components/tasks/TaskArtifactRow";
-import { useTaskArtifacts, useUploadTaskArtifact } from "@/hooks/useTaskArtifacts";
-import { ApiError } from "@/lib/apiClient";
+import {
+  JIRA_COPY_REFETCH_INTERVAL_MS,
+  useJiraAttachmentCopy,
+  useTaskArtifacts,
+  useUploadTaskArtifact,
+} from "@/hooks/useTaskArtifacts";
+import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
+import { errorMessage } from "@/lib/errors";
 import type { Task } from "@/lib/types";
+
+// Пока задача работает, агент сохраняет файлы и между сменами статуса.
+const ACTIVE_REFETCH_INTERVAL_MS = 15_000;
 
 /**
  * Раздел 14.3, 15.2: артефакты задачи — файлы для агента и результаты его
@@ -15,7 +25,14 @@ import type { Task } from "@/lib/types";
  * репозиториев; те же файлы видны по SFTP в `<код>/artifacts`.
  */
 export function TaskArtifactsCard({ task }: { task: Task }) {
-  const { data: artifacts } = useTaskArtifacts(task.id);
+  const { data: jiraCopy } = useJiraAttachmentCopy(task.id, task.jira_issue_url !== null);
+  const copyingFromJira = jiraCopy?.pending === true;
+  const { data: artifacts, isLoading } = useTaskArtifacts(
+    task.id,
+    copyingFromJira
+      ? JIRA_COPY_REFETCH_INTERVAL_MS
+      : SESSION_ACTIVE_STATUSES.includes(task.status) && ACTIVE_REFETCH_INTERVAL_MS,
+  );
   const upload = useUploadTaskArtifact(task.id);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -26,7 +43,7 @@ export function TaskArtifactsCard({ task }: { task: Task }) {
       upload.mutate(file, {
         onError: (error) =>
           toast.error(
-            error instanceof ApiError ? error.message : `Не удалось загрузить ${file.name}`,
+            errorMessage(error, `Не удалось загрузить ${file.name}`),
           ),
       });
     }
@@ -53,13 +70,20 @@ export function TaskArtifactsCard({ task }: { task: Task }) {
         aria-label="Файлы артефактов"
         onChange={handleFiles}
       />
-      {artifacts?.length ? (
+      {copyingFromJira && (
+        <p className="text-caption text-text-3">
+          Копируются вложения из Jira — список обновится сам.
+        </p>
+      )}
+      {isLoading ? (
+        <LoadingState />
+      ) : artifacts?.length ? (
         <div className="flex flex-col">
           {artifacts.map((artifact) => (
             <TaskArtifactRow key={artifact.path} taskId={task.id} artifact={artifact} />
           ))}
         </div>
-      ) : (
+      ) : copyingFromJira ? null : (
         <EmptyState
           compact
           title="Файлов нет"

@@ -67,7 +67,7 @@ ignore_missing_imports = true
 # как следствие "untyped", что делает untyped любую декорированную функцию
 # в strict-режиме; отключается точечно там, где декоратор реально
 # используется, а не глобально для всего проекта.
-module = ["tasks.periodic", "tasks.session_worker"]
+module = ["tasks.periodic", "tasks.session_worker", "tasks.jira_attachments"]
 disable_error_code = ["untyped-decorator"]
 
 [tool.pytest.ini_options]

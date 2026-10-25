@@ -5,10 +5,9 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { LlmAccountForm } from "@/components/llmAccounts/LlmAccountForm";
 import { useDeleteLlmAccount, useLlmAccounts } from "@/hooks/useLlmAccounts";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import type { LlmAccount } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { EditButton } from "@/components/common/actions/EditButton";
@@ -17,11 +16,12 @@ import { LLM_ACCOUNT_STATUS_LABEL, LLM_ACCOUNT_STATUS_TONE } from "@/lib/labels"
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { EntityFormDialog, type EditTarget } from "@/components/common/dialogs/EntityFormDialog";
 
 export function LlmAccountsPage() {
   const { data: accounts, isLoading } = useLlmAccounts();
   const deleteAccount = useDeleteLlmAccount();
-  const [dialogAccount, setDialogAccount] = useState<LlmAccount | "new" | null>(null);
+  const [dialogAccount, setDialogAccount] = useState<EditTarget<LlmAccount>>(null);
 
   return (
     <div className={PAGE_ROOT}>
@@ -58,7 +58,7 @@ export function LlmAccountsPage() {
                     deleteAccount.mutate(account.id, {
                       onError: (error) =>
                         toast.error(
-                          error instanceof ApiError ? error.message : "Не удалось удалить",
+                          errorMessage(error, "Не удалось удалить"),
                         ),
                     })}
                 />
@@ -75,22 +75,20 @@ export function LlmAccountsPage() {
         </div>
       </div>
 
-      <Dialog open={dialogAccount !== null} onOpenChange={(open) => !open && setDialogAccount(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {dialogAccount === "new" ? "Новый LLM-аккаунт" : "Редактировать LLM-аккаунт"}
-            </DialogTitle>
-          </DialogHeader>
-          {dialogAccount !== null && (
-            <LlmAccountForm
-              account={dialogAccount === "new" ? undefined : dialogAccount}
-              onSaved={() => setDialogAccount(null)}
-              onCancel={() => setDialogAccount(null)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      <EntityFormDialog
+        target={dialogAccount}
+        onClose={() => setDialogAccount(null)}
+        createTitle="Новый LLM-аккаунт"
+        editTitle="Редактировать LLM-аккаунт"
+      >
+        {(item, close) => (
+          <LlmAccountForm
+            account={item}
+            onSaved={close}
+            onCancel={close}
+          />
+        )}
+      </EntityFormDialog>
     </div>
   );
 }

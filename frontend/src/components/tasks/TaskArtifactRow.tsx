@@ -3,7 +3,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { artifactUrl, useDeleteTaskArtifact } from "@/hooks/useTaskArtifacts";
-import { api, ApiError } from "@/lib/apiClient";
+import { api } from "@/lib/apiClient";
+import { errorMessage, toastError } from "@/lib/errors";
 import { downloadBlob } from "@/lib/textExport";
 import { formatDateTime, formatFileSize } from "@/lib/utils";
 import type { TaskArtifact } from "@/lib/types";
@@ -21,7 +22,7 @@ export function TaskArtifactRow({ taskId, artifact }: { taskId: string; artifact
       .getBlob(artifactUrl(taskId, artifact.path))
       .then((blob) => downloadBlob(blob, fileName(artifact.path)))
       .catch((error: unknown) =>
-        toast.error(error instanceof ApiError ? error.message : "Не удалось скачать файл"),
+        toast.error(errorMessage(error, "Не удалось скачать файл")),
       );
   }
 
@@ -50,8 +51,7 @@ export function TaskArtifactRow({ taskId, artifact }: { taskId: string; artifact
         pending={remove.isPending}
         onConfirm={() =>
           remove.mutate(artifact.path, {
-            onError: (error) =>
-              toast.error(error instanceof ApiError ? error.message : "Не удалось удалить файл"),
+            onError: toastError("Не удалось удалить файл"),
           })
         }
       />

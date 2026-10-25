@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useManualQueue, useSubmitFreeformPrompt } from "@/hooks/useTasks";
 import { useTemplatePreview } from "@/hooks/useTemplates";
 import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import { ManualRequestStatus, ManualRequestType, type TaskStatus } from "@/lib/types";
 
 /** Раздел 8, 15.2: свободный параметризованный промт — отдельно от поля
@@ -15,7 +15,16 @@ import { ManualRequestStatus, ManualRequestType, type TaskStatus } from "@/lib/t
  * (раздел 8.2); при занятой сессии запрос ждёт в очереди — индикатор
  * «В очереди» рядом с полем. Предпросмотр (раздел 8.2) показывает текст
  * после подстановки переменных — ровно тот, что уйдёт в сессию. */
-export function Composer({ taskId, taskStatus }: { taskId: string; taskStatus: TaskStatus }) {
+export function Composer({
+  taskId,
+  taskStatus,
+  hasLlmAccount,
+}: {
+  taskId: string;
+  taskStatus: TaskStatus;
+  /** Раздел 3.1: без LLM-аккаунта свободный промт выполнить некому. */
+  hasLlmAccount: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [previewText, setPreviewText] = useState<string | null>(null);
@@ -40,7 +49,7 @@ export function Composer({ taskId, taskStatus }: { taskId: string; taskStatus: T
       {
         onSuccess: (data) => setPreviewText(data.rendered_text),
         onError: (error) => {
-          toast.error(error instanceof ApiError ? error.message : "Ошибка предпросмотра");
+          toast.error(errorMessage(error, "Ошибка предпросмотра"));
           setPreviewText(null);
         },
       },
@@ -57,7 +66,7 @@ export function Composer({ taskId, taskStatus }: { taskId: string; taskStatus: T
         setOpen(false);
       },
       onError: (error) => {
-        toast.error(error instanceof ApiError ? error.message : "Не удалось отправить промт");
+        toast.error(errorMessage(error, "Не удалось отправить промт"));
       },
     });
   }
@@ -70,7 +79,12 @@ export function Composer({ taskId, taskStatus }: { taskId: string; taskStatus: T
           В очереди: {queuedFreeform}
         </div>
       )}
-      {!sessionActive ? (
+      {!hasLlmAccount ? (
+        <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
+          <MessageSquarePlus className="size-3.5 shrink-0" />
+          У задачи нет LLM-аккаунта — свободный промт выполнить некому
+        </div>
+      ) : !sessionActive ? (
         <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
           <MessageSquarePlus className="size-3.5 shrink-0" />
           Свободный промт доступен, пока сессия задачи активна

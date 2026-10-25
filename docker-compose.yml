@@ -64,6 +64,10 @@ services:
       TRACKER_LOG_ARCHIVE_ROOT: /data/log-archive
       # Раздел 6.4: срок хранения истории сессий Claude Code (cleanupPeriodDays).
       CLAUDE_SESSION_RETENTION_DAYS: ${CLAUDE_SESSION_RETENTION_DAYS:-36500}
+      # Раздел 19.3: CLI запускается в контейнере сессии той же версии, что
+      # SDK (runners/tracker-session) — пробный `claude -v` с запуском
+      # контейнера перед каждой сессией не нужен.
+      CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK: "1"
     volumes:
       - task_repos:/data/repos
       - user_files:/data/user-files
@@ -89,12 +93,13 @@ services:
       retries: 10
       start_period: 10s
 
-  worker:
+  # Периодические задачи (раздел 16): очередь `celery`.
+  worker: &worker
     build:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
-    command: ["celery", "-A", "tasks.celery_app", "worker", "-l", "info"]
+    command: ["celery", "-A", "tasks.celery_app", "worker", "-Q", "celery", "-l", "info"]
     environment: *backend_env
     volumes:
       - task_repos:/data/repos
@@ -112,6 +117,17 @@ services:
       # ещё-не-созданную схему БД при холодном старте стека.
       backend:
         condition: service_healthy
+
+  # Раздел 6.1, 20.3: сессии задач — своя очередь `sessions`. Сессия занимает
+  # процесс часами (пауза, ожидание решения), поэтому число процессов —
+  # верхняя граница одновременно работающих задач.
+  session-worker:
+    <<: *worker
+    command:
+      [
+        "celery", "-A", "tasks.celery_app", "worker", "-Q", "sessions", "-O", "fair",
+        "--concurrency", "${SESSION_WORKER_CONCURRENCY:-4}", "-l", "info",
+      ]
 
   beat:
     build:

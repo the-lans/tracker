@@ -6,7 +6,6 @@ Origin — локальный bare-репозиторий, как в `test_git_o
 
 from __future__ import annotations
 
-import subprocess
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,38 +28,21 @@ from services.crypto import encrypt
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
 from services.task_workspace import build_branch_name, prepare_task_workspace
 from tests.fakes import FakeClaudeAgentClient, make_result_message
+from tests.git_support import GIT_AUTHOR_ARGS, init_bare_origin, run
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-_GIT_AUTHOR_ARGS = ["-c", "user.email=test@example.com", "-c", "user.name=Test"]
 _NO_EDITOR_ARGS = ["-c", "core.editor=true"]
-
-
-def _run(*args: str, cwd: Path, check: bool = True) -> str:
-    result = subprocess.run(args, cwd=cwd, check=check, capture_output=True, text=True)
-    return result.stdout
-
-
-def _init_bare_origin(tmp_path: Path) -> Path:
-    origin = tmp_path / "origin.git"
-    _run("git", "init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
-    seed_dir = tmp_path / "seed"
-    _run("git", "clone", str(origin), str(seed_dir), cwd=tmp_path)
-    (seed_dir / "README.md").write_text("исходный файл\n")
-    _run("git", "add", "README.md", cwd=seed_dir)
-    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "начальный коммит", cwd=seed_dir)
-    _run("git", "push", "origin", "main", cwd=seed_dir)
-    return origin
 
 
 def _push_conflicting_base_update(tmp_path: Path, origin: Path) -> None:
     updater_dir = tmp_path / "updater"
-    _run("git", "clone", str(origin), str(updater_dir), cwd=tmp_path)
+    run("git", "clone", str(origin), str(updater_dir), cwd=tmp_path)
     (updater_dir / "README.md").write_text("изменение родительской задачи\n")
-    _run("git", "add", "README.md", cwd=updater_dir)
-    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "смерджен родитель", cwd=updater_dir)
-    _run("git", "push", "origin", "main", cwd=updater_dir)
+    run("git", "add", "README.md", cwd=updater_dir)
+    run("git", *GIT_AUTHOR_ARGS, "commit", "-m", "смерджен родитель", cwd=updater_dir)
+    run("git", "push", "origin", "main", cwd=updater_dir)
 
 
 async def _make_task_with_conflicting_branch(
@@ -69,7 +51,7 @@ async def _make_task_with_conflicting_branch(
     *,
     conflict: bool = True,
 ) -> tuple[Task, Path]:
-    origin = _init_bare_origin(tmp_path)
+    origin = init_bare_origin(tmp_path)
     user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
     db_session.add(user)
     await db_session.flush()
@@ -95,8 +77,8 @@ async def _make_task_with_conflicting_branch(
     workspace = await prepare_task_workspace(db_session, task=task, repos_root=tmp_path / "repos")
     repo_dir = workspace / "backend"
     (repo_dir / "README.md").write_text("изменение дочерней задачи\n")
-    _run("git", "add", "README.md", cwd=repo_dir)
-    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
+    run("git", "add", "README.md", cwd=repo_dir)
+    run("git", *GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
     if conflict:
         _push_conflicting_base_update(tmp_path, origin)
     return task, workspace
@@ -120,11 +102,11 @@ async def test_agent_resolving_conflict_unblocks_task(
     repo_dir = workspace / "backend"
 
     async def agent_resolves_conflict() -> None:
-        _run("git", "fetch", "origin", "main", cwd=repo_dir)
-        _run("git", *_GIT_AUTHOR_ARGS, "rebase", "origin/main", cwd=repo_dir, check=False)
+        run("git", "fetch", "origin", "main", cwd=repo_dir)
+        run("git", *GIT_AUTHOR_ARGS, "rebase", "origin/main", cwd=repo_dir, check=False)
         (repo_dir / "README.md").write_text("обе правки объединены\n")
-        _run("git", "add", "README.md", cwd=repo_dir)
-        _run("git", *_GIT_AUTHOR_ARGS, *_NO_EDITOR_ARGS, "rebase", "--continue", cwd=repo_dir)
+        run("git", "add", "README.md", cwd=repo_dir)
+        run("git", *GIT_AUTHOR_ARGS, *_NO_EDITOR_ARGS, "rebase", "--continue", cwd=repo_dir)
 
     fake = FakeClaudeAgentClient(
         messages_per_query=[[make_result_message()]],

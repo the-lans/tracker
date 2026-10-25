@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
 from services.errors import NotFoundError, PayloadTooLargeError, ValidationError
+from services.task_codes import validate_task_code
 
 _USER_FILES_ROOT_ENV_VAR = "TRACKER_USER_FILES_ROOT"
 _DEFAULT_USER_FILES_ROOT = "tracker/user-files"
@@ -50,14 +51,14 @@ def resolve_user_files_root() -> Path:
 
 def task_artifacts_dir(task_code: str) -> Path:
     """Каталог артефактов задачи; создаётся при первом обращении."""
-    directory = resolve_user_files_root() / task_code
+    directory = resolve_user_files_root() / validate_task_code(task_code)
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
 
 def task_artifacts_path(task_code: str) -> str:
     """`{{task.artifacts_path}}` (раздел 5): абсолютный путь с завершающим "/"."""
-    return f"{(resolve_user_files_root() / task_code).resolve()}/"
+    return f"{(resolve_user_files_root() / validate_task_code(task_code)).resolve()}/"
 
 
 def max_upload_bytes() -> int:

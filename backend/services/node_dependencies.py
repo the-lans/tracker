@@ -19,8 +19,9 @@ from typing import TYPE_CHECKING
 import sqlalchemy as sa
 
 from db.models.enums import NodeType
-from db.models.pipelines import Node, TaskNode
+from db.models.pipelines import Node
 from services.errors import NotFoundError
+from services.task_nodes import load_task_node_rows
 from services.templating import NODE_FIELD_REQUIRED_PRECEDING_TYPES, VARIABLE_PATTERN
 
 if TYPE_CHECKING:
@@ -126,12 +127,7 @@ async def find_task_node_dependents(
     task_node_id: uuid.UUID,
 ) -> list[PipelineNodeRef]:
     """Зависимые ноды по текущему составу `task_nodes` задачи."""
-    stmt = (
-        sa.select(TaskNode, Node)
-        .join(Node, Node.id == TaskNode.node_id)
-        .where(TaskNode.task_id == task.id)
-    )
-    rows = (await db_session.execute(stmt)).all()
+    rows = await load_task_node_rows(db_session, task.id)
     target = next((task_node for task_node, _ in rows if task_node.id == task_node_id), None)
     if target is None:
         raise NotFoundError(f"Нода {task_node_id} не найдена у этой задачи")

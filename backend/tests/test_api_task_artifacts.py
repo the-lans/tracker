@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from db.models.tasks import Task
-from tests.factories import make_user
+from tests.factories import make_task, make_user
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -23,10 +23,7 @@ if TYPE_CHECKING:
 
 
 async def _task(db_session: AsyncSession, owner_id: uuid.UUID) -> Task:
-    task = Task(code=f"RR-{uuid.uuid4().hex[:6]}", title="t", description="d", created_by=owner_id)
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    return await make_task(db_session, created_by=owner_id)
 
 
 class TestCrud:
@@ -60,7 +57,7 @@ class TestCrud:
         db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr("api.tasks.max_upload_bytes", lambda: 4)
+        monkeypatch.setattr("api.tasks.artifacts.max_upload_bytes", lambda: 4)
         task = await _task(db_session, current_user.id)
 
         response = await authed_client.put(f"/tasks/{task.id}/artifacts/a.bin", content=b"12345")

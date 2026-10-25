@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -34,6 +35,9 @@ _VAPID_CLAIMS_EMAIL_ENV = "VAPID_CLAIMS_EMAIL"
 # Found), поэтому чистка ленивая (при следующей неудачной отправке), а не
 # по TTL.
 _EXPIRED_SUBSCRIPTION_STATUS_CODES = frozenset({404, 410})
+# Push-служба, принявшая соединение и не отвечающая, не должна держать
+# отправителя: у `webpush` по умолчанию ожидание не ограничено.
+PUSH_SEND_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +71,7 @@ class PywebpushSender:
                 data=payload,
                 vapid_private_key=os.environ[_VAPID_PRIVATE_KEY_ENV],
                 vapid_claims={"sub": f"mailto:{os.environ[_VAPID_CLAIMS_EMAIL_ENV]}"},
+                timeout=PUSH_SEND_TIMEOUT_SECONDS,
             )
         except WebPushException as exc:
             status_code = exc.response.status_code if exc.response is not None else None
@@ -85,13 +90,17 @@ async def send_push_to_user(
     """Отправляет `message` во все подписки пользователя; истёкшие подписки
     (404/410 от push-службы) удаляются немедленно, не дожидаясь отдельной
     периодической задачи очистки — раздел 18.1 не предполагает отдельного
-    TTL-механизма для них."""
+    TTL-механизма для них.
+
+    Отправка синхронная (HTTP через `requests`) и идёт в отдельном потоке:
+    иначе медленная push-служба остановила бы event loop вызывающего — в
+    воркере сессии вместе с пульсом сессии (раздел 6.6)."""
     active_sender = sender or PywebpushSender()
     stmt = sa.select(PushSubscription).where(PushSubscription.user_id == user_id)
     subscriptions = list((await db_session.execute(stmt)).scalars().all())
     for subscription in subscriptions:
         try:
-            active_sender.send(subscription=subscription, message=message)
+            await asyncio.to_thread(active_sender.send, subscription=subscription, message=message)
         except SubscriptionExpiredError:
             logger.info("push_subscription_expired", subscription_id=str(subscription.id))
             await db_session.delete(subscription)

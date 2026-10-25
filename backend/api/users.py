@@ -18,17 +18,20 @@ from api.schemas import (
 )
 from db.models.users import AllowedEmail, User
 from db.session import get_session
-from services.errors import ConflictError, NotFoundError
+from services.access import get_or_404
+from services.errors import ConflictError
 from services.users import ensure_allowed_email_deletable
 
 router = APIRouter(tags=["admin-users"])
 
 
 async def _get_user_or_404(db_session: AsyncSession, user_id: uuid.UUID) -> User:
-    user = await db_session.get(User, user_id)
-    if user is None:
-        raise NotFoundError(f"Пользователь {user_id} не найден")
-    return user
+    return await get_or_404(
+        db_session,
+        User,
+        user_id,
+        not_found=f"Пользователь {user_id} не найден",
+    )
 
 
 @router.get("/users", response_model=list[UserResponse])
@@ -108,9 +111,12 @@ async def delete_allowed_email(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     _admin: Annotated[User, Depends(require_admin)],
 ) -> None:
-    allowed_email = await db_session.get(AllowedEmail, allowed_email_id)
-    if allowed_email is None:
-        raise NotFoundError(f"Запись allowed_emails {allowed_email_id} не найдена")
+    allowed_email = await get_or_404(
+        db_session,
+        AllowedEmail,
+        allowed_email_id,
+        not_found=f"Запись allowed_emails {allowed_email_id} не найдена",
+    )
     await ensure_allowed_email_deletable(db_session, allowed_email)
     await db_session.delete(allowed_email)
     await db_session.commit()

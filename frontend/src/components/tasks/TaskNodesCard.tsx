@@ -1,5 +1,6 @@
 import { Check, Lock } from "lucide-react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DependentNodesDialog } from "@/components/tasks/DependentNodesDialog";
@@ -11,7 +12,7 @@ import {
   useTaskNodeDependents,
   useTaskNodes,
 } from "@/hooks/useTasks";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import {
   TaskStatus,
@@ -26,7 +27,10 @@ function nodesHint(status: TaskStatus): string {
   if (status === TaskStatus.NEW)
     return "Снимите галочку, чтобы пропустить ноду в этой задаче";
   if (status === TaskStatus.FAILED) {
-    return "Пройденные и упавшая ноды уже выполнены — менять можно только ноды после точки сбоя";
+    return "Пройденные и упавшая ноды уже выполнены — менять можно только ноды после точки сбоя. Чтобы сменить пайплайн, верните задачу в новые";
+  }
+  if (status === TaskStatus.DONE) {
+    return "Задача завершена — чтобы сменить пайплайн и запустить заново, верните её в новые";
   }
   return "Состав нод заблокирован — задача уже запущена";
 }
@@ -36,9 +40,12 @@ function nodesHint(status: TaskStatus): string {
 export function TaskNodesCard({
   task,
   nodeLogs,
+  onChangePipeline,
 }: {
   task: Task;
   nodeLogs: NodeLog[];
+  /** Раздел 13.1: до запуска пайплайн можно сменить. */
+  onChangePipeline: () => void;
 }) {
   const { data: taskNodes } = useTaskNodes(task.id, true);
   const setTaskNodeEnabled = useSetTaskNodeEnabled(task.id);
@@ -51,9 +58,7 @@ export function TaskNodesCard({
       {
         onError: (error) => {
           toast.error(
-            error instanceof ApiError
-              ? error.message
-              : "Не удалось изменить состав нод",
+            errorMessage(error, "Не удалось изменить состав нод"),
           );
         },
       },
@@ -88,11 +93,17 @@ export function TaskNodesCard({
       <Card>
         <CardTitle>
           <span>Ноды пайплайна</span>
-          {taskNodes && (
-            <span>
-              {successfulPipelineNodeIds.size} /{" "}
-              {taskNodes.filter((node) => node.is_enabled).length}
-            </span>
+          {task.status === TaskStatus.NEW ? (
+            <Button size="sm" variant="secondary" onClick={onChangePipeline}>
+              Сменить пайплайн
+            </Button>
+          ) : (
+            taskNodes && (
+              <span>
+                {successfulPipelineNodeIds.size} /{" "}
+                {taskNodes.filter((node) => node.is_enabled).length}
+              </span>
+            )
           )}
         </CardTitle>
         <div className="flex flex-col">

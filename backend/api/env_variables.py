@@ -24,8 +24,9 @@ from db.models.enums import EnvVariableScope
 from db.models.env_vars import EnvVariable
 from db.models.users import User
 from db.session import get_session
+from services.access import get_or_404
 from services.crypto import decrypt, encrypt
-from services.errors import NotFoundError, ValidationError
+from services.errors import ValidationError
 
 router = APIRouter(prefix="/env-variables", tags=["env-variables"])
 
@@ -45,10 +46,12 @@ async def _get_env_variable_or_404(
     db_session: AsyncSession,
     env_variable_id: uuid.UUID,
 ) -> EnvVariable:
-    env_variable = await db_session.get(EnvVariable, env_variable_id)
-    if env_variable is None:
-        raise NotFoundError(f"Переменная окружения {env_variable_id} не найдена")
-    return env_variable
+    return await get_or_404(
+        db_session,
+        EnvVariable,
+        env_variable_id,
+        not_found=f"Переменная окружения {env_variable_id} не найдена",
+    )
 
 
 @router.post("", response_model=EnvVariableResponse, status_code=201)

@@ -3,7 +3,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TaskRepositoryPicker } from "@/components/tasks/TaskRepositoryPicker";
 import { useLlmAccounts } from "@/hooks/useLlmAccounts";
-import { useAuth } from "@/stores/authStore";
+import { useAuth } from "@/hooks/useAuth";
 import type { TaskFormValues } from "@/components/tasks/taskForm.types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 
@@ -29,8 +29,15 @@ export function TaskFormFields({
           placeholder="RR-10240"
           value={value.code}
           onChange={(event) => onChange({ code: event.target.value })}
+          pattern="\S+"
+          title="Любой текст без пробелов"
+          aria-describedby="task-code-hint"
           required
         />
+        <div id="task-code-hint" className="mt-1 text-meta text-text-3">
+          Любой текст без пробелов, например RR-10240 или ключ задачи Jira. Из него же
+          строится рабочая ветка feature/&lt;код&gt;.
+        </div>
       </div>
       <div>
         <Label htmlFor="task-title">Название</Label>
@@ -61,6 +68,10 @@ export function TaskFormFields({
       </div>
       <div>
         <Label>LLM-аккаунт</Label>
+        <div className="mb-1 text-meta text-text-3">
+          Нужен для нод с промтами, слэш-командами и планированием; задаче из одних скриптов не
+          нужен.
+        </div>
         <Select value={value.llmAccountId} onValueChange={(llmAccountId) => onChange({ llmAccountId })}>
           <SelectTrigger>
             <SelectValue placeholder="Выберите аккаунт" />
@@ -77,7 +88,7 @@ export function TaskFormFields({
           <EmptyState
             compact
             title="LLM-аккаунтов пока нет"
-            hint="Без аккаунта Claude задачу не запустить. Добавьте свой аккаунт в разделе «LLM-аккаунты» кнопкой «+ Аккаунт»."
+            hint="Без аккаунта Claude можно запускать только скрипты. Добавьте свой аккаунт в разделе «LLM-аккаунты» кнопкой «+ Аккаунт»."
           />
         )}
       </div>

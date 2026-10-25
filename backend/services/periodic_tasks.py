@@ -14,6 +14,7 @@ Celery-таска (`tasks/periodic.py`) вне зависимости от ис�
 
 from __future__ import annotations
 
+import uuid
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -36,6 +37,59 @@ logger = get_logger("periodic_tasks")
 async def list_enabled_periodic_tasks(db_session: AsyncSession) -> list[PeriodicTask]:
     stmt = sa.select(PeriodicTask).where(PeriodicTask.is_enabled == True)  # noqa: E712
     return list((await db_session.execute(stmt)).scalars().all())
+
+
+CRONTAB_FIELD_COUNT = 5
+
+
+def validate_crontab_expression(expression: str) -> str:
+    """
+    Стандартный 5-польный cron (`минута час день_месяца месяц день_недели`):
+    его понимают и Celery Beat, и расчёт `next_run_at`.
+    """
+    normalized = " ".join(expression.split())
+    if len(normalized.split()) != CRONTAB_FIELD_COUNT or not croniter.is_valid(normalized):
+        raise ValidationError(
+            "Расписание cron — 5 полей «минута час день_месяца месяц день_недели», "
+            f"например «0 3 * * *»; получено {expression!r}",
+        )
+    return normalized
+
+
+async def update_periodic_task(
+    db_session: AsyncSession,
+    *,
+    periodic_task: PeriodicTask,
+    interval_seconds: int | None,
+    crontab_expression: str | None,
+    is_enabled: bool | None,
+    updated_by: uuid.UUID,
+) -> PeriodicTask:
+    """
+    Раздел 15.5, 16.1: расписание меняется из админки без деплоя — Beat
+    подхватит его при следующем чтении таблицы. Тип расписания задачи не
+    меняется, поэтому применимо только поле её типа.
+    """
+    if interval_seconds is not None:
+        if periodic_task.schedule_type is not PeriodicScheduleType.INTERVAL:
+            raise ValidationError(
+                f"Задача {periodic_task.name} использует {periodic_task.schedule_type}, "
+                "а не interval — interval_seconds не применим",
+            )
+        periodic_task.interval_seconds = interval_seconds
+    if crontab_expression is not None:
+        if periodic_task.schedule_type is not PeriodicScheduleType.CRONTAB:
+            raise ValidationError(
+                f"Задача {periodic_task.name} использует {periodic_task.schedule_type}, "
+                "а не crontab — crontab_expression не применим",
+            )
+        periodic_task.crontab_expression = validate_crontab_expression(crontab_expression)
+    if is_enabled is not None:
+        periodic_task.is_enabled = is_enabled
+    periodic_task.updated_by = updated_by
+    await db_session.commit()
+    await db_session.refresh(periodic_task)
+    return periodic_task
 
 
 def compute_next_run_at(periodic_task: PeriodicTask, *, now: datetime) -> datetime:

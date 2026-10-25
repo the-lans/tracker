@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
+import { JIRA_SERVER_KEY } from "@/hooks/useProfile";
 import type {
   ActiveCeleryTask,
   AllowedEmail,
   AppLog,
   AppLogLevel,
+  Integrations,
+  IntegrationsUpdate,
   LibraryUsage,
   NodeLogStatus,
   NodeRun,
@@ -28,11 +32,10 @@ export function useUsers(options: { enabled?: boolean } = {}) {
 }
 
 export function useUpdateUser(userId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: UserUpdateRequest) => api.patch<User>(`/users/${userId}`, body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: USERS_KEY }),
-  });
+  return useInvalidatingMutation(
+    (body: UserUpdateRequest) => api.patch<User>(`/users/${userId}`, body),
+    [USERS_KEY],
+  );
 }
 
 export function useAllowedEmails() {
@@ -43,19 +46,17 @@ export function useAllowedEmails() {
 }
 
 export function useCreateAllowedEmail() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (email: string) => api.post<AllowedEmail>("/allowed-emails", { email }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ALLOWED_EMAILS_KEY }),
-  });
+  return useInvalidatingMutation(
+    (email: string) => api.post<AllowedEmail>("/allowed-emails", { email }),
+    [ALLOWED_EMAILS_KEY],
+  );
 }
 
 export function useDeleteAllowedEmail() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (allowedEmailId: string) => api.delete(`/allowed-emails/${allowedEmailId}`),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ALLOWED_EMAILS_KEY }),
-  });
+  return useInvalidatingMutation(
+    (allowedEmailId: string) => api.delete(`/allowed-emails/${allowedEmailId}`),
+    [ALLOWED_EMAILS_KEY],
+  );
 }
 
 export function usePeriodicTasks() {
@@ -67,21 +68,18 @@ export function usePeriodicTasks() {
 }
 
 export function useUpdatePeriodicTask(periodicTaskId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: PeriodicTaskUpdateRequest) =>
+  return useInvalidatingMutation(
+    (body: PeriodicTaskUpdateRequest) =>
       api.patch<PeriodicTask>(`/periodic-tasks/${periodicTaskId}`, body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: PERIODIC_TASKS_KEY }),
-  });
+    [PERIODIC_TASKS_KEY],
+  );
 }
 
 export function useRunPeriodicTaskNow() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (periodicTaskId: string) =>
-      api.post<void>(`/periodic-tasks/${periodicTaskId}/run-now`),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: PERIODIC_TASKS_KEY }),
-  });
+  return useInvalidatingMutation(
+    (periodicTaskId: string) => api.post<void>(`/periodic-tasks/${periodicTaskId}/run-now`),
+    [PERIODIC_TASKS_KEY],
+  );
 }
 
 export interface AppLogFilters {
@@ -143,6 +141,28 @@ export function useUpdateSystemSettings() {
   return useMutation({
     mutationFn: (body: SystemSettings) => api.put<SystemSettings>("/system-settings", body),
     onSuccess: (settings) => queryClient.setQueryData(SYSTEM_SETTINGS_KEY, settings),
+  });
+}
+
+const INTEGRATIONS_KEY = ["admin", "integrations"] as const;
+
+/** Раздел 15.5, 15.6: адрес и токен GitLab, адрес Jira — только администратору. */
+export function useIntegrations() {
+  return useQuery({
+    queryKey: INTEGRATIONS_KEY,
+    queryFn: () => api.get<Integrations>("/system-settings/integrations"),
+  });
+}
+
+export function useUpdateIntegrations() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: IntegrationsUpdate) =>
+      api.put<Integrations>("/system-settings/integrations", body),
+    onSuccess: (integrations) => {
+      queryClient.setQueryData(INTEGRATIONS_KEY, integrations);
+      void queryClient.invalidateQueries({ queryKey: JIRA_SERVER_KEY });
+    },
   });
 }
 

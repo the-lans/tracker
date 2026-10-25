@@ -5,19 +5,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import (
     EnvVariableScope,
-    NodeLogStatus,
-    NodeLogTriggerType,
     RepositoryRole,
     TaskStatus,
-    UserRole,
 )
 from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.logs import NodeLog
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
-from db.models.users import User
 from services.crypto import encrypt
 from services.errors import ValidationError
+from services.node_history import NodeContextHistory
 from services.template_context import (
     build_node_context,
     build_session_context,
@@ -27,23 +24,17 @@ from services.template_context import (
     resolve_env_value,
     resolve_task_env,
 )
+from tests.factories import make_task
 
 
 async def _make_task(session: AsyncSession) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    session.add(user)
-    await session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
+    return await make_task(
+        session,
         title="Починить баг",
         description="Описание задачи",
-        created_by=user.id,
         status=TaskStatus.IN_PROGRESS,
         session_id="sess-123",
     )
-    session.add(task)
-    await session.flush()
-    return task
 
 
 def _global_env_variable(key: str, plaintext_value: str) -> EnvVariable:
@@ -62,10 +53,12 @@ async def test_build_task_context_maps_fields_and_computes_repos_path(
     monkeypatch.setenv("TRACKER_REPOS_ROOT", "/data/repos")
     monkeypatch.setenv("TRACKER_USER_FILES_ROOT", "/data/user-files")
     task = await _make_task(db_session)
+    task.jira_issue_url = "https://jira.example.com/browse/PROJ-1"
 
     context = build_task_context(task)
 
     assert context["task.code"] == task.code
+    assert context["task.jira_issue_url"] == "https://jira.example.com/browse/PROJ-1"
     assert context["task.title"] == "Починить баг"
     assert context["task.status"] == "in_progress"
     assert context["task.repos_path"] == f"/data/repos/{task.code}/"
@@ -78,51 +71,35 @@ async def test_build_session_context_uses_task_session_id(db_session: AsyncSessi
     assert build_session_context(task) == {"session.id": "sess-123"}
 
 
-def test_build_node_context_picks_last_non_null_value_per_field() -> None:
-    history = [
-        NodeLog(
-            task_id=uuid.uuid4(),
-            trigger_type=NodeLogTriggerType.PIPELINE,
-            status=NodeLogStatus.SUCCESS,
-            script_stdout="первый вывод",
-        ),
-        NodeLog(
-            task_id=uuid.uuid4(),
-            trigger_type=NodeLogTriggerType.PIPELINE,
-            status=NodeLogStatus.SUCCESS,
-            llm_output_text="ответ модели",
-        ),
-        NodeLog(
-            task_id=uuid.uuid4(),
-            trigger_type=NodeLogTriggerType.PIPELINE,
-            status=NodeLogStatus.AWAITING_DECISION,
-            user_input_text="принять план",
-            pending_plan_text="1. сделать раз\n2. сделать два",
-        ),
-    ]
+class TestBuildNodeContext:
+    def test_last_value_per_field(self) -> None:
+        runs = [
+            NodeLog(task_id=uuid.uuid4(), script_stdout="первый вывод"),
+            NodeLog(task_id=uuid.uuid4(), llm_output_text="ответ модели"),
+            NodeLog(
+                task_id=uuid.uuid4(),
+                user_input_text="принять план",
+                pending_plan_text="1. сделать раз\n2. сделать два",
+            ),
+        ]
 
-    context = build_node_context(history)
+        context = build_node_context(NodeContextHistory(pipeline_runs=runs, session_replies=[]))
 
-    assert context["node.script_output"] == "первый вывод"
-    assert context["node.llm_output"] == "ответ модели"
-    assert context["node.user_input"] == "принять план"
-    assert context["node.plan_text"] == "1. сделать раз\n2. сделать два"
+        assert context["node.script_output"] == "первый вывод"
+        assert context["node.llm_output"] == "ответ модели"
+        assert context["node.user_input"] == "принять план"
+        assert context["node.plan_text"] == "1. сделать раз\n2. сделать два"
+        assert "node.llm_output_last_n" not in context
 
-
-def test_build_node_context_llm_output_last_n_joins_only_last_n() -> None:
-    history = [
-        NodeLog(
-            task_id=uuid.uuid4(),
-            trigger_type=NodeLogTriggerType.PIPELINE,
-            status=NodeLogStatus.SUCCESS,
-            llm_output_text=f"реплика {i}",
+    def test_last_n_joins_only_last_n(self) -> None:
+        history = NodeContextHistory(
+            pipeline_runs=[],
+            session_replies=[f"реплика {i}" for i in range(5)],
         )
-        for i in range(5)
-    ]
 
-    context = build_node_context(history, last_n=2)
+        context = build_node_context(history, last_n=2)
 
-    assert context["node.llm_output_last_n"] == "реплика 3\n\nреплика 4"
+        assert context["node.llm_output_last_n"] == "реплика 3\n\nреплика 4"
 
 
 async def test_resolve_env_value_prefers_task_override_over_global(
@@ -163,7 +140,7 @@ async def test_render_for_task_combines_all_sources(db_session: AsyncSession) ->
         "{{task.code}} / {{env.REGION}} / {{session.id}}",
     )
 
-    assert rendered == f"{task.code} / eu / sess-123"
+    assert rendered.text == f"{task.code} / eu / sess-123"
 
 
 async def _attach_repository_variable(
@@ -294,8 +271,8 @@ class TestResolveTaskEnv:
 
     @pytest.mark.parametrize(
         "key",
-        ["GITLAB_URL", "GITLAB_TOKEN", "1BAD", "WITH-DASH", "SPACE KEY"],
-        ids=["gitlab_url", "gitlab_token", "leading_digit", "dash", "space"],
+        ["1BAD", "WITH-DASH", "SPACE KEY"],
+        ids=["leading_digit", "dash", "space"],
     )
     async def test_skips_key(self, db_session: AsyncSession, key: str) -> None:
         task = await _make_task(db_session)

@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { DialogFooter } from "@/components/ui/dialog";
 import { useCreateLlmAccount, useUpdateLlmAccount } from "@/hooks/useLlmAccounts";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 import { LlmAccountStatus, type LlmAccount, type LlmAccountUpdateRequest } from "@/lib/types";
 
 /**
@@ -31,7 +31,7 @@ export function LlmAccountForm({
 
   function handleSave() {
     const onError = (error: unknown) =>
-      toast.error(error instanceof ApiError ? error.message : "Не удалось сохранить аккаунт");
+      toast.error(errorMessage(error, "Не удалось сохранить аккаунт"));
     if (account) {
       const body: LlmAccountUpdateRequest = { label, claude_config_dir: configDir };
       // Статус отправляется только при переключении — иначе «упёрся в лимит» сбросился бы в «активен».

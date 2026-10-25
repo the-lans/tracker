@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import McpAuthType, NodeLogStatus, NodeLogTriggerType, TaskStatus, UserRole
+from db.models.enums import McpAuthType, NodeLogStatus, NodeLogTriggerType, TaskStatus
 from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.tasks import Task
@@ -33,24 +33,13 @@ from services.maintenance_tasks import (
     send_cleanup_reminders,
     stale_ssh_key_reminder_key,
 )
+from services.nodes.script import CONTAINER_DEADLINE_LABEL, container_deadline
 from services.notifications import NotificationEvent
-from tests.factories import SAMPLE_ED25519_KEY, make_user
+from tests.factories import SAMPLE_ED25519_KEY, make_llm_account, make_task, make_user
 
 
 async def _make_task(db_session: AsyncSession, *, status: TaskStatus) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
-        created_by=user.id,
-        status=status,
-    )
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    return await make_task(db_session, status=status)
 
 
 async def _set_updated_at(db_session: AsyncSession, task: Task, value: datetime) -> None:
@@ -144,12 +133,68 @@ async def test_find_tasks_requiring_remote_control_check_matches_active_statuses
 ) -> None:
     in_progress = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
     done = await _make_task(db_session, status=TaskStatus.DONE)
+    scripts_only = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
+    for task in (in_progress, done):
+        account = await make_llm_account(db_session, owner_id=task.created_by)
+        task.llm_account_id = account.id
+    await db_session.flush()
 
     found = await find_tasks_requiring_remote_control_check(db_session)
     found_ids = {t.id for t in found}
 
     assert in_progress.id in found_ids
     assert done.id not in found_ids
+    # Раздел 6.6: моста нет, но потерянный воркер переводит в `failed` и её.
+    assert scripts_only.id in found_ids
+
+
+async def _run_labelled_container(deadline: int) -> str:
+    container_name = f"tracker-node-{uuid.uuid4()}"
+    process = await asyncio.create_subprocess_exec(
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        container_name,
+        "--label",
+        f"{CONTAINER_DEADLINE_LABEL}={deadline}",
+        "alpine",
+        "sleep",
+        "60",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await process.communicate()
+    return container_name
+
+
+class TestPurgeByDeadline:
+    """Раздел 16.2: зависший — переживший свой дедлайн, а не просто «старый»."""
+
+    @pytest.mark.parametrize(
+        ("deadline_offset", "grace_period", "purged"),
+        [
+            (timedelta(hours=1), timedelta(seconds=0), False),
+            (-timedelta(seconds=1), timedelta(hours=1), True),
+        ],
+        ids=["long_running_script_kept", "past_deadline_stopped"],
+    )
+    async def test_deadline_wins_over_grace(
+        self,
+        deadline_offset: timedelta,
+        grace_period: timedelta,
+        purged: bool,
+    ) -> None:
+        now = datetime.now(UTC)
+        container_name = await _run_labelled_container(int((now + deadline_offset).timestamp()))
+        try:
+            stopped = await purge_orphaned_docker_containers(now=now, grace_period=grace_period)
+            assert (container_name in stopped) is purged
+        finally:
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+
+    def test_deadline_includes_node_timeout(self) -> None:
+        assert container_deadline(1800, now=1000.0) > 1000 + 1800
 
 
 async def test_purge_orphaned_docker_containers_stops_stale_and_keeps_fresh() -> None:

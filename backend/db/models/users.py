@@ -31,6 +31,11 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     # Раздел 16.2: последний вход по ключу — по нему `revoke_stale_sshfs_keys`
     # находит неиспользуемые ключи; смена ключа сбрасывает значение.
     ssh_key_last_used_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Раздел 15.6: личный доступ к Jira для импорта задач (адрес Jira — системная
+    # настройка). С email — Jira Cloud (Basic), без него — Server/Data Center
+    # (Bearer); токен — секрет.
+    jira_email: Mapped[str | None] = mapped_column(sa.String)
+    jira_token_encrypted: Mapped[str | None] = mapped_column(sa.Text)
 
 
 class AllowedEmail(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

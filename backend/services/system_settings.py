@@ -7,6 +7,10 @@
 раннера в ноду не записывается: если у script-ноды он не задан явно, образ
 берётся из настроек при каждом запуске по её текущему языку — так смена
 языка в редакторе не оставляет ноду в чужом раннере.
+
+Здесь же — интеграция с GitLab: адрес и токен API (раздел 16.2,
+`sync_gitlab_merge_status`). Это настройки системы, а не переменные
+окружения: в промты и script-контейнеры они не попадают (раздел 19.4).
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from typing import TYPE_CHECKING
 from app_logging.config import get_logger
 from db.models.enums import NodeType, ScriptLanguage
 from db.models.settings import SYSTEM_SETTINGS_ROW_ID, SystemSettings
+from services.crypto import decrypt, encrypt
 from services.nodes.script import DEFAULT_RUNNER_IMAGES
 
 if TYPE_CHECKING:
@@ -118,3 +123,51 @@ async def resolve_runner_image(db_session: AsyncSession, node: Node) -> str | No
         return node.docker_image
     settings = await get_system_settings(db_session)
     return default_runner_image(settings, node.script_language)
+
+
+@dataclass(frozen=True, slots=True)
+class GitlabCredentials:
+    url: str
+    token: str
+
+
+async def get_gitlab_credentials(db_session: AsyncSession) -> GitlabCredentials | None:
+    """Адрес и токен GitLab API; `None` — интеграция не настроена."""
+    settings = await get_system_settings(db_session)
+    if not settings.gitlab_url or not settings.gitlab_token_encrypted:
+        return None
+    return GitlabCredentials(
+        url=settings.gitlab_url,
+        token=decrypt(settings.gitlab_token_encrypted),
+    )
+
+
+async def get_jira_url(db_session: AsyncSession) -> str | None:
+    """Раздел 15.6: адрес сервера Jira для импорта задач; `None` — не задан."""
+    return (await get_system_settings(db_session)).jira_url
+
+
+async def update_integrations(
+    db_session: AsyncSession,
+    *,
+    gitlab_url: str | None,
+    gitlab_token: str | None,
+    jira_url: str | None,
+) -> SystemSettings:
+    """
+    ``gitlab_token``: `None` — оставить сохранённый, пустая строка — удалить.
+    Значение токена API не возвращает никогда.
+    """
+    settings = await get_system_settings(db_session)
+    settings.gitlab_url = gitlab_url or None
+    if gitlab_token is not None:
+        settings.gitlab_token_encrypted = encrypt(gitlab_token) if gitlab_token else None
+    settings.jira_url = jira_url.rstrip("/") if jira_url else None
+    await db_session.commit()
+    logger.info(
+        "integrations_updated",
+        gitlab_url_set=settings.gitlab_url is not None,
+        gitlab_token_set=settings.gitlab_token_encrypted is not None,
+        jira_url_set=settings.jira_url is not None,
+    )
+    return settings

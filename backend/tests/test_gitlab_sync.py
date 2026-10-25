@@ -8,9 +8,7 @@
 
 from __future__ import annotations
 
-import subprocess
 import uuid
-from pathlib import Path
 
 import httpx
 import pytest
@@ -19,53 +17,27 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.gitlab import GitlabClient
-from db.models.enums import AppLogLevel, MergeStatus, RepositoryRole, TaskStatus, UserRole
+from db.models.enums import AppLogLevel, MergeStatus, RepositoryRole, TaskStatus
 from db.models.logs import AppLog
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
-from db.models.users import User
 from services import gitlab_sync as gitlab_sync_module
-from services.crypto import encrypt
-from services.git_ops import clone_task_repository
 from services.gitlab_sync import (
     ACCESS_DENIED_KEY,
+    find_merged_parents_with_children,
     permanent_failure_key,
-    rebase_child_task_repositories_on_parent_merge,
+    request_child_rebases_on_parent_merge,
     sync_merge_statuses,
     sync_task_repository_merge_status,
 )
 from services.notifications import NotificationEvent
-
-_GIT_AUTHOR_ARGS = ["-c", "user.email=test@example.com", "-c", "user.name=Test"]
+from tests.factories import build_repository, make_task, make_user
 
 
 def _make_repository(*, git_url: str = "git@gitlab.example.com:g/p.git") -> Repository:
-    return Repository(name="r", git_url=git_url, deploy_key_encrypted=encrypt("k"))
+    return build_repository(name="r", git_url=git_url)
 
 
-def _run(*args: str, cwd: Path) -> str:
-    result = subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True)
-    return result.stdout
-
-
-def _init_bare_origin(tmp_path: Path) -> Path:
-    origin = tmp_path / "origin.git"
-    _run("git", "init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
-    seed_dir = tmp_path / "seed"
-    _run("git", "clone", str(origin), str(seed_dir), cwd=tmp_path)
-    (seed_dir / "README.md").write_text("init\n")
-    _run("git", "add", "README.md", cwd=seed_dir)
-    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "init", cwd=seed_dir)
-    _run("git", "branch", "-M", "main", cwd=seed_dir)
-    _run("git", "push", "origin", "main", cwd=seed_dir)
-    return origin
-
-
-async def _make_user(db_session: AsyncSession) -> User:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    return user
 
 
 async def _make_task(
@@ -75,17 +47,12 @@ async def _make_task(
     parent_task_id: uuid.UUID | None = None,
     status: TaskStatus = TaskStatus.IN_PROGRESS,
 ) -> Task:
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
+    return await make_task(
+        db_session,
         created_by=created_by,
         status=status,
         parent_task_id=parent_task_id,
     )
-    db_session.add(task)
-    await db_session.flush()
-    return task
 
 
 def _gitlab_client_returning(state: str | None) -> GitlabClient:
@@ -101,382 +68,78 @@ def _gitlab_client_returning(state: str | None) -> GitlabClient:
     )
 
 
-async def test_sync_skips_not_pushed_repository(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
-    task = await _make_task(db_session, created_by=user.id)
-    repository = _make_repository()
-    db_session.add(repository)
-    await db_session.flush()
-    task_repository = TaskRepository(
-        task_id=task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-00001",
-        base_branch="main",
-        merge_status=MergeStatus.NOT_PUSHED,
+class TestSyncMergeStatus:
+    """Раздел 16.2: статус слияния подтягивается только у запушенных веток."""
+
+    @pytest.mark.parametrize(
+        ("merge_status", "gitlab_state", "result", "stored"),
+        [
+            (MergeStatus.NOT_PUSHED, "merged", None, MergeStatus.NOT_PUSHED),
+            (MergeStatus.PUSHED, "merged", MergeStatus.MERGED, MergeStatus.MERGED),
+            (MergeStatus.PUSHED, "closed", None, MergeStatus.PUSHED),
+            (MergeStatus.PUSHED, None, None, MergeStatus.PUSHED),
+        ],
+        ids=["not_pushed", "merged", "closed", "no_merge_requests"],
     )
-    db_session.add(task_repository)
-    await db_session.flush()
-    gitlab_client = _gitlab_client_returning("merged")
+    async def test_sync(
+        self,
+        db_session: AsyncSession,
+        merge_status: MergeStatus,
+        gitlab_state: str | None,
+        result: MergeStatus | None,
+        stored: MergeStatus,
+    ) -> None:
+        user = await make_user(db_session)
+        task = await _make_task(db_session, created_by=user.id)
+        repository = _make_repository()
+        db_session.add(repository)
+        await db_session.flush()
+        task_repository = TaskRepository(
+            task_id=task.id,
+            repository_id=repository.id,
+            role=RepositoryRole.READ_WRITE,
+            branch_name="feature/RR-00001",
+            base_branch="main",
+            merge_status=merge_status,
+        )
+        db_session.add(task_repository)
+        await db_session.flush()
 
-    result = await sync_task_repository_merge_status(
-        db_session,
-        task_repository=task_repository,
-        repository=repository,
-        gitlab_client=gitlab_client,
-    )
+        synced = await sync_task_repository_merge_status(
+            db_session,
+            task_repository=task_repository,
+            repository=repository,
+            gitlab_client=_gitlab_client_returning(gitlab_state),
+        )
 
-    assert result is None
-    assert task_repository.merge_status is MergeStatus.NOT_PUSHED
-
-
-async def test_sync_updates_status_to_merged(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
-    task = await _make_task(db_session, created_by=user.id)
-    repository = _make_repository()
-    db_session.add(repository)
-    await db_session.flush()
-    task_repository = TaskRepository(
-        task_id=task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-00001",
-        base_branch="main",
-        merge_status=MergeStatus.PUSHED,
-    )
-    db_session.add(task_repository)
-    await db_session.flush()
-    gitlab_client = _gitlab_client_returning("merged")
-
-    result = await sync_task_repository_merge_status(
-        db_session,
-        task_repository=task_repository,
-        repository=repository,
-        gitlab_client=gitlab_client,
-    )
-
-    assert result is MergeStatus.MERGED
-    assert task_repository.merge_status is MergeStatus.MERGED
+        assert synced is result
+        assert task_repository.merge_status is stored
 
 
-async def test_sync_ignores_closed_state_no_schema_mapping(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
-    task = await _make_task(db_session, created_by=user.id)
-    repository = _make_repository()
-    db_session.add(repository)
-    await db_session.flush()
-    task_repository = TaskRepository(
-        task_id=task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-00001",
-        base_branch="main",
-        merge_status=MergeStatus.PUSHED,
-    )
-    db_session.add(task_repository)
-    await db_session.flush()
-    gitlab_client = _gitlab_client_returning("closed")
-
-    result = await sync_task_repository_merge_status(
-        db_session,
-        task_repository=task_repository,
-        repository=repository,
-        gitlab_client=gitlab_client,
-    )
-
-    assert result is None
-    assert task_repository.merge_status is MergeStatus.PUSHED
-
-
-async def test_sync_returns_none_when_no_merge_requests(db_session: AsyncSession) -> None:
-    user = await _make_user(db_session)
-    task = await _make_task(db_session, created_by=user.id)
-    repository = _make_repository()
-    db_session.add(repository)
-    await db_session.flush()
-    task_repository = TaskRepository(
-        task_id=task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-00001",
-        base_branch="main",
-        merge_status=MergeStatus.PUSHED,
-    )
-    db_session.add(task_repository)
-    await db_session.flush()
-    gitlab_client = _gitlab_client_returning(None)
-
-    result = await sync_task_repository_merge_status(
-        db_session,
-        task_repository=task_repository,
-        repository=repository,
-        gitlab_client=gitlab_client,
-    )
-
-    assert result is None
-
-
-async def test_rebase_child_task_repositories_skips_when_parent_not_merged(
+async def _parent_and_child(
     db_session: AsyncSession,
-) -> None:
-    user = await _make_user(db_session)
-    task = await _make_task(db_session, created_by=user.id)
-    repository = _make_repository()
-    db_session.add(repository)
-    await db_session.flush()
-    parent_task_repository = TaskRepository(
-        task_id=task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-00001",
-        base_branch="main",
-        merge_status=MergeStatus.PUSHED,
-    )
-    db_session.add(parent_task_repository)
-    await db_session.flush()
-
-    rebased = await rebase_child_task_repositories_on_parent_merge(
-        db_session,
-        parent_task_repository=parent_task_repository,
-        repos_root=Path("/tmp/unused"),
-    )
-
-    assert rebased == []
-
-
-async def test_rebase_child_task_repositories_rebases_matching_children(
-    db_session: AsyncSession,
-    tmp_path: Path,
-) -> None:
-    origin = _init_bare_origin(tmp_path)
-
-    # Ветка родителя уже существует в origin (была запушена ранее задачей-родителем).
-    parent_pusher_dir = tmp_path / "parent-pusher"
-    _run("git", "clone", str(origin), str(parent_pusher_dir), cwd=tmp_path)
-    _run("git", "checkout", "-b", "feature/RR-parent", cwd=parent_pusher_dir)
-    (parent_pusher_dir / "from_parent.txt").write_text("родительские изменения\n")
-    _run("git", "add", "from_parent.txt", cwd=parent_pusher_dir)
-    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "работа родителя", cwd=parent_pusher_dir)
-    _run("git", "push", "origin", "feature/RR-parent", cwd=parent_pusher_dir)
-
-    user = await _make_user(db_session)
-    repository = _make_repository(git_url=str(origin))
-    db_session.add(repository)
-    await db_session.flush()
-
-    parent_task = await _make_task(db_session, created_by=user.id)
-    parent_task_repository = TaskRepository(
-        task_id=parent_task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-parent",
-        base_branch="main",
-        merge_status=MergeStatus.MERGED,
-    )
-    db_session.add(parent_task_repository)
-    await db_session.flush()
-
-    child_task = await _make_task(db_session, created_by=user.id, parent_task_id=parent_task.id)
-    child_task_repository = TaskRepository(
-        task_id=child_task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-child",
-        base_branch="feature/RR-parent",
-        merge_status=MergeStatus.NOT_PUSHED,
-    )
-    db_session.add(child_task_repository)
-    await db_session.flush()
-
-    # Дочерняя задача клонируется от ветки родителя и добавляет свою работу.
-    repos_root = tmp_path / "repos"
-    child_repo_dir = await clone_task_repository(
-        repository=repository,
-        task_repository=child_task_repository,
-        task_code=child_task.code,
-        repos_root=repos_root,
-    )
-    (child_repo_dir / "from_child.txt").write_text("работа ребёнка\n")
-    _run("git", "add", "from_child.txt", cwd=child_repo_dir)
-    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "работа ребёнка", cwd=child_repo_dir)
-
-    # "Смердж родительской ветки в main" — main обновляется содержимым родителя.
-    _run("git", "checkout", "main", cwd=parent_pusher_dir)
-    _run(
-        "git",
-        *_GIT_AUTHOR_ARGS,
-        "merge",
-        "--no-ff",
-        "feature/RR-parent",
-        "-m",
-        "merge parent",
-        cwd=parent_pusher_dir,
-    )
-    _run("git", "push", "origin", "main", cwd=parent_pusher_dir)
-
-    rebased = await rebase_child_task_repositories_on_parent_merge(
-        db_session,
-        parent_task_repository=parent_task_repository,
-        repos_root=repos_root,
-    )
-
-    assert rebased == [child_task.id]
-    assert child_task_repository.base_branch == "main"
-    assert (child_repo_dir / "from_parent.txt").exists()
-    assert (child_repo_dir / "from_child.txt").exists()
-
-
-@pytest.mark.parametrize(
-    ("child_status", "expected_status"),
-    [
-        (TaskStatus.IN_PROGRESS, TaskStatus.REBASE_CONFLICT),
-        (TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT),
-        # Из ожидания решения — только признак: воркер разберёт его после решения.
-        (TaskStatus.PLAN_REVIEW, TaskStatus.PLAN_REVIEW),
-        (TaskStatus.AWAITING_INPUT, TaskStatus.AWAITING_INPUT),
-    ],
-)
-async def test_rebase_child_task_repositories_marks_conflict_on_rebase_conflict(
-    db_session: AsyncSession,
-    tmp_path: Path,
+    *,
+    parent_merge_status: MergeStatus,
     child_status: TaskStatus,
-    expected_status: TaskStatus,
-) -> None:
-    origin = _init_bare_origin(tmp_path)
-
-    parent_pusher_dir = tmp_path / "parent-pusher"
-    _run("git", "clone", str(origin), str(parent_pusher_dir), cwd=tmp_path)
-    _run("git", "checkout", "-b", "feature/RR-parent", cwd=parent_pusher_dir)
-    (parent_pusher_dir / "README.md").write_text("родительская версия\n")
-    _run("git", "add", "README.md", cwd=parent_pusher_dir)
-    _run("git", *_GIT_AUTHOR_ARGS, "commit", "-m", "родитель меняет README", cwd=parent_pusher_dir)
-    _run("git", "push", "origin", "feature/RR-parent", cwd=parent_pusher_dir)
-
-    user = await _make_user(db_session)
-    repository = _make_repository(git_url=str(origin))
+) -> tuple[TaskRepository, TaskRepository]:
+    user = await make_user(db_session)
+    repository = _make_repository()
     db_session.add(repository)
     await db_session.flush()
-
     parent_task = await _make_task(db_session, created_by=user.id)
-    parent_task_repository = TaskRepository(
-        task_id=parent_task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-parent",
-        base_branch="main",
-        merge_status=MergeStatus.MERGED,
-    )
-    db_session.add(parent_task_repository)
-    await db_session.flush()
-
     child_task = await _make_task(
         db_session,
         created_by=user.id,
         parent_task_id=parent_task.id,
         status=child_status,
     )
-    child_task_repository = TaskRepository(
-        task_id=child_task.id,
-        repository_id=repository.id,
-        role=RepositoryRole.READ_WRITE,
-        branch_name="feature/RR-child",
-        base_branch="feature/RR-parent",
-        merge_status=MergeStatus.NOT_PUSHED,
-    )
-    db_session.add(child_task_repository)
-    await db_session.flush()
-
-    repos_root = tmp_path / "repos"
-    child_repo_dir = await clone_task_repository(
-        repository=repository,
-        task_repository=child_task_repository,
-        task_code=child_task.code,
-        repos_root=repos_root,
-    )
-    # Дочерняя задача КОНФЛИКТУЮЩЕ меняет тот же файл.
-    (child_repo_dir / "README.md").write_text("версия ребёнка\n")
-    _run("git", "add", "README.md", cwd=child_repo_dir)
-    _run(
-        "git",
-        *_GIT_AUTHOR_ARGS,
-        "commit",
-        "-m",
-        "ребёнок меняет README иначе",
-        cwd=child_repo_dir,
-    )
-
-    # Родитель мерджится в main.
-    _run("git", "checkout", "main", cwd=parent_pusher_dir)
-    _run(
-        "git",
-        *_GIT_AUTHOR_ARGS,
-        "merge",
-        "--no-ff",
-        "feature/RR-parent",
-        "-m",
-        "merge parent",
-        cwd=parent_pusher_dir,
-    )
-    # После мерджа main ЕЩЁ РАЗ меняет тот же файл иначе — именно это
-    # расхождение с ожиданиями коммита ребёнка гарантирует конфликт
-    # ребейза (без этого патч ребёнка применился бы поверх main чисто,
-    # поскольку main до этого момента совпадает с тем, от чего ребёнок
-    # изначально ответвился).
-    (parent_pusher_dir / "README.md").write_text("независимая правка main после мерджа\n")
-    _run("git", "add", "README.md", cwd=parent_pusher_dir)
-    _run(
-        "git",
-        *_GIT_AUTHOR_ARGS,
-        "commit",
-        "-m",
-        "main меняет README ещё раз",
-        cwd=parent_pusher_dir,
-    )
-    _run("git", "push", "origin", "main", cwd=parent_pusher_dir)
-
-    rebased = await rebase_child_task_repositories_on_parent_merge(
-        db_session,
-        parent_task_repository=parent_task_repository,
-        repos_root=repos_root,
-    )
-
-    assert rebased == []
-    await db_session.refresh(child_task)
-    await db_session.refresh(child_task_repository)
-    assert child_task.status is expected_status
-    # Признак переживает уход задачи в `failed` (services/rebase_resolution.py).
-    assert child_task_repository.merge_status is MergeStatus.CONFLICT
-
-
-@pytest.mark.parametrize(
-    "child_status",
-    [TaskStatus.NEW, TaskStatus.QUEUED, TaskStatus.DONE, TaskStatus.FAILED],
-)
-async def test_rebase_skips_children_without_live_session(
-    db_session: AsyncSession,
-    tmp_path: Path,
-    child_status: TaskStatus,
-) -> None:
-    """Решение 2026-10-19: done/failed не ребейзятся; new/queued склонируют
-    свежую базу при старте. Базовая ветка переключается всё равно."""
-    user = await _make_user(db_session)
-    repository = _make_repository(git_url=str(tmp_path / "нет-такого-origin.git"))
-    db_session.add(repository)
-    await db_session.flush()
-    parent_task = await _make_task(db_session, created_by=user.id)
     parent_task_repository = TaskRepository(
         task_id=parent_task.id,
         repository_id=repository.id,
         role=RepositoryRole.READ_WRITE,
         branch_name="feature/RR-parent",
         base_branch="main",
-        merge_status=MergeStatus.MERGED,
-    )
-    child_task = await _make_task(
-        db_session,
-        created_by=user.id,
-        parent_task_id=parent_task.id,
-        status=child_status,
+        merge_status=parent_merge_status,
     )
     child_task_repository = TaskRepository(
         task_id=child_task.id,
@@ -487,17 +150,68 @@ async def test_rebase_skips_children_without_live_session(
     )
     db_session.add_all([parent_task_repository, child_task_repository])
     await db_session.flush()
+    return parent_task_repository, child_task_repository
 
-    rebased = await rebase_child_task_repositories_on_parent_merge(
-        db_session,
-        parent_task_repository=parent_task_repository,
-        repos_root=tmp_path / "repos",
+
+class TestRequestChildRebases:
+    """Раздел 16.2: периодическая задача только отмечает ребейз, git не трогает."""
+
+    async def test_skips_when_parent_not_merged(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+    ) -> None:
+        parent, child = await _parent_and_child(
+            db_session,
+            parent_merge_status=MergeStatus.PUSHED,
+            child_status=TaskStatus.IN_PROGRESS,
+        )
+
+        requested = await request_child_rebases_on_parent_merge(
+            db_session,
+            parent_task_repository=parent,
+            redis_client=redis_client,
+        )
+
+        assert requested == []
+        assert child.rebase_requested_at is None
+
+    @pytest.mark.parametrize(
+        ("child_status", "requested"),
+        [
+            (TaskStatus.IN_PROGRESS, True),
+            (TaskStatus.PAUSED, True),
+            (TaskStatus.PLAN_REVIEW, True),
+            (TaskStatus.AWAITING_INPUT, True),
+            # Решение 2026-10-19: done/failed не ребейзятся, new/queued склонируют свежую базу.
+            (TaskStatus.NEW, False),
+            (TaskStatus.QUEUED, False),
+            (TaskStatus.DONE, False),
+            (TaskStatus.FAILED, False),
+        ],
     )
+    async def test_marks_children_with_live_session(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        child_status: TaskStatus,
+        requested: bool,
+    ) -> None:
+        parent, child = await _parent_and_child(
+            db_session,
+            parent_merge_status=MergeStatus.MERGED,
+            child_status=child_status,
+        )
 
-    assert rebased == []
-    assert child_task_repository.base_branch == "main"
-    await db_session.refresh(child_task)
-    assert child_task.status is child_status
+        result = await request_child_rebases_on_parent_merge(
+            db_session,
+            parent_task_repository=parent,
+            redis_client=redis_client,
+        )
+
+        assert (result == [child.task_id]) is requested
+        assert (child.rebase_requested_at is not None) is requested
+        assert child.base_branch == "main"
 
 
 class TestSyncFailures:
@@ -509,7 +223,7 @@ class TestSyncFailures:
         *,
         branch: str,
     ) -> tuple[TaskRepository, Repository, Task]:
-        user = await _make_user(db_session)
+        user = await make_user(db_session)
         task = await _make_task(db_session, created_by=user.id)
         repository = _make_repository(git_url=f"git@gitlab.example.com:g/{branch}.git")
         db_session.add(repository)
@@ -666,10 +380,60 @@ class TestSyncFailures:
                 await db_session.execute(
                     sa.select(AppLog).where(
                         AppLog.source == "periodic.sync_gitlab_merge_status",
-                        AppLog.message.contains("GITLAB_TOKEN"),
+                        AppLog.message.contains("токен GitLab"),
                     ),
                 )
             ).scalars().all()
             assert len(logs) == 1
         finally:
             await redis_client.delete(ACCESS_DENIED_KEY)
+
+
+class TestFindMergedParentsWithChildren:
+    """Раздел 16.2: проход ребейза берёт только слитые ветки, на которые ещё опираются дети."""
+
+    async def test_only_pending_parents(self, db_session: AsyncSession) -> None:
+        user = await make_user(db_session)
+        repository = _make_repository()
+        db_session.add(repository)
+        await db_session.flush()
+
+        async def parent_branch(
+            merge_status: MergeStatus,
+            *,
+            child_base: str | None,
+        ) -> TaskRepository:
+            parent = await _make_task(db_session, created_by=user.id, status=TaskStatus.DONE)
+            branch = f"feature/{parent.code}"
+            parent_repository = TaskRepository(
+                task_id=parent.id,
+                repository_id=repository.id,
+                role=RepositoryRole.READ_WRITE,
+                branch_name=branch,
+                base_branch="main",
+                merge_status=merge_status,
+            )
+            db_session.add(parent_repository)
+            if child_base is not None:
+                child = await _make_task(db_session, created_by=user.id, parent_task_id=parent.id)
+                db_session.add(
+                    TaskRepository(
+                        task_id=child.id,
+                        repository_id=repository.id,
+                        role=RepositoryRole.READ_WRITE,
+                        branch_name=f"feature/{child.code}",
+                        base_branch=branch if child_base == "parent" else child_base,
+                    ),
+                )
+            await db_session.flush()
+            return parent_repository
+
+        pending = await parent_branch(MergeStatus.MERGED, child_base="parent")
+        already_switched = await parent_branch(MergeStatus.MERGED, child_base="main")
+        without_children = await parent_branch(MergeStatus.MERGED, child_base=None)
+        not_merged = await parent_branch(MergeStatus.PUSHED, child_base="parent")
+
+        found = {row.id for row in await find_merged_parents_with_children(db_session)}
+
+        assert pending.id in found
+        assert not {already_switched.id, without_children.id, not_merged.id} & found

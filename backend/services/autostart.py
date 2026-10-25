@@ -22,8 +22,8 @@ from db.models.logs import AppLog
 from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
 from services.notifications import NotificationEvent, notify_task_event
+from services.task_launch import ensure_task_launchable
 from services.task_status import transition_task_status
-from services.template_context import ensure_no_repository_env_conflicts
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -67,7 +67,7 @@ async def run_scheduled_autostart_check(
     result = AutostartBatchResult()
     for task in tasks:
         try:
-            await ensure_no_repository_env_conflicts(db_session, task_id=task.id)
+            await ensure_task_launchable(db_session, task)
             await transition_task_status(
                 db_session,
                 task_id=task.id,

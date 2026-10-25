@@ -19,11 +19,9 @@ from db.models.enums import (
     ParentSummaryStatus,
     RepositoryRole,
     TaskStatus,
-    UserRole,
 )
 from db.models.repositories import Repository, Template
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
-from db.models.users import User
 from services.crypto import encrypt
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
@@ -34,7 +32,7 @@ from services.task_workspace import (
     push_task_workspace,
     write_template_files,
 )
-from tests.factories import make_user
+from tests.factories import make_task, make_user
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -62,20 +60,13 @@ def _init_bare_origin(tmp_path: Path, name: str) -> Path:
 
 
 async def _make_task(db_session: AsyncSession) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    code = f"RR-{uuid.uuid4().hex[:5]}"
-    task = Task(code=code, title="t", description="d", created_by=user.id)
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    return await make_task(db_session)
 
 
 async def _attach_repository(
     db_session: AsyncSession,
-    task: Task,
     *,
+    task: Task,
     origin: Path,
     name: str,
     role: RepositoryRole,
@@ -117,7 +108,7 @@ async def test_prepare_clones_repositories_on_task_branch(
     origin = _init_bare_origin(tmp_path, "backend")
     await _attach_repository(
         db_session,
-        task,
+        task=task,
         origin=origin,
         name="backend",
         role=RepositoryRole.READ_WRITE,
@@ -145,7 +136,7 @@ async def test_prepare_writes_template_files_to_task_root_not_into_repository(
     )
     await _attach_repository(
         db_session,
-        task,
+        task=task,
         origin=_init_bare_origin(tmp_path, "backend"),
         name="backend",
         role=RepositoryRole.READ_WRITE,
@@ -168,7 +159,7 @@ async def test_prepare_is_idempotent_and_keeps_agent_changes(
     template = await _make_template(db_session, {"CLAUDE.md": "из шаблона\n"})
     await _attach_repository(
         db_session,
-        task,
+        task=task,
         origin=_init_bare_origin(tmp_path, "backend"),
         name="backend",
         role=RepositoryRole.READ_WRITE,
@@ -205,14 +196,14 @@ async def test_push_pushes_read_write_repositories_and_marks_them_pushed(
     ro_origin = _init_bare_origin(tmp_path, "docs")
     rw = await _attach_repository(
         db_session,
-        task,
+        task=task,
         origin=rw_origin,
         name="backend",
         role=RepositoryRole.READ_WRITE,
     )
     ro = await _attach_repository(
         db_session,
-        task,
+        task=task,
         origin=ro_origin,
         name="docs",
         role=RepositoryRole.READ_ONLY,
@@ -266,7 +257,7 @@ class TestCleanupAndReclone:
         origin = _init_bare_origin(tmp_path, "backend")
         await _attach_repository(
             db_session,
-            task,
+            task=task,
             origin=origin,
             name="backend",
             role=RepositoryRole.READ_WRITE,

@@ -34,6 +34,8 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     title: Mapped[str] = mapped_column(sa.String)
     description: Mapped[str] = mapped_column(sa.Text)
     guide_url: Mapped[str | None] = mapped_column(sa.String)
+    # Раздел 15.6: задача Jira, из которой задача импортирована.
+    jira_issue_url: Mapped[str | None] = mapped_column(sa.String)
     status: Mapped[TaskStatus] = mapped_column(
         pg_enum(TaskStatus, name="task_status"),
         default=TaskStatus.NEW,
@@ -65,6 +67,12 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     scheduled_start_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     auto_start_enabled: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     last_failed_order_index: Mapped[int | None] = mapped_column(sa.Integer)
+    # Раздел 14.2 «Вернуть в новые»: выполнения нод до этого момента не
+    # учитываются ни точкой перезапуска, ни переходом в `done`.
+    reset_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Раздел 5 `{{node.llm_output_last_n}}`: реплики до этого момента —
+    # прежней сессии (очистка контекста, смена LLM-аккаунта).
+    context_cleared_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     repo_cleaned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"))
 
@@ -82,6 +90,9 @@ class TaskRepository(UUIDPrimaryKeyMixin, Base):
         pg_enum(MergeStatus, name="merge_status"),
         default=MergeStatus.NOT_PUSHED,
     )
+    # Раздел 16.2: ветку родителя слили — ребейз на новую базу выполнит воркер
+    # задачи в ближайшей точке между нодами и очистит отметку.
+    rebase_requested_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
 
 class TaskParentSummary(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

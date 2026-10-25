@@ -7,6 +7,9 @@
 #     20.4, docs/migration.md): в каталоге .env, дамп БД *.sql.gz,
 #     task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz, claude_accounts.tar.gz
 #     и sftp_host_keys.tar.gz со старого сервера
+#   deploy/install.sh --update            — обновление установленного сервера
+#     до свежего кода (раздел 20.6): пересборка всех образов, в том числе
+#     раннеров и tracker-session, миграции и перезапуск сервисов
 
 set -euo pipefail
 
@@ -24,6 +27,8 @@ ADMIN_EMAIL=""
 # Каталог с архивами переноса; пусто — обычная установка.
 RESTORE_DIR=""
 RESTORE_DUMP=""
+# --update: обновление уже установленного сервера.
+UPDATE_MODE=""
 # Архив -> точка монтирования volume[ -> сервис, по умолчанию backend]
 # (docker-compose.yml).
 RESTORE_ARCHIVES=(
@@ -46,7 +51,7 @@ die() {
 }
 
 usage() {
-  echo "Использование: $0 [--restore <каталог с .env, *.sql.gz, task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz, claude_accounts.tar.gz>]"
+  echo "Использование: $0 [--restore <каталог с .env, *.sql.gz, task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz, claude_accounts.tar.gz> | --update]"
 }
 
 parse_args() {
@@ -56,6 +61,10 @@ parse_args() {
         [ "$#" -ge 2 ] || { usage; exit 2; }
         RESTORE_DIR="$2"
         shift 2
+        ;;
+      --update)
+        UPDATE_MODE="1"
+        shift
         ;;
       -h | --help)
         usage
@@ -68,6 +77,11 @@ parse_args() {
         ;;
     esac
   done
+  if [ -n "${RESTORE_DIR}" ] && [ -n "${UPDATE_MODE}" ]; then
+    log "--restore и --update несовместимы"
+    usage
+    exit 2
+  fi
 }
 
 # Команда от root: скрипт обычно запускают от root, иначе — через sudo.
@@ -240,7 +254,7 @@ step_prompt_critical_values() {
 
 # Шаг 5: сборка Docker-образов
 step_build_images() {
-  log "Шаг 5/11: сборка образов backend, frontend, раннеров script-нод"
+  log "Шаг 5/11: сборка образов backend, frontend, раннеров script-нод и сессии"
   ( cd "${INSTALL_DIR}" && docker compose build backend frontend )
   # Раннеры не входят в docker-compose.yml — запускаются on-demand Celery
   # worker'ом через docker.sock (раздел 11.4, 19.3), а не как долгоживущий
@@ -248,6 +262,9 @@ step_build_images() {
   # `services/nodes/script.py::DEFAULT_RUNNER_IMAGES`.
   docker build -t tracker-runner-python:latest "${INSTALL_DIR}/runners/tracker-runner-python"
   docker build -t tracker-runner-bash:latest "${INSTALL_DIR}/runners/tracker-runner-bash"
+  # Контейнер сессии — процесс Claude Code CLI задачи (раздел 19.3); имя —
+  # `services/session_container.py::DEFAULT_SESSION_IMAGE`.
+  docker build -t tracker-session:latest "${INSTALL_DIR}/runners/tracker-session"
 }
 
 # Шаг 6: поднятие инфраструктурных сервисов первыми, с healthcheck
@@ -275,16 +292,21 @@ step_seed_data() {
   ( cd "${INSTALL_DIR}" \
     && docker compose run --rm backend python /app/scripts/seed_admin_allowlist.py "${ADMIN_EMAIL}" )
 
-  # periodic_tasks (раздел 16.2): записи создаются системой (updated_by =
-  # NULL, раздел 3.1), администратор для этого не нужен.
+  _seed_periodic_tasks
+}
+
+# periodic_tasks (раздел 16.2): записи создаются системой (updated_by =
+# NULL, раздел 3.1), администратор для этого не нужен; повторный запуск
+# идемпотентен и добавляет только новые задачи.
+_seed_periodic_tasks() {
   ( cd "${INSTALL_DIR}" \
     && docker compose run --rm backend python /app/scripts/seed_periodic_tasks.py )
 }
 
 # Шаг 9: старт прикладных сервисов
 step_start_app_services() {
-  log "Шаг 9/11: запуск backend, worker, beat, sftp, frontend, caddy, backup"
-  ( cd "${INSTALL_DIR}" && docker compose up -d backend worker beat sftp frontend caddy backup )
+  log "Шаг 9/11: запуск backend, worker, session-worker, beat, sftp, frontend, caddy, backup"
+  ( cd "${INSTALL_DIR}" && docker compose up -d backend worker session-worker beat sftp frontend caddy backup )
 }
 
 # Шаг 10: получение TLS-сертификата — выполняется автоматически Caddy
@@ -387,12 +409,46 @@ run_restore() {
   log "Восстановление завершено: откройте https://<DOMAIN> и войдите прежним аккаунтом администратора"
 }
 
+# --- Обновление установленного сервера (раздел 20.6) ---
+
+validate_update() {
+  [ -d "${INSTALL_DIR}/.git" ] || die "в ${INSTALL_DIR} нет установленного трекера — сначала обычная установка"
+  [ -f "${ENV_FILE}" ] || die "нет ${ENV_FILE} — сначала обычная установка"
+}
+
+step_pull_repo() {
+  log "Обновление: получение свежего кода в ${INSTALL_DIR}"
+  # Только перемотка вперёд: локальные правки на сервере не затираются молча.
+  git -C "${INSTALL_DIR}" pull --ff-only
+}
+
+# Образы раннеров и tracker-session не входят в docker-compose.yml — без
+# пересборки здесь сессии и script-ноды остались бы на старых образах или
+# не нашли бы новый (раздел 19.3).
+run_update() {
+  step_pull_repo
+  _ensure_env_value SFTP_DB_PASSWORD "$(_generate_sftp_db_password)"
+  step_build_images
+  step_start_infra
+  step_run_migrations
+  _seed_periodic_tasks
+  step_start_app_services
+  log "Обновление завершено"
+}
+
 main() {
   parse_args "$@"
   if [ -n "${RESTORE_DIR}" ]; then
     validate_restore_dir
   fi
+  if [ -n "${UPDATE_MODE}" ]; then
+    validate_update
+  fi
   step_install_docker
+  if [ -n "${UPDATE_MODE}" ]; then
+    run_update
+    return
+  fi
   step_clone_repo
   if [ -n "${RESTORE_DIR}" ]; then
     run_restore

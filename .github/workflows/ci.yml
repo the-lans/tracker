@@ -28,6 +28,7 @@ jobs:
         run: |
           docker build -t tracker-runner-python:latest runners/tracker-runner-python/
           docker build -t tracker-runner-bash:latest runners/tracker-runner-bash/
+          docker build -t tracker-session:latest runners/tracker-session/
 
       # make check сам устанавливает зависимости backend (backend/.venv через
       # pip install -e ".[dev]") и frontend (npm install), затем прогоняет

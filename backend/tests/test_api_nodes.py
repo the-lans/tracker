@@ -404,3 +404,48 @@ class TestLibraryDescription:
         )
 
         assert response.status_code == 201
+
+
+class TestExecutionLimits:
+    """Таймаут и retry ноды — в тех же границах, что у «Системных настроек»."""
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("timeout_seconds", 0),
+            ("timeout_seconds", 24 * 60 * 60 + 1),
+            ("max_retries", 11),
+            ("retry_base_delay_seconds", -1),
+        ],
+    )
+    async def test_out_of_range_rejected(
+        self,
+        authed_client: AsyncClient,
+        field: str,
+        value: int,
+    ) -> None:
+        created = await authed_client.post(
+            "/nodes",
+            json={
+                "name": "n",
+                "description": "d",
+                "node_type": NodeType.PLAIN_PROMPT.value,
+                "prompt_template": "x",
+            },
+        )
+        assert created.status_code == 201, created.text
+        node_id = created.json()["id"]
+
+        create = await authed_client.post(
+            "/nodes",
+            json={
+                "name": "n",
+                "description": "d",
+                "node_type": NodeType.PLAIN_PROMPT.value,
+                "prompt_template": "x",
+                field: value,
+            },
+        )
+        update = await authed_client.patch(f"/nodes/{node_id}", json={field: value})
+
+        assert (create.status_code, update.status_code) == (422, 422)

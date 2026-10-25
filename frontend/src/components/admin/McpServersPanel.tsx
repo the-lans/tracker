@@ -1,13 +1,11 @@
 import { useState } from "react";
 import { CircleCheck, CircleX, Plus, Server } from "lucide-react";
-import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { McpServerForm } from "@/components/admin/McpServerForm";
 import { useDeleteMcpServer, useMcpServers } from "@/hooks/useMcpServers";
-import { ApiError } from "@/lib/apiClient";
+import { toastError } from "@/lib/errors";
 import type { McpServer } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { EditButton } from "@/components/common/actions/EditButton";
@@ -15,11 +13,12 @@ import { MCP_ISOLATION_LABEL } from "@/lib/labels";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
+import { EntityFormDialog, type EditTarget } from "@/components/common/dialogs/EntityFormDialog";
 
 export function McpServersPanel() {
   const { data: servers, isLoading } = useMcpServers();
   const deleteServer = useDeleteMcpServer();
-  const [dialogServer, setDialogServer] = useState<McpServer | "new" | null>(null);
+  const [dialogServer, setDialogServer] = useState<EditTarget<McpServer>>(null);
 
   return (
     <div className="flex flex-col gap-2">
@@ -60,29 +59,26 @@ export function McpServersPanel() {
             pending={deleteServer.isPending}
             onConfirm={() =>
               deleteServer.mutate(server.id, {
-                onError: (error) =>
-                  toast.error(error instanceof ApiError ? error.message : "Не удалось удалить"),
+                onError: toastError("Не удалось удалить"),
               })}
           />
         </Card>
       ))}
 
-      <Dialog open={dialogServer !== null} onOpenChange={(open) => !open && setDialogServer(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {dialogServer === "new" ? "Новый MCP-сервер" : "Редактировать MCP-сервер"}
-            </DialogTitle>
-          </DialogHeader>
-          {dialogServer !== null && (
-            <McpServerForm
-              server={dialogServer === "new" ? undefined : dialogServer}
-              onSaved={() => setDialogServer(null)}
-              onCancel={() => setDialogServer(null)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      <EntityFormDialog
+        target={dialogServer}
+        onClose={() => setDialogServer(null)}
+        createTitle="Новый MCP-сервер"
+        editTitle="Редактировать MCP-сервер"
+      >
+        {(item, close) => (
+          <McpServerForm
+            server={item}
+            onSaved={close}
+            onCancel={close}
+          />
+        )}
+      </EntityFormDialog>
     </div>
   );
 }

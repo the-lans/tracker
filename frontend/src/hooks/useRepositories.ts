@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
 import type { Repository, RepositoryCreateRequest, RepositoryUpdateRequest } from "@/lib/types";
 
@@ -9,26 +10,22 @@ export function useRepositories() {
 }
 
 export function useCreateRepository() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: RepositoryCreateRequest) => api.post<Repository>("/repositories", body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+  return useInvalidatingMutation(
+    (body: RepositoryCreateRequest) => api.post<Repository>("/repositories", body),
+    [KEY],
+  );
 }
 
 export function useUpdateRepository(repositoryId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: RepositoryUpdateRequest) =>
-      api.patch<Repository>(`/repositories/${repositoryId}`, body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+  return useInvalidatingMutation(
+    (body: RepositoryUpdateRequest) => api.patch<Repository>(`/repositories/${repositoryId}`, body),
+    [KEY],
+  );
 }
 
 export function useDeleteRepository() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (repositoryId: string) => api.delete(`/repositories/${repositoryId}`),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: KEY }),
-  });
+  return useInvalidatingMutation(
+    (repositoryId: string) => api.delete(`/repositories/${repositoryId}`),
+    [KEY],
+  );
 }

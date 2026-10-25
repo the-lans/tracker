@@ -19,7 +19,7 @@ from services.sftp_access import (
     list_visible_task_codes,
     touch_ssh_key_usage,
 )
-from tests.factories import SAMPLE_ECDSA_KEY, SAMPLE_ED25519_KEY, make_user
+from tests.factories import SAMPLE_ECDSA_KEY, SAMPLE_ED25519_KEY, make_task, make_user
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,10 +45,7 @@ def _login(user: User) -> SftpLogin:
 
 
 async def _task(db_session: AsyncSession, owner_id: uuid.UUID) -> Task:
-    task = Task(code=f"RR-{uuid.uuid4().hex[:6]}", title="t", description="d", created_by=owner_id)
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    return await make_task(db_session, created_by=owner_id)
 
 
 class TestLogin:

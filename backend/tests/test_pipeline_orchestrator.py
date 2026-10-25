@@ -18,14 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.claude_agent import ClaudeCodeSession
 from db.models.enums import (
-    EnvVariableScope,
     NodeLogStatus,
     NodeType,
     ScriptLanguage,
     TaskStatus,
     UserRole,
 )
-from db.models.env_vars import EnvVariable, TaskEnvVariable
+from db.models.env_vars import TaskEnvVariable
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
@@ -38,6 +37,7 @@ from services.pipeline_orchestrator import (
     run_pipeline,
 )
 from services.plan_mode import ActiveNodeContext
+from services.system_settings import update_integrations
 from services.task_control import TaskControlCommand, request_task_control
 from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
@@ -263,6 +263,7 @@ async def test_run_pipeline_stops_at_clear_context_and_reports_order_index(
     assert outcome.context_cleared_at_order_index == 1
     assert fake.disconnected is True
     assert task.session_id is None
+    assert task.context_cleared_at is not None
     logs = await _node_logs_for(db_session, task.id)
     # Первый шаг и сама clear_context (успешная запись нужна инварианту done);
     # шаг после очистки не выполнялся — пайплайн остановился.
@@ -346,12 +347,14 @@ class TestScriptEnv:
                     key="API_URL",
                     value_encrypted=encrypt("из задачи"),
                 ),
-                EnvVariable(
-                    key="GITLAB_TOKEN",
-                    value_encrypted=encrypt("секрет"),
-                    scope=EnvVariableScope.GLOBAL,
-                ),
             ],
+        )
+        # Токен GitLab — системная настройка, а не переменная окружения задачи.
+        await update_integrations(
+            db_session,
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="секрет",
+            jira_url=None,
         )
         await _add_node(
             db_session,
@@ -752,3 +755,65 @@ class TestFailureKinds:
                 repos_path=tmp_path,
                 recover_session=recover,
             )
+
+
+class TestNodeOutputOnRetry:
+    """
+    Раздел 5: `{{node.llm_output}}` — ответ предыдущей ноды пайплайна, а не
+    обрывок упавшей попытки этой же ноды.
+    """
+
+    async def test_retry_gets_previous_node_output(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        await _add_node(
+            db_session,
+            task,
+            order_index=0,
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="первый шаг",
+        )
+        await _add_node(
+            db_session,
+            task,
+            order_index=1,
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="используем: {{node.llm_output}}",
+        )
+        first = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    AssistantMessage(content=[TextBlock(text="ответ A")], model="claude"),
+                    make_result_message(),
+                ],
+                [
+                    AssistantMessage(content=[TextBlock(text="обрывок B")], model="claude"),
+                    make_result_message(),
+                ],
+            ],
+            failures_mid_turn={1: ProcessError("CLI упал", exit_code=1)},
+        )
+        replacement = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        session = ClaudeCodeSession(first)
+
+        async def recover() -> None:
+            await session.replace_client(replacement)
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=session,
+            repos_path=tmp_path,
+            recover_session=recover,
+        )
+
+        assert outcome.completed is True
+        logs = await _node_logs_for(db_session, task.id)
+        assert [(log.status, log.rendered_prompt) for log in logs] == [
+            (NodeLogStatus.SUCCESS, "первый шаг"),
+            (NodeLogStatus.FAILED, "используем: ответ A"),
+            (NodeLogStatus.SUCCESS, "используем: ответ A"),
+        ]

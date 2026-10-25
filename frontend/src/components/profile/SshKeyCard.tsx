@@ -9,7 +9,7 @@ import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteBu
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { useDeleteSshKey, useProfile, useUpdateSshKey } from "@/hooks/useProfile";
-import { ApiError } from "@/lib/apiClient";
+import { errorMessage } from "@/lib/errors";
 
 function keyTitle(publicKey: string): string {
   const [keyType, , ...comment] = publicKey.split(" ");
@@ -28,7 +28,7 @@ export function SshKeyCard() {
   const [draft, setDraft] = useState("");
 
   const onError = (error: unknown) =>
-    toast.error(error instanceof ApiError ? error.message : "Не удалось сохранить ключ");
+    toast.error(errorMessage(error, "Не удалось сохранить ключ"));
 
   function handleSave() {
     updateSshKey.mutate(

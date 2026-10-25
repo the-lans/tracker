@@ -9,8 +9,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import os
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,6 +23,7 @@ from app_logging.config import get_logger
 from clients.claude_agent import (
     ClaudeAgentClientProtocol,
     ClaudeCodeSession,
+    OfflineAgentClient,
     RateLimitHandler,
     build_claude_agent_options,
 )
@@ -34,6 +33,7 @@ from db.models.mcp import McpServer
 from db.models.repositories import Repository, TemplateMcpServer
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
 from db.session import async_session_factory
+from services.child_rebase import apply_requested_rebases
 from services.claude_config import ensure_history_retention, history_retention_days
 from services.errors import ConflictError
 from services.llm_accounts import record_rate_limit
@@ -51,11 +51,22 @@ from services.parent_summary import (
     summarize_parent_in_fork,
     wait_for_parent_summary,
 )
-from services.pipeline_orchestrator import CheckpointDecision, StopGuard, run_pipeline
+from services.pipeline_orchestrator import (
+    CheckpointDecision,
+    PipelineRunOutcome,
+    StopGuard,
+    run_pipeline,
+)
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
+from services.redis_connection import redis_connection
 from services.remote_control import record_bridge_status
-from services.session_heartbeat import keep_session_heartbeat
+from services.session_container import SESSION_CLI_PATH, build_session_cli_env
+from services.session_heartbeat import (
+    SESSION_OWNER_WAIT_SECONDS,
+    SessionAlreadyOwnedError,
+    keep_session_heartbeat,
+)
 from services.session_lifecycle import plan_session_start
 from services.task_artifacts import task_artifacts_dir
 from services.task_control import (
@@ -78,10 +89,11 @@ from services.task_workspace import (
     resolve_repos_root,
     task_root,
 )
+from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import celery_app
 
 if TYPE_CHECKING:
-    from claude_agent_sdk.types import McpServerConfig
+    from claude_agent_sdk.types import CanUseTool, McpServerConfig
     from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger("tasks.session_worker")
@@ -125,7 +137,7 @@ def run_task_session(
     не выполняются (продолжение после `clear_context`, перезапуск после
     `failed`). ``continuation`` — задача уже в `in_progress`: предыдущий
     таск передал сессию этому после `clear_context` (раздел 11.5)."""
-    asyncio.run(
+    run_with_fresh_pool(
         _run_task_session_async(
             uuid.UUID(task_id),
             start_after_order_index=start_after_order_index,
@@ -181,6 +193,8 @@ class _SessionControl:
     # Новый процесс CLI с прежними флагами — после падения процесса посреди
     # ноды (раздел 17.3: временный сбой повторяется в той же сессии).
     recovery_client_factory: Callable[[str], ClaudeAgentClientProtocol]
+    # Раздел 3.1: без LLM-аккаунта процесса Claude Code нет вовсе.
+    has_llm: bool = True
 
     async def recover_session(self) -> None:
         session_id = self.claude_session.session_id or self.task.session_id
@@ -203,10 +217,14 @@ class _SessionControl:
         """
         `False` — агент не справился, задачу надо переводить в `failed`.
 
-        Конфликт узнаётся и по статусу, и по признаку в `task_repositories`:
-        после неудачной автообработки и перезапуска из `failed` статус уже
+        Сначала — ребейзы, запрошенные после слияния ветки родителя
+        (`services/child_rebase.py`): они могут и создать конфликт. Конфликт
+        узнаётся и по статусу, и по признаку в `task_repositories`: после
+        неудачной автообработки и перезапуска из `failed` статус уже
         `in_progress`, а ветка всё ещё не перебазирована.
         """
+        await self.db_session.refresh(self.task)
+        await apply_requested_rebases(self.db_session, task=self.task, workspace=self.workspace)
         await self.db_session.refresh(self.task)
         in_conflict_status = self.task.status is TaskStatus.REBASE_CONFLICT
         if not in_conflict_status and not await has_unresolved_rebase_conflict(
@@ -214,6 +232,10 @@ class _SessionControl:
             self.task,
         ):
             return True
+        if not self.has_llm:
+            # Конфликт разбирает агент (раздел 14) — без LLM-аккаунта некому.
+            logger.info("rebase_conflict_without_llm", task_id=str(self.task.id))
+            return False
         logger.info("rebase_conflict_resolution_started", task_id=str(self.task.id))
         if not await resolve_rebase_conflict(
             self.db_session,
@@ -253,7 +275,7 @@ class _SessionControl:
         await self.db_session.refresh(self.task)
         session_id = self.claude_session.session_id or self.task.session_id
         status = RemoteControlStatus.DISCONNECTED
-        if session_id is None:
+        if session_id is None or not self.has_llm:
             logger.info("bridge_reconnect_skipped_no_session", task_id=str(self.task.id))
         else:
             try:
@@ -263,12 +285,20 @@ class _SessionControl:
                 logger.exception("bridge_reconnect_failed", task_id=str(self.task.id))
         await record_bridge_status(self.db_session, task=self.task, status=status)
 
-    async def checkpoint(self, _order_index: int) -> CheckpointDecision:
+    async def _serve_between_nodes(self, *, status: TaskStatus) -> TaskControlCommand | None:
+        """
+        Работа между нодами (правило 16): мост, ребейз, ручные запросы — и
+        команда управления после них. Неразобранный конфликт ребейза
+        равносилен `stop`.
+        """
         await self.reconnect_bridge_if_requested()
-        if not await self.resolve_rebase_conflict_if_any(resume_status=TaskStatus.IN_PROGRESS):
-            return CheckpointDecision.STOP
+        if not await self.resolve_rebase_conflict_if_any(resume_status=status):
+            return TaskControlCommand.STOP
         await self.process_manual_queue()
-        command = await read_task_control(self.redis_client, self.task.id)
+        return await read_task_control(self.redis_client, self.task.id)
+
+    async def checkpoint(self, _order_index: int) -> CheckpointDecision:
+        command = await self._serve_between_nodes(status=TaskStatus.IN_PROGRESS)
         if command is TaskControlCommand.STOP:
             return CheckpointDecision.STOP
         if command is TaskControlCommand.PAUSE and await consume_task_control(
@@ -293,11 +323,7 @@ class _SessionControl:
                 return CheckpointDecision.STOP
         logger.info("task_paused", task_id=str(self.task.id))
         while True:
-            await self.reconnect_bridge_if_requested()
-            if not await self.resolve_rebase_conflict_if_any(resume_status=TaskStatus.PAUSED):
-                return CheckpointDecision.STOP
-            await self.process_manual_queue()
-            command = await read_task_control(self.redis_client, self.task.id)
+            command = await self._serve_between_nodes(status=TaskStatus.PAUSED)
             if command is TaskControlCommand.STOP:
                 return CheckpointDecision.STOP
             if command is TaskControlCommand.RESUME:
@@ -386,31 +412,53 @@ async def _run_task_session_async(
         if task is None:
             logger.warning("task_not_found", task_id=str(task_id))
             return
-        if not await _claim_task(db_session, task, continuation=continuation):
-            return
-
-        redis_client = Redis.from_url(os.environ["REDIS_URL"])
-        try:
-            if not continuation:
-                # Команда, адресованная прошлому прогону, к этому не относится.
-                await clear_task_control(redis_client, task_id)
-            async with keep_session_heartbeat(redis_client, task_id):
-                await _run_claimed_task(
-                    db_session,
-                    task=task,
-                    redis_client=redis_client,
-                    start_after_order_index=start_after_order_index,
-                )
-        except Exception as exc:
-            # Раздел 17.3: любая ошибка сессии переводит задачу в `failed`,
-            # а не оставляет её в `in_progress` навсегда.
-            logger.exception("task_session_failed", task_id=str(task_id))
-            await fail_task_after_error(db_session, task_id=task_id, error=exc)
-        finally:
+        async with redis_connection() as redis_client:
             try:
-                await _settle_bridge_request(db_session, task_id=task_id, redis_client=redis_client)
-            finally:
-                await redis_client.aclose()
+                # Раздел 17.4: сначала владение сессией, затем статус — второй
+                # исполнитель той же задачи уходит, ничего не изменив.
+                async with keep_session_heartbeat(
+                    redis_client,
+                    task_id,
+                    acquire_timeout=SESSION_OWNER_WAIT_SECONDS,
+                ):
+                    if not await _claim_task(db_session, task, continuation=continuation):
+                        return
+                    await _run_owned_session(
+                        db_session,
+                        task=task,
+                        redis_client=redis_client,
+                        start_after_order_index=start_after_order_index,
+                        continuation=continuation,
+                    )
+            except SessionAlreadyOwnedError:
+                logger.info("task_session_already_owned", task_id=str(task_id))
+
+
+async def _run_owned_session(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    redis_client: Redis,
+    start_after_order_index: int | None,
+    continuation: bool,
+) -> None:
+    try:
+        if not continuation:
+            # Команда, адресованная прошлому прогону, к этому не относится.
+            await clear_task_control(redis_client, task.id)
+        await _run_claimed_task(
+            db_session,
+            task=task,
+            redis_client=redis_client,
+            start_after_order_index=start_after_order_index,
+        )
+    except Exception as exc:
+        # Раздел 17.3: любая ошибка сессии переводит задачу в `failed`,
+        # а не оставляет её в `in_progress` навсегда.
+        logger.exception("task_session_failed", task_id=str(task.id))
+        await fail_task_after_error(db_session, task_id=task.id, error=exc)
+    finally:
+        await _settle_bridge_request(db_session, task_id=task.id, redis_client=redis_client)
 
 
 async def _claude_config_dir(db_session: AsyncSession, task: Task) -> str:
@@ -450,15 +498,23 @@ async def _summarize_parent_in_fork(
     # После очистки репозиториев родителя его папки может не быть, а resume
     # ищет историю сессии по рабочей директории.
     parent_root.mkdir(parents=True, exist_ok=True)
+    parent_config_dir = await _claude_config_dir(db_session, parent)
     options = build_claude_agent_options(
         resume_session_id=parent.session_id,
         cwd=str(parent_root),
         permission_mode=None,
         mcp_servers={},
-        claude_config_dir=await _claude_config_dir(db_session, parent),
+        claude_config_dir=parent_config_dir,
         enable_remote_control=False,
         can_use_tool=deny_all_tools,
         fork_session=True,
+        cli_path=str(SESSION_CLI_PATH),
+        # Контейнер пересказа — часть сессии дочерней задачи: метка её.
+        cli_env=await build_session_cli_env(
+            task_id=child.id,
+            cwd=parent_root,
+            claude_config_dir=parent_config_dir,
+        ),
     )
     ensure_history_retention(options.env["CLAUDE_CONFIG_DIR"], days=history_retention_days())
     fork = ClaudeCodeSession(ClaudeSDKClient(options=options))
@@ -526,6 +582,82 @@ async def _obtain_parent_summary(
     return summary
 
 
+@dataclass(frozen=True, slots=True)
+class _SessionClientFactory:
+    """
+    Клиент сессии задачи: новый процесс CLI в контейнере сессии (раздел
+    19.3) — при старте, переподключении моста и восстановлении после сбоя;
+    без LLM-аккаунта — офлайн-клиент (задача только из скриптов).
+    """
+
+    task: Task
+    workspace: Path
+    artifacts_dir: Path
+    claude_config_dir: str
+    mcp_servers: dict[str, McpServerConfig]
+    can_use_tool: CanUseTool
+    cli_env: dict[str, str]
+
+    @property
+    def has_llm(self) -> bool:
+        return self.task.llm_account_id is not None
+
+    def __call__(
+        self,
+        *,
+        resume_session_id: str | None,
+        enable_remote_control: bool,
+    ) -> ClaudeAgentClientProtocol:
+        if not self.has_llm:
+            return OfflineAgentClient()
+        options = build_claude_agent_options(
+            resume_session_id=resume_session_id,
+            cwd=str(self.workspace),
+            permission_mode=self.task.current_permission_mode,
+            mcp_servers=self.mcp_servers,
+            claude_config_dir=self.claude_config_dir,
+            enable_remote_control=enable_remote_control,
+            can_use_tool=self.can_use_tool,
+            add_dirs=[str(self.artifacts_dir)],
+            cli_path=str(SESSION_CLI_PATH),
+            cli_env=self.cli_env,
+        )
+        return ClaudeSDKClient(options=options)
+
+
+async def _build_client_factory(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    workspace: Path,
+    can_use_tool: CanUseTool,
+) -> _SessionClientFactory:
+    claude_config_dir = await _claude_config_dir(db_session, task)
+    artifacts_dir = task_artifacts_dir(task.code)
+    has_llm = task.llm_account_id is not None
+    cli_env = (
+        await build_session_cli_env(
+            task_id=task.id,
+            cwd=workspace,
+            claude_config_dir=claude_config_dir,
+            artifacts_dir=artifacts_dir,
+        )
+        if has_llm
+        else {}
+    )
+    # Раздел 6.4: история сессии нужна, пока существует задача (resume, пересказ).
+    ensure_history_retention(claude_config_dir, days=history_retention_days())
+    return _SessionClientFactory(
+        task=task,
+        workspace=workspace,
+        artifacts_dir=artifacts_dir,
+        claude_config_dir=claude_config_dir,
+        mcp_servers=await _resolve_mcp_servers_for_task(db_session, task),
+        can_use_tool=can_use_tool,
+        cli_env=cli_env,
+    )
+
+
 async def _run_claimed_task(
     db_session: AsyncSession,
     *,
@@ -533,11 +665,8 @@ async def _run_claimed_task(
     redis_client: Redis,
     start_after_order_index: int | None,
 ) -> None:
-    claude_config_dir = await _claude_config_dir(db_session, task)
     repos_root = resolve_repos_root()
     workspace = await prepare_task_workspace(db_session, task=task, repos_root=repos_root)
-    artifacts_dir = task_artifacts_dir(task.code)
-    mcp_servers = await _resolve_mcp_servers_for_task(db_session, task)
 
     parent_summary = None
     if needs_parent_summary(task):
@@ -557,35 +686,22 @@ async def _run_claimed_task(
             return
 
     active_node_context = ActiveNodeContext()
-    can_use_tool = build_can_use_tool_callback(
-        context=active_node_context,
-        session_factory=async_session_factory,
-        redis_client=redis_client,
+    make_client = await _build_client_factory(
+        db_session,
+        task=task,
+        workspace=workspace,
+        can_use_tool=build_can_use_tool_callback(
+            context=active_node_context,
+            session_factory=async_session_factory,
+            redis_client=redis_client,
+        ),
     )
-    def make_client(
-        *,
-        resume_session_id: str | None,
-        enable_remote_control: bool,
-    ) -> ClaudeAgentClientProtocol:
-        options = build_claude_agent_options(
-            resume_session_id=resume_session_id,
-            cwd=str(workspace),
-            permission_mode=task.current_permission_mode,
-            mcp_servers=mcp_servers,
-            claude_config_dir=claude_config_dir or "",
-            enable_remote_control=enable_remote_control,
-            can_use_tool=can_use_tool,
-            add_dirs=[str(artifacts_dir)],
-        )
-        return ClaudeSDKClient(options=options)
-
-    # Раздел 6.4: история сессии нужна, пока существует задача (resume, пересказ).
-    ensure_history_retention(claude_config_dir, days=history_retention_days())
     start_plan = plan_session_start(existing_session_id=task.session_id)
+    enable_remote_control = start_plan.enable_remote_control and make_client.has_llm
     session = ClaudeCodeSession(
         make_client(
             resume_session_id=start_plan.resume_session_id,
-            enable_remote_control=start_plan.enable_remote_control,
+            enable_remote_control=enable_remote_control,
         ),
         on_text_delta=build_output_publisher(redis_client, active_node_context),
         on_abort=active_node_context.cancel_decision_wait,
@@ -604,50 +720,20 @@ async def _run_claimed_task(
         ),
         recovery_client_factory=lambda session_id: make_client(
             resume_session_id=session_id,
-            enable_remote_control=start_plan.enable_remote_control,
+            enable_remote_control=enable_remote_control,
         ),
+        has_llm=make_client.has_llm,
     )
     await session.connect()
-    if start_plan.enable_remote_control:
+    if enable_remote_control:
         await record_bridge_status(db_session, task=task, status=RemoteControlStatus.CONNECTED)
-    outcome = None
     try:
-        if parent_summary is not None and parent_summary.delivered_at is None:
-            await deliver_parent_summary(
-                db_session,
-                child=task,
-                summary=parent_summary,
-                claude_session=session,
-                timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
-                active_node_context=active_node_context,
-            )
-        # Конфликт, оставшийся от прошлого прогона (перезапуск из `failed`,
-        # продолжение после `clear_context`), — до первой же ноды.
-        rebase_resolved = await control.resolve_rebase_conflict_if_any(
-            resume_status=TaskStatus.IN_PROGRESS,
+        outcome, rebase_resolved = await _run_connected_session(
+            db_session,
+            control=control,
+            parent_summary=parent_summary,
+            start_after_order_index=start_after_order_index,
         )
-        if rebase_resolved:
-            outcome = await run_pipeline(
-                db_session,
-                task=task,
-                claude_session=session,
-                repos_path=workspace,
-                start_after_order_index=start_after_order_index,
-                active_node_context=active_node_context,
-                checkpoint=control.checkpoint,
-                stop_guard=StopGuard(redis_client=redis_client, task_id=task.id),
-                recover_session=control.recover_session,
-            )
-        if outcome is not None and outcome.completed:
-            # Пайплайн пройден, но сессия ещё жива: конфликт ребейза и
-            # запросы, поставленные во время последней ноды, — до пуша.
-            # Пауза/остановка после последней ноды уже ни к чему не относятся.
-            await clear_task_control(redis_client, task.id)
-            rebase_resolved = await control.resolve_rebase_conflict_if_any(
-                resume_status=TaskStatus.IN_PROGRESS,
-            )
-            if rebase_resolved:
-                await control.process_manual_queue()
     except BaseException:
         await _disconnect_quietly(session)
         raise
@@ -665,7 +751,78 @@ async def _run_claimed_task(
         )
         return
     await session.disconnect()
+    await _settle_pipeline_run(
+        db_session,
+        task=task,
+        outcome=outcome,
+        rebase_resolved=rebase_resolved,
+        repos_root=repos_root,
+        redis_client=redis_client,
+    )
 
+
+async def _run_connected_session(
+    db_session: AsyncSession,
+    *,
+    control: _SessionControl,
+    parent_summary: TaskParentSummary | None,
+    start_after_order_index: int | None,
+) -> tuple[PipelineRunOutcome | None, bool]:
+    """
+    Пересказ родителя, прогон пайплайна и работа после последней ноды;
+    ``None`` вместо итога прогона — пайплайн не начался из-за конфликта
+    ребейза. Второй элемент — конфликт ребейза разобран.
+    """
+    task = control.task
+    session = control.claude_session
+    if parent_summary is not None and parent_summary.delivered_at is None:
+        await deliver_parent_summary(
+            db_session,
+            child=task,
+            summary=parent_summary,
+            claude_session=session,
+            timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
+            active_node_context=control.active_node_context,
+        )
+    # Конфликт, оставшийся от прошлого прогона (перезапуск из `failed`,
+    # продолжение после `clear_context`), — до первой же ноды.
+    if not await control.resolve_rebase_conflict_if_any(resume_status=TaskStatus.IN_PROGRESS):
+        return None, False
+    outcome = await run_pipeline(
+        db_session,
+        task=task,
+        claude_session=session,
+        repos_path=control.workspace,
+        start_after_order_index=start_after_order_index,
+        active_node_context=control.active_node_context,
+        checkpoint=control.checkpoint,
+        stop_guard=StopGuard(redis_client=control.redis_client, task_id=task.id),
+        recover_session=control.recover_session,
+    )
+    if not outcome.completed:
+        return outcome, True
+    # Пайплайн пройден, но сессия ещё жива: конфликт ребейза и запросы,
+    # поставленные во время последней ноды, — до пуша. Пауза/остановка после
+    # последней ноды уже ни к чему не относятся.
+    await clear_task_control(control.redis_client, task.id)
+    rebase_resolved = await control.resolve_rebase_conflict_if_any(
+        resume_status=TaskStatus.IN_PROGRESS,
+    )
+    if rebase_resolved:
+        await control.process_manual_queue()
+    return outcome, rebase_resolved
+
+
+async def _settle_pipeline_run(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    outcome: PipelineRunOutcome | None,
+    rebase_resolved: bool,
+    repos_root: Path,
+    redis_client: Redis,
+) -> None:
+    """Итог прогона: пуш и `done`, либо `failed` с нодой, откуда продолжить."""
     if outcome is None or (outcome.completed and not rebase_resolved):
         await _fail_task(
             db_session,

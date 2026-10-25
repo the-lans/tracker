@@ -320,7 +320,7 @@ async def authed_client(
     current_user: User,
 ) -> AsyncIterator[AsyncClient]:
     """`api_client`, у которого `get_current_user` подменён на фикстуру
-    `current_user` — тесты `api/tasks.py` проверяют бизнес-логику эндпоинтов,
+    `current_user` — тесты `api/tasks/` проверяют бизнес-логику эндпоинтов,
     не сам механизм проверки Bearer-токена (тот покрыт `test_api_dependencies.py`
     и `test_api_auth.py` отдельно)."""
     from api.dependencies import get_current_user

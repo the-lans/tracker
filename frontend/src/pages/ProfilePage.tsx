@@ -3,9 +3,10 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { ActiveSessionsCard } from "@/components/profile/ActiveSessionsCard";
 import { SshKeyCard } from "@/components/profile/SshKeyCard";
 import { SftpConnectionCard } from "@/components/profile/SftpConnectionCard";
+import { JiraConnectionCard } from "@/components/profile/JiraConnectionCard";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { useAuth } from "@/stores/authStore";
+import { useAuth } from "@/hooks/useAuth";
 import { USER_ROLE_LABEL } from "@/lib/labels";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 import { UserAvatar } from "@/components/common/avatar/UserAvatar";
@@ -30,6 +31,8 @@ export function ProfilePage() {
           <SshKeyCard />
 
           <SftpConnectionCard />
+
+          <JiraConnectionCard />
 
           <ActiveSessionsCard />
 

@@ -15,7 +15,7 @@ from db.models.enums import (
     UserRole,
 )
 from db.models.logs import NodeLog
-from db.models.pipelines import Node, Pipeline
+from db.models.pipelines import Node
 from db.models.tasks import Task
 from db.models.users import User
 from services.nodes import dispatch
@@ -30,29 +30,21 @@ from services.nodes.dispatch import (
     resolve_node_prompt,
 )
 from services.nodes.script import ScriptExecutionResult
+from tests.factories import make_pipeline, make_task, make_user
 from tests.fakes import FakeClaudeAgentClient, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
 
 
 async def _make_task(db_session: AsyncSession) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    pipeline = Pipeline(name="p", is_archived=False, created_by=user.id)
-    db_session.add(pipeline)
-    await db_session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
+    user = await make_user(db_session)
+    pipeline = await make_pipeline(db_session, created_by=user.id)
+    return await make_task(
+        db_session,
         created_by=user.id,
         pipeline_id=pipeline.id,
         status=TaskStatus.IN_PROGRESS,
     )
-    db_session.add(task)
-    await db_session.flush()
-    return task
 
 
 async def test_resolve_node_prompt_renders_plain_prompt_template(db_session: AsyncSession) -> None:
@@ -70,9 +62,9 @@ async def test_resolve_node_prompt_renders_plain_prompt_template(db_session: Asy
     db_session.add(node)
     await db_session.flush()
 
-    prompt = await resolve_node_prompt(db_session, node=node, task=task, history=[])
+    prompt = await resolve_node_prompt(db_session, node=node, task=task)
 
-    assert prompt == f"Задача {task.code}"
+    assert prompt.text == f"Задача {task.code}"
 
 
 async def test_resolve_node_prompt_returns_slash_command_literally_unmodified(
@@ -93,11 +85,11 @@ async def test_resolve_node_prompt_returns_slash_command_literally_unmodified(
     db_session.add(node)
     await db_session.flush()
 
-    prompt = await resolve_node_prompt(db_session, node=node, task=task, history=[])
+    prompt = await resolve_node_prompt(db_session, node=node, task=task)
 
     # Раздел 4: слэш-команда никогда не проходит через шаблонизатор — если
     # бы прошла, "{{task.code}}" был бы заменён на реальный код задачи.
-    assert prompt == literal_invocation
+    assert prompt.text == prompt.display == literal_invocation
 
 
 async def test_resolve_node_prompt_raises_when_slash_command_missing_invocation(
@@ -117,7 +109,7 @@ async def test_resolve_node_prompt_raises_when_slash_command_missing_invocation(
     await db_session.flush()
 
     with pytest.raises(ValueError, match="command_invocation"):
-        await resolve_node_prompt(db_session, node=node, task=task, history=[])
+        await resolve_node_prompt(db_session, node=node, task=task)
 
 
 async def test_resolve_node_prompt_raises_when_plain_prompt_missing_template(
@@ -137,7 +129,7 @@ async def test_resolve_node_prompt_raises_when_plain_prompt_missing_template(
     await db_session.flush()
 
     with pytest.raises(ValueError, match="prompt_template"):
-        await resolve_node_prompt(db_session, node=node, task=task, history=[])
+        await resolve_node_prompt(db_session, node=node, task=task)
 
 
 async def test_execute_llm_node_returns_success_outcome() -> None:
@@ -534,3 +526,35 @@ class TestRecordSdkFailure:
         assert len(calls) == (1 if logged else 0)
         if logged:
             assert calls[0]["task_id"] == task_id
+
+
+class TestScriptTaskPaths:
+    """Раздел 11.4: текст скрипта не шаблонизируется — пути задачи приходят в окружении."""
+
+    async def test_script_saves_artifact(self, tmp_path: Path, user_files_root: Path) -> None:
+        repos_path = tmp_path / "repos" / "RR-55555"
+        repos_path.mkdir(parents=True)
+        node = Node(
+            created_by=uuid.uuid4(),
+            name="n",
+            node_type=NodeType.SCRIPT,
+            script_language=ScriptLanguage.PYTHON,
+            script_content=(
+                "import os\n"
+                "path = os.path.join(os.environ['TASK_ARTIFACTS_PATH'], 'report.txt')\n"
+                "open(path, 'w').write(os.environ['TASK_REPOS_PATH'])\n"
+            ),
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+            is_library_item=True,
+            is_archived=False,
+        )
+
+        outcome = await execute_script_node(
+            node,
+            repos_path=repos_path,
+            # Переменная задачи с тем же именем путь не подменяет.
+            env={"TASK_ARTIFACTS_PATH": "/tmp"},
+        )
+
+        assert outcome.success is True, outcome.error_message
+        assert (user_files_root / "RR-55555" / "report.txt").read_text() == str(repos_path)

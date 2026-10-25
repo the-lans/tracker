@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
+import { ShowArchivedToggle } from "@/components/common/actions/ShowArchivedToggle";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,6 +23,7 @@ import {
   useUpdatePipeline,
 } from "@/hooks/usePipelines";
 import { ApiError } from "@/lib/apiClient";
+import { errorMessage, toastError } from "@/lib/errors";
 import type { Pipeline } from "@/lib/types";
 import { ArchiveToggleButton } from "@/components/common/actions/ArchiveToggleButton";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
@@ -42,8 +43,7 @@ function PipelineArchiveToggle({ pipeline }: { pipeline: Pipeline }) {
         updatePipeline.mutate(
           { is_archived: !pipeline.is_archived },
           {
-            onError: (error) =>
-              toast.error(error instanceof ApiError ? error.message : "Не удалось изменить"),
+            onError: toastError("Не удалось изменить"),
           },
         )
       }
@@ -66,7 +66,7 @@ export function PipelinesPage() {
         setName("");
       },
       onError: (error) => {
-        toast.error(error instanceof ApiError ? error.message : "Не удалось создать пайплайн");
+        toast.error(errorMessage(error, "Не удалось создать пайплайн"));
       },
     });
   }
@@ -89,13 +89,7 @@ export function PipelinesPage() {
         title="Пайплайны"
         actions={
           <>
-            <label className="flex min-h-11 items-center gap-2.5 text-note text-text-2">
-              <Checkbox
-                checked={includeArchived}
-                onCheckedChange={(checked) => setIncludeArchived(checked === true)}
-              />
-              Показать архивные
-            </label>
+            <ShowArchivedToggle checked={includeArchived} onChange={setIncludeArchived} />
             <Button onClick={() => setOpen(true)}>
               <Plus className="size-4" /> Пайплайн
             </Button>

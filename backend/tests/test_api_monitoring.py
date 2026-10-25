@@ -9,11 +9,11 @@ from typing import TYPE_CHECKING
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import AppLogLevel, NodeLogStatus, NodeLogTriggerType, NodeType, UserRole
+from db.models.enums import AppLogLevel, NodeLogStatus, NodeLogTriggerType, NodeType
 from db.models.logs import AppLog, NodeLog
 from db.models.pipelines import Node
 from db.models.tasks import Task
-from db.models.users import User
+from tests.factories import make_task
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -43,13 +43,7 @@ async def test_non_admin_cannot_view_app_logs(authed_client: AsyncClient) -> Non
 
 
 async def _make_task(db_session: AsyncSession, code: str) -> Task:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    task = Task(code=code, title="t", description="d", created_by=user.id)
-    db_session.add(task)
-    await db_session.flush()
-    return task
+    return await make_task(db_session, code=code)
 
 
 class TestAppLogTaskAndSourceFilter:

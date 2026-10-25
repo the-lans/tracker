@@ -19,14 +19,12 @@ from db.models.enums import (
     NodeType,
     ScriptLanguage,
     TaskStatus,
-    UserRole,
 )
 from db.models.env_vars import TaskEnvVariable
 from db.models.logs import NodeLog
 from db.models.pipelines import Node
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
-from db.models.users import User
 from services.crypto import encrypt
 from services.distributed_lock import acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
@@ -45,6 +43,7 @@ from services.task_control import (
     request_manual_stop,
     request_task_control,
 )
+from tests.factories import make_llm_account, make_task, make_user
 from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
@@ -52,18 +51,13 @@ _LIBRARY_PROMPT_TEXT = "библиотечный промт"
 
 
 async def _make_task(db_session: AsyncSession) -> tuple[Task, uuid.UUID]:
-    user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
-    db_session.add(user)
-    await db_session.flush()
-    task = Task(
-        code=f"RR-{uuid.uuid4().hex[:5]}",
-        title="t",
-        description="d",
+    user = await make_user(db_session)
+    task = await make_task(
+        db_session,
         created_by=user.id,
         status=TaskStatus.IN_PROGRESS,
+        llm_account_id=(await make_llm_account(db_session, owner_id=user.id)).id,
     )
-    db_session.add(task)
-    await db_session.flush()
     return task, user.id
 
 
@@ -403,6 +397,9 @@ async def test_expire_stale_manual_queue_requests_cancels_old_queued(
         raw_prompt_text="свежий",
         requested_by=user_id,
     )
+    # Сессии больше нет — запрос никто не обработает.
+    task.status = TaskStatus.FAILED
+    await db_session.flush()
 
     expired_ids = await expire_stale_manual_queue_requests(
         db_session,
@@ -436,6 +433,7 @@ class TestExpireStaleRequests:
             requested_by=user_id,
         )
         stale.requested_at = datetime.now(UTC) - timedelta(hours=2)
+        task.status = TaskStatus.FAILED
         await db_session.flush()
         older_than = datetime.now(UTC) - timedelta(hours=1)
 
@@ -445,6 +443,35 @@ class TestExpireStaleRequests:
         assert first == [stale.id]
         assert second == []
         assert notified == [task.id]
+
+    @pytest.mark.parametrize(
+        "status",
+        [TaskStatus.QUEUED, TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.AWAITING_INPUT],
+    )
+    async def test_live_session_keeps_request(
+        self,
+        db_session: AsyncSession,
+        status: TaskStatus,
+    ) -> None:
+        """Запрос за долгой нодой или решением пользователя не «зависший»."""
+        task, user_id = await _make_task(db_session)
+        request = await enqueue_freeform_prompt_run(
+            db_session,
+            task_id=task.id,
+            raw_prompt_text="ждёт своей очереди",
+            requested_by=user_id,
+        )
+        request.requested_at = datetime.now(UTC) - timedelta(hours=2)
+        task.status = status
+        await db_session.flush()
+
+        expired = await expire_stale_manual_queue_requests(
+            db_session,
+            older_than=datetime.now(UTC) - timedelta(hours=1),
+        )
+
+        assert expired == []
+        assert request.status is ManualRequestStatus.QUEUED
 
 
 async def test_expire_stale_manual_queue_requests_ignores_non_queued(
@@ -484,6 +511,48 @@ async def _enqueue_library_run(
         requested_by=user_id,
     )
     return task, task_library_prompt, request
+
+
+class TestLibraryPromptAfterCancel:
+    """Раздел 7.3: отменённый запрос не оставляет промт «в очереди»."""
+
+    async def test_cancel_marks_stopped(self, db_session: AsyncSession) -> None:
+        _task, task_library_prompt, request = await _enqueue_library_run(db_session)
+
+        await cancel_manual_request(db_session, request)
+
+        await db_session.refresh(task_library_prompt)
+        assert task_library_prompt.last_run_status is LibraryPromptRunStatus.STOPPED
+
+    async def test_other_request_keeps_queued(self, db_session: AsyncSession) -> None:
+        task, task_library_prompt, first = await _enqueue_library_run(db_session)
+        node = await db_session.get(Node, task_library_prompt.node_id)
+        assert node is not None
+        await enqueue_library_prompt_run(
+            db_session,
+            task_library_prompt=task_library_prompt,
+            node=node,
+            requested_by=task.created_by,
+        )
+
+        await cancel_manual_request(db_session, first)
+
+        await db_session.refresh(task_library_prompt)
+        assert task_library_prompt.last_run_status is LibraryPromptRunStatus.QUEUED
+
+    async def test_expired_marks_stopped(self, db_session: AsyncSession) -> None:
+        task, task_library_prompt, request = await _enqueue_library_run(db_session)
+        request.requested_at = datetime.now(UTC) - timedelta(hours=2)
+        task.status = TaskStatus.FAILED
+        await db_session.flush()
+
+        await expire_stale_manual_queue_requests(
+            db_session,
+            older_than=datetime.now(UTC) - timedelta(hours=1),
+        )
+
+        await db_session.refresh(task_library_prompt)
+        assert task_library_prompt.last_run_status is LibraryPromptRunStatus.STOPPED
 
 
 async def test_library_prompt_is_marked_running_while_executing(

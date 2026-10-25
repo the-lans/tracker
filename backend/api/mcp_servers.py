@@ -17,18 +17,21 @@ from api.schemas import McpServerCreateRequest, McpServerResponse, McpServerUpda
 from db.models.mcp import McpServer
 from db.models.users import User
 from db.session import get_session
+from services.access import get_or_404
 from services.crypto import encrypt
-from services.errors import NotFoundError
+from services.integrity import ensure_mcp_server_deletable
 from services.mcp_validation import validate_mcp_server_isolation
 
 router = APIRouter(prefix="/mcp-servers", tags=["mcp-servers"])
 
 
 async def _get_mcp_server_or_404(db_session: AsyncSession, mcp_server_id: uuid.UUID) -> McpServer:
-    mcp_server = await db_session.get(McpServer, mcp_server_id)
-    if mcp_server is None:
-        raise NotFoundError(f"MCP-сервер {mcp_server_id} не найден")
-    return mcp_server
+    return await get_or_404(
+        db_session,
+        McpServer,
+        mcp_server_id,
+        not_found=f"MCP-сервер {mcp_server_id} не найден",
+    )
 
 
 @router.post("", response_model=McpServerResponse, status_code=201)
@@ -119,5 +122,6 @@ async def delete_mcp_server(
     _admin: Annotated[User, Depends(require_admin)],
 ) -> None:
     mcp_server = await _get_mcp_server_or_404(db_session, mcp_server_id)
+    await ensure_mcp_server_deletable(db_session, mcp_server_id)
     await db_session.delete(mcp_server)
     await db_session.commit()
