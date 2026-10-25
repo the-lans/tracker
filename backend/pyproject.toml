@@ -4,15 +4,15 @@ version = "0.1.0"
 description = "AI-трекер задач — backend API и оркестрация Celery-задач"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi==0.143.2",
+    "fastapi==0.159.1",
     "uvicorn[standard]==0.54.0",
-    "sqlalchemy[asyncio]==2.1.4",
+    "sqlalchemy[asyncio]==2.1.6",
     "asyncpg==0.32.0",
-    "alembic==1.20.0",
+    "alembic==1.20.1",
     "celery==5.6.3",
     "redis==8.1.0",
     "structlog==26.1.0",
-    "claude-agent-sdk==0.2.168",
+    "claude-agent-sdk==0.2.172",
     "cryptography==50.0.2",
     "httpx==0.28.1",
     "croniter==6.2.4",
