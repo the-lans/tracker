@@ -56,6 +56,7 @@ from services.task_control import (
     request_bridge_reconnect,
     request_task_control,
 )
+from services.task_nodes import CustomNodeDraft, add_custom_task_node
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name
 from tasks import session_worker
@@ -1521,5 +1522,55 @@ class TestPauseAfterNode:
         await _run_worker(task)
 
         assert observed == [TaskStatus.PAUSED]
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+
+    async def test_custom_prompt_then_dialog(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 1.2, сценарий 2: свой промт с вопросами, ответы в диалоге, дальше пайплайн."""
+        task = await _make_task(db_session, status=TaskStatus.NEW)
+        await _add_node(db_session, task, order_index=0)
+        await _add_node(db_session, task, order_index=1)
+        first = await db_session.scalar(
+            sa.select(TaskNode).where(TaskNode.task_id == task.id, TaskNode.order_index == 0),
+        )
+        assert first is not None
+        await add_custom_task_node(
+            db_session,
+            task=task,
+            after_task_node_id=first.id,
+            draft=CustomNodeDraft(
+                name="Вопросы",
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template="задай вопросы",
+            ),
+            pause_after=True,
+        )
+        task.status = TaskStatus.QUEUED
+        await db_session.commit()
+
+        async def while_paused(observed: list[TaskStatus]) -> None:
+            await db_session.refresh(task)
+            observed.append(task.status)
+            await _enqueue_freeform(db_session, task, "ответы на вопросы")
+            await request_task_control(redis_client, task.id, TaskControlCommand.RESUME)
+
+        observed = _patch_pause_wait(monkeypatch, while_paused)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(4))
+
+        await _run_worker(task)
+
+        assert observed == [TaskStatus.PAUSED]
+        assert worker_env.client.queries == [
+            "шаг 0",
+            "задай вопросы",
+            "ответы на вопросы",
+            "шаг 1",
+        ]
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE

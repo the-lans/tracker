@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from clients.claude_agent import ClaudeCodeSession
 from db.models.enums import (
     NodeLogStatus,
+    NodeLogTriggerType,
     NodeType,
     ScriptLanguage,
     TaskStatus,
@@ -30,6 +31,7 @@ from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
 from db.models.users import User
 from services.crypto import encrypt
+from services.errors import ValidationError
 from services.pipeline_orchestrator import (
     CheckpointDecision,
     StopGuard,
@@ -39,6 +41,7 @@ from services.pipeline_orchestrator import (
 from services.plan_mode import ActiveNodeContext
 from services.system_settings import update_integrations
 from services.task_control import TaskControlCommand, request_task_control
+from services.task_status import transition_task_status
 from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
@@ -967,3 +970,77 @@ class TestPauseAfterNode:
         )
 
         assert paused_after == [1]
+
+
+class TestCustomTaskNode:
+    """Раздел 13.1: своя нода задачи выполняется как нода пайплайна на своём месте."""
+
+    async def _task_with_custom_node(self, db_session: AsyncSession) -> tuple[Task, Node]:
+        task = await _make_task_with_pipeline(db_session)
+        prompts = ["шаг 0", "уточни: {{node.llm_output}}", "шаг 1: {{node.llm_output}}"]
+        nodes = [
+            await _add_node(
+                db_session,
+                task,
+                order_index=order_index,
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template=prompt,
+            )
+            for order_index, prompt in enumerate(prompts)
+        ]
+        custom = nodes[1]
+        custom.pipeline_id, custom.task_id = None, task.id
+        await db_session.flush()
+        return task, custom
+
+    async def test_runs_between_pipeline_nodes(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task, custom = await self._task_with_custom_node(db_session)
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    AssistantMessage(content=[TextBlock(text=text)], model="claude"),
+                    make_result_message(),
+                ]
+                for text in ("ответ 0", "ответ свой", "ответ 1")
+            ],
+        )
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+        )
+
+        assert outcome.completed is True
+        assert fake.queries == ["шаг 0", "уточни: ответ 0", "шаг 1: ответ свой"]
+        logs = await _node_logs_for(db_session, task.id)
+        assert [log.node_id for log in logs][1] == custom.id
+
+    async def test_done_requires_custom_node_success(self, db_session: AsyncSession) -> None:
+        task, custom = await self._task_with_custom_node(db_session)
+        stmt = sa.select(TaskNode.node_id).where(TaskNode.task_id == task.id)
+        for node_id in await db_session.scalars(stmt):
+            if node_id != custom.id:
+                db_session.add(
+                    NodeLog(
+                        task_id=task.id,
+                        node_id=node_id,
+                        trigger_type=NodeLogTriggerType.PIPELINE,
+                        status=NodeLogStatus.SUCCESS,
+                    ),
+                )
+        task.status = TaskStatus.IN_PROGRESS
+        await db_session.flush()
+
+        with pytest.raises(ValidationError):
+            await transition_task_status(
+                db_session,
+                task_id=task.id,
+                from_status=TaskStatus.IN_PROGRESS,
+                to_status=TaskStatus.DONE,
+            )

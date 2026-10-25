@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/apiClient";
+import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import type {
   BindPipelineRequest,
   DecisionRequest,
@@ -13,6 +14,7 @@ import type {
   TaskDuplicateRequest,
   TaskLibraryPrompt,
   TaskLibraryPromptItem,
+  TaskCustomNodeCreateRequest,
   TaskNodeItem,
   TaskNodeUpdateRequest,
   TaskRepository,
@@ -309,6 +311,22 @@ export function useUpdateTaskNode(taskId: string) {
       void queryClient.invalidateQueries({ queryKey: taskKeys.nodes(taskId) });
     },
   });
+}
+
+/** Раздел 13.1: свой промт между нодами снимка задачи. */
+export function useCreateTaskNode(taskId: string) {
+  return useInvalidatingMutation(
+    (body: TaskCustomNodeCreateRequest) => api.post<TaskNodeItem>(`/tasks/${taskId}/nodes`, body),
+    [taskKeys.nodes(taskId)],
+  );
+}
+
+/** Раздел 3.2, 13.1: удаляется только свой промт без истории. */
+export function useDeleteTaskNode(taskId: string) {
+  return useInvalidatingMutation(
+    (taskNodeId: string) => api.delete(`/tasks/${taskId}/nodes/${taskNodeId}`),
+    [taskKeys.nodes(taskId)],
+  );
 }
 
 /** Раздел 14.2: пауза/продолжение/остановка исполняет воркер — статус

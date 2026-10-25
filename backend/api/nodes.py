@@ -28,6 +28,7 @@ from db.models.pipelines import Node
 from db.models.users import User
 from db.session import get_session
 from services.access import get_node_for_user, get_pipeline_for_user, owner_filter
+from services.errors import NotFoundError
 from services.integrity import count_library_prompt_usage, ensure_node_deletable
 from services.pipeline_validation import validate_node_shape, validate_pipeline_templates
 from services.system_settings import resolve_node_execution_defaults
@@ -37,8 +38,14 @@ router = APIRouter(prefix="/nodes", tags=["nodes"])
 EXECUTION_FIELDS = ("timeout_seconds", "max_retries", "retry_base_delay_seconds")
 
 async def _get_node_or_404(db_session: AsyncSession, node_id: uuid.UUID, user: User) -> Node:
-    """Раздел 19.2: чужая нода/промт для `user` неотличимы от несуществующих."""
-    return await get_node_for_user(db_session, node_id, user=user)
+    """
+    Раздел 19.2: чужая нода/промт для `user` неотличимы от несуществующих.
+    Своя нода задачи (раздел 13.1) меняется только со страницы задачи.
+    """
+    node = await get_node_for_user(db_session, node_id, user=user)
+    if node.task_id is not None:
+        raise NotFoundError(f"Нода {node_id} не найден(а)")
+    return node
 
 
 async def _node_owner_id(
@@ -145,7 +152,11 @@ async def list_nodes(
     library_only: bool = False,
     include_archived: bool = False,
 ) -> list[Node]:
-    stmt = sa.select(Node).where(owner_filter(Node.created_by, current_user)).order_by(Node.name)
+    stmt = (
+        sa.select(Node)
+        .where(owner_filter(Node.created_by, current_user), Node.task_id.is_(None))
+        .order_by(Node.name)
+    )
     if library_only:
         stmt = stmt.where(Node.is_library_item == True)  # noqa: E712
     if not include_archived:

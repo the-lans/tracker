@@ -1,11 +1,12 @@
-import { Check, Pause } from "lucide-react";
+import type { ReactNode } from "react";
+import { Check, Pause, Pencil, Trash2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { NODE_TYPE_LABEL } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import { NodeType, type TaskNodeItem } from "@/lib/types";
 
-/** Раздел 13.1, 15.2: строка ноды задачи — включение, отметка «пауза после», ход выполнения. */
+/** Раздел 13.1, 15.2: строка ноды задачи — включение, «пауза после», свой промт, ход выполнения. */
 export function TaskNodeRow({
   taskNode,
   done,
@@ -13,6 +14,8 @@ export function TaskNodeRow({
   busy,
   onToggleEnabled,
   onTogglePause,
+  onEdit,
+  onDelete,
 }: {
   taskNode: TaskNodeItem;
   done: boolean;
@@ -21,9 +24,12 @@ export function TaskNodeRow({
   busy: boolean;
   onToggleEnabled: (isEnabled: boolean) => void;
   onTogglePause: (pauseAfter: boolean) => void;
+  onEdit: () => void;
+  onDelete: () => void;
 }) {
   // Раздел 13.1: после `clear_context` пайплайн продолжается в новой сессии — паузы нет.
   const pausable = taskNode.node_type !== NodeType.CLEAR_CONTEXT;
+  const customEditable = taskNode.is_custom && taskNode.editable;
   return (
     <div
       className={cn(
@@ -39,11 +45,42 @@ export function TaskNodeRow({
           aria-label={`Включить ноду ${taskNode.name}`}
           onCheckedChange={(checked) => onToggleEnabled(checked === true)}
         />
-        <NodeTypeIcon type={taskNode.node_type} className="size-[15px] shrink-0 text-text-2" />
-        <div className="min-w-0 flex-1 truncate text-note font-bold" title={taskNode.name}>
-          {taskNode.name}
+        <NodeTypeIcon
+          type={taskNode.node_type}
+          className="size-[15px] shrink-0 text-text-2"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-note font-bold" title={taskNode.name}>
+            {taskNode.name}
+          </div>
+          <div
+            className={cn(
+              "truncate text-caption font-bold uppercase tracking-wide",
+              taskNode.is_custom ? "text-accent" : "text-text-3",
+            )}
+          >
+            {taskNode.is_custom ? "свой промт" : NODE_TYPE_LABEL[taskNode.node_type]}
+          </div>
         </div>
       </label>
+      {customEditable && (
+        <>
+          <RowIconButton
+            label={`Изменить промт ${taskNode.name}`}
+            disabled={busy}
+            onClick={onEdit}
+          >
+            <Pencil className="size-3.5" />
+          </RowIconButton>
+          <RowIconButton
+            label={`Удалить промт ${taskNode.name}`}
+            disabled={busy}
+            onClick={onDelete}
+          >
+            <Trash2 className="size-3.5" />
+          </RowIconButton>
+        </>
+      )}
       {pausable && (
         <button
           type="button"
@@ -60,13 +97,34 @@ export function TaskNodeRow({
           <Pause className="size-3.5" />
         </button>
       )}
-      {done ? (
+      {done && (
         <Check className="size-3.5 shrink-0 text-success" aria-label="выполнено" />
-      ) : (
-        <div className="text-caption font-bold uppercase tracking-wide text-text-3">
-          {NODE_TYPE_LABEL[taskNode.node_type]}
-        </div>
       )}
     </div>
+  );
+}
+
+function RowIconButton({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="touch-hit flex size-6 shrink-0 items-center justify-center rounded-md text-text-3 hover:text-text disabled:opacity-50"
+    >
+      {children}
+    </button>
   );
 }

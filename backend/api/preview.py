@@ -27,7 +27,7 @@ from services.access import get_node_for_user, get_pipeline_for_user, get_task_f
 from services.errors import ValidationError
 from services.manual_queue import render_freeform_prompt
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, load_node_context_history
-from services.pipeline_validation import PipelinePosition, pipeline_position
+from services.pipeline_validation import PipelinePosition, pipeline_position, task_position
 from services.template_context import render_for_task
 from services.templating import RenderScope, validate_template_variables
 
@@ -44,10 +44,22 @@ async def _pipeline_position(
 ) -> PipelinePosition:
     """
     Раздел 5.1: предпросмотр ноды пайплайна видит те же предыдущие ноды, что
-    и проверка при сохранении. Без пайплайна позиция пустая.
+    и проверка при сохранении. Своя нода задачи (раздел 13.1) — предыдущие
+    ноды задачи. Без пайплайна и задачи позиция пустая.
     """
     node = await get_node_for_user(db_session, body.node_id, user=user) if body.node_id else None
+    task_id = node.task_id if node is not None else None
     pipeline_id = body.pipeline_id or (node.pipeline_id if node is not None else None)
+    if task_id is None and pipeline_id is None:
+        task_id = body.task_id
+    if task_id is not None:
+        await get_task_for_user(db_session, task_id, user=user)
+        return await task_position(
+            db_session,
+            task_id=task_id,
+            order_index=body.order_index,
+            node=node,
+        )
     if pipeline_id is None:
         return PipelinePosition()
     await get_pipeline_for_user(db_session, pipeline_id, user=user)
@@ -76,13 +88,16 @@ async def preview_template(
     if scope is RenderScope.PIPELINE:
         position = await _pipeline_position(db_session, body=body, user=current_user)
 
-    if body.task_id is None:
+    # Раздел 5.1, 13.1: нода пайплайна и своя нода задачи проверяются по позиции, как при
+    # сохранении; свободный промт задачи — ниже, своей областью.
+    if body.task_id is None or scope is RenderScope.PIPELINE:
         validate_template_variables(
             body.text,
             scope=scope,
             preceding_node_types=position.preceding_node_types,
             current_node_llm_output_last_n=position.llm_output_last_n,
         )
+    if body.task_id is None:
         return TemplatePreviewResponse(rendered_text=body.text)
 
     task = await get_task_for_user(db_session, body.task_id, user=current_user)

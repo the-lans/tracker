@@ -89,6 +89,9 @@ export function makeTaskNode(overrides: Partial<TaskNodeItem> = {}): TaskNodeIte
     name: "Реализация",
     node_type: NodeType.PLAIN_PROMPT,
     editable: true,
+    is_custom: false,
+    prompt_template: null,
+    command_invocation: null,
     ...overrides,
   };
 }

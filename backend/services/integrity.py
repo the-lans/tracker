@@ -50,6 +50,12 @@ async def _nodes_are_referenced(
     return bool(await session.scalar(stmt))
 
 
+async def node_has_history(session: AsyncSession, node_id: uuid.UUID) -> bool:
+    """Раздел 3.2: по ноде уже есть записи `node_logs`."""
+    stmt = sa.select(sa.exists().where(NodeLog.node_id == node_id))
+    return bool(await session.scalar(stmt))
+
+
 async def _node_is_referenced(session: AsyncSession, node_id: uuid.UUID) -> bool:
     return await _nodes_are_referenced(session, sa.select(Node.id).where(Node.id == node_id))
 
@@ -169,6 +175,8 @@ async def count_library_prompt_usage(db_session: AsyncSession) -> list[tuple[uui
 
 def ensure_library_prompt_attachable(node: Node) -> None:
     """Раздел 3.2, 7.2: архивный промт остаётся у прежних задач, но новым не выдаётся."""
+    if not node.is_library_item:
+        raise ConflictError("В список промтов задачи добавляется только промт из библиотеки")
     if node.is_archived:
         raise ConflictError("Промт в архиве — добавить его в задачу нельзя")
 
