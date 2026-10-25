@@ -21,11 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app_logging.config import get_logger
 from db.models.enums import EnvVariableScope
 from db.models.env_vars import EnvVariable, TaskEnvVariable
-from db.models.logs import NodeLog
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from services.crypto import decrypt
 from services.errors import ValidationError
+from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.task_artifacts import task_artifacts_path
 from services.task_workspace import task_repos_path
 from services.templating import VARIABLE_PATTERN, render_template
@@ -78,23 +78,23 @@ def build_session_context(task: Task) -> dict[str, str]:
 
 
 def build_node_context(
-    history: list[NodeLog],
+    history: NodeContextHistory,
     *,
     last_n: int | None = None,
 ) -> dict[str, str]:
     """``{{node.*}}`` — источники по разделу 5, вычисленные из истории задачи.
 
-    ``history`` — записи ``node_logs`` этой задачи, предшествующие текущей
-    точке рендеринга, в хронологическом порядке (старые первыми).
-    Отсутствующий источник (например, ни одна предыдущая нода не была
-    скрипт-нодой) даёт пустую строку, а не ошибку — сама ДОСТУПНОСТЬ
-    переменной уже проверена на этапе сохранения (``validate_template_variables``).
+    Значение переменной — из последней предшествующей ноды пайплайна, у
+    которой этот источник есть. Отсутствующий источник (например, ни одна
+    предыдущая нода не была скрипт-нодой) даёт пустую строку, а не ошибку —
+    сама ДОСТУПНОСТЬ переменной уже проверена на этапе сохранения
+    (``validate_template_variables``).
     """
     script_output = ""
     llm_output = ""
     user_input = ""
     plan_text = ""
-    for entry in history:
+    for entry in history.pipeline_runs:
         if entry.script_stdout is not None:
             script_output = entry.script_stdout
         if entry.llm_output_text is not None:
@@ -111,8 +111,7 @@ def build_node_context(
         "node.plan_text": plan_text,
     }
     if last_n is not None:
-        recent_outputs = [entry.llm_output_text for entry in history if entry.llm_output_text]
-        context["node.llm_output_last_n"] = "\n\n".join(recent_outputs[-last_n:])
+        context["node.llm_output_last_n"] = "\n\n".join(history.session_replies[-last_n:])
     return context
 
 
@@ -279,7 +278,7 @@ async def render_for_task(
     task: Task,
     template: str,
     *,
-    history: list[NodeLog] | None = None,
+    history: NodeContextHistory = EMPTY_NODE_CONTEXT_HISTORY,
     last_n: int | None = None,
 ) -> RenderedText:
     """Полный рендеринг: собирает контекст из всех источников раздела 5 и подставляет.
@@ -292,7 +291,7 @@ async def render_for_task(
     context = {
         **build_task_context(task),
         **build_session_context(task),
-        **build_node_context(history or [], last_n=last_n),
+        **build_node_context(history, last_n=last_n),
     }
     display_context = dict(context)
     for namespace, key in VARIABLE_PATTERN.findall(template):

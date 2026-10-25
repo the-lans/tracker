@@ -205,7 +205,8 @@ alembic/
                  task_parent_summaries, system_settings, владельцы записей,
                  SFTP, токен GitLab в system_settings, уникальность
                  task_nodes, подключение к Jira, tasks.reset_at, адрес Jira
-                 в system_settings, task_repositories.rebase_requested_at); новые миграции пишут DDL
+                 в system_settings, task_repositories.rebase_requested_at,
+                 tasks.context_cleared_at); новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна

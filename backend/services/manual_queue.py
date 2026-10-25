@@ -39,7 +39,6 @@ from db.models.tasks import Task
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_library_prompt_attachable
-from services.node_history import load_node_log_history
 from services.node_runs import apply_node_outcome, mark_node_log_stopped, start_node_log
 from services.nodes.dispatch import (
     execute_llm_node_with_timeout,
@@ -353,8 +352,9 @@ async def _run_library_prompt(
     if task_library_prompt is not None:
         task_library_prompt.last_run_status = LibraryPromptRunStatus.RUNNING
 
-    history = await load_node_log_history(db_session, task.id)
-    prompt = await resolve_node_prompt_or_none(db_session, node=node, task=task, history=history)
+    # `{{node.*}}` в промтах библиотеки недоступны (раздел 5.1): у них нет
+    # «предыдущей ноды».
+    prompt = await resolve_node_prompt_or_none(db_session, node=node, task=task)
     node_log = await start_node_log(
         db_session,
         NodeLog(

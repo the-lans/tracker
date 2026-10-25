@@ -5,8 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import (
     EnvVariableScope,
-    NodeLogStatus,
-    NodeLogTriggerType,
     RepositoryRole,
     TaskStatus,
 )
@@ -16,6 +14,7 @@ from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from services.crypto import encrypt
 from services.errors import ValidationError
+from services.node_history import NodeContextHistory
 from services.template_context import (
     build_node_context,
     build_session_context,
@@ -72,51 +71,35 @@ async def test_build_session_context_uses_task_session_id(db_session: AsyncSessi
     assert build_session_context(task) == {"session.id": "sess-123"}
 
 
-def test_build_node_context_picks_last_non_null_value_per_field() -> None:
-    history = [
-        NodeLog(
-            task_id=uuid.uuid4(),
-            trigger_type=NodeLogTriggerType.PIPELINE,
-            status=NodeLogStatus.SUCCESS,
-            script_stdout="первый вывод",
-        ),
-        NodeLog(
-            task_id=uuid.uuid4(),
-            trigger_type=NodeLogTriggerType.PIPELINE,
-            status=NodeLogStatus.SUCCESS,
-            llm_output_text="ответ модели",
-        ),
-        NodeLog(
-            task_id=uuid.uuid4(),
-            trigger_type=NodeLogTriggerType.PIPELINE,
-            status=NodeLogStatus.AWAITING_DECISION,
-            user_input_text="принять план",
-            pending_plan_text="1. сделать раз\n2. сделать два",
-        ),
-    ]
+class TestBuildNodeContext:
+    def test_last_value_per_field(self) -> None:
+        runs = [
+            NodeLog(task_id=uuid.uuid4(), script_stdout="первый вывод"),
+            NodeLog(task_id=uuid.uuid4(), llm_output_text="ответ модели"),
+            NodeLog(
+                task_id=uuid.uuid4(),
+                user_input_text="принять план",
+                pending_plan_text="1. сделать раз\n2. сделать два",
+            ),
+        ]
 
-    context = build_node_context(history)
+        context = build_node_context(NodeContextHistory(pipeline_runs=runs, session_replies=[]))
 
-    assert context["node.script_output"] == "первый вывод"
-    assert context["node.llm_output"] == "ответ модели"
-    assert context["node.user_input"] == "принять план"
-    assert context["node.plan_text"] == "1. сделать раз\n2. сделать два"
+        assert context["node.script_output"] == "первый вывод"
+        assert context["node.llm_output"] == "ответ модели"
+        assert context["node.user_input"] == "принять план"
+        assert context["node.plan_text"] == "1. сделать раз\n2. сделать два"
+        assert "node.llm_output_last_n" not in context
 
-
-def test_build_node_context_llm_output_last_n_joins_only_last_n() -> None:
-    history = [
-        NodeLog(
-            task_id=uuid.uuid4(),
-            trigger_type=NodeLogTriggerType.PIPELINE,
-            status=NodeLogStatus.SUCCESS,
-            llm_output_text=f"реплика {i}",
+    def test_last_n_joins_only_last_n(self) -> None:
+        history = NodeContextHistory(
+            pipeline_runs=[],
+            session_replies=[f"реплика {i}" for i in range(5)],
         )
-        for i in range(5)
-    ]
 
-    context = build_node_context(history, last_n=2)
+        context = build_node_context(history, last_n=2)
 
-    assert context["node.llm_output_last_n"] == "реплика 3\n\nреплика 4"
+        assert context["node.llm_output_last_n"] == "реплика 3\n\nреплика 4"
 
 
 async def test_resolve_env_value_prefers_task_override_over_global(

@@ -17,6 +17,7 @@ from app_logging.config import get_logger
 from db.models.enums import TaskStatus
 from services.access import ensure_llm_account_of_owner
 from services.errors import ValidationError
+from services.session_context import forget_task_session
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +40,7 @@ def _forget_session_of_other_account(task: Task, changes: dict[str, Any]) -> Non
         task_id=str(task.id),
         previous_session_id=task.session_id,
     )
-    task.session_id = None
+    forget_task_session(task)
 
 
 async def update_task(

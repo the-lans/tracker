@@ -16,19 +16,17 @@ from __future__ import annotations
 
 from typing import Annotated
 
-import sqlalchemy as sa
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user
 from api.schemas import TemplatePreviewRequest, TemplatePreviewResponse
-from db.models.enums import NodeLogTriggerType
-from db.models.logs import NodeLog
 from db.models.users import User
 from db.session import get_session
 from services.access import get_node_for_user, get_pipeline_for_user, get_task_for_user
 from services.errors import ValidationError
 from services.manual_queue import render_freeform_prompt
+from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, load_node_context_history
 from services.pipeline_validation import PipelinePosition, pipeline_position
 from services.template_context import render_for_task
 from services.templating import RenderScope, validate_template_variables
@@ -95,17 +93,9 @@ async def preview_template(
         rendered = await render_freeform_prompt(db_session, task=task, text=body.text)
         return TemplatePreviewResponse(rendered_text=rendered.display)
 
-    history: list[NodeLog] = []
+    history = EMPTY_NODE_CONTEXT_HISTORY
     if scope is RenderScope.PIPELINE:
-        stmt = (
-            sa.select(NodeLog)
-            .where(
-                NodeLog.task_id == task.id,
-                NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
-            )
-            .order_by(NodeLog.started_at, NodeLog.id)
-        )
-        history = list((await db_session.execute(stmt)).scalars().all())
+        history = await load_node_context_history(db_session, task)
 
     rendered_text = await render_for_task(
         db_session,

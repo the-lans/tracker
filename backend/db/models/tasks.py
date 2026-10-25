@@ -70,6 +70,9 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     # Раздел 14.2 «Вернуть в новые»: выполнения нод до этого момента не
     # учитываются ни точкой перезапуска, ни переходом в `done`.
     reset_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Раздел 5 `{{node.llm_output_last_n}}`: реплики до этого момента —
+    # прежней сессии (очистка контекста, смена LLM-аккаунта).
+    context_cleared_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     repo_cleaned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"))
 

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -28,12 +29,21 @@ if TYPE_CHECKING:
 logger = get_logger("session_context")
 
 
+def forget_task_session(task: Task) -> None:
+    """
+    Следующее обращение начнёт новую сессию; ответы прежней не попадают в
+    `{{node.llm_output_last_n}}` (раздел 5).
+    """
+    task.session_id = None
+    task.context_cleared_at = datetime.now(UTC)
+
+
 async def clear_task_session_context(db_session: AsyncSession, *, task: Task) -> None:
     if task.status is not TaskStatus.FAILED:
         raise ConflictError("Очистить контекст можно только у задачи в статусе failed")
     await ensure_clear_context_allowed(db_session, task.id)
     previous_session_id = task.session_id
-    task.session_id = None
+    forget_task_session(task)
     await db_session.commit()
     logger.info(
         "task_session_context_cleared",

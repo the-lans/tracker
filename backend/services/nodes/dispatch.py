@@ -18,6 +18,7 @@ from clients.claude_agent import ClaudeCodeSession
 from db.models.enums import AppLogLevel, NodeLogStatus, NodeType
 from db.models.logs import NodeLog
 from services.failure_classification import is_transient_assistant_error
+from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.nodes.script import ScriptExecutionResult, run_script_node
 from services.task_artifacts import task_artifacts_dir
 from services.template_context import RenderedText, render_for_task, resolve_task_env
@@ -37,7 +38,7 @@ async def resolve_node_prompt(
     *,
     node: Node,
     task: Task,
-    history: list[NodeLog],
+    history: NodeContextHistory = EMPTY_NODE_CONTEXT_HISTORY,
 ) -> RenderedText:
     """Возвращает итоговый текст для отправки в сессию и его показываемый вид.
 
@@ -67,7 +68,7 @@ async def resolve_node_prompt_or_none(
     *,
     node: Node,
     task: Task,
-    history: list[NodeLog],
+    history: NodeContextHistory = EMPTY_NODE_CONTEXT_HISTORY,
 ) -> RenderedText | None:
     """`None` для `script`-нод (у них нет промта); иначе — `resolve_node_prompt`."""
     if node.node_type is NodeType.SCRIPT:

@@ -24,7 +24,7 @@ from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType
 from db.models.logs import NodeLog
 from db.models.pipelines import Node
 from services.failure_classification import is_transient_sdk_exception
-from services.node_history import load_node_log_history
+from services.node_history import load_node_context_history
 from services.node_runs import apply_node_outcome, mark_node_log_stopped, start_node_log
 from services.nodes.clear_context import ensure_clear_context_allowed
 from services.nodes.dispatch import (
@@ -36,6 +36,7 @@ from services.nodes.dispatch import (
     resolve_script_env_or_none,
     sent_prompt,
 )
+from services.session_context import forget_task_session
 from services.system_settings import resolve_runner_image
 from services.task_control import TaskControlCommand, read_task_control, run_stoppable
 from services.task_nodes import load_task_node_rows
@@ -208,7 +209,7 @@ async def _run_pipeline_attempt(
     Одна попытка — своя запись `node_logs`, итог зафиксирован в БД;
     ``None`` вместо итога — остановка пользователем.
     """
-    history = await load_node_log_history(db_session, task.id)
+    history = await load_node_context_history(db_session, task)
     prompt = await resolve_node_prompt_or_none(db_session, node=node, task=task, history=history)
     node_log = await start_node_log(
         db_session,
@@ -397,7 +398,7 @@ async def _clear_session_context(
     """
     await ensure_clear_context_allowed(db_session, task.id)
     await claude_session.disconnect()
-    task.session_id = None
+    forget_task_session(task)
     now = datetime.now(UTC)
     # Успешная запись нужна инварианту перехода в `done` (раздел 17.5):
     # без неё пайплайн с clear_context никогда бы не завершился.

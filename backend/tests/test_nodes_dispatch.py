@@ -62,7 +62,7 @@ async def test_resolve_node_prompt_renders_plain_prompt_template(db_session: Asy
     db_session.add(node)
     await db_session.flush()
 
-    prompt = await resolve_node_prompt(db_session, node=node, task=task, history=[])
+    prompt = await resolve_node_prompt(db_session, node=node, task=task)
 
     assert prompt.text == f"Задача {task.code}"
 
@@ -85,7 +85,7 @@ async def test_resolve_node_prompt_returns_slash_command_literally_unmodified(
     db_session.add(node)
     await db_session.flush()
 
-    prompt = await resolve_node_prompt(db_session, node=node, task=task, history=[])
+    prompt = await resolve_node_prompt(db_session, node=node, task=task)
 
     # Раздел 4: слэш-команда никогда не проходит через шаблонизатор — если
     # бы прошла, "{{task.code}}" был бы заменён на реальный код задачи.
@@ -109,7 +109,7 @@ async def test_resolve_node_prompt_raises_when_slash_command_missing_invocation(
     await db_session.flush()
 
     with pytest.raises(ValueError, match="command_invocation"):
-        await resolve_node_prompt(db_session, node=node, task=task, history=[])
+        await resolve_node_prompt(db_session, node=node, task=task)
 
 
 async def test_resolve_node_prompt_raises_when_plain_prompt_missing_template(
@@ -129,7 +129,7 @@ async def test_resolve_node_prompt_raises_when_plain_prompt_missing_template(
     await db_session.flush()
 
     with pytest.raises(ValueError, match="prompt_template"):
-        await resolve_node_prompt(db_session, node=node, task=task, history=[])
+        await resolve_node_prompt(db_session, node=node, task=task)
 
 
 async def test_execute_llm_node_returns_success_outcome() -> None:
