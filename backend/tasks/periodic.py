@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import httpx
 import sqlalchemy as sa
 
+from app_logging.app_logs import write_app_log
 from app_logging.config import get_logger
 from clients.gitlab import GitlabClient
 from db.models.enums import (
@@ -26,7 +27,6 @@ from db.models.enums import (
     PeriodicRunStatus,
     RepositoryRole,
 )
-from db.models.logs import AppLog
 from db.models.periodic import PeriodicTask
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
@@ -73,15 +73,16 @@ async def _run_periodic_async(name: str, body: Callable[[AsyncSession], Awaitabl
         except Exception as exc:  # noqa: BLE001 — раздел 16.3: любая ошибка периодической задачи логируется, не роняет процесс
             status = PeriodicRunStatus.FAILED
             logger.error("periodic_task_failed", name=name, error=str(exc))
-            db_session.add(
-                AppLog(
-                    level=AppLogLevel.ERROR,
-                    source=f"periodic.{name}",
-                    message=str(exc),
-                    context={},
-                ),
+            # Сбой запроса оставляет транзакцию прерванной: без отката итог
+            # запуска не записался бы, а статус так и остался бы `running`.
+            await db_session.rollback()
+            await db_session.refresh(periodic_task)
+            await write_app_log(
+                level=AppLogLevel.ERROR,
+                source=f"periodic.{name}",
+                message=str(exc),
+                context={},
             )
-            await db_session.commit()
         await record_periodic_task_run(
             db_session,
             periodic_task=periodic_task,

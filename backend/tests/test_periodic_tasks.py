@@ -131,14 +131,19 @@ class TestRunningStatus:
     """
 
     @pytest.mark.parametrize(
-        ("fails", "final"),
-        [(False, PeriodicRunStatus.SUCCESS), (True, PeriodicRunStatus.FAILED)],
-        ids=["success", "failure"],
+        ("failure", "final"),
+        [
+            (None, PeriodicRunStatus.SUCCESS),
+            ("error", PeriodicRunStatus.FAILED),
+            # Прерванная транзакция: без отката итог запуска не записался бы.
+            ("db_error", PeriodicRunStatus.FAILED),
+        ],
+        ids=["success", "failure", "db_failure"],
     )
     async def test_status_during_run(
         self,
         run_migrations: None,
-        fails: bool,
+        failure: str | None,
         final: PeriodicRunStatus,
     ) -> None:
         name = f"probe-{uuid.uuid4().hex[:8]}"
@@ -152,14 +157,21 @@ class TestRunningStatus:
                 sa.select(PeriodicTask.last_run_status).where(PeriodicTask.name == name),
             )
             seen.append(status)
-            if fails:
+            if failure == "error":
                 raise RuntimeError("сбой периодической задачи")
+            if failure == "db_error":
+                await db_session.execute(sa.text("SELECT * FROM no_such_table"))
 
         try:
             await _run_periodic_async(name, body)
             async with async_session_factory() as session:
                 stored = await session.scalar(
                     sa.select(PeriodicTask.last_run_status).where(PeriodicTask.name == name),
+                )
+                logged = await session.scalar(
+                    sa.select(sa.func.count())
+                    .select_from(AppLog)
+                    .where(AppLog.source == f"periodic.{name}"),
                 )
         finally:
             async with async_session_factory() as session:
@@ -169,3 +181,4 @@ class TestRunningStatus:
 
         assert seen == [PeriodicRunStatus.RUNNING]
         assert stored is final
+        assert logged == (0 if failure is None else 1)
