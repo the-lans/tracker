@@ -34,6 +34,8 @@ from services.system_settings import resolve_node_execution_defaults
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
+EXECUTION_FIELDS = ("timeout_seconds", "max_retries", "retry_base_delay_seconds")
+
 async def _get_node_or_404(db_session: AsyncSession, node_id: uuid.UUID, user: User) -> Node:
     """Раздел 19.2: чужая нода/промт для `user` неотличимы от несуществующих."""
     return await get_node_for_user(db_session, node_id, user=user)
@@ -67,6 +69,34 @@ async def _validate_and_flush(
     await db_session.flush()
     if node.pipeline_id is not None:
         await validate_pipeline_templates(db_session, node.pipeline_id)
+
+
+async def _apply_execution_values(
+    db_session: AsyncSession,
+    node: Node,
+    body: NodeUpdateRequest,
+) -> None:
+    """
+    Раздел 15.5: явный `null` возвращает таймауту и retry значение из
+    «Системных настроек», не переданное поле остаётся прежним.
+    """
+    passed = body.model_fields_set
+    if not passed.intersection(EXECUTION_FIELDS):
+        return
+
+    def requested(field: str) -> int | None:
+        value: int | None = getattr(body if field in passed else node, field)
+        return value
+
+    defaults = await resolve_node_execution_defaults(
+        db_session,
+        timeout_seconds=requested("timeout_seconds"),
+        max_retries=requested("max_retries"),
+        retry_base_delay_seconds=requested("retry_base_delay_seconds"),
+    )
+    node.timeout_seconds = defaults.timeout_seconds
+    node.max_retries = defaults.max_retries
+    node.retry_base_delay_seconds = defaults.retry_base_delay_seconds
 
 
 @router.post("", response_model=NodeResponse, status_code=201)
@@ -168,12 +198,7 @@ async def update_node(
         node.script_content = body.script_content
     if body.docker_image is not None:
         node.docker_image = body.docker_image
-    if body.timeout_seconds is not None:
-        node.timeout_seconds = body.timeout_seconds
-    if body.max_retries is not None:
-        node.max_retries = body.max_retries
-    if body.retry_base_delay_seconds is not None:
-        node.retry_base_delay_seconds = body.retry_base_delay_seconds
+    await _apply_execution_values(db_session, node, body)
     if body.guide_url is not None:
         node.guide_url = body.guide_url
     if body.is_skipped is not None:

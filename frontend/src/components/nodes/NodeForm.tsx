@@ -90,11 +90,9 @@ export function NodeForm({
       script_language: nodeType === NodeType.SCRIPT ? scriptLanguage : null,
       script_content: nodeType === NodeType.SCRIPT ? scriptContent : null,
       guide_url: guideUrl || null,
-      timeout_seconds: execution.timeoutSeconds ?? undefined,
-      max_retries: isPipeline ? (execution.maxRetries ?? undefined) : undefined,
-      retry_base_delay_seconds: isPipeline
-        ? (execution.retryBaseDelaySeconds ?? undefined)
-        : undefined,
+      timeout_seconds: execution.timeoutSeconds,
+      max_retries: isPipeline ? execution.maxRetries : undefined,
+      retry_base_delay_seconds: isPipeline ? execution.retryBaseDelaySeconds : undefined,
       is_skipped: isPipeline ? execution.isSkipped : false,
     };
     const callbacks = { onSuccess: onSaved, onError: toastError("Не удалось сохранить ноду") };
@@ -125,9 +123,9 @@ export function NodeForm({
         />
       </div>
       <div>
-        <Label>Тип ноды</Label>
+        <Label htmlFor="node-type">Тип ноды</Label>
         <Select value={nodeType} onValueChange={(v) => setNodeType(v as NodeType)}>
-          <SelectTrigger>
+          <SelectTrigger id="node-type">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

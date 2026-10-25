@@ -52,6 +52,7 @@ export function MessageBubble({
         >
           <CollapsibleText
             text={text}
+            live={streaming}
             renderText={
               role === "llm" && !danger ? (shown) => <AgentMessageText text={shown} /> : undefined
             }

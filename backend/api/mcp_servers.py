@@ -20,7 +20,7 @@ from db.session import get_session
 from services.access import get_or_404
 from services.crypto import encrypt
 from services.integrity import ensure_mcp_server_deletable
-from services.mcp_validation import validate_mcp_server_isolation
+from services.mcp_validation import normalize_mcp_server_isolation, validate_mcp_server_isolation
 
 router = APIRouter(prefix="/mcp-servers", tags=["mcp-servers"])
 
@@ -45,6 +45,11 @@ async def create_mcp_server(
         isolation_mode=body.isolation_mode,
         isolation_path_template=body.isolation_path_template,
     )
+    isolation_mode, isolation_path_template = normalize_mcp_server_isolation(
+        has_stateful_resource=body.has_stateful_resource,
+        isolation_mode=body.isolation_mode,
+        isolation_path_template=body.isolation_path_template,
+    )
     mcp_server = McpServer(
         id=uuid.uuid4(),
         name=body.name,
@@ -52,8 +57,8 @@ async def create_mcp_server(
         auth_type=body.auth_type,
         auth_config_encrypted=encrypt(body.auth_config),
         has_stateful_resource=body.has_stateful_resource,
-        isolation_mode=body.isolation_mode,
-        isolation_path_template=body.isolation_path_template,
+        isolation_mode=isolation_mode,
+        isolation_path_template=isolation_path_template,
     )
     db_session.add(mcp_server)
     await db_session.commit()
@@ -106,6 +111,11 @@ async def update_mcp_server(
         mcp_server.isolation_path_template = body.isolation_path_template
 
     validate_mcp_server_isolation(
+        has_stateful_resource=mcp_server.has_stateful_resource,
+        isolation_mode=mcp_server.isolation_mode,
+        isolation_path_template=mcp_server.isolation_path_template,
+    )
+    mcp_server.isolation_mode, mcp_server.isolation_path_template = normalize_mcp_server_isolation(
         has_stateful_resource=mcp_server.has_stateful_resource,
         isolation_mode=mcp_server.isolation_mode,
         isolation_path_template=mcp_server.isolation_path_template,

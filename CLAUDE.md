@@ -70,15 +70,17 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | Tailwind CSS / PostCSS / Autoprefixer | 4.3.3 / 8.5.30 / 10.6.1* (требуются shadcn/ui) |
 | TypeScript | 6.0.3 |
 | ESLint / typescript-eslint | 10.12.0 / 8.71.2 |
+| Vitest / jsdom | 5.0.5* / 30.1.3* |
+| Testing Library (react / dom / jest-dom / user-event) | 16.3.3* / 10.4.2* / 7.0.1* / 14.6.8* |
 
 TypeScript закреплён на 6.0.3, а не на новом мажоре 7.x: `typescript-eslint@8.71.2`
 пока требует `typescript < 6.1.0` (проверено `npm view typescript-eslint
 peerDependencies`) — апгрейд до TS 7 ждёт апгрейда этой цепочки, иначе
 `npm ls` покажет конфликт. `@vitejs/plugin-react` закреплён на 6.1.1:
 6.1.2 через optional peer-зависимости тянет `@babel/core@8` и ломает
-разрешение зависимостей (ERESOLVE). Vitest в package.json пока не заведён (не был
-явно назван в разделе 2.2 ТЗ) — команда `npm test` появится вместе с его
-настройкой.
+разрешение зависимостей (ERESOLVE). Тесты фронтенда — Vitest в окружении
+jsdom и Testing Library (ТЗ 21.1); настройка — секция `test` в
+`vite.config.ts`, общая подготовка — `src/test/setup.ts`.
 
 ### Инфраструктура
 | Компонент | Версия |
@@ -180,7 +182,13 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               lib/errors.ts — текст и тост ошибки API (errorMessage,
               toastError); hooks/useInvalidatingMutation.ts — мутация с
               перечитыванием списков; common/dialogs/EntityFormDialog —
-              диалог создания/правки записи справочника
+              диалог создания/правки записи справочника; src/test/ — общее
+              для тестов Vitest: fixtures.ts (`test` с фикстурами api и
+              toasts, как conftest.py), factories.ts (тестовые записи),
+              apiMock.ts (подмена fetch с записью запросов),
+              renderWithProviders.tsx (кеш запросов, роутер и вошедший
+              пользователь; renderHookWithClient — для хуков),
+              fakeWebSocket.ts (подмена WebSocket), setup.ts
 deploy/
   caddy/     — конфигурация reverse-proxy (handle_path /api/* — срезает
               префикс перед проксированием на backend)
@@ -270,7 +278,7 @@ make check
 ```
 Создаёт/актуализирует `backend/.venv` и `frontend/node_modules` при
 необходимости, затем последовательно: `ruff check .` → `mypy .` → `pytest`
-(backend; падает, если покрытие `services/` ниже 85%), `eslint .` → `tsc --noEmit` (frontend). Падает с ненулевым кодом
+(backend; падает, если покрытие `services/` ниже 85%), `eslint .` → `tsc --noEmit` → `vitest run` (frontend). Падает с ненулевым кодом
 на первой же ошибке. CI (`.github/workflows/ci.yml`) дополнительно перед
 ней собирает образы раннеров, а после — запускает
 `scripts/smoke_frontend_image.sh`.
@@ -278,7 +286,7 @@ make check
 ### Тесты
 ```bash
 cd backend && .venv/bin/pytest
-cd frontend && npm test   # появится вместе с настройкой Vitest
+cd frontend && npm test   # Vitest, один прогон; npm run test:watch — в режиме наблюдения
 scripts/smoke_frontend_image.sh   # продовый образ фронтенда + SPA-маршруты
 ```
 Backend-тестам нужен запущенный Docker: `conftest.py` сам поднимает

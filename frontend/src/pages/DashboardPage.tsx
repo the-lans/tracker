@@ -78,9 +78,9 @@ export function DashboardPage() {
             <label className="hidden min-h-11 items-center gap-2 rounded-md border border-border bg-surface-2 px-3 text-body-lg text-text-3 md:flex">
               <Search className="size-4" />
               <input
-                aria-label="Найти задачу по коду"
+                aria-label="Найти задачу по коду или названию"
                 className="h-11 w-56 bg-transparent outline-none placeholder:text-text-3"
-                placeholder="Найти задачу по коду..."
+                placeholder="Код или название задачи..."
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
@@ -116,13 +116,13 @@ export function DashboardPage() {
           <EmptyState
             icon={ListTodo}
             title="Задач пока нет"
-            hint="Нажмите «+ Новая задача» вверху справа: укажите код RR-XXXXX, название, описание и репозитории. Затем на странице задачи выберите пайплайн и нажмите «Запустить»."
+            hint="Нажмите «+ Новая задача» вверху справа: укажите код задачи (например, RR-12345), название, описание и репозитории. Затем на странице задачи выберите пайплайн и нажмите «Запустить»."
           />
         ) : (
           <EmptyState
             icon={SearchX}
             title="Задачи не найдены"
-            hint="Выберите фильтр «Все» или измените код задачи в поиске."
+            hint="Выберите фильтр «Все» или измените текст поиска."
           />
         ))}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">

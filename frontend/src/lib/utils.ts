@@ -73,6 +73,7 @@ const INTERVAL_UNITS: Array<{ seconds: number; single: string; forms: [string, s
   { seconds: 86400, single: "каждый день", forms: ["день", "дня", "дней"] },
   { seconds: 3600, single: "каждый час", forms: ["час", "часа", "часов"] },
   { seconds: 60, single: "каждую минуту", forms: ["минуту", "минуты", "минут"] },
+  { seconds: 1, single: "каждую секунду", forms: ["секунду", "секунды", "секунд"] },
 ];
 
 /** Интервал периодической задачи словами: 300 → «каждые 5 минут», 604800 → «каждую неделю». */
@@ -83,20 +84,32 @@ export function formatInterval(seconds: number): string {
     if (count === 1) return unit.single;
     return `${plural(count, ["каждую", "каждые", "каждые"])} ${count} ${plural(count, unit.forms)}`;
   }
-  return `каждые ${seconds} ${plural(seconds, ["секунду", "секунды", "секунд"])}`;
+  return `каждые ${seconds} с`;
 }
 
 const FILE_SIZE_UNITS = ["Б", "КБ", "МБ", "ГБ"] as const;
 const FILE_SIZE_STEP = 1024;
+/** Ниже этого значения размер показывается с одной цифрой после запятой: «3,4 МБ». */
+const FILE_SIZE_FRACTION_BELOW = 10;
+
+function fileSizeDigits(value: number, unit: number): number {
+  return unit === 0 || value >= FILE_SIZE_FRACTION_BELOW ? 0 : 1;
+}
+
+function roundFileSize(value: number, unit: number): number {
+  const factor = 10 ** fileSizeDigits(value, unit);
+  return Math.round(value * factor) / factor;
+}
 
 /** Размер файла для списка артефактов (раздел 15.2): «12 КБ», «3,4 МБ». */
 export function formatFileSize(bytes: number): string {
   let value = bytes;
   let unit = 0;
-  while (value >= FILE_SIZE_STEP && unit < FILE_SIZE_UNITS.length - 1) {
+  // Сравнивается округлённое значение: 1023,9 КБ показывается как «1 МБ», а не «1024 КБ».
+  while (roundFileSize(value, unit) >= FILE_SIZE_STEP && unit < FILE_SIZE_UNITS.length - 1) {
     value /= FILE_SIZE_STEP;
     unit += 1;
   }
-  const digits = unit === 0 || value >= 10 ? 0 : 1;
+  const digits = fileSizeDigits(value, unit);
   return `${value.toLocaleString("ru-RU", { maximumFractionDigits: digits })} ${FILE_SIZE_UNITS[unit]}`;
 }

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.nodes import EXECUTION_FIELDS
 from db.models.enums import NodeType
 from db.models.pipelines import Node, Pipeline
 from db.models.prompts import TaskLibraryPrompt
@@ -449,3 +450,57 @@ class TestExecutionLimits:
         update = await authed_client.patch(f"/nodes/{node_id}", json={field: value})
 
         assert (create.status_code, update.status_code) == (422, 422)
+
+
+class TestExecutionDefaultsOnUpdate:
+    """Раздел 15.5: явный `null` при правке — значение из «Системных настроек»."""
+
+    async def _node(self, client: AsyncClient) -> dict[str, int | str]:
+        response = await client.post(
+            "/nodes",
+            json={
+                "name": "n",
+                "description": "d",
+                "node_type": NodeType.PLAIN_PROMPT.value,
+                "prompt_template": "x",
+                "timeout_seconds": 1800,
+                "max_retries": 7,
+                "retry_base_delay_seconds": 30,
+            },
+        )
+        assert response.status_code == 201, response.text
+        body: dict[str, int | str] = response.json()
+        return body
+
+    @pytest.mark.parametrize(
+        ("field", "setting"),
+        [
+            ("timeout_seconds", "default_timeout_seconds"),
+            ("max_retries", "default_max_retries"),
+            ("retry_base_delay_seconds", "default_retry_base_delay_seconds"),
+        ],
+    )
+    async def test_null_resets_to_default(
+        self,
+        authed_client: AsyncClient,
+        field: str,
+        setting: str,
+    ) -> None:
+        node = await self._node(authed_client)
+        settings = (await authed_client.get("/system-settings")).json()
+
+        response = await authed_client.patch(f"/nodes/{node['id']}", json={field: None})
+
+        assert response.status_code == 200, response.text
+        updated = response.json()
+        assert updated[field] == settings[setting]
+        others = [name for name in EXECUTION_FIELDS if name != field]
+        assert {name: updated[name] for name in others} == {name: node[name] for name in others}
+
+    async def test_omitted_fields_kept(self, authed_client: AsyncClient) -> None:
+        node = await self._node(authed_client)
+
+        response = await authed_client.patch(f"/nodes/{node['id']}", json={"name": "renamed"})
+
+        assert response.status_code == 200, response.text
+        assert (response.json()["timeout_seconds"], response.json()["max_retries"]) == (1800, 7)

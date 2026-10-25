@@ -9,6 +9,9 @@ const PLAN_DECISION_LABEL: Record<string, string> = {
 
 const AUTO_ACCEPT_ID = "accept_auto";
 
+/** Ответ на вопрос агента своим текстом (`CUSTOM_ANSWER_OPTION` на бэкенде). */
+export const CUSTOM_ANSWER_OPTION = "custom";
+
 export interface UserInputView {
   text: string;
   /** План принят переключателем `auto_accept_plan`, а не пользователем (раздел 9.2). */
@@ -25,6 +28,7 @@ export function describeUserInput(log: NodeLog): UserInputView {
   const options = log.pending_options ?? [];
   const [optionId = "", ...rest] = raw.split("\n");
   const feedback = rest.join("\n").trim();
+  if (optionId === CUSTOM_ANSWER_OPTION && feedback) return { text: feedback, automatic: false };
 
   const label =
     options.find((option) => option.id === optionId)?.label ??

@@ -18,8 +18,10 @@ export interface OutputLine {
 }
 
 const ERROR_LINE =
-  /\b(traceback|error|exception|failed|failure|fatal|panic)\b|^\s*(E\s|!\s)|\b\w+Error\b/i;
-const WARNING_LINE = /\b(warn|warning|deprecated)\b/i;
+  /\b(traceback|errors?|exception|failed|failures?|fatal|panic)\b|^\s*(E\s|!\s)|\b\w+Error\b/i;
+const WARNING_LINE = /\b(warn|warnings?|deprecated)\b|\b\w+Warning\b/i;
+// Итоги вида «5 passed, 0 failed», «Found 0 errors» или «No errors found» — не ошибка.
+const ZERO_COUNT = /\b(0|no)\s+(errors?|failed|failures?|warnings?)\b/gi;
 const SUCCESS_LINE = /(\b(ok|passed|success|succeeded|done)\b|✓|✔)/i;
 
 // Путь: есть «/» или имя файла с расширением; строка в кавычках; число.
@@ -27,9 +29,10 @@ const TOKEN_RE =
   /("[^"\n]*"|'[^'\n]*')|((?:\.{0,2}\/)?[\w.-]+(?:\/[\w.-]+)+\/?|\b[\w-]+\.(?:py|sh|ts|tsx|js|json|md|txt|csv|yml|yaml|toml|cfg|log)\b)|(\b\d+(?:\.\d+)?%?)/g;
 
 function lineTone(line: string): LineTone {
-  if (ERROR_LINE.test(line)) return "error";
-  if (WARNING_LINE.test(line)) return "warning";
-  if (SUCCESS_LINE.test(line)) return "success";
+  const meaningful = line.replace(ZERO_COUNT, "");
+  if (ERROR_LINE.test(meaningful)) return "error";
+  if (WARNING_LINE.test(meaningful)) return "warning";
+  if (SUCCESS_LINE.test(meaningful)) return "success";
   return "plain";
 }
 

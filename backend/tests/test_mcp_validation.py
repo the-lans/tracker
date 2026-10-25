@@ -2,7 +2,11 @@ import pytest
 
 from db.models.enums import McpIsolationMode
 from services.errors import ValidationError
-from services.mcp_validation import validate_isolation_path_template, validate_mcp_server_isolation
+from services.mcp_validation import (
+    normalize_mcp_server_isolation,
+    validate_isolation_path_template,
+    validate_mcp_server_isolation,
+)
 
 _VALID_PER_TASK_TEMPLATE = "{{task.repos_path}}/.mcp-profiles/{{mcp_server.name}}"
 
@@ -66,3 +70,35 @@ def test_validate_isolation_path_template_rejects_missing_variable() -> None:
 def test_validate_isolation_path_template_rejects_none() -> None:
     with pytest.raises(ValidationError):
         validate_isolation_path_template(None)
+
+
+class TestNormalizeIsolation:
+    """Раздел 3.1: лишние режим и шаблон пути не хранятся."""
+
+    @pytest.mark.parametrize(
+        ("stateful", "mode", "expected"),
+        [
+            (False, McpIsolationMode.PER_TASK_DATA_DIR, (None, None)),
+            (True, McpIsolationMode.ISOLATED_FLAG, (McpIsolationMode.ISOLATED_FLAG, None)),
+            (
+                True,
+                McpIsolationMode.PER_TASK_DATA_DIR,
+                (McpIsolationMode.PER_TASK_DATA_DIR, _VALID_PER_TASK_TEMPLATE),
+            ),
+        ],
+        ids=["stateless", "isolated_flag", "per_task_data_dir"],
+    )
+    def test_result(
+        self,
+        stateful: bool,
+        mode: McpIsolationMode,
+        expected: tuple[McpIsolationMode | None, str | None],
+    ) -> None:
+        assert (
+            normalize_mcp_server_isolation(
+                has_stateful_resource=stateful,
+                isolation_mode=mode,
+                isolation_path_template=_VALID_PER_TASK_TEMPLATE,
+            )
+            == expected
+        )

@@ -451,9 +451,10 @@ export interface NodeCreateRequest {
   script_language?: ScriptLanguage | null;
   script_content?: string | null;
   docker_image?: string | null;
-  timeout_seconds?: number;
-  max_retries?: number;
-  retry_base_delay_seconds?: number;
+  /** `null` — значение из «Системных настроек» (раздел 15.5). */
+  timeout_seconds?: number | null;
+  max_retries?: number | null;
+  retry_base_delay_seconds?: number | null;
   guide_url?: string | null;
   is_skipped?: boolean;
   llm_output_last_n?: number | null;

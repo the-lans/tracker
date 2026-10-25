@@ -58,7 +58,11 @@ export function McpServerForm({
       ...(authConfig ? { auth_config: authConfig } : {}),
       has_stateful_resource: hasStatefulResource,
       isolation_mode: hasStatefulResource ? (isolationMode as McpIsolationMode) : null,
-      isolation_path_template: hasStatefulResource ? isolationPathTemplate : null,
+      // Шаблон пути нужен только своей папке задачи — иначе прежний не сохраняется.
+      isolation_path_template:
+        hasStatefulResource && isolationMode === McpIsolationMode.PER_TASK_DATA_DIR
+          ? isolationPathTemplate
+          : null,
     };
     const onError = (error: unknown) =>
       toast.error(errorMessage(error, "Не удалось сохранить сервер"));
@@ -83,9 +87,9 @@ export function McpServerForm({
         <Input id="mcp-url" value={url} onChange={(e) => setUrl(e.target.value)} />
       </div>
       <div>
-        <Label>Тип авторизации</Label>
+        <Label htmlFor="mcp-auth-type">Тип авторизации</Label>
         <Select value={authType} onValueChange={(v) => setAuthType(v as McpAuthType)}>
-          <SelectTrigger>
+          <SelectTrigger id="mcp-auth-type">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -113,17 +117,21 @@ export function McpServerForm({
           <div className="text-body font-bold">Ресурс с состоянием</div>
           <div className="text-meta text-text-3">Сервер держит состояние между вызовами</div>
         </div>
-        <Switch checked={hasStatefulResource} onCheckedChange={setHasStatefulResource} />
+        <Switch
+          aria-label="Ресурс с состоянием"
+          checked={hasStatefulResource}
+          onCheckedChange={setHasStatefulResource}
+        />
       </div>
       {hasStatefulResource && (
         <>
           <div>
-            <Label>Режим изоляции</Label>
+            <Label htmlFor="mcp-isolation-mode">Режим изоляции</Label>
             <Select
               value={isolationMode}
               onValueChange={(v) => setIsolationMode(v as McpIsolationMode)}
             >
-              <SelectTrigger>
+              <SelectTrigger id="mcp-isolation-mode">
                 <SelectValue placeholder="Выберите режим" />
               </SelectTrigger>
               <SelectContent>

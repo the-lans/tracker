@@ -48,10 +48,10 @@ export function TaskCard({ task }: { task: Task }) {
         {task.status === TaskStatus.NEW && (
           <button
             type="button"
-            className="ml-auto flex touch-target size-[30px] items-center justify-center rounded-[9px] border border-accent-border bg-accent-tint text-accent"
+            className="ml-auto flex touch-target size-[30px] items-center justify-center rounded-[9px] border border-accent-border bg-accent-tint text-accent disabled:opacity-50"
             aria-label="Запустить задачу"
-            title="Запустить задачу"
-            disabled={startTask.isPending}
+            title={task.pipeline_id ? "Запустить задачу" : "Сначала выберите пайплайн на странице задачи"}
+            disabled={!task.pipeline_id || startTask.isPending}
             onClick={(event) => {
               event.preventDefault();
               startTask.mutate(undefined, {

@@ -67,13 +67,13 @@ export function TaskFormFields({
         />
       </div>
       <div>
-        <Label>LLM-аккаунт</Label>
+        <Label htmlFor="task-llm-account">LLM-аккаунт</Label>
         <div className="mb-1 text-meta text-text-3">
           Нужен для нод с промтами, слэш-командами и планированием; задаче из одних скриптов не
           нужен.
         </div>
         <Select value={value.llmAccountId} onValueChange={(llmAccountId) => onChange({ llmAccountId })}>
-          <SelectTrigger>
+          <SelectTrigger id="task-llm-account">
             <SelectValue placeholder="Выберите аккаунт" />
           </SelectTrigger>
           <SelectContent>
