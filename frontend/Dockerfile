@@ -4,7 +4,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-RUN npm run build
+# Раздел 19.1: Client ID Google встраивается в бандл при сборке — compose
+# передаёт GOOGLE_OAUTH_CLIENT_ID из .env. Пустой аргумент не перекрывает
+# frontend/.env локальной сборки.
+ARG VITE_GOOGLE_CLIENT_ID=
+RUN if [ -z "$VITE_GOOGLE_CLIENT_ID" ]; then unset VITE_GOOGLE_CLIENT_ID; fi; npm run build
 
 FROM nginx:1.29-alpine
 

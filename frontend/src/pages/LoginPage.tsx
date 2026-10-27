@@ -70,8 +70,9 @@ export function LoginPage() {
         <div ref={buttonRef} />
       ) : (
         <div className="max-w-sm rounded-lg border border-warning-border bg-warning-tint p-3 text-center text-note text-warning-text">
-          Не задан VITE_GOOGLE_CLIENT_ID — вход через Google недоступен. Заполните переменную
-          окружения (см. frontend/.env.example) и пересоберите фронтенд.
+          Не задан VITE_GOOGLE_CLIENT_ID — вход через Google недоступен. Заполните
+          GOOGLE_OAUTH_CLIENT_ID в .env (в разработке — VITE_GOOGLE_CLIENT_ID в frontend/.env) и
+          пересоберите фронтенд.
         </div>
       )}
       {signingIn && <p className="text-note text-text-3">Выполняется вход…</p>}

@@ -229,7 +229,7 @@ scripts/
   smoke_frontend_image.sh — собирает продовый образ фронтенда и проверяет
                 SPA-фолбэк nginx (запускается в CI после make check)
   qa/          — стенд ручного E2E-тестирования (docs/qa_e2e_manual.md):
-                stand.sh (.env и frontend/.env из qa.env с VAPID-ключами,
+                stand.sh (.env из qa.env с VAPID-ключами,
                 compose-проект tracker-qa, git-хост qa-git по SSH и мок
                 qa-mocks в его сети, справочники, сертификат Caddy;
                 env/seed/up/data/trust/merge/export/down), qa.env.example —

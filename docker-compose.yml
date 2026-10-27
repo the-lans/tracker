@@ -191,6 +191,9 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        # Тот же OAuth-клиент, что у backend (раздел 19.1): встраивается в бандл.
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
     restart: unless-stopped
     expose:
       - "80"

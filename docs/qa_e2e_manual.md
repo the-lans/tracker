@@ -31,8 +31,8 @@ OAuth-клиент Google (Web application, в Authorized JavaScript origins —
 `tracker-qa` (`COMPOSE_PROJECT_NAME` в `.env`): его volume и сеть не
 пересекаются с другим стеком трекера на машине.
 
-1. Создать настройки и `.env` трекера (`DOMAIN=localhost`) и `frontend/.env`
-   (Client ID встраивается в сборку фронтенда):
+1. Создать настройки и `.env` трекера (`DOMAIN=localhost`); Client ID Google
+   встраивается в сборку фронтенда из `GOOGLE_OAUTH_CLIENT_ID`:
    ```bash
    cp scripts/qa/qa.env.example scripts/qa/qa.env   # вписать GOOGLE_OAUTH_* и QA_ADMIN_EMAIL
    scripts/qa/stand.sh env

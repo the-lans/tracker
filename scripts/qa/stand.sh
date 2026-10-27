@@ -3,7 +3,7 @@
 # git-хост по SSH с репозиторием qa-calc и мок Jira/GitLab в сети compose
 # (worker видит их как qa-git и qa-mocks), тестовые данные.
 #
-#   scripts/qa/stand.sh env            — .env и frontend/.env трекера из scripts/qa/qa.env
+#   scripts/qa/stand.sh env            — .env трекера из scripts/qa/qa.env
 #                                        (повторный запуск дописывает новое, секреты сохраняет)
 #   scripts/qa/stand.sh seed           — первый администратор и периодические задачи
 #   scripts/qa/stand.sh up             — поднять git-хост и мок (повторный запуск безопасен)
@@ -35,7 +35,6 @@ MOCKS_PORT="${QA_MOCKS_PORT:-8090}"
 REPO_PATH="/srv/git/qa/qa-calc.git"
 GIT_URL="ssh://git@${GIT_CONTAINER}${REPO_PATH}"
 TRACKER_ENV="$ROOT_DIR/.env"
-FRONTEND_ENV="$ROOT_DIR/frontend/.env"
 GENERATED_SECRETS=(SECRET_ENCRYPTION_KEY SESSION_SECRET_KEY POSTGRES_PASSWORD REDIS_PASSWORD SFTP_DB_PASSWORD)
 
 as_git() {
@@ -119,13 +118,11 @@ make_env() {
   done
   [[ -n "$(env_value "$TRACKER_ENV" VAPID_PRIVATE_KEY)" ]] || generate_vapid
 
-  [[ -f "$FRONTEND_ENV" ]] || cp "$ROOT_DIR/frontend/.env.example" "$FRONTEND_ENV"
   if [[ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" && -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]]; then
     set_env_value "$TRACKER_ENV" GOOGLE_OAUTH_CLIENT_ID "$GOOGLE_OAUTH_CLIENT_ID"
     set_env_value "$TRACKER_ENV" GOOGLE_OAUTH_CLIENT_SECRET "$GOOGLE_OAUTH_CLIENT_SECRET"
-    # Client ID встраивается в бандл при сборке образа frontend.
-    set_env_value "$FRONTEND_ENV" VITE_GOOGLE_CLIENT_ID "$GOOGLE_OAUTH_CLIENT_ID"
-    echo ".env и frontend/.env готовы. Применить: docker compose up -d --build"
+    # Client ID встраивается в бандл при сборке образа frontend (build-arg compose).
+    echo ".env готов. Применить: docker compose up -d --build"
   else
     echo "GOOGLE_OAUTH_* в $QA_ENV не заполнены — вход через Google пока недоступен." >&2
     echo "Заполните их и повторите: scripts/qa/stand.sh env && docker compose up -d --build" >&2
