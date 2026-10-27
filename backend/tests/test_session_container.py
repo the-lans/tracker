@@ -20,6 +20,7 @@ import pytest
 
 import session_cli
 from services import docker_mounts, session_container
+from services.git_ops import GIT_IDENTITY_EMAIL, GIT_IDENTITY_NAME
 from services.maintenance_tasks import purge_orphaned_session_containers
 from services.session_container import (
     SESSION_CONTAINER_PREFIX,
@@ -255,6 +256,12 @@ touch "$PWD/written-by-agent"
 """
 
 
+_COMMIT_PROBE = """
+git init -q -b main . && git commit -q --allow-empty -m "feat: probe"
+echo "author=$(git log -1 --format='%an <%ae>')"
+"""
+
+
 @pytest.mark.usefixtures("session_roots")
 class TestSessionImage:
     """
@@ -284,6 +291,15 @@ class TestSessionImage:
         written = tmp_path / "repos" / "RR-1" / "written-by-agent"
         assert written.exists()
         assert written.stat().st_uid == os.getuid()
+
+    async def test_agent_can_commit(self, tmp_path: Path) -> None:
+        """Агент коммитит без своего git-конфига — идентичностью трекера."""
+        exit_code, output = await _run_in_session_image(
+            tmp_path, program="sh", argv=["-c", _COMMIT_PROBE]
+        )
+
+        assert exit_code == 0, output
+        assert f"author={GIT_IDENTITY_NAME} <{GIT_IDENTITY_EMAIL}>" in output
 
 
 def test_session_image_cli_matches_worker_sdk() -> None:

@@ -40,11 +40,19 @@ _HEAD_REF_PREFIX = "refs/heads/"
 
 _KEY_FILE_MODE = 0o600
 
+GIT_IDENTITY_NAME = "AI Tracker"
+GIT_IDENTITY_EMAIL = "tracker@localhost"
 # Ребейз переписывает коммиты и требует committer-идентичность; в контейнере
 # воркера глобального git-конфига нет. Автор коммитов при ребейзе сохраняется.
 _DEFAULT_GIT_IDENTITY = {
-    "GIT_COMMITTER_NAME": "AI Tracker",
-    "GIT_COMMITTER_EMAIL": "tracker@localhost",
+    "GIT_COMMITTER_NAME": GIT_IDENTITY_NAME,
+    "GIT_COMMITTER_EMAIL": GIT_IDENTITY_EMAIL,
+}
+# Коммиты агента в контейнере сессии (раздел 19.3): там тоже нет git-конфига.
+AGENT_GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": GIT_IDENTITY_NAME,
+    "GIT_AUTHOR_EMAIL": GIT_IDENTITY_EMAIL,
+    **_DEFAULT_GIT_IDENTITY,
 }
 # Системный и глобальный конфиг не читаются, git ничего не спрашивает.
 _ISOLATED_GIT_ENV = {

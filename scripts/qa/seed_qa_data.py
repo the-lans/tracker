@@ -112,8 +112,7 @@ PIPELINE_NODES = (
         prompt_template=(
             "Реализуй задачу {{task.code}} по утверждённому плану: {{node.plan_text}}. "
             "В README добавь строку: {{env.QA_GREETING}}. Запусти `python3 -m unittest -v`, "
-            "затем закоммить изменения в текущую ветку: `git -c user.name=\"QA Agent\" "
-            "-c user.email=qa-agent@example.com commit -am \"feat: add divide\"`."
+            "затем закоммить изменения в текущую ветку: `git commit -am \"feat: add divide\"`."
         ),
     ),
     NodeSpec(
