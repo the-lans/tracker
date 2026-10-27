@@ -439,7 +439,8 @@ async def test_run_pipeline_executes_plan_prompt_node_with_active_node_context(
     )
 
     assert outcome.completed is True
-    assert fake.permission_modes == ["plan"]
+    # Раздел 9.4: следующая нода идёт уже в режиме, выбранном при принятии.
+    assert fake.permission_modes == ["plan", "acceptEdits"]
     logs = await _node_logs_for(db_session, task.id)
     assert logs[0].status is NodeLogStatus.SUCCESS
     assert logs[1].rendered_prompt == "используем план: 1. Шаг раз\n2. Шаг два"
