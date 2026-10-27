@@ -58,6 +58,9 @@ from sqlalchemy.orm import Session, SessionTransaction  # noqa: E402
 from tests.worker_support import WorkerEnv, install_worker_env  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Свой compose-проект: `COMPOSE_PROJECT_NAME` из `.env` (например, стенд QA)
+# иначе дал бы тестовым контейнерам тома данных работающего стека.
+_TEST_COMPOSE_PROJECT = "tracker-test"
 _PG_CONTAINER_NAME = "tracker_pg_test"
 _REDIS_CONTAINER_NAME = "tracker_redis_test"
 
@@ -80,6 +83,8 @@ def postgres_container() -> Iterator[None]:
             [
                 "docker",
                 "compose",
+                "--project-name",
+                _TEST_COMPOSE_PROJECT,
                 "run",
                 "--rm",
                 "-d",
@@ -150,6 +155,8 @@ def redis_container() -> Iterator[None]:
             [
                 "docker",
                 "compose",
+                "--project-name",
+                _TEST_COMPOSE_PROJECT,
                 "run",
                 "--rm",
                 "-d",
