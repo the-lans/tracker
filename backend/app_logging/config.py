@@ -1,16 +1,20 @@
 """Единая конфигурация структурированного логирования (раздел 17.2 ТЗ).
 
 JSON на stdout с обязательными полями timestamp/level/source/message;
-task_id добавляется вызывающим кодом через ``logger.bind(task_id=...)``,
-когда применимо. Ротацию и хранение обеспечивает драйвер логирования
-Docker — это применимо только к обычным (не критичным) логам; критичные
-события дополнительно пишутся в таблицу ``app_logs`` вызывающим кодом.
+task_id добавляется вызывающим кодом через ``logger.bind(task_id=...)``
+или на всю обработку задачи — ``bind_task_context`` (contextvars).
+Ротацию и хранение обеспечивает драйвер логирования Docker — это
+применимо только к обычным (не критичным) логам; критичные события
+дополнительно пишутся в таблицу ``app_logs`` вызывающим кодом.
 """
 
 from __future__ import annotations
 
 import logging
 import sys
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import structlog
 
@@ -37,6 +41,23 @@ def configure_logging(*, level: int = logging.INFO) -> None:
 
 
 def get_logger(source: str) -> structlog.typing.FilteringBoundLogger:
-    """Логгер с обязательным полем ``source`` (модуль/сервис)."""
-    logger: structlog.typing.FilteringBoundLogger = structlog.get_logger()
-    return logger.bind(source=source)
+    """
+    Логгер с обязательным полем ``source`` (модуль/сервис).
+
+    Ленивый: модули создают логгер при импорте, раньше ``configure_logging()``,
+    а настройки structlog применяются при первой записи — иначе такой логгер
+    навсегда остался бы с консольным форматом по умолчанию вместо JSON.
+    """
+    logger: structlog.typing.FilteringBoundLogger = structlog.get_logger(source=source)
+    return logger
+
+
+@contextmanager
+def bind_task_context(task_id: uuid.UUID) -> Iterator[None]:
+    """
+    ``task_id`` во всех событиях, записанных при обработке задачи, — в том
+    числе в общих сервисах, которые о задаче не знают (клонирование,
+    сессия, скрипт-ноды): по нему ищутся все логи задачи (раздел 17.2).
+    """
+    with structlog.contextvars.bound_contextvars(task_id=str(task_id)):
+        yield

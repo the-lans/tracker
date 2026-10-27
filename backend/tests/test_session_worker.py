@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 import sqlalchemy as sa
+import structlog
 from claude_agent_sdk import ClaudeAgentOptions, PermissionResultAllow, ProcessError
 from claude_agent_sdk.types import ToolPermissionContext
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -550,6 +551,29 @@ async def test_rebase_conflict_is_resolved_by_agent_before_next_node(
 async def _refreshed_status(db_session: AsyncSession, task: Task) -> TaskStatus:
     await db_session.refresh(task)
     return task.status
+
+
+class TestTaskLogContext:
+    async def test_events_carry_task_id(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """
+        Раздел 17.2: события общих сервисов (сессия, оркестратор) пишутся с
+        `task_id` задачи, которую обрабатывает воркер.
+        """
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        merge_context = [structlog.contextvars.merge_contextvars]
+        with structlog.testing.capture_logs(processors=merge_context) as logs:
+            await _run_worker(task)
+
+        events = {entry["event"]: entry.get("task_id") for entry in logs}
+        for event in ("session_connected", "session_query_started", "node_succeeded"):
+            assert events[event] == str(task.id)
 
 
 class TestConflictAfterRestart:

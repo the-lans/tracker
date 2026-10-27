@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from claude_agent_sdk import ClaudeSDKClient, ClaudeSDKError, RateLimitInfo
 from redis.asyncio import Redis
 
-from app_logging.config import get_logger
+from app_logging.config import bind_task_context, get_logger
 from clients.claude_agent import (
     ClaudeAgentClientProtocol,
     ClaudeCodeSession,
@@ -414,6 +414,20 @@ async def _disconnect_quietly(session: ClaudeCodeSession) -> None:
 
 
 async def _run_task_session_async(
+    task_id: uuid.UUID,
+    *,
+    start_after_order_index: int | None,
+    continuation: bool,
+) -> None:
+    with bind_task_context(task_id):
+        await _run_task_session_in_context(
+            task_id,
+            start_after_order_index=start_after_order_index,
+            continuation=continuation,
+        )
+
+
+async def _run_task_session_in_context(
     task_id: uuid.UUID,
     *,
     start_after_order_index: int | None,

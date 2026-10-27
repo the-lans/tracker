@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 
-from app_logging.config import get_logger
+from app_logging.config import bind_task_context, get_logger
 from db.models.tasks import Task
 from db.models.users import User
 from db.session import async_session_factory
@@ -51,10 +51,11 @@ async def _clear_pending(task_id: uuid.UUID) -> None:
 
 
 async def copy_jira_attachments_async(*, task_id: uuid.UUID, user_id: uuid.UUID, key: str) -> None:
-    try:
-        await _copy(task_id=task_id, user_id=user_id, key=key)
-    finally:
-        await _clear_pending(task_id)
+    with bind_task_context(task_id):
+        try:
+            await _copy(task_id=task_id, user_id=user_id, key=key)
+        finally:
+            await _clear_pending(task_id)
 
 
 @celery_app.task(name="copy_jira_attachments_to_task")
