@@ -17,7 +17,9 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -55,6 +57,7 @@ from redis.asyncio import Redis  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 from sqlalchemy.orm import Session, SessionTransaction  # noqa: E402
 
+from services import maintenance_tasks  # noqa: E402
 from tests.worker_support import WorkerEnv, install_worker_env  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -394,3 +397,25 @@ def worker_env(
         tmp_path=tmp_path,
         monkeypatch=monkeypatch,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerPrefixes:
+    node: str
+    session: str
+
+
+@pytest.fixture
+def container_prefixes(monkeypatch: pytest.MonkeyPatch) -> ContainerPrefixes:
+    """
+    Уборка зависших контейнеров (раздел 16.2) видит только контейнеры этого
+    теста: иначе она остановила бы контейнеры работающего на машине стека.
+    """
+    run_id = uuid.uuid4().hex[:8]
+    prefixes = ContainerPrefixes(
+        node=f"tracker-node-test-{run_id}-",
+        session=f"tracker-session-test-{run_id}-",
+    )
+    monkeypatch.setattr(maintenance_tasks, "NODE_CONTAINER_PREFIX", prefixes.node)
+    monkeypatch.setattr(maintenance_tasks, "SESSION_CONTAINER_PREFIX", prefixes.session)
+    return prefixes

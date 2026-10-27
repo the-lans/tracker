@@ -38,7 +38,7 @@ from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.tasks import Task
 from db.models.users import User
-from services.nodes.script import CONTAINER_DEADLINE_LABEL
+from services.nodes.script import CONTAINER_DEADLINE_LABEL, NODE_CONTAINER_PREFIX
 from services.notifications import NotificationEvent, notify_task_event, notify_user_event
 from services.session_container import SESSION_CONTAINER_PREFIX, SESSION_TASK_LABEL
 from services.session_heartbeat import is_session_alive
@@ -209,7 +209,7 @@ async def purge_orphaned_docker_containers(
     listing = await _run_docker(
         "ps",
         "--filter",
-        "name=tracker-node-",
+        f"name={NODE_CONTAINER_PREFIX}",
         "--format",
         f'{{{{.Names}}}}\t{{{{.Label "{CONTAINER_DEADLINE_LABEL}"}}}}',
     )

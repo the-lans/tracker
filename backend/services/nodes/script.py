@@ -52,6 +52,8 @@ _SCRIPT_SUFFIXES: dict[ScriptLanguage, str] = {
 _DEFAULT_MEMORY_LIMIT = "512m"
 # Раздел 16.2: метка с моментом, после которого контейнер считается зависшим, —
 # по ней `purge_orphaned_docker_containers` не трогает долгие, но живые скрипты.
+# По имени `purge_orphaned_docker_containers` находит контейнеры script-нод.
+NODE_CONTAINER_PREFIX = "tracker-node-"
 CONTAINER_DEADLINE_LABEL = "tracker.deadline"
 # Запас на остановку по таймауту самой ноды (`docker stop`) сверх `timeout_seconds`.
 _DEADLINE_MARGIN_SECONDS = 120
@@ -94,7 +96,7 @@ async def run_script_node(
     image = docker_image or DEFAULT_RUNNER_IMAGES[script_language]
     task_mounts = await task_mount_args(repos_path, artifacts_path)
     script_path = _write_script(repos_path, script_content, script_language)
-    container_name = f"tracker-node-{uuid.uuid4()}"
+    container_name = f"{NODE_CONTAINER_PREFIX}{uuid.uuid4()}"
 
     try:
         process = await asyncio.create_subprocess_exec(

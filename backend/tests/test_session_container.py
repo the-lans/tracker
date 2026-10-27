@@ -33,6 +33,8 @@ from services.session_heartbeat import beat
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
+    from tests.conftest import ContainerPrefixes
+
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _SESSION_DOCKERFILE = _BACKEND_DIR.parent / "runners" / "tracker-session" / "Dockerfile"
 _WORKER_SECRETS = {
@@ -317,8 +319,8 @@ def test_session_image_cli_matches_worker_sdk() -> None:
     assert match.group(1) == pinned
 
 
-async def _run_session_container(task_id: uuid.UUID) -> str:
-    container_name = f"{SESSION_CONTAINER_PREFIX}{task_id}-{uuid.uuid4().hex[:6]}"
+async def _run_session_container(prefix: str, task_id: uuid.UUID) -> str:
+    container_name = f"{prefix}{task_id}-{uuid.uuid4().hex[:6]}"
     process = await asyncio.create_subprocess_exec(
         "docker",
         "run",
@@ -343,12 +345,16 @@ class TestPurgeOrphanedSessionContainers:
         ("alive", "purged"), [(True, False), (False, True)], ids=["alive", "orphaned"]
     )
     async def test_stops_only_without_heartbeat(
-        self, redis_client: Redis, alive: bool, purged: bool
+        self,
+        redis_client: Redis,
+        container_prefixes: ContainerPrefixes,
+        alive: bool,
+        purged: bool,
     ) -> None:
         task_id = uuid.uuid4()
         if alive:
             await beat(redis_client, task_id)
-        container_name = await _run_session_container(task_id)
+        container_name = await _run_session_container(container_prefixes.session, task_id)
         try:
             stopped = await purge_orphaned_session_containers(redis_client)
             assert (container_name in stopped) is purged
