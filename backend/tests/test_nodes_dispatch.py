@@ -10,6 +10,7 @@ from db.models.enums import (
     NodeLogStatus,
     NodeLogTriggerType,
     NodeType,
+    PermissionMode,
     ScriptLanguage,
     TaskStatus,
     UserRole,
@@ -296,31 +297,60 @@ async def _make_task_with_node_log(db_session: AsyncSession) -> tuple[Task, Node
     return task, node_log
 
 
-async def test_execute_plan_prompt_node_switches_to_plan_mode_first(
-    db_session: AsyncSession,
-) -> None:
-    _task, node_log = await _make_task_with_node_log(db_session)
+class TestPlanAcceptedMode:
+    """Раздел 9.4: после хода принятого плана сессия выходит из `plan` в выбранный режим."""
 
-    async def _accept_plan() -> None:
-        node_log.status = NodeLogStatus.SUCCESS
-        await db_session.commit()
-
-    fake = FakeClaudeAgentClient(
-        messages_per_query=[[make_result_message()]],
-        on_query=_accept_plan,
+    @pytest.mark.parametrize(
+        ("task_mode", "session_mode"),
+        [
+            (None, "acceptEdits"),
+            (PermissionMode.ACCEPT_EDITS, "acceptEdits"),
+            (PermissionMode.DEFAULT, "default"),
+        ],
+        ids=["unset", "auto", "confirm_each"],
     )
-    session = ClaudeCodeSession(fake)
+    async def test_switches_after_turn(
+        self,
+        db_session: AsyncSession,
+        task_mode: PermissionMode | None,
+        session_mode: str,
+    ) -> None:
+        task, node_log = await _make_task_with_node_log(db_session)
 
-    outcome = await execute_plan_prompt_node(
-        session,
-        "составь план",
-        db_session=db_session,
-        node_log_id=node_log.id,
-        timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
-    )
+        async def _accept_plan() -> None:
+            node_log.status = NodeLogStatus.SUCCESS
+            task.current_permission_mode = task_mode
+            await db_session.commit()
 
-    assert fake.permission_modes == ["plan"]
-    assert outcome.success is True
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()]],
+            on_query=_accept_plan,
+        )
+
+        outcome = await execute_plan_prompt_node(
+            ClaudeCodeSession(fake),
+            "составь план",
+            db_session=db_session,
+            node_log_id=node_log.id,
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+        )
+
+        assert outcome.success is True
+        assert fake.permission_modes == ["plan", session_mode]
+
+    async def test_not_accepted_stays_in_plan(self, db_session: AsyncSession) -> None:
+        _task, node_log = await _make_task_with_node_log(db_session)
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+
+        await execute_plan_prompt_node(
+            ClaudeCodeSession(fake),
+            "составь план",
+            db_session=db_session,
+            node_log_id=node_log.id,
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+        )
+
+        assert fake.permission_modes == ["plan"]
 
 
 async def test_execute_plan_prompt_node_fails_when_plan_never_accepted(
@@ -393,7 +423,7 @@ async def test_execute_node_dispatches_plan_prompt_type(
     )
 
     assert outcome.success is True
-    assert fake.permission_modes == ["plan"]
+    assert fake.permission_modes == ["plan", "acceptEdits"]
 
 
 async def test_execute_node_plan_prompt_requires_db_session_and_node_log_id(

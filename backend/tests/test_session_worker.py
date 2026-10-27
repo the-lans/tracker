@@ -45,7 +45,7 @@ from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
 from services.manual_queue import enqueue_freeform_prompt_run
 from services.notifications import NotificationEvent
-from services.plan_mode import PlanDecisionOption, encode_decision
+from services.plan_mode import PLAN_ACCEPTED_MESSAGE, PlanDecisionOption, encode_decision
 from services.session_context import clear_task_session_context
 from services.session_heartbeat import is_session_alive
 from services.task_control import (
@@ -1265,7 +1265,8 @@ class TestPlanRevision:
 
         await _run_worker(task)
 
-        assert denials == ["добавь тесты"]
+        assert denials == ["добавь тесты", PLAN_ACCEPTED_MESSAGE]
+        assert worker_env.client.permission_modes == ["plan", "default"]
         logs = (
             (await db_session.execute(sa.select(NodeLog).where(NodeLog.task_id == task.id)))
             .scalars()

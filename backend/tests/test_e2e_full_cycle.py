@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 import sqlalchemy as sa
+from claude_agent_sdk import PermissionResultDeny
 from claude_agent_sdk.types import ToolPermissionContext
 
 from db.models.enums import (
@@ -37,7 +38,7 @@ from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
 from services.autostart import run_scheduled_autostart_check
-from services.plan_mode import PlanDecisionOption
+from services.plan_mode import PLAN_ACCEPTED_MESSAGE, PlanDecisionOption
 from tasks import session_worker
 from tests.factories import make_llm_account, make_repository
 from tests.fakes import FakeClaudeAgentClient, make_result_message, patch_plan_mode_signals
@@ -236,7 +237,8 @@ class TestFullCycle:
                     {"plan": _PLAN_TEXT},
                     ToolPermissionContext(),
                 )
-                assert decision.behavior == "allow"
+                assert isinstance(decision, PermissionResultDeny)
+                assert decision.message == PLAN_ACCEPTED_MESSAGE
 
         fake = FakeClaudeAgentClient(
             messages_per_query=[[make_result_message()] for _ in range(5)],

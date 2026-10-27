@@ -15,8 +15,9 @@ from typing import TYPE_CHECKING
 
 from app_logging.app_logs import write_app_log
 from clients.claude_agent import ClaudeCodeSession
-from db.models.enums import AppLogLevel, NodeLogStatus, NodeType
+from db.models.enums import AppLogLevel, NodeLogStatus, NodeType, PermissionMode
 from db.models.logs import NodeLog
+from db.models.tasks import Task
 from services.failure_classification import is_transient_assistant_error
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.nodes.script import ScriptExecutionResult, run_script_node
@@ -30,7 +31,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from db.models.pipelines import Node
-    from db.models.tasks import Task
 
 
 async def resolve_node_prompt(
@@ -279,7 +279,25 @@ async def execute_plan_prompt_node(
             llm_output_text=outcome.llm_output_text,
             error_message="План не был принят (ExitPlanMode не подтверждён)",
         )
+    assert node_log is not None
+    await _apply_accepted_plan_mode(claude_session, db_session=db_session, task_id=node_log.task_id)
     return outcome
+
+
+async def _apply_accepted_plan_mode(
+    claude_session: ClaudeCodeSession,
+    *,
+    db_session: AsyncSession,
+    task_id: uuid.UUID,
+) -> None:
+    """
+    Раздел 9.4: режим, выбранный при принятии плана, действует со следующей
+    ноды — сессия выходит из `plan` после завершения хода ноды плана.
+    """
+    task = await db_session.get(Task, task_id, populate_existing=True)
+    mode = task.current_permission_mode if task is not None else None
+    accepted_mode = mode or PermissionMode.ACCEPT_EDITS
+    await claude_session.set_permission_mode(accepted_mode.value)
 
 
 async def execute_node(

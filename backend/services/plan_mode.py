@@ -5,8 +5,10 @@
 действиями, которые режим разрешений сессии не одобряет сам. Все случаи,
 где нужен ответ пользователя, проходят через один виджет выбора (9.6):
 
-- `ExitPlanMode` — решение по плану (9.3); принятый план сразу переключает
-  режим живой сессии (`setMode`) на выбранный пользователем;
+- `ExitPlanMode` — решение по плану (9.3); принятый план завершает ход ноды
+  `plan_prompt` без изменений (до конца хода инструменты запрещены), режим
+  сессии на выбранный пользователем переключает `execute_plan_prompt_node`
+  после хода — реализацию выполняют следующие ноды;
 - `AskUserQuestion` — вопросы агента в формате SDK (`questions[]`), задаются
   по очереди, ответы возвращаются в `answers` (вопрос → выбранный вариант
   или свой текст);
@@ -42,7 +44,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny, PermissionUpdate
+from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from app_logging.config import get_logger
 from db.models.enums import NodeLogStatus, PermissionMode, TaskStatus
@@ -82,6 +84,14 @@ TOOL_APPROVAL_OPTIONS: list[dict[str, str]] = [
 PLAN_MODE_WRITE_DENIED = (
     "В режиме планирования изменения запрещены: сначала предложите план (ExitPlanMode)"
 )
+# Раздел 9.3: принятый план завершает ход ноды `plan_prompt` — реализацию
+# выполняют следующие ноды. Отказ без прерывания: агент видит, что план принят,
+# и сам заканчивает ответ (прерванный ход CLI завершает ошибкой).
+PLAN_ACCEPTED_MESSAGE = (
+    "План принят пользователем. Реализацию выполнит следующий запрос — "
+    "сейчас ничего не меняй и заверши ответ."
+)
+PLAN_ACCEPTED_TOOL_DENIED = "План принят: изменения — в следующем запросе. Заверши ответ."
 DECISION_TIMEOUT_DENIED = "Истекло время ожидания решения пользователя"
 _TOOL_DESCRIPTION_LIMIT = 500
 
@@ -155,6 +165,8 @@ class ActiveNodeContext:
     auto_accept_plan: bool = False
     # Идёт нода `plan_prompt` и план ещё не принят: изменения запрещены (9.1).
     plan_mode: bool = False
+    # План принят, ход ноды `plan_prompt` дописывается: инструменты запрещены (9.3).
+    plan_accepted: bool = False
     _decision_wait: asyncio.Task[Any] | None = field(default=None, init=False, repr=False)
 
     def activate(
@@ -173,6 +185,7 @@ class ActiveNodeContext:
         self.task_id = task_id
         self.auto_accept_plan = auto_accept_plan
         self.plan_mode = plan_mode
+        self.plan_accepted = False
 
     def track_decision_wait(self) -> None:
         self._decision_wait = asyncio.current_task()
@@ -471,11 +484,6 @@ async def _finish_question(
     await db_session.commit()
 
 
-def _set_session_mode(mode: PermissionMode) -> list[PermissionUpdate]:
-    """Режим живой сессии меняется вместе с `tasks.current_permission_mode` (9.4)."""
-    return [PermissionUpdate(type="setMode", mode=mode.value, destination="session")]
-
-
 async def _record_plan_decision(
     db_session: AsyncSession,
     *,
@@ -542,6 +550,8 @@ class _PermissionCallback:
     ) -> PermissionResult:
         context = self.context
         active = context.node_log_id is not None and context.task_id is not None
+        if context.plan_accepted and tool_name != ASK_USER_QUESTION_TOOL:
+            return PermissionResultDeny(message=PLAN_ACCEPTED_TOOL_DENIED, interrupt=False)
         if tool_name in INTERCEPTED_TOOLS:
             if not active:
                 return PermissionResultDeny(message="Нет активной ноды для обработки решения")
@@ -681,11 +691,8 @@ class _PermissionCallback:
                     task_id=context.task_id,
                     plan_text=plan_text,
                 )
-            context.plan_mode = False
             logger.info("plan_auto_accepted", node_log_id=str(context.node_log_id))
-            return PermissionResultAllow(
-                updated_permissions=_set_session_mode(PermissionMode.ACCEPT_EDITS),
-            )
+            return self._finish_plan_turn()
         resolution = await self._await_decision(
             awaiting_status=TaskStatus.PLAN_REVIEW,
             question=None,
@@ -705,9 +712,13 @@ class _PermissionCallback:
             )
         if not decision.allow:
             return PermissionResultDeny(message=decision.feedback_text or "", interrupt=False)
-        context.plan_mode = False
-        if decision.updated_permission_mode is None:
-            return PermissionResultAllow()
-        return PermissionResultAllow(
-            updated_permissions=_set_session_mode(decision.updated_permission_mode),
-        )
+        return self._finish_plan_turn()
+
+    def _finish_plan_turn(self) -> PermissionResult:
+        """
+        Раздел 9.3: план принят — ход ноды заканчивается без изменений, режим
+        сессии переключает `execute_plan_prompt_node` после хода (9.4).
+        """
+        self.context.plan_mode = False
+        self.context.plan_accepted = True
+        return PermissionResultDeny(message=PLAN_ACCEPTED_MESSAGE, interrupt=False)

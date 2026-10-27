@@ -483,7 +483,8 @@ Postgres из `backend/tests/conftest.py`:
     Задача, у которой пропал пульс сессии (`services/session_heartbeat.py`),
     после исчерпания попыток переходит в `failed` (ТЗ 6.6).
 17. **Режимы разрешений агента** (`services/plan_mode.py`, ТЗ 9): пока идёт
-    нода `plan_prompt`, правки запрещены; `current_permission_mode =
+    нода `plan_prompt`, правки запрещены, а принятый план завершает ход
+    ноды без изменений — реализуют следующие ноды; `current_permission_mode =
     default` — каждое действие, требующее разрешения, ждёт «Разрешить» /
     «Запретить» в виджете; `NULL`/`acceptEdits` — автономная работа.
     Вопросы агента (`AskUserQuestion`) — в формате SDK: `questions[]` →
