@@ -36,7 +36,9 @@ def configure_logging(*, level: int = logging.INFO) -> None:
         wrapper_class=structlog.make_filtering_bound_logger(level),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
-        cache_logger_on_first_use=True,
+        # Без кеша: логгер, успевший записать до этой настройки, иначе навсегда
+        # остался бы с форматом по умолчанию.
+        cache_logger_on_first_use=False,
     )
 
 
