@@ -61,7 +61,7 @@ class TaskSignalSubscription:
             if deadline is not None:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
-                    logger.info("task_signal_wait_timed_out", task_id=str(self._task_id))
+                    logger.debug("task_signal_wait_timed_out", task_id=str(self._task_id))
                     return False
                 poll_timeout = min(remaining, _POLL_SECONDS)
             else:

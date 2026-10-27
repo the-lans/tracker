@@ -38,8 +38,8 @@ describe("CollapsibleText", () => {
     expect(screen.queryByText(/ХВОСТ/)).not.toBeInTheDocument();
   });
 
-  test("текст, который ещё генерируется, показан целиком", () => {
-    renderWithProviders(<CollapsibleText text={longText} live />);
+  test.for([{ prop: "live" }, { prop: "defaultExpanded" }])("с $prop текст показан целиком", ({ prop }) => {
+    renderWithProviders(<CollapsibleText text={longText} {...{ [prop]: true }} />);
 
     expect(screen.getByText(/ХВОСТ/)).toBeInTheDocument();
   });

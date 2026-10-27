@@ -7,6 +7,8 @@ import { useAuth } from "@/hooks/useAuth";
 import type { TaskFormValues } from "@/components/tasks/taskForm.types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 
+const WHITESPACE_RE = /\s/;
+
 /** Поля задачи: код, название, описание, гайд, LLM-аккаунт, репозитории. */
 export function TaskFormFields({
   value,
@@ -19,6 +21,8 @@ export function TaskFormFields({
   const { data: allLlmAccounts } = useLlmAccounts();
   // Раздел 19.2: у задачи — только аккаунт её автора; `admin` видит и чужие.
   const llmAccounts = allLlmAccounts?.filter((account) => account.created_by === user?.id);
+  // Раздел 3.1: код задачи — текст без пробелов (из него строится ветка).
+  const codeInvalid = WHITESPACE_RE.test(value.code);
 
   return (
     <>
@@ -31,9 +35,15 @@ export function TaskFormFields({
           onChange={(event) => onChange({ code: event.target.value })}
           pattern="\S+"
           title="Любой текст без пробелов"
-          aria-describedby="task-code-hint"
+          aria-describedby={codeInvalid ? "task-code-error task-code-hint" : "task-code-hint"}
+          aria-invalid={codeInvalid}
           required
         />
+        {codeInvalid && (
+          <div id="task-code-error" role="alert" className="mt-1 text-meta font-semibold text-danger-text">
+            Код задачи не должен содержать пробелов
+          </div>
+        )}
         <div id="task-code-hint" className="mt-1 text-meta text-text-3">
           Любой текст без пробелов, например RR-10240 или ключ задачи Jira. Из него же
           строится рабочая ветка feature/&lt;код&gt;.

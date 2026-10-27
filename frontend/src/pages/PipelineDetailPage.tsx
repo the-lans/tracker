@@ -1,14 +1,15 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowDown, ArrowLeft, ArrowUp, Layers, Plus } from "lucide-react";
+import { ArrowLeft, Layers, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { NodeForm } from "@/components/nodes/NodeForm";
+import { NodeReorderButton } from "@/components/nodes/NodeReorderButton";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { NODE_TYPE_LABEL } from "@/lib/labels";
 import { usePipeline, usePipelineNodes } from "@/hooks/usePipelines";
-import { useDeleteNode, useUpdateNode } from "@/hooks/useNodes";
+import { useDeleteNode } from "@/hooks/useNodes";
 import { errorMessage } from "@/lib/errors";
 import type { NodeItem } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
@@ -17,32 +18,6 @@ import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 import { cn } from "@/lib/utils";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { EntityFormDialog, type EditTarget } from "@/components/common/dialogs/EntityFormDialog";
-
-function ReorderButtons({ node, neighbor }: { node: NodeItem; neighbor?: NodeItem }) {
-  const updateThis = useUpdateNode(node.id);
-  const updateNeighbor = useUpdateNode(neighbor?.id ?? "");
-
-  function swap() {
-    if (!neighbor) return;
-    updateThis.mutate({ order_index: neighbor.order_index ?? 0 });
-    updateNeighbor.mutate({ order_index: node.order_index ?? 0 });
-  }
-
-  return (
-    <button
-      type="button"
-      disabled={!neighbor}
-      onClick={swap}
-      className="touch-target flex items-center justify-center text-text-3 hover:text-text disabled:opacity-30"
-    >
-      {neighbor && neighbor.order_index! < node.order_index! ? (
-        <ArrowUp className="size-4" />
-      ) : (
-        <ArrowDown className="size-4" />
-      )}
-    </button>
-  );
-}
 
 export function PipelineDetailPage() {
   const { pipelineId } = useParams<{ pipelineId: string }>();
@@ -85,8 +60,8 @@ export function PipelineDetailPage() {
                 </div>
               </button>
               <div className="ml-auto flex shrink-0 items-center">
-              <ReorderButtons node={node} neighbor={sorted[index - 1]} />
-              <ReorderButtons node={node} neighbor={sorted[index + 1]} />
+              <NodeReorderButton node={node} neighbor={sorted[index - 1]} direction="up" />
+              <NodeReorderButton node={node} neighbor={sorted[index + 1]} direction="down" />
               <ConfirmDeleteButton
                 kind="ноду"
                 name={node.name}

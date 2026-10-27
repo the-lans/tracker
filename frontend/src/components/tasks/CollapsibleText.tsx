@@ -13,6 +13,7 @@ export function CollapsibleText({
   className,
   monospace,
   live = false,
+  defaultExpanded = false,
   renderText,
 }: {
   text: string;
@@ -21,6 +22,8 @@ export function CollapsibleText({
   monospace?: boolean;
   /** Текст ещё генерируется — показывается целиком, по мере поступления (раздел 15.2). */
   live?: boolean;
+  /** Показать целиком сразу (план на ревью — раздел 15.2); свернуть можно вручную. */
+  defaultExpanded?: boolean;
   /** Своё оформление видимой части текста (например, раскраска вывода скрипта). */
   renderText?: (text: string) => ReactNode;
 }) {
@@ -28,7 +31,7 @@ export function CollapsibleText({
   // (например, вывод скрипта вместо «(пусто)»), тоже остаётся свёрнутым.
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
   const isTruncatable = text.length > PREVIEW_LENGTH;
-  const expanded = !isTruncatable || (userExpanded ?? live);
+  const expanded = !isTruncatable || (userExpanded ?? (live || defaultExpanded));
   const shown = expanded ? text : `${text.slice(0, PREVIEW_LENGTH)}…`;
 
   return (

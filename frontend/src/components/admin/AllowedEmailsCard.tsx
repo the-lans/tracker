@@ -14,10 +14,11 @@ import { useAllowedEmails, useCreateAllowedEmail, useDeleteAllowedEmail } from "
 import { toastError } from "@/lib/errors";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
 
 /** Раздел 19.1: список допуска — войти через Google могут только эти адреса. */
 export function AllowedEmailsCard() {
-  const { data: allowedEmails } = useAllowedEmails();
+  const { data: allowedEmails, isLoading } = useAllowedEmails();
   const createAllowedEmail = useCreateAllowedEmail();
   const deleteAllowedEmail = useDeleteAllowedEmail();
   const [open, setOpen] = useState(false);
@@ -37,7 +38,8 @@ export function AllowedEmailsCard() {
           закрываются вход в трекер и доступ по SFTP.
         </div>
         <div className="flex flex-col">
-          {(allowedEmails ?? []).length === 0 && (
+          {isLoading && <LoadingState />}
+          {allowedEmails?.length === 0 && (
             <EmptyState
               compact
               title="Список допуска пуст"

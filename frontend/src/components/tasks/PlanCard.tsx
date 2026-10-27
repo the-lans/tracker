@@ -2,6 +2,7 @@ import { Sparkles } from "lucide-react";
 import { CollapsibleText } from "@/components/tasks/CollapsibleText";
 import { AgentMessageText } from "@/components/tasks/AgentMessageText";
 
+/** План на ревью — полным текстом над виджетом выбора (раздел 15.2). */
 export function PlanCard({ text }: { text: string }) {
   return (
     <div
@@ -13,7 +14,7 @@ export function PlanCard({ text }: { text: string }) {
         План сформирован
       </div>
       <div className="text-body-lg leading-relaxed text-text">
-        <CollapsibleText text={text} renderText={(shown) => <AgentMessageText text={shown} />} />
+        <CollapsibleText text={text} defaultExpanded renderText={(shown) => <AgentMessageText text={shown} />} />
       </div>
     </div>
   );
