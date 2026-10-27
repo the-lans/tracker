@@ -26,6 +26,8 @@ function applyEvent(queryClient: QueryClient, taskId: string, payload: TaskSocke
   void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "node-logs"] });
   // Раздел 14.3: файлы, сохранённые агентом или скриптом, появляются без перезагрузки.
   void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "artifacts"] });
+  // Пуш ветки (раздел 12) происходит вместе с переходом в `done`.
+  void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "repositories"] });
 }
 
 /**
