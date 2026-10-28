@@ -13,6 +13,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from app_logging.config import bind_task_context
 from services.push_notifications import PushMessage, send_push_to_user
 
 if TYPE_CHECKING:
@@ -74,7 +75,10 @@ async def notify_task_event(
         body=detail or f"{task.code}: {task.title}",
         data={"task_id": str(task.id), "event": event.value},
     )
-    await send_push_to_user(db_session, user_id=task.created_by, message=message)
+    # Периодические проверки обходят задачи вне воркера сессии — итог отправки
+    # всё равно ищется по `task_id` задачи (раздел 17.2).
+    with bind_task_context(task.id):
+        await send_push_to_user(db_session, user_id=task.created_by, message=message)
 
 
 async def notify_user_event(

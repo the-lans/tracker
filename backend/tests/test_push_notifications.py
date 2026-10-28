@@ -12,7 +12,10 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.notifications import PushSubscription
+from db.models.tasks import Task
 from db.models.users import User
+from services import notifications
+from services.notifications import NotificationEvent, notify_task_event
 from services.push_notifications import (
     PUSH_SEND_TIMEOUT_SECONDS,
     PushMessage,
@@ -226,3 +229,25 @@ class TestSendDoesNotBlockLoop:
             )
 
         assert webpush.call_args.kwargs["timeout"] == PUSH_SEND_TIMEOUT_SECONDS
+
+
+class TestNotifyTaskEvent:
+    async def test_push_logged_with_task_id(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 17.2: итог отправки ищется по задаче и вне воркера сессии."""
+        seen: list[object] = []
+
+        async def record(*_args: object, **_kwargs: object) -> None:
+            seen.append(structlog.contextvars.get_contextvars().get("task_id"))
+
+        monkeypatch.setattr(notifications, "send_push_to_user", record)
+        user = await make_user(db_session)
+        task = Task(code="RR-12345", title="t", description="d", created_by=user.id)
+
+        await notify_task_event(db_session, event=NotificationEvent.DONE, task=task)
+
+        assert seen == [str(task.id)]
+        assert "task_id" not in structlog.contextvars.get_contextvars()
