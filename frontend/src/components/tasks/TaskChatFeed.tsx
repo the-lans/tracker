@@ -96,7 +96,7 @@ export function TaskChatFeed({
             log={log}
             title={log.node_id ? nodeNames.get(log.node_id) : undefined}
             streamedText={outputStream[log.id]}
-            isLlmTurn={isAgentTurn(log, nodeTypes)}
+            isAgentTurn={isAgentTurn(log, nodeTypes)}
           />
         ))}
       </div>

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Maximize2 } from "lucide-react";
 import { MessageBubble } from "@/components/tasks/MessageBubble";
 import { promptKindOf } from "@/components/tasks/messageKinds";
-import { describeUserInput, splitOutputAtDecision } from "@/lib/userInput";
+import { describeUserInput, turnOutputOf } from "@/lib/userInput";
 import { NodeOutputSheet } from "@/components/tasks/NodeOutputSheet";
 import { ScriptOutputBlock } from "@/components/tasks/ScriptOutputBlock";
 import { DecisionWidget } from "@/components/tasks/DecisionWidget";
@@ -27,14 +27,14 @@ export function NodeLogEntry({
   log,
   title,
   streamedText,
-  isLlmTurn = false,
+  isAgentTurn = false,
 }: {
   taskId: string;
   log: NodeLog;
   title?: string;
   streamedText?: string;
   /** Запись — ход агента (промт, слэш-команда, план), а не скрипт или очистка контекста. */
-  isLlmTurn?: boolean;
+  isAgentTurn?: boolean;
 }) {
   const [outputOpen, setOutputOpen] = useState(false);
   // Раздел 15.2: служебная реплика помечена источником — один раз, в заголовке записи.
@@ -44,22 +44,13 @@ export function NodeLogEntry({
   const isAwaitingDecision = log.status === NodeLogStatus.AWAITING_DECISION;
   const isSummaryNote =
     log.trigger_type === NodeLogTriggerType.PARENT_SUMMARY && log.llm_output_text === null;
-  // Раздел 15.2: пока ход идёт, ответ показывается по мере генерации;
-  // итоговый текст из БД заменяет его.
   const userInput =
     !isAwaitingDecision && log.user_input_text ? describeUserInput(log) : null;
-  const isRunning = log.status === NodeLogStatus.RUNNING;
-  const finalText = log.llm_output_text;
-  // Ход не завершён: ответ — из потока, в том числе пока ждёт решения.
-  const streamText = isRunning || isAwaitingDecision ? (streamedText ?? "") : "";
-  // Раздел 15.2: решение — в той точке ответа, где агент его запросил.
-  const output = splitOutputAtDecision(finalText ?? streamText, log.decision_output_offset);
-  const generating = !finalText && isRunning;
-  // После решения генерируется продолжение ответа — оно ниже решения.
-  const liveAfterDecision = generating && log.decision_output_offset !== null;
-  const thinking = generating && isLlmTurn && !(liveAfterDecision ? output.after : output.before);
-  // Ответ, увиденный в потоке, после хода не сворачивается — как в CLI.
-  const keepExpanded = streamedText !== undefined;
+  const { before, after, generating, liveAfterDecision, thinking, keepExpanded } = turnOutputOf(
+    log,
+    streamedText,
+    isAgentTurn,
+  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -89,10 +80,10 @@ export function NodeLogEntry({
         />
       )}
       {isScript && <ScriptOutputBlock stdout={log.script_stdout} exitCode={log.script_exit_code} />}
-      {output.before && (
+      {before && (
         <MessageBubble
           role="llm"
-          text={output.before}
+          text={before}
           streaming={generating && !liveAfterDecision}
           defaultExpanded={keepExpanded}
         />
@@ -109,8 +100,8 @@ export function NodeLogEntry({
           text={userInput.text}
         />
       )}
-      {output.after && (
-        <MessageBubble role="llm" text={output.after} streaming={liveAfterDecision} defaultExpanded={keepExpanded} />
+      {after && (
+        <MessageBubble role="llm" text={after} streaming={liveAfterDecision} defaultExpanded={keepExpanded} />
       )}
       {thinking && liveAfterDecision && <MessageBubble role="llm" text="" thinking />}
       {/* Пометка «саммари недоступно» сама объясняет себя — без общей ошибки. */}

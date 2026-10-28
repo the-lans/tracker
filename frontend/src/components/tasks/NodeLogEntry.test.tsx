@@ -10,7 +10,7 @@ const PLAN = "1. Добавить кнопку\n2. Написать тесты";
 
 function renderEntry(
   log: Partial<NodeLog>,
-  { title, streamedText, isLlmTurn }: { title?: string; streamedText?: string; isLlmTurn?: boolean } = {},
+  { title, streamedText, isAgentTurn }: { title?: string; streamedText?: string; isAgentTurn?: boolean } = {},
 ) {
   return renderWithProviders(
     <NodeLogEntry
@@ -18,7 +18,7 @@ function renderEntry(
       log={makeNodeLog(log)}
       title={title}
       streamedText={streamedText}
-      isLlmTurn={isLlmTurn}
+      isAgentTurn={isAgentTurn}
     />,
   );
 }
@@ -103,11 +103,11 @@ describe("NodeLogEntry", () => {
 
   describe("поток ответа", () => {
     test.for([
-      { isLlmTurn: true, streamedText: undefined, thinking: true },
-      { isLlmTurn: false, streamedText: undefined, thinking: false },
-      { isLlmTurn: true, streamedText: "Добавляю", thinking: false },
-    ])("ход агента $isLlmTurn, поток «$streamedText» → думает: $thinking", ({ isLlmTurn, streamedText, thinking }) => {
-      renderEntry({ status: NodeLogStatus.RUNNING }, { isLlmTurn, streamedText });
+      { isAgentTurn: true, streamedText: undefined, thinking: true },
+      { isAgentTurn: false, streamedText: undefined, thinking: false },
+      { isAgentTurn: true, streamedText: "Добавляю", thinking: false },
+    ])("ход агента $isAgentTurn, поток «$streamedText» → думает: $thinking", ({ isAgentTurn, streamedText, thinking }) => {
+      renderEntry({ status: NodeLogStatus.RUNNING }, { isAgentTurn, streamedText });
 
       expect(screen.queryByText("думает…") !== null).toBe(thinking);
     });
@@ -115,7 +115,7 @@ describe("NodeLogEntry", () => {
     test("после ответа на вопрос агент думает — ниже решения", () => {
       const { container } = renderEntry(
         { ...QUESTION, status: NodeLogStatus.RUNNING, user_input_text: "0" },
-        { streamedText: "Уточню.", isLlmTurn: true },
+        { streamedText: "Уточню.", isAgentTurn: true },
       );
 
       expectOrder(container, ["Уточню.", "main", "думает…"]);
