@@ -5,6 +5,7 @@ import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { TaskOverviewPanel } from "@/components/tasks/TaskOverviewPanel";
 import { TaskChatFeed } from "@/components/tasks/TaskChatFeed";
 import { TaskLogsPanel } from "@/components/tasks/TaskLogsPanel";
+import { type MobileTaskTab, TaskMobileTabs } from "@/components/tasks/TaskMobileTabs";
 import { TaskWorkspaceTabs, type WorkspaceView } from "@/components/tasks/TaskWorkspaceTabs";
 import { TaskControlButtons } from "@/components/tasks/TaskControlButtons";
 import { RemoteControlButton } from "@/components/tasks/RemoteControlButton";
@@ -18,7 +19,7 @@ export function TaskPage() {
   const { taskId } = useParams<{ taskId: string }>();
   const { data: task, isLoading } = useTask(taskId);
   const { data: nodeLogs } = useTaskNodeLogs(taskId);
-  const [mobileTab, setMobileTab] = useState<"overview" | WorkspaceView>("dialogue");
+  const [mobileTab, setMobileTab] = useState<MobileTaskTab>("dialogue");
   useTaskStatusSocket(taskId);
 
   if (isLoading || !task) {
@@ -63,38 +64,7 @@ export function TaskPage() {
         {hasBridge && <RemoteControlNotice />}
       </div>
 
-      <div className="flex border-b border-border xl:hidden">
-        <button
-          type="button"
-          onClick={() => setMobileTab("overview")}
-          className={cn(
-            "flex-1 touch-target border-b-2 border-transparent py-2.5 text-body font-bold text-text-2 short:py-1",
-            mobileTab === "overview" && "border-accent text-accent",
-          )}
-        >
-          Обзор
-        </button>
-        <button
-          type="button"
-          onClick={() => setMobileTab("dialogue")}
-          className={cn(
-            "flex-1 touch-target border-b-2 border-transparent py-2.5 text-body font-bold text-text-2 short:py-1",
-            mobileTab === "dialogue" && "border-accent text-accent",
-          )}
-        >
-          Диалог
-        </button>
-        <button
-          type="button"
-          onClick={() => setMobileTab("logs")}
-          className={cn(
-            "flex-1 touch-target border-b-2 border-transparent py-2.5 text-body font-bold text-text-2 short:py-1",
-            mobileTab === "logs" && "border-accent text-accent",
-          )}
-        >
-          Логи
-        </button>
-      </div>
+      <TaskMobileTabs value={mobileTab} onChange={setMobileTab} />
 
       <div className="flex min-h-0 flex-1 xl:flex-row short:flex-none">
         <div
