@@ -42,6 +42,13 @@ if TYPE_CHECKING:
 logger = get_logger("claude_agent")
 
 REMOTE_CONTROL_EXTRA_ARG = "remote-control"
+# Правило 1 CLAUDE.md: ход сессии начинает только запрос трекера. Фоновая
+# команда или запланированное пробуждение агента завершаются ходом без
+# запроса, и его ответ достался бы следующему запросу трекера.
+SEQUENTIAL_TURNS_ENV = {
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+    "CLAUDE_CODE_DISABLE_CRON": "1",
+}
 _CONTENT_BLOCK_START_EVENT = "content_block_start"
 _CONTENT_BLOCK_DELTA_EVENT = "content_block_delta"
 _TEXT_DELTA = "text_delta"
@@ -133,7 +140,8 @@ def build_claude_agent_options(
     пересказывается история родительской задачи. ``add_dirs`` — каталоги вне
     ``cwd``, с которыми сессии можно работать: артефакты задачи (раздел 14.3).
     ``cli_path`` и ``cli_env`` — обёртка, запускающая CLI в контейнере сессии,
-    и её настройки (раздел 19.3, `services/session_container.py`).
+    и её настройки (раздел 19.3, `services/session_container.py`). Фоновые
+    задачи и пробуждения CLI выключены всегда (`SEQUENTIAL_TURNS_ENV`).
     """
     extra_args: dict[str, str | None] = {}
     if enable_remote_control:
@@ -158,7 +166,11 @@ def build_claude_agent_options(
         cwd=cwd,
         permission_mode=permission_mode,  # type: ignore[arg-type]
         mcp_servers=mcp_servers,
-        env={**(cli_env or {}), "CLAUDE_CONFIG_DIR": claude_config_dir},
+        env={
+            **(cli_env or {}),
+            **SEQUENTIAL_TURNS_ENV,
+            "CLAUDE_CONFIG_DIR": claude_config_dir,
+        },
         cli_path=cli_path,
         extra_args=extra_args,
         can_use_tool=can_use_tool,

@@ -17,6 +17,7 @@ from claude_agent_sdk import AssistantMessage, ProcessError, RateLimitInfo, Text
 
 from clients.claude_agent import (
     REMOTE_CONTROL_EXTRA_ARG,
+    SEQUENTIAL_TURNS_ENV,
     ClaudeCodeSession,
     OfflineAgentClient,
     build_claude_agent_options,
@@ -50,7 +51,10 @@ def test_build_claude_agent_options_sets_remote_control_flag_on_first_connect() 
     assert options.resume is None
     assert options.add_dirs == ["/data/user-files/RR-00001"]
     assert options.extra_args == {REMOTE_CONTROL_EXTRA_ARG: None}
-    assert options.env == {"CLAUDE_CONFIG_DIR": "/data/llm-accounts/acc-1"}
+    assert options.env == {
+        **SEQUENTIAL_TURNS_ENV,
+        "CLAUDE_CONFIG_DIR": "/data/llm-accounts/acc-1",
+    }
 
 
 def test_build_claude_agent_options_omits_remote_control_flag_on_resume() -> None:
@@ -65,6 +69,31 @@ def test_build_claude_agent_options_omits_remote_control_flag_on_resume() -> Non
 
     assert options.resume == "sess-1"
     assert options.extra_args == {}
+
+
+class TestSequentialTurnsEnv:
+    @pytest.mark.parametrize(
+        "cli_env",
+        [
+            None,
+            {"TRACKER_SESSION_DOCKER_SPEC": "{}"},
+            {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "0", "CLAUDE_CODE_DISABLE_CRON": "0"},
+        ],
+    )
+    def test_cli_cannot_start_turns_itself(self, cli_env: dict[str, str] | None) -> None:
+        """Правило 1: фоновые задачи и пробуждения CLI выключены при любом окружении."""
+        options = build_claude_agent_options(
+            resume_session_id=None,
+            cwd="tracker/repos/RR-00001/",
+            permission_mode=None,
+            mcp_servers={},
+            claude_config_dir="/data/llm-accounts/acc-1",
+            enable_remote_control=False,
+            cli_env=cli_env,
+        )
+
+        assert options.env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+        assert options.env["CLAUDE_CODE_DISABLE_CRON"] == "1"
 
 
 async def test_connect_disconnect_interrupt_delegate_to_client() -> None:
