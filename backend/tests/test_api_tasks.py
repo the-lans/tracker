@@ -1460,6 +1460,7 @@ class TestDuplicateTask:
             ],
         )
         source.status = TaskStatus.DONE
+        source.auto_accept_plan = True
         source.session_id = "sess-source"
         source.parent_task_id = uuid.UUID(parent["id"])
         await db_session.flush()
@@ -1487,6 +1488,7 @@ class TestDuplicateTask:
         copy = response.json()
         assert copy["status"] == TaskStatus.NEW.value
         assert copy["pipeline_id"] == str(source.pipeline_id)
+        assert copy["auto_accept_plan"] is True
         assert copy["session_id"] is None
         assert copy["parent_task_id"] is None
         copy_nodes = (await authed_client.get(f"/tasks/{copy['id']}/nodes")).json()
