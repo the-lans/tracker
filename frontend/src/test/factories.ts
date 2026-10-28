@@ -70,6 +70,7 @@ export function makeNodeLog(overrides: Partial<NodeLog> = {}): NodeLog {
     decision_output_offset: null,
     script_stdout: null,
     script_exit_code: null,
+    error_message: null,
     status: NodeLogStatus.SUCCESS,
     pending_question: null,
     pending_plan_text: null,

@@ -315,6 +315,8 @@ export interface NodeLog {
   decision_output_offset: number | null;
   script_stdout: string | null;
   script_exit_code: number | null;
+  /** Почему выполнение не удалось (раздел 15.2): таймаут, сбой сессии. */
+  error_message: string | null;
   status: NodeLogStatus;
   pending_question: string | null;
   pending_plan_text: string | null;

@@ -109,7 +109,9 @@ export function NodeLogEntry({
         <MessageBubble
           role="llm"
           danger
-          text={`Ошибка выполнения (попытка ${log.attempt_number})`}
+          text={[`Ошибка выполнения (попытка ${log.attempt_number})`, log.error_message]
+            .filter(Boolean)
+            .join(": ")}
         />
       )}
       {log.status === NodeLogStatus.STOPPED && (

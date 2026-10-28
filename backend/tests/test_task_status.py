@@ -19,6 +19,7 @@ from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
 from services.task_status import (
+    SESSION_ERROR_MESSAGE,
     fail_task_after_error,
     first_unfinished_order_index,
     reset_task_to_new,
@@ -345,6 +346,7 @@ async def test_fail_task_after_error_fails_task_and_closes_running_logs(
     assert task.status is TaskStatus.FAILED
     assert task.last_failed_order_index == 2
     assert running_log.status is NodeLogStatus.FAILED
+    assert running_log.error_message == SESSION_ERROR_MESSAGE
     app_logs = (
         await db_session.execute(sa.select(AppLog).where(AppLog.task_id == task.id))
     ).scalars().all()

@@ -283,7 +283,8 @@ async def test_list_node_logs_returns_history_in_order(
         NodeLog(
             task_id=task_id,
             trigger_type=NodeLogTriggerType.FREEFORM_MANUAL,
-            status=NodeLogStatus.SUCCESS,
+            status=NodeLogStatus.FAILED,
+            error_message="Превышен таймаут выполнения",
         ),
     )
     await db_session.flush()
@@ -293,7 +294,8 @@ async def test_list_node_logs_returns_history_in_order(
     assert response.status_code == 200
     entries = response.json()
     assert len(entries) == 1
-    assert entries[0]["status"] == NodeLogStatus.SUCCESS.value
+    assert entries[0]["status"] == NodeLogStatus.FAILED.value
+    assert entries[0]["error_message"] == "Превышен таймаут выполнения"
 
 
 async def test_submit_decision_encodes_and_publishes_signal(

@@ -37,6 +37,8 @@ class NodeLog(UUIDPrimaryKeyMixin, Base):
     decision_output_offset: Mapped[int | None] = mapped_column(sa.Integer)
     script_stdout: Mapped[str | None] = mapped_column(sa.Text)
     script_exit_code: Mapped[int | None] = mapped_column(sa.Integer)
+    # Причина `failed` для ленты (раздел 15.2): таймаут, ошибка сессии и т. п.
+    error_message: Mapped[str | None] = mapped_column(sa.Text)
     status: Mapped[NodeLogStatus] = mapped_column(
         pg_enum(NodeLogStatus, name="node_log_status"),
         default=NodeLogStatus.PENDING,

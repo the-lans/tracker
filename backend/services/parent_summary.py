@@ -238,6 +238,7 @@ async def _run_summary_turn(
     )
     node_log.finished_at = datetime.now(UTC)
     node_log.llm_output_text = outcome.llm_output_text
+    node_log.error_message = outcome.error_message
     succeeded = outcome.success and bool(outcome.llm_output_text)
     node_log.status = NodeLogStatus.SUCCESS if succeeded else NodeLogStatus.FAILED
     await db_session.commit()
@@ -357,6 +358,7 @@ async def deliver_parent_summary(
             timeout_seconds=timeout_seconds,
         )
         node_log.llm_output_text = outcome.llm_output_text
+        node_log.error_message = outcome.error_message
         node_log.status = NodeLogStatus.SUCCESS if outcome.success else NodeLogStatus.FAILED
     else:
         reason = summary.unavailable_reason or REASON_NO_SESSION

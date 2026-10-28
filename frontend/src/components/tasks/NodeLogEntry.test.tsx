@@ -157,10 +157,15 @@ describe("NodeLogEntry", () => {
     });
 
     test.for([
-      { status: NodeLogStatus.FAILED, trigger: NodeLogTriggerType.PIPELINE, output: null, text: "Ошибка выполнения (попытка 3)" },
-      { status: NodeLogStatus.STOPPED, trigger: NodeLogTriggerType.PIPELINE, output: null, text: "Остановлено пользователем" },
-    ])("$status → «$text»", ({ status, trigger, output, text }) => {
-      renderEntry({ status, trigger_type: trigger, llm_output_text: output, attempt_number: 3 });
+      { status: NodeLogStatus.FAILED, error: null, text: "Ошибка выполнения (попытка 3)" },
+      {
+        status: NodeLogStatus.FAILED,
+        error: "Превышен таймаут выполнения",
+        text: "Ошибка выполнения (попытка 3): Превышен таймаут выполнения",
+      },
+      { status: NodeLogStatus.STOPPED, error: null, text: "Остановлено пользователем" },
+    ])("$status, причина «$error» → «$text»", ({ status, error, text }) => {
+      renderEntry({ status, error_message: error, llm_output_text: null, attempt_number: 3 });
 
       expect(screen.getByText(text)).toBeInTheDocument();
     });

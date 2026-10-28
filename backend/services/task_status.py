@@ -227,6 +227,8 @@ _UNFINISHED_NODE_LOG_STATUSES = (
     NodeLogStatus.RUNNING,
     NodeLogStatus.AWAITING_DECISION,
 )
+# Причина в ленте (раздел 15.2); подробности сбоя — в `app_logs`, не пользователю.
+SESSION_ERROR_MESSAGE = "Сбой сессии Claude Code — подробности в журнале ошибок у администратора"
 _AWAITING_STATUSES = (TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW)
 # Раздел 8.2: сессией задачи владеет воркер ровно в этих статусах — ручные
 # запросы принимаются в её очередь, только пока она активна.
@@ -338,7 +340,11 @@ async def fail_task_after_error(
     await db_session.execute(
         sa.update(NodeLog)
         .where(NodeLog.task_id == task_id, NodeLog.status.in_(_UNFINISHED_NODE_LOG_STATUSES))
-        .values(status=NodeLogStatus.FAILED, finished_at=now),
+        .values(
+            status=NodeLogStatus.FAILED,
+            finished_at=now,
+            error_message=SESSION_ERROR_MESSAGE,
+        ),
     )
     await db_session.execute(
         sa.update(TaskManualRequestQueue)

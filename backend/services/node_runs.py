@@ -62,4 +62,5 @@ def apply_node_outcome(
     node_log.llm_output_text = outcome.llm_output_text
     node_log.script_stdout = outcome.script_stdout
     node_log.script_exit_code = outcome.script_exit_code
+    node_log.error_message = None if succeeded else outcome.error_message
     node_log.status = NodeLogStatus.SUCCESS if succeeded else NodeLogStatus.FAILED

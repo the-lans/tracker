@@ -216,7 +216,8 @@ alembic/
                  в system_settings, task_repositories.rebase_requested_at,
                  tasks.context_cleared_at, task_nodes.pause_after, nodes.task_id —
                  свои ноды задачи, node_logs.decision_output_offset — место
-                 решения в ответе); новые миграции пишут DDL
+                 решения в ответе, node_logs.error_message — причина
+                 ошибки); новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна

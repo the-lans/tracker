@@ -147,6 +147,7 @@ class NodeLogResponse(BaseModel):
     decision_output_offset: int | None
     script_stdout: str | None
     script_exit_code: int | None
+    error_message: str | None
     status: NodeLogStatus
     pending_question: str | None
     pending_plan_text: str | None
