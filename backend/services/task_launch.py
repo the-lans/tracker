@@ -26,6 +26,9 @@ if TYPE_CHECKING:
 
 # Ноды, которые выполняются без сессии Claude Code.
 NODE_TYPES_WITHOUT_LLM = frozenset({NodeType.SCRIPT, NodeType.CLEAR_CONTEXT})
+# Раздел 13.1: без пайплайна выполнять нечего — иначе задача «выполнилась» бы
+# пустой: пуш ветки без изменений и уведомление «Задача выполнена».
+PIPELINE_REQUIRED_MESSAGE = "Сначала выберите пайплайн задачи"
 
 
 def requires_llm_account(node: Node) -> bool:
@@ -60,5 +63,7 @@ async def ensure_llm_account_for_launch(db_session: AsyncSession, task: Task) ->
 
 
 async def ensure_task_launchable(db_session: AsyncSession, task: Task) -> None:
+    if task.pipeline_id is None:
+        raise ValidationError(PIPELINE_REQUIRED_MESSAGE)
     await ensure_no_repository_env_conflicts(db_session, task_id=task.id)
     await ensure_llm_account_for_launch(db_session, task)

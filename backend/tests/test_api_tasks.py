@@ -38,7 +38,7 @@ from services.task_control import (
     read_task_control,
 )
 from services.task_signal import wait_for_task_signal
-from tests.factories import make_llm_account, make_node_log, make_repository
+from tests.factories import make_llm_account, make_node_log, make_pipeline, make_repository
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -67,6 +67,16 @@ async def _create_task(
     )
     assert response.status_code == 201, response.text
     body: dict[str, Any] = response.json()
+    return body
+
+
+async def _create_launchable_task(client: AsyncClient, db_session: AsyncSession) -> dict[str, Any]:
+    """Задача с привязанным пайплайном — без него запуск отклоняется (раздел 13.1)."""
+    body = await _create_task(client)
+    task = await db_session.get(Task, uuid.UUID(body["id"]))
+    assert task is not None
+    task.pipeline_id = (await make_pipeline(db_session, created_by=task.created_by)).id
+    await db_session.flush()
     return body
 
 
@@ -236,9 +246,10 @@ async def test_bind_pipeline_rejects_task_not_in_new_status(
 
 async def test_start_task_transitions_to_queued_and_enqueues_session_worker(
     authed_client: AsyncClient,
+    db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    task_body = await _create_task(authed_client)
+    task_body = await _create_launchable_task(authed_client, db_session)
     enqueued_task_ids: list[str] = []
     monkeypatch.setattr(
         "api.tasks.lifecycle.run_task_session",
@@ -257,7 +268,7 @@ async def test_start_task_rejects_task_not_in_new_status(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    task_body = await _create_task(authed_client)
+    task_body = await _create_launchable_task(authed_client, db_session)
     task = await db_session.get(Task, uuid.UUID(task_body["id"]))
     assert task is not None
     task.status = TaskStatus.DONE
@@ -596,7 +607,7 @@ async def test_restart_task_reruns_failed_node(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    task_body = await _create_task(authed_client)
+    task_body = await _create_launchable_task(authed_client, db_session)
     task = await db_session.get(Task, uuid.UUID(task_body["id"]))
     assert task is not None
     task.status = TaskStatus.FAILED

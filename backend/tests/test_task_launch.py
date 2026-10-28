@@ -15,7 +15,7 @@ from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
 from services.errors import ValidationError
 from services.manual_queue import enqueue_freeform_prompt_run
-from services.task_launch import ensure_llm_account_for_launch
+from services.task_launch import PIPELINE_REQUIRED_MESSAGE, ensure_llm_account_for_launch
 from tests.factories import make_llm_account, make_user
 
 if TYPE_CHECKING:
@@ -133,6 +133,27 @@ class TestStartApi:
         response = await authed_client.post(f"/tasks/{task.id}/start")
 
         assert response.status_code == 422
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.NEW
+
+
+class TestPipelineRequired:
+    """Раздел 13.1: задача без пайплайна не запускается ни кнопкой, ни по API."""
+
+    async def test_start_rejected(
+        self,
+        authed_client: AsyncClient,
+        current_user: User,
+        db_session: AsyncSession,
+    ) -> None:
+        task = await _task_with_nodes(db_session, current_user, [(NodeType.SCRIPT, True)])
+        task.pipeline_id = None
+        await db_session.flush()
+
+        response = await authed_client.post(f"/tasks/{task.id}/start")
+
+        assert response.status_code == 422
+        assert response.json()["error"]["message"] == PIPELINE_REQUIRED_MESSAGE
         await db_session.refresh(task)
         assert task.status is TaskStatus.NEW
 
