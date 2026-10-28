@@ -1,10 +1,8 @@
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { screen } from "@testing-library/react";
 import { beforeEach, describe, expect, vi } from "vitest";
-import { AuthContext, type AuthContextValue } from "@/stores/authContext";
 import { makeCurrentUser } from "@/test/factories";
 import { test } from "@/test/fixtures";
+import { renderWithProviders } from "@/test/renderWithProviders";
 
 vi.hoisted(() => vi.stubEnv("VITE_GOOGLE_CLIENT_ID", "test-client.apps.googleusercontent.com"));
 const { LoginPage } = await import("@/pages/LoginPage");
@@ -32,16 +30,9 @@ function stubGoogleButton() {
   };
 }
 
-function renderLogin(login: AuthContextValue["login"] = vi.fn()) {
-  const auth: AuthContextValue = { token: null, user: null, isAuthenticated: false, login, logout: () => {} };
-  render(
-    <AuthContext.Provider value={auth}>
-      <MemoryRouter>
-        <LoginPage />
-      </MemoryRouter>
-    </AuthContext.Provider>,
-  );
-  return { login };
+function renderLogin() {
+  const login = vi.fn();
+  return { login, ...renderWithProviders(<LoginPage />, { currentUser: null, login }) };
 }
 
 describe("LoginPage", () => {
@@ -49,22 +40,22 @@ describe("LoginPage", () => {
 
   test("отказ во входе остаётся на странице с причиной от сервера", async ({ api }) => {
     api.respond("POST /auth/google", { error: { status: 403, message: REFUSAL } });
-    const { login } = renderLogin();
+    const { login, user } = renderLogin();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Войти через Google" }));
+    await user.click(await screen.findByRole("button", { name: "Войти через Google" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(REFUSAL);
     expect(login).not.toHaveBeenCalled();
   });
 
   test("успешный вход сохраняет сессию без сообщения об отказе", async ({ api }) => {
-    const user = makeCurrentUser();
-    api.respond("POST /auth/google", { session_token: "session", user });
-    const { login } = renderLogin();
+    const currentUser = makeCurrentUser();
+    api.respond("POST /auth/google", { session_token: "session", user: currentUser });
+    const { login, user } = renderLogin();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Войти через Google" }));
+    await user.click(await screen.findByRole("button", { name: "Войти через Google" }));
 
-    await vi.waitFor(() => expect(login).toHaveBeenCalledWith({ token: "session", user }));
+    await vi.waitFor(() => expect(login).toHaveBeenCalledWith({ token: "session", user: currentUser }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

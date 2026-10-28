@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth import get_google_verifier
 from db.models.enums import UserRole
 from db.models.users import AllowedEmail, User
-from services.auth import GoogleIdentity
+from services.auth import NOT_ALLOWED_MESSAGE, UNVERIFIED_EMAIL_MESSAGE, GoogleIdentity
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -67,22 +67,28 @@ async def test_login_registers_first_allowed_user_as_admin(
     assert body["session_token"]
 
 
-async def test_login_rejects_email_outside_allowlist(api_client: AsyncClient) -> None:
-    email = f"{uuid.uuid4()}@example.com"
-    _override_verifier(GoogleIdentity(email=email, email_verified=True))
+class TestLoginRefused:
+    """Раздел 19.1: отказ во входе — 403 `forbidden` с причиной для человека."""
 
-    response = await api_client.post("/auth/google", json={"id_token": "fake-jwt"})
+    @pytest.mark.parametrize(
+        ("email_verified", "message"),
+        [(True, NOT_ALLOWED_MESSAGE), (False, UNVERIFIED_EMAIL_MESSAGE)],
+        ids=["not_in_allowlist", "unverified"],
+    )
+    async def test_reason(
+        self,
+        api_client: AsyncClient,
+        email_verified: bool,
+        message: str,
+    ) -> None:
+        email = f"{uuid.uuid4()}@example.com"
+        _override_verifier(GoogleIdentity(email=email, email_verified=email_verified))
 
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "forbidden"
+        response = await api_client.post("/auth/google", json={"id_token": "fake-jwt"})
 
-
-async def test_login_rejects_unverified_email(api_client: AsyncClient) -> None:
-    _override_verifier(GoogleIdentity(email="unverified@example.com", email_verified=False))
-
-    response = await api_client.post("/auth/google", json={"id_token": "fake-jwt"})
-
-    assert response.status_code == 403
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "forbidden"
+        assert response.json()["error"]["message"] == message.format(email=email)
 
 
 async def test_login_returns_working_session_token_for_existing_user(
