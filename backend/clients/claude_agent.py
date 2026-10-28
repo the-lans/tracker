@@ -184,6 +184,16 @@ def _join_text_blocks(parts: list[str]) -> str:
     return TEXT_BLOCK_SEPARATOR.join(part for part in parts if part)
 
 
+def _own_text_blocks(message: AssistantMessage) -> list[str]:
+    """
+    Текст ответа самого агента: реплики субагентов не входят ни в поток, ни в
+    итог хода — иначе место решения в потоке и в ответе разошлось бы (15.2).
+    """
+    if message.parent_tool_use_id is not None:
+        return []
+    return [block.text for block in message.content if isinstance(block, TextBlock)]
+
+
 def _starts_text_block(message: StreamEvent) -> bool:
     """Начало нового текстового блока в ответе самого агента."""
     if message.parent_tool_use_id is not None:
@@ -432,9 +442,7 @@ class ClaudeCodeSession:
                     if isinstance(message, AssistantMessage):
                         if message.error is not None:
                             assistant_error = message.error
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                text_parts.append(block.text)
+                        text_parts.extend(_own_text_blocks(message))
                     if isinstance(message, ResultMessage):
                         result = message
             except ClaudeSDKError:

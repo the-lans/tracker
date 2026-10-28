@@ -313,6 +313,48 @@ class TestTurnTextLength:
         assert session.turn_text_length() == 0
 
 
+class TestSubagentText:
+    """Раздел 15.2: ответ хода — реплики самого агента, как в потоке."""
+
+    async def test_not_in_turn_text(self) -> None:
+        deltas: list[str] = []
+        lengths: list[int] = []
+
+        async def collect(text: str) -> None:
+            deltas.append(text)
+
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    make_text_block_start(),
+                    make_text_delta("Ищу"),
+                    AssistantMessage(content=[TextBlock(text="Ищу")], model="claude"),
+                    make_text_delta("найдено", parent_tool_use_id="tool-1"),
+                    AssistantMessage(
+                        content=[TextBlock(text="найдено")],
+                        model="claude",
+                        parent_tool_use_id="tool-1",
+                    ),
+                    make_result_message(),
+                ],
+            ],
+        )
+        session = ClaudeCodeSession(fake, on_text_delta=collect)
+        original = fake.receive_response
+
+        async def spying_receive() -> AsyncIterator[Message]:
+            async for message in original():
+                yield message
+                lengths.append(session.turn_text_length())
+
+        fake.receive_response = spying_receive  # type: ignore[method-assign]
+
+        turn = await session.send_and_collect_text("найди")
+
+        assert turn.text == "".join(deltas) == "Ищу"
+        assert lengths[-2] == len("".join(deltas))
+
+
 class TestTextDeltas:
     async def test_forwarded_while_answer_is_collected(self) -> None:
         deltas: list[str] = []
