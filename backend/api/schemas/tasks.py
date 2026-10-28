@@ -157,11 +157,12 @@ class NodeLogResponse(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    """Раздел 9.6: ответ на `awaiting_input`/`plan_review`.
+    """
+    Раздел 9.6: ответ на `awaiting_input`/`plan_review`.
 
     ``option_id`` — выбор одной из `pending_options` (включая варианты
-    решения по плану, раздел 9.3); ``feedback_text`` — свободный текст,
-    обязателен для "Доработать план" (раздел 9.3), опционален для прочих.
+    решения по плану, раздел 9.3); ``feedback_text`` — необязательный
+    свободный текст, для "Доработать план" — пожелания к плану.
     """
 
     node_log_id: uuid.UUID
