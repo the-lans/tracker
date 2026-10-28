@@ -9,12 +9,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import time
 import uuid
+from collections.abc import Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from app_logging.app_logs import write_app_log
-from clients.claude_agent import ClaudeCodeSession
+from clients.claude_agent import ClaudeCodeSession, UserWaitClock
 from db.models.enums import AppLogLevel, NodeLogStatus, NodeType, PermissionMode
 from db.models.logs import NodeLog
 from db.models.tasks import Task
@@ -162,6 +165,35 @@ async def execute_llm_node(claude_session: ClaudeCodeSession, prompt: str) -> No
     return NodeExecutionOutcome(success=True, llm_output_text=turn.text)
 
 
+async def _run_within_active_time(
+    turn: Coroutine[Any, Any, NodeExecutionOutcome],
+    *,
+    timeout_seconds: float,
+    clock: UserWaitClock,
+) -> NodeExecutionOutcome:
+    """
+    Как `asyncio.wait_for`, но время, пока ход ждёт решения пользователя
+    (`clock`), в таймаут не входит (раздел 7.3): срок сдвигается на него.
+    """
+    running = asyncio.ensure_future(turn)
+    started = time.monotonic()
+    waited_before = clock.waited_seconds()
+    try:
+        while True:
+            active = time.monotonic() - started - (clock.waited_seconds() - waited_before)
+            remaining = timeout_seconds - active
+            if remaining <= 0:
+                raise TimeoutError
+            done, _ = await asyncio.wait({running}, timeout=remaining)
+            if done:
+                return running.result()
+    finally:
+        if not running.done():
+            running.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await running
+
+
 async def execute_llm_node_with_timeout(
     claude_session: ClaudeCodeSession,
     prompt: str,
@@ -175,9 +207,10 @@ async def execute_llm_node_with_timeout(
     хвост прерванного хода следующему запросу.
     """
     try:
-        return await asyncio.wait_for(
+        return await _run_within_active_time(
             execute_llm_node(claude_session, prompt),
-            timeout=timeout_seconds,
+            timeout_seconds=timeout_seconds,
+            clock=claude_session.user_wait_clock,
         )
     except TimeoutError:
         partial_text = claude_session.take_partial_turn_text()

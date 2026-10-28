@@ -46,7 +46,12 @@ from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
 from services.manual_queue import enqueue_freeform_prompt_run
 from services.notifications import NotificationEvent
-from services.plan_mode import PLAN_ACCEPTED_MESSAGE, PlanDecisionOption, encode_decision
+from services.plan_mode import (
+    PLAN_ACCEPTED_MESSAGE,
+    PLAN_REVISE_DENIED,
+    PlanDecisionOption,
+    encode_decision,
+)
 from services.session_context import clear_task_session_context
 from services.session_heartbeat import is_session_alive
 from services.task_control import (
@@ -1136,57 +1141,54 @@ class TestStatefulMcpIsolation:
 
 
 class TestNodeTimeoutWhileAwaitingDecision:
-    async def test_task_fails_instead_of_hanging(
+    async def test_user_wait_not_counted(
         self,
         db_session: AsyncSession,
         worker_env: WorkerEnv,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """
-        Пользователь не принял план за `timeout_seconds` ноды: ход
-        прерывается, ожидание решения в задаче SDK снимается, задача — `failed`,
-        а не висит в `plan_review` или в `in_progress` без воркера.
+        Раздел 7.3: таймаут ноды ограничивает ожидание ответа LLM — план,
+        принятый позже `timeout_seconds`, не прерывает ход и не тратит попытку.
         """
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
         plan_node = await _add_node(db_session, task, order_index=0, node_type=NodeType.PLAN_PROMPT)
         plan_node.prompt_template = "Составь план"
         plan_node.timeout_seconds = 1
         await db_session.flush()
-        sdk_handlers: list[asyncio.Task[Any]] = []
 
-        async def user_never_answers(*_args: Any, **_kwargs: Any) -> bool:
-            await asyncio.Event().wait()
-            return False
+        async def user_decides_late(*_args: Any, **_kwargs: Any) -> bool:
+            await asyncio.sleep(1.5)
+            pending = await db_session.scalar(
+                sa.select(NodeLog).where(NodeLog.status == NodeLogStatus.AWAITING_DECISION),
+            )
+            assert pending is not None
+            pending.user_input_text = encode_decision(PlanDecisionOption.ACCEPT_AUTO)
+            await db_session.commit()
+            return True
 
-        patch_plan_mode_signals(monkeypatch, user_never_answers)
-
-        class HangingClient(FakeClaudeAgentClient):
-            async def interrupt(self) -> None:
-                self.message_delay_seconds = 0
-                await super().interrupt()
+        patch_plan_mode_signals(monkeypatch, user_decides_late)
 
         async def agent_exits_plan_mode() -> None:
             can_use_tool = worker_env.options[0].can_use_tool
             assert can_use_tool is not None
-            # Как в SDK: callback разрешений живёт в своей задаче, не в ходе.
-            sdk_handlers.append(
-                asyncio.ensure_future(
-                    can_use_tool("ExitPlanMode", {"plan": "1. Шаг"}, ToolPermissionContext()),
-                ),
-            )
-            worker_env.client.message_delay_seconds = 30
+            await can_use_tool("ExitPlanMode", {"plan": "1. Шаг"}, ToolPermissionContext())
 
-        worker_env.client = HangingClient(
+        worker_env.client = FakeClaudeAgentClient(
             messages_per_query=_results(1),
             on_query=agent_exits_plan_mode,
         )
 
         await asyncio.wait_for(_run_worker(task), timeout=30)
 
+        logs = (
+            (await db_session.execute(sa.select(NodeLog).where(NodeLog.task_id == task.id)))
+            .scalars()
+            .all()
+        )
+        assert [(log.attempt_number, log.status) for log in logs] == [(1, NodeLogStatus.SUCCESS)]
         await db_session.refresh(task)
-        assert task.status is TaskStatus.FAILED
-        assert task.last_failed_order_index == 0
-        assert all(handler.done() for handler in sdk_handlers)
+        assert task.status is TaskStatus.DONE
 
 
 class TestHistoryRetention:
@@ -1318,7 +1320,7 @@ class TestPlanRevision:
 
         await _run_worker(task)
 
-        assert denials == ["добавь тесты", PLAN_ACCEPTED_MESSAGE]
+        assert denials == [f"{PLAN_REVISE_DENIED}: добавь тесты", PLAN_ACCEPTED_MESSAGE]
         assert worker_env.client.permission_modes == ["plan", "default"]
         logs = (
             (await db_session.execute(sa.select(NodeLog).where(NodeLog.task_id == task.id)))

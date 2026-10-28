@@ -734,6 +734,7 @@ async def _run_claimed_task(
         on_rate_limit=_rate_limit_recorder(db_session, task),
     )
     active_node_context.output_length = session.turn_text_length
+    active_node_context.user_wait_clock = session.user_wait_clock
     control = _SessionControl(
         db_session=db_session,
         task=task,

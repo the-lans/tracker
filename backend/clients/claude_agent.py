@@ -19,6 +19,7 @@ Celery-таска на весь активный жизненный цикл с�
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol
 
@@ -240,6 +241,33 @@ class SessionTurnResult:
 _ABORT_DRAIN_TIMEOUT_SECONDS = 10.0
 
 
+class UserWaitClock:
+    """
+    Раздел 7.3: таймаут ноды ограничивает ожидание ответа LLM, а не решения
+    пользователя — время, пока ход ждёт ответа в виджете выбора (9.6), в него
+    не входит.
+    """
+
+    def __init__(self, now: Callable[[], float] = time.monotonic) -> None:
+        self._now = now
+        self._waited = 0.0
+        self._started: float | None = None
+
+    def begin(self) -> None:
+        if self._started is None:
+            self._started = self._now()
+
+    def end(self) -> None:
+        if self._started is not None:
+            self._waited += self._now() - self._started
+            self._started = None
+
+    def waited_seconds(self) -> float:
+        """Сколько всего ход ждал пользователя, включая идущее сейчас ожидание."""
+        current = self._now() - self._started if self._started is not None else 0.0
+        return self._waited + current
+
+
 class ClaudeCodeSession:
     """Владелец единственного клиента активной сессии задачи (раздел 6.1, 6.2)."""
 
@@ -265,6 +293,7 @@ class ClaudeCodeSession:
         self._turn_text_parts: list[str] = []
         # В поток хода уже ушёл текст: следующий текстовый блок отделяется.
         self._turn_streamed_text = False
+        self.user_wait_clock = UserWaitClock()
 
     def take_partial_turn_text(self) -> str | None:
         """

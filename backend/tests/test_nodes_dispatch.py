@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -484,6 +485,31 @@ class TestScriptRunnerImage:
         await execute_script_node(node, repos_path=tmp_path, runner_image=runner_image)
 
         assert seen == [expected]
+
+
+class TestTimeoutExcludesUserWait:
+    """Раздел 7.3: время, пока ход ждёт решения пользователя, в таймаут ноды не входит."""
+
+    @pytest.mark.parametrize(
+        ("user_wait_seconds", "success"),
+        [(0.5, True), (0.0, False)],
+        ids=["waits_for_user", "llm_only"],
+    )
+    async def test_outcome(self, user_wait_seconds: float, success: bool) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        fake.message_delay_seconds = 0.6
+        session = ClaudeCodeSession(fake)
+
+        async def user_decides() -> None:
+            session.user_wait_clock.begin()
+            await asyncio.sleep(user_wait_seconds)
+            session.user_wait_clock.end()
+
+        waiting = asyncio.ensure_future(user_decides())
+        outcome = await execute_llm_node_with_timeout(session, "hi", timeout_seconds=0.4)
+        await waiting
+
+        assert outcome.success is success
 
 
 class TestPartialReply:

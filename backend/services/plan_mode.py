@@ -67,6 +67,8 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from clients.claude_agent import UserWaitClock
+
 logger = get_logger("plan_mode")
 
 EXIT_PLAN_MODE_TOOL = "ExitPlanMode"
@@ -183,6 +185,8 @@ class ActiveNodeContext:
     # Длина ответа текущего хода (`ClaudeCodeSession.turn_text_length`):
     # место решения пользователя в ответе (раздел 15.2).
     output_length: Callable[[], int] | None = None
+    # Часы ожидания пользователя сессии: на это время таймаут ноды стоит (7.3).
+    user_wait_clock: UserWaitClock | None = None
     _decision_wait: asyncio.Task[Any] | None = field(default=None, init=False, repr=False)
 
     def activate(
@@ -210,10 +214,14 @@ class ActiveNodeContext:
 
     def track_decision_wait(self) -> None:
         self._decision_wait = asyncio.current_task()
+        if self.user_wait_clock is not None:
+            self.user_wait_clock.begin()
 
     def untrack_decision_wait(self) -> None:
         if self._decision_wait is asyncio.current_task():
             self._decision_wait = None
+            if self.user_wait_clock is not None:
+                self.user_wait_clock.end()
 
     async def cancel_decision_wait(self) -> None:
         """
