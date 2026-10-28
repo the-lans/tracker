@@ -115,7 +115,7 @@ export function TaskLibraryPromptsCard({
                 onClick={() => handleRun(prompt.id)}
                 disabled={blockReason !== null || runLibraryPrompt.isPending}
                 className="flex touch-target size-6 shrink-0 items-center justify-center rounded-[7px] border border-border text-text-2 disabled:opacity-40"
-                aria-label="Выполнить промт"
+                aria-label={`Выполнить промт ${prompt.name}`}
                 title={blockReason ?? "Выполнить"}
               >
                 <Play className="size-2.5" fill="currentColor" />
@@ -125,7 +125,7 @@ export function TaskLibraryPromptsCard({
                 onClick={() => activeRequestId && handleStop(activeRequestId)}
                 disabled={!activeRequestId || stopManualRequest.isPending}
                 className="flex touch-target size-6 shrink-0 items-center justify-center rounded-[7px] border border-border text-text-2 disabled:opacity-40"
-                aria-label="Остановить промт"
+                aria-label={`Остановить промт ${prompt.name}`}
               >
                 <Square className="size-2.5" fill="currentColor" />
               </button>
