@@ -376,9 +376,19 @@ async def rebase_onto_base_branch(
 
 
 async def has_uncommitted_changes(*, repository: Repository, repo_dir: Path) -> bool:
-    """Незакоммиченные или неотслеживаемые изменения рабочей директории."""
+    """
+    Незакоммиченные изменения отслеживаемых файлов. Неотслеживаемые (вывод
+    сборки и тестов) ребейз не трогает, а если коммит базы приносит файл с
+    тем же путём, ребейз откажется сам.
+    """
     async with _existing_repository_env(repository, repo_dir) as env:
-        _, status, _ = await _run_git("status", "--porcelain", cwd=repo_dir, env=env)
+        _, status, _ = await _run_git(
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+            cwd=repo_dir,
+            env=env,
+        )
     return bool(status.strip())
 
 

@@ -85,7 +85,20 @@ class TestApplyRequestedRebases:
         assert child.task_repository.merge_status is MergeStatus.NOT_PUSHED
         assert child.task.status is TaskStatus.IN_PROGRESS
 
-    @pytest.mark.parametrize("cause", ["conflict", "dirty_tree"])
+    async def test_untracked_files_kept(self, db_session: AsyncSession, tmp_path: Path) -> None:
+        """Вывод тестов (`__pycache__/`) — не незакоммиченная работа: ребейз без агента."""
+        child = await _child_task(db_session, tmp_path, status=TaskStatus.PAUSED)
+        (child.repo_dir / "__pycache__").mkdir()
+        (child.repo_dir / "__pycache__" / "calc.pyc").write_bytes(b"\x00")
+        push_base_update(tmp_path, child.origin, "other.txt", "не конфликтует\n")
+
+        await _apply(db_session, child)
+
+        assert (child.repo_dir / "other.txt").exists()
+        assert (child.repo_dir / "__pycache__" / "calc.pyc").exists()
+        assert child.task.status is TaskStatus.PAUSED
+
+    @pytest.mark.parametrize("cause", ["conflict", "dirty_tree", "untracked_collision"])
     @pytest.mark.parametrize("status", [TaskStatus.IN_PROGRESS, TaskStatus.PAUSED])
     async def test_left_to_agent(
         self,
@@ -97,8 +110,11 @@ class TestApplyRequestedRebases:
         child = await _child_task(db_session, tmp_path, status=status)
         if cause == "conflict":
             push_base_update(tmp_path, child.origin, "README.md", "правка базы\n")
+        elif cause == "dirty_tree":
+            (child.repo_dir / "README.md").write_text("незакоммиченная работа агента\n")
         else:
-            (child.repo_dir / "draft.txt").write_text("незакоммиченная работа агента\n")
+            push_base_update(tmp_path, child.origin, "draft.txt", "файл базы\n")
+            (child.repo_dir / "draft.txt").write_text("неотслеживаемая работа агента\n")
 
         await _apply(db_session, child)
 
@@ -108,6 +124,7 @@ class TestApplyRequestedRebases:
         # Работа агента не потеряна, ребейз не остался висеть.
         assert run("git", "status", "--porcelain", cwd=child.repo_dir).strip() in (
             "",
+            "M README.md",
             "?? draft.txt",
         )
         assert not (child.repo_dir / ".git" / "rebase-merge").exists()
