@@ -32,6 +32,9 @@ class NodeLog(UUIDPrimaryKeyMixin, Base):
     rendered_prompt: Mapped[str | None] = mapped_column(sa.Text)
     llm_output_text: Mapped[str | None] = mapped_column(sa.Text)
     user_input_text: Mapped[str | None] = mapped_column(sa.Text)
+    # Длина `llm_output_text` в момент запроса решения (раздел 15.2): там лента
+    # показывает решение пользователя.
+    decision_output_offset: Mapped[int | None] = mapped_column(sa.Integer)
     script_stdout: Mapped[str | None] = mapped_column(sa.Text)
     script_exit_code: Mapped[int | None] = mapped_column(sa.Integer)
     status: Mapped[NodeLogStatus] = mapped_column(

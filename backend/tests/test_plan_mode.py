@@ -408,6 +408,7 @@ def _callback(
     *,
     auto_accept_plan: bool = False,
     plan_mode: bool = False,
+    output_length: Callable[[], int] | None = None,
 ) -> CanUseTool:
     return build_can_use_tool_callback(
         context=ActiveNodeContext(
@@ -415,11 +416,50 @@ def _callback(
             task_id=task.id,
             auto_accept_plan=auto_accept_plan,
             plan_mode=plan_mode,
+            output_length=output_length,
         ),
         session_factory=_non_closing_session_factory(db_session),
         redis_client=Redis(),
         decision_wait_timeout_seconds=5.0,
     )
+
+
+class TestDecisionOutputOffset:
+    """Раздел 15.2: решение в ленте стоит там, где агент его запросил."""
+
+    @pytest.mark.parametrize(
+        ("tool_name", "tool_input", "auto_accept_plan"),
+        [
+            ("AskUserQuestion", {"questions": [_question("Какую базу?", "main", "dev")]}, False),
+            ("ExitPlanMode", {"plan": "1. Сделать X"}, True),
+        ],
+        ids=["question", "plan_auto_accept"],
+    )
+    @pytest.mark.parametrize(("output_length", "offset"), [(42, 42), (None, None)])
+    async def test_offset_recorded(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        tool_name: str,
+        tool_input: dict[str, object],
+        auto_accept_plan: bool,
+        output_length: int | None,
+        offset: int | None,
+    ) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        patch_plan_mode_signals(monkeypatch, _answering(db_session, node_log, ["1"]))
+        callback = _callback(
+            db_session,
+            task,
+            node_log,
+            auto_accept_plan=auto_accept_plan,
+            output_length=None if output_length is None else lambda: output_length,
+        )
+
+        await callback(tool_name, tool_input, _TEST_TOOL_CONTEXT)
+
+        await db_session.refresh(node_log)
+        assert node_log.decision_output_offset == offset
 
 
 class TestAskUserQuestion:

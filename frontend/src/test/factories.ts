@@ -67,6 +67,7 @@ export function makeNodeLog(overrides: Partial<NodeLog> = {}): NodeLog {
     rendered_prompt: null,
     llm_output_text: null,
     user_input_text: null,
+    decision_output_offset: null,
     script_stdout: null,
     script_exit_code: null,
     status: NodeLogStatus.SUCCESS,

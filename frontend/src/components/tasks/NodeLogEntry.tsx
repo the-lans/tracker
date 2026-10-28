@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Maximize2 } from "lucide-react";
 import { MessageBubble } from "@/components/tasks/MessageBubble";
 import { promptKindOf } from "@/components/tasks/messageKinds";
-import { describeUserInput } from "@/lib/userInput";
+import { describeUserInput, splitOutputAtDecision } from "@/lib/userInput";
 import { NodeOutputSheet } from "@/components/tasks/NodeOutputSheet";
 import { ScriptOutputBlock } from "@/components/tasks/ScriptOutputBlock";
 import { DecisionWidget } from "@/components/tasks/DecisionWidget";
@@ -46,6 +46,8 @@ export function NodeLogEntry({
   const userInput =
     !isAwaitingDecision && log.user_input_text ? describeUserInput(log) : null;
   const liveText = !log.llm_output_text && log.status === NodeLogStatus.RUNNING ? streamedText : undefined;
+  // Раздел 15.2: решение — в той точке ответа, где агент его запросил.
+  const output = splitOutputAtDecision(log.llm_output_text ?? "", log.decision_output_offset);
 
   return (
     <div className="flex flex-col gap-3">
@@ -75,19 +77,8 @@ export function NodeLogEntry({
         />
       )}
       {isScript && <ScriptOutputBlock stdout={log.script_stdout} exitCode={log.script_exit_code} />}
-      {log.llm_output_text && <MessageBubble role="llm" text={log.llm_output_text} />}
+      {output.before && <MessageBubble role="llm" text={output.before} />}
       {liveText && <MessageBubble role="llm" text={liveText} streaming />}
-      {/* Пометка «саммари недоступно» сама объясняет себя — без общей ошибки. */}
-      {log.status === NodeLogStatus.FAILED && !isSummaryNote && (
-        <MessageBubble
-          role="llm"
-          danger
-          text={`Ошибка выполнения (попытка ${log.attempt_number})`}
-        />
-      )}
-      {log.status === NodeLogStatus.STOPPED && (
-        <MessageBubble role="llm" danger kind="stopped" text="Остановлено пользователем" />
-      )}
       {isAwaitingDecision && <DecisionWidget taskId={taskId} log={log} />}
       {!isAwaitingDecision && log.pending_plan_text && log.status === NodeLogStatus.SUCCESS && (
         <MessageBubble role="llm" kind="plan" text={`План принят.\n\n${log.pending_plan_text}`} />
@@ -98,6 +89,18 @@ export function NodeLogEntry({
           kind={userInput.automatic ? "plan" : "decision"}
           text={userInput.text}
         />
+      )}
+      {output.after && <MessageBubble role="llm" text={output.after} />}
+      {/* Пометка «саммари недоступно» сама объясняет себя — без общей ошибки. */}
+      {log.status === NodeLogStatus.FAILED && !isSummaryNote && (
+        <MessageBubble
+          role="llm"
+          danger
+          text={`Ошибка выполнения (попытка ${log.attempt_number})`}
+        />
+      )}
+      {log.status === NodeLogStatus.STOPPED && (
+        <MessageBubble role="llm" danger kind="stopped" text="Остановлено пользователем" />
       )}
     </div>
   );

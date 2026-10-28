@@ -167,6 +167,9 @@ class ActiveNodeContext:
     plan_mode: bool = False
     # План принят, ход ноды `plan_prompt` дописывается: инструменты запрещены (9.3).
     plan_accepted: bool = False
+    # Длина ответа текущего хода (`ClaudeCodeSession.turn_text_length`):
+    # место решения пользователя в ответе (раздел 15.2).
+    output_length: Callable[[], int] | None = None
     _decision_wait: asyncio.Task[Any] | None = field(default=None, init=False, repr=False)
 
     def activate(
@@ -186,6 +189,9 @@ class ActiveNodeContext:
         self.auto_accept_plan = auto_accept_plan
         self.plan_mode = plan_mode
         self.plan_accepted = False
+
+    def output_offset(self) -> int | None:
+        return self.output_length() if self.output_length is not None else None
 
     def track_decision_wait(self) -> None:
         self._decision_wait = asyncio.current_task()
@@ -228,9 +234,11 @@ async def _mark_awaiting_decision(
     pending_question: str | None,
     pending_plan_text: str | None,
     pending_options: list[dict[str, str]],
+    output_offset: int | None,
 ) -> None:
     node_log = await _get_node_log(db_session, node_log_id)
     node_log.status = NodeLogStatus.AWAITING_DECISION
+    node_log.decision_output_offset = output_offset
     node_log.pending_question = pending_question
     node_log.pending_plan_text = pending_plan_text
     node_log.pending_options = pending_options
@@ -404,9 +412,11 @@ async def _record_plan_auto_accept(
     node_log_id: uuid.UUID,
     task_id: uuid.UUID,
     plan_text: str | None,
+    output_offset: int | None,
 ) -> None:
     node_log = await _get_node_log(db_session, node_log_id)
     node_log.pending_plan_text = plan_text
+    node_log.decision_output_offset = output_offset
     node_log.user_input_text = PlanDecisionOption.ACCEPT_AUTO
     # Как и при решении пользователя: принятый план — успешная запись, по
     # ней `execute_plan_prompt_node` понимает, что план подтверждён.
@@ -598,6 +608,7 @@ class _PermissionCallback:
                         pending_question=question,
                         pending_plan_text=plan_text,
                         pending_options=options,
+                        output_offset=context.output_offset(),
                     )
                     resume_status = await resumable_decision_status(db_session, task_id=task_id)
                     if resume_status is not None:
@@ -690,6 +701,7 @@ class _PermissionCallback:
                     node_log_id=context.node_log_id,
                     task_id=context.task_id,
                     plan_text=plan_text,
+                    output_offset=context.output_offset(),
                 )
             logger.info("plan_auto_accepted", node_log_id=str(context.node_log_id))
             return self._finish_plan_turn()

@@ -311,6 +311,8 @@ export interface NodeLog {
   rendered_prompt: string | null;
   llm_output_text: string | null;
   user_input_text: string | null;
+  /** Длина ответа в момент запроса решения (раздел 15.2); null — решения не было. */
+  decision_output_offset: number | null;
   script_stdout: string | null;
   script_exit_code: number | null;
   status: NodeLogStatus;

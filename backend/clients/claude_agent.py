@@ -42,8 +42,13 @@ if TYPE_CHECKING:
 logger = get_logger("claude_agent")
 
 REMOTE_CONTROL_EXTRA_ARG = "remote-control"
+_CONTENT_BLOCK_START_EVENT = "content_block_start"
 _CONTENT_BLOCK_DELTA_EVENT = "content_block_delta"
 _TEXT_DELTA = "text_delta"
+_TEXT_BLOCK = "text"
+# Текстовые блоки хода — отдельные реплики агента (до и после вызова
+# инструмента): в ответе они идут абзацами, а не сливаются в одну строку.
+TEXT_BLOCK_SEPARATOR = "\n\n"
 
 # Получатель фрагментов ответа по мере генерации (раздел 15.2).
 TextDeltaHandler = Callable[[str], Awaitable[None]]
@@ -162,6 +167,19 @@ def build_claude_agent_options(
     )
 
 
+def _join_text_blocks(parts: list[str]) -> str:
+    return TEXT_BLOCK_SEPARATOR.join(part for part in parts if part)
+
+
+def _starts_text_block(message: StreamEvent) -> bool:
+    """Начало нового текстового блока в ответе самого агента."""
+    if message.parent_tool_use_id is not None:
+        return False
+    event = message.event
+    block = event.get("content_block") or {}
+    return event.get("type") == _CONTENT_BLOCK_START_EVENT and block.get("type") == _TEXT_BLOCK
+
+
 def _text_delta_of(message: StreamEvent) -> str | None:
     """Фрагмент текста ответа самого агента; события субагентов не показываются."""
     if message.parent_tool_use_id is not None:
@@ -233,15 +251,25 @@ class ClaudeCodeSession:
         # Раздел 6.4: текст хода, полученный к этому моменту, — чтобы при
         # остановке, таймауте или падении CLI он не пропал из `node_logs`.
         self._turn_text_parts: list[str] = []
+        # В поток хода уже ушёл текст: следующий текстовый блок отделяется.
+        self._turn_streamed_text = False
 
     def take_partial_turn_text(self) -> str | None:
         """
         Текст прерванного хода (раздел 6.4), полученный до остановки, таймаута
         или падения CLI. Буфер очищается: текст попадает ровно в одну запись.
         """
-        text = "".join(self._turn_text_parts) or None
+        text = _join_text_blocks(self._turn_text_parts) or None
         self._turn_text_parts = []
         return text
+
+    def turn_text_length(self) -> int:
+        """
+        Длина ответа текущего хода, полученного к этому моменту, — в тех же
+        символах, что и итоговый текст хода (раздел 15.2: место решения
+        пользователя в ответе).
+        """
+        return len(_join_text_blocks(self._turn_text_parts))
 
     @property
     def session_id(self) -> str | None:
@@ -340,6 +368,7 @@ class ClaudeCodeSession:
             self._turn_open = True
             try:
                 self._turn_text_parts = []
+                self._turn_streamed_text = False
                 await self._client.query(prompt)
                 text_parts = self._turn_text_parts
                 result: ResultMessage | None = None
@@ -377,7 +406,7 @@ class ClaudeCodeSession:
                 session_id=result.session_id,
             )
             return SessionTurnResult(
-                text="".join(text_parts),
+                text=_join_text_blocks(text_parts),
                 result=result,
                 assistant_error=assistant_error,
             )
@@ -385,6 +414,10 @@ class ClaudeCodeSession:
     async def _forward_text_delta(self, message: StreamEvent) -> None:
         if self._on_text_delta is None:
             return
+        if _starts_text_block(message) and self._turn_streamed_text:
+            await self._on_text_delta(TEXT_BLOCK_SEPARATOR)
+            return
         text = _text_delta_of(message)
         if text is not None:
+            self._turn_streamed_text = True
             await self._on_text_delta(text)

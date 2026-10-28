@@ -36,6 +36,29 @@ describe("NodeLogEntry", () => {
     });
   });
 
+  describe("решение пользователя в ответе", () => {
+    test.for([
+      { offset: 7, order: ["Уточню.", "main", "Берём базу."] },
+      { offset: null, order: ["Уточню.", "Берём базу.", "main"] },
+    ])("смещение $offset → порядок $order", ({ offset, order }) => {
+      const { container } = renderEntry({
+        llm_output_text: "Уточню.\n\nБерём базу.",
+        decision_output_offset: offset,
+        user_input_text: "0",
+        pending_question: "Какую базу?",
+        pending_options: [
+          { id: "0", label: "main" },
+          { id: "1", label: "dev" },
+        ],
+      });
+
+      const text = container.textContent ?? "";
+      const positions = order.map((part) => text.indexOf(part));
+      expect(positions.every((position) => position >= 0)).toBe(true);
+      expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    });
+  });
+
   describe("содержимое", () => {
     test("скрипт показывает вывод, а не текст промта", () => {
       const { container } = renderEntry({

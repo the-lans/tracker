@@ -844,6 +844,7 @@ class TestQuestionDuringPausedPrompt:
         await _add_node(db_session, task, order_index=1)
         statuses_while_asking: list[TaskStatus] = []
         answers: list[str] = []
+        offsets: list[int | None] = []
 
         async def user_answers(*, timeout: float | None) -> bool:
             await db_session.refresh(task)
@@ -852,6 +853,7 @@ class TestQuestionDuringPausedPrompt:
                 sa.select(NodeLog).where(NodeLog.status == NodeLogStatus.AWAITING_DECISION),
             )
             assert pending is not None
+            offsets.append(pending.decision_output_offset)
             pending.user_input_text = "0"
             await db_session.commit()
             return True
@@ -897,6 +899,8 @@ class TestQuestionDuringPausedPrompt:
 
         assert statuses_while_asking == [TaskStatus.AWAITING_INPUT]
         assert answers == ["main"]
+        # Вопрос задан до текста ответа: решение — в начале ответа (раздел 15.2).
+        assert offsets == [0]
         assert observed == [TaskStatus.PAUSED, TaskStatus.PAUSED]
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE

@@ -733,6 +733,7 @@ async def _run_claimed_task(
         on_abort=active_node_context.cancel_decision_wait,
         on_rate_limit=_rate_limit_recorder(db_session, task),
     )
+    active_node_context.output_length = session.turn_text_length
     control = _SessionControl(
         db_session=db_session,
         task=task,

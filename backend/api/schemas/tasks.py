@@ -144,6 +144,7 @@ class NodeLogResponse(BaseModel):
     rendered_prompt: str | None
     llm_output_text: str | None
     user_input_text: str | None
+    decision_output_offset: int | None
     script_stdout: str | None
     script_exit_code: int | None
     status: NodeLogStatus

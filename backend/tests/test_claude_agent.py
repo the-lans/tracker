@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 import pytest
 from claude_agent_sdk import AssistantMessage, ProcessError, RateLimitInfo, TextBlock
@@ -23,8 +24,14 @@ from tests.fakes import (
     make_assistant_error,
     make_rate_limit_event,
     make_result_message,
+    make_text_block_start,
     make_text_delta,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from claude_agent_sdk import Message
 
 
 def test_build_claude_agent_options_sets_remote_control_flag_on_first_connect() -> None:
@@ -71,12 +78,13 @@ async def test_connect_disconnect_interrupt_delegate_to_client() -> None:
     assert fake.disconnected is True
 
 
-async def test_send_and_collect_text_concatenates_text_blocks() -> None:
+async def test_send_and_collect_text_separates_text_blocks() -> None:
     fake = FakeClaudeAgentClient(
         messages_per_query=[
             [
-                AssistantMessage(content=[TextBlock(text="Привет, ")], model="claude"),
-                AssistantMessage(content=[TextBlock(text="мир!")], model="claude"),
+                AssistantMessage(content=[TextBlock(text="Читаю файлы.")], model="claude"),
+                AssistantMessage(content=[TextBlock(text="")], model="claude"),
+                AssistantMessage(content=[TextBlock(text="План готов.")], model="claude"),
                 make_result_message(),
             ],
         ],
@@ -85,7 +93,7 @@ async def test_send_and_collect_text_concatenates_text_blocks() -> None:
 
     turn = await session.send_and_collect_text("say hi")
 
-    assert turn.text == "Привет, мир!"
+    assert turn.text == "Читаю файлы.\n\nПлан готов."
     assert turn.is_error is False
     assert turn.session_id == "sess-1"
     assert fake.queries == ["say hi"]
@@ -229,6 +237,34 @@ class TestStreamingOptions:
         assert options.fork_session is fork_session
 
 
+class TestTurnTextLength:
+    async def test_counts_collected_blocks_with_separator(self) -> None:
+        lengths: list[int] = []
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    AssistantMessage(content=[TextBlock(text="Читаю")], model="claude"),
+                    AssistantMessage(content=[TextBlock(text="Готово")], model="claude"),
+                    make_result_message(),
+                ],
+            ],
+        )
+        session = ClaudeCodeSession(fake)
+        original = fake.receive_response
+
+        async def spying_receive() -> AsyncIterator[Message]:
+            async for message in original():
+                yield message
+                lengths.append(session.turn_text_length())
+
+        fake.receive_response = spying_receive  # type: ignore[method-assign]
+
+        turn = await session.send_and_collect_text("план")
+
+        assert lengths == [len("Читаю"), len(turn.text), len(turn.text)]
+        assert session.turn_text_length() == 0
+
+
 class TestTextDeltas:
     async def test_forwarded_while_answer_is_collected(self) -> None:
         deltas: list[str] = []
@@ -253,6 +289,39 @@ class TestTextDeltas:
 
         assert deltas == ["При", "вет"]
         assert result.text == "Привет"
+
+    @pytest.mark.parametrize(
+        ("events", "expected"),
+        [
+            (["start", "Читаю", "start", "Готово"], ["Читаю", "\n\n", "Готово"]),
+            (["start", "Читаю"], ["Читаю"]),
+            (["start", "Читаю", "subagent_start", "Готово"], ["Читаю", "Готово"]),
+        ],
+        ids=["second_block_separated", "first_block_plain", "subagent_block_ignored"],
+    )
+    async def test_text_blocks_separated_in_stream(
+        self,
+        events: list[str],
+        expected: list[str],
+    ) -> None:
+        deltas: list[str] = []
+
+        async def collect(text: str) -> None:
+            deltas.append(text)
+
+        stream = {
+            "start": make_text_block_start,
+            "subagent_start": lambda: make_text_block_start(parent_tool_use_id="tool-1"),
+        }
+        messages = [
+            stream[event]() if event in stream else make_text_delta(event) for event in events
+        ]
+        fake = FakeClaudeAgentClient(messages_per_query=[[*messages, make_result_message()]])
+        session = ClaudeCodeSession(fake, on_text_delta=collect)
+
+        await session.send_and_collect_text("план")
+
+        assert deltas == expected
 
 
 class TestReplaceClient:

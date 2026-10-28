@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeUserInput } from "@/lib/userInput";
+import { describeUserInput, splitOutputAtDecision } from "@/lib/userInput";
 import type { PendingOption } from "@/lib/types";
 import { makeNodeLog, PLAN_OPTIONS } from "@/test/factories";
 
@@ -53,5 +53,17 @@ describe("describeUserInput", () => {
     },
   ])("$case", ({ log, view }) => {
     expect(describeUserInput(makeNodeLog(log))).toEqual(view);
+  });
+});
+
+describe("splitOutputAtDecision", () => {
+  it.each([
+    { text: "Уточню.\n\nБерём dev.", offset: 7, before: "Уточню.", after: "Берём dev." },
+    { text: "Берём dev.", offset: 0, before: "", after: "Берём dev." },
+    { text: "Готово.", offset: null, before: "Готово.", after: "" },
+    { text: "Готово.", offset: 7, before: "Готово.", after: "" },
+    { text: "🙂 Вопрос\n\nОтвет", offset: 9, before: "🙂 Вопрос", after: "Ответ" },
+  ])("«$text» по смещению $offset", ({ text, offset, before, after }) => {
+    expect(splitOutputAtDecision(text, offset)).toEqual({ before, after });
   });
 });

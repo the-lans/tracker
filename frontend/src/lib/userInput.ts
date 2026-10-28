@@ -39,3 +39,25 @@ export function describeUserInput(log: NodeLog): UserInputView {
   if (automatic) return { text: "План принят автоматически", automatic };
   return { text: feedback ? `${label}\n\n${feedback}` : label, automatic: false };
 }
+
+export interface OutputAroundDecision {
+  /** Ответ агента до запроса решения. */
+  before: string;
+  /** Ответ после решения пользователя. */
+  after: string;
+}
+
+/**
+ * Раздел 15.2: решение пользователя стоит в ленте там, где агент его
+ * запросил. `decision_output_offset` считает символы, как Python, — по
+ * кодовым точкам, а не по UTF-16 (эмодзи не рвутся). Без смещения решение
+ * идёт после всего ответа.
+ */
+export function splitOutputAtDecision(text: string, offset: number | null): OutputAroundDecision {
+  if (offset === null) return { before: text, after: "" };
+  const chars = Array.from(text);
+  return {
+    before: chars.slice(0, offset).join("").trimEnd(),
+    after: chars.slice(offset).join("").trimStart(),
+  };
+}
