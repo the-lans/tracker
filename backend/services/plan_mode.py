@@ -94,6 +94,9 @@ PLAN_ACCEPTED_MESSAGE = (
 PLAN_ACCEPTED_TOOL_DENIED = "План принят: изменения — в следующем запросе. Заверши ответ."
 CONTEXT_ONLY_TOOL_DENIED = "Сейчас только прими контекст: задание придёт следующим сообщением."
 DECISION_TIMEOUT_DENIED = "Истекло время ожидания решения пользователя"
+# Раздел 9.3: у отказа всегда есть текст — пустой отказ API Claude отклоняет
+# (400), и сессия с ним в истории больше не отвечает.
+PLAN_REVISE_DENIED = "Пользователь просит доработать план"
 _TOOL_DESCRIPTION_LIMIT = 500
 
 
@@ -139,6 +142,13 @@ def apply_plan_decision(option: str, *, feedback_text: str | None = None) -> Pla
         return PlanDecisionResult(allow=False, feedback_text=feedback_text)
     message = f"Неизвестный вариант решения по плану: {option}"
     raise ValueError(message)
+
+
+def plan_revise_message(feedback_text: str | None) -> str:
+    """Раздел 9.3: фидбек «Доработать план» — с пожеланиями пользователя, если они есть."""
+    if not feedback_text or not feedback_text.strip():
+        return PLAN_REVISE_DENIED
+    return f"{PLAN_REVISE_DENIED}: {feedback_text.strip()}"
 
 
 def decide_plan_auto_completion(*, auto_accept_plan: bool) -> PlanDecisionResult | None:
@@ -260,8 +270,8 @@ def encode_decision(option_id: str, *, feedback_text: str | None = None) -> str:
     """Кодирует решение пользователя (раздел 9.6) в одно текстовое поле
     `node_logs.user_input_text` — API вызывает это перед записью.
 
-    ``feedback_text`` обязателен по смыслу для "Доработать план" (раздел
-    9.3), опционален для прочих вариантов; хранится второй строкой, чтобы
+    ``feedback_text`` — пожелания к доработке плана или комментарий к
+    решению (раздел 9.3), всегда необязателен; хранится второй строкой, чтобы
     не заводить под него отдельную колонку в уже зафиксированной схеме
     (раздел 3.1).
     """
@@ -732,7 +742,10 @@ class _PermissionCallback:
                 decision=decision,
             )
         if not decision.allow:
-            return PermissionResultDeny(message=decision.feedback_text or "", interrupt=False)
+            return PermissionResultDeny(
+                message=plan_revise_message(decision.feedback_text),
+                interrupt=False,
+            )
         return self._finish_plan_turn()
 
     def _finish_plan_turn(self) -> PermissionResult:

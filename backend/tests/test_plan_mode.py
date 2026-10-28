@@ -31,6 +31,7 @@ from services.plan_mode import (
     PLAN_ACCEPTED_MESSAGE,
     PLAN_ACCEPTED_TOOL_DENIED,
     PLAN_MODE_WRITE_DENIED,
+    PLAN_REVISE_DENIED,
     TOOL_APPROVAL_ALLOW,
     TOOL_APPROVAL_DENY,
     TOOL_APPROVAL_OPTIONS,
@@ -248,34 +249,36 @@ async def test_callback_marks_awaiting_decision_and_resolves_plan_review(
     assert task.current_permission_mode is PermissionMode.DEFAULT
 
 
-async def test_callback_denies_when_revise_chosen(
-    db_session: AsyncSession,
-    redis_client: Redis,
-) -> None:
-    _, node_log, result = await _review_plan_with_decision(
-        db_session,
-        redis_client,
-        PlanDecisionOption.REVISE,
+class TestPlanRevise:
+    """Раздел 9.3: «Доработать план» — отказ с непустым фидбеком, планирование продолжается."""
+
+    @pytest.mark.parametrize(
+        ("feedback_text", "message"),
+        [
+            (None, PLAN_REVISE_DENIED),
+            ("   ", PLAN_REVISE_DENIED),
+            ("добавь обработку ошибок", f"{PLAN_REVISE_DENIED}: добавь обработку ошибок"),
+        ],
+        ids=["no_comment", "blank_comment", "with_comment"],
     )
+    async def test_denial(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        feedback_text: str | None,
+        message: str,
+    ) -> None:
+        _, node_log, result = await _review_plan_with_decision(
+            db_session,
+            redis_client,
+            encode_decision(PlanDecisionOption.REVISE, feedback_text=feedback_text),
+        )
 
-    assert result.behavior == "deny"
-    await db_session.refresh(node_log)
-    # "Доработать план" не завершает planning — статус остаётся running (раздел 9.5).
-    assert node_log.status is NodeLogStatus.RUNNING
-
-
-async def test_callback_passes_revise_feedback_text_to_denial_message(
-    db_session: AsyncSession,
-    redis_client: Redis,
-) -> None:
-    _, _, result = await _review_plan_with_decision(
-        db_session,
-        redis_client,
-        encode_decision(PlanDecisionOption.REVISE, feedback_text="добавь обработку ошибок"),
-    )
-
-    assert result.behavior == "deny"
-    assert result.message == "добавь обработку ошибок"
+        assert isinstance(result, PermissionResultDeny)
+        assert result.message == message
+        assert result.interrupt is False
+        await db_session.refresh(node_log)
+        assert node_log.status is NodeLogStatus.RUNNING
 
 
 async def test_unrelated_task_signal_does_not_reject_pending_plan(
