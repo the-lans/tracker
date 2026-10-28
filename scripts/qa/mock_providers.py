@@ -31,10 +31,10 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 DEFAULT_PORT = 8090
-JIRA_ISSUE_KEY = "RR-QA-2"
+JIRA_ISSUE_KEY = "QA-2"
 ATTACHMENT_NAME = "requirements.md"
 ATTACHMENT_BODY = (
-    "# Требования RR-QA-2\n\n"
+    "# Требования QA-2\n\n"
     "- `percent(value, total)` возвращает долю в процентах, округлённую до 2 знаков.\n"
     "- При `total == 0` — `ValueError` с сообщением «total must not be zero».\n"
 ).encode()
