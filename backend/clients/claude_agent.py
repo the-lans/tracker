@@ -262,6 +262,9 @@ class UserWaitClock:
             self._waited += self._now() - self._started
             self._started = None
 
+    def is_waiting(self) -> bool:
+        return self._started is not None
+
     def waited_seconds(self) -> float:
         """Сколько всего ход ждал пользователя, включая идущее сейчас ожидание."""
         current = self._now() - self._started if self._started is not None else 0.0

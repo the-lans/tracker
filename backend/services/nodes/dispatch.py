@@ -165,6 +165,11 @@ async def execute_llm_node(claude_session: ClaudeCodeSession, prompt: str) -> No
     return NodeExecutionOutcome(success=True, llm_output_text=turn.text)
 
 
+# Пока ход ждёт решения пользователя, срок не идёт: ждём не чаще раза в
+# секунду, даже если до таймаута оставались доли секунды.
+_USER_WAIT_POLL_SECONDS = 1.0
+
+
 async def _run_within_active_time(
     turn: Coroutine[Any, Any, NodeExecutionOutcome],
     *,
@@ -184,6 +189,8 @@ async def _run_within_active_time(
             remaining = timeout_seconds - active
             if remaining <= 0:
                 raise TimeoutError
+            if clock.is_waiting():
+                remaining = max(remaining, _USER_WAIT_POLL_SECONDS)
             done, _ = await asyncio.wait({running}, timeout=remaining)
             if done:
                 return running.result()

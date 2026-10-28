@@ -1,12 +1,13 @@
 import asyncio
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pytest
 from claude_agent_sdk import AssistantMessage, TextBlock
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from clients.claude_agent import ClaudeCodeSession
+from clients.claude_agent import ClaudeCodeSession, UserWaitClock
 from db.models.enums import (
     NodeLogStatus,
     NodeLogTriggerType,
@@ -510,6 +511,33 @@ class TestTimeoutExcludesUserWait:
         await waiting
 
         assert outcome.success is success
+
+
+class TestUserWaitPolling:
+    """Раздел 7.3: пока ход ждёт решения, срок не идёт — и цикл не крутится вхолостую."""
+
+    async def test_few_wakeups_near_deadline(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        clock = UserWaitClock()
+        wakeups: list[float | None] = []
+        original_wait = asyncio.wait
+
+        async def counting_wait(*args: Any, **kwargs: Any) -> Any:
+            wakeups.append(kwargs.get("timeout"))
+            return await original_wait(*args, **kwargs)
+
+        monkeypatch.setattr("services.nodes.dispatch.asyncio.wait", counting_wait)
+
+        async def turn() -> NodeExecutionOutcome:
+            await asyncio.sleep(0.09)
+            clock.begin()
+            await asyncio.sleep(0.5)
+            clock.end()
+            return NodeExecutionOutcome(success=True)
+
+        outcome = await dispatch._run_within_active_time(turn(), timeout_seconds=0.1, clock=clock)
+
+        assert outcome.success
+        assert len(wakeups) <= 3
 
 
 class TestPartialReply:
