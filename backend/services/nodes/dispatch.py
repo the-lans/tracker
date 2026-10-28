@@ -108,7 +108,8 @@ class NodeExecutionOutcome:
     """
     ``is_transient`` (раздел 17.3) — имеет ли смысл повтор неуспешной попытки;
     ``session_lost`` — процесс CLI упал, и перед повтором сессию нужно
-    переподключить.
+    переподключить. ``error_message`` видит пользователь в ленте,
+    ``error_details`` — только `app_logs` (раздел 17.2).
     """
 
     success: bool
@@ -116,6 +117,7 @@ class NodeExecutionOutcome:
     script_stdout: str | None = None
     script_exit_code: int | None = None
     error_message: str | None = None
+    error_details: str | None = None
     is_transient: bool = True
     session_lost: bool = False
 
@@ -137,7 +139,7 @@ async def record_sdk_failure(
     await write_app_log(
         level=AppLogLevel.ERROR,
         source=source,
-        message=f"Ошибка Claude Agent SDK: {outcome.error_message}",
+        message=f"Ошибка Claude Agent SDK: {outcome.error_details or outcome.error_message}",
         context={
             "node_id": str(node_id) if node_id is not None else None,
             "session_lost": outcome.session_lost,

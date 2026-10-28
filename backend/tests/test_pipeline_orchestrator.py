@@ -32,6 +32,7 @@ from db.models.tasks import Task
 from db.models.users import User
 from services.crypto import encrypt
 from services.errors import ValidationError
+from services.node_runs import SESSION_ERROR_MESSAGE
 from services.pipeline_orchestrator import (
     CheckpointDecision,
     StopGuard,
@@ -658,12 +659,12 @@ class TestFailureKinds:
     ) -> None:
         """
         Раздел 6.4: полученная до падения CLI часть ответа остаётся в истории;
-        раздел 17.2: сам сбой записан в `app_logs`.
+        раздел 17.2: сам сбой записан в `app_logs`, а в ленте — без подробностей.
         """
-        logged: list[object] = []
+        logged: list[tuple[object, object]] = []
 
         async def record(**kwargs: object) -> None:
-            logged.append(kwargs["task_id"])
+            logged.append((kwargs["task_id"], kwargs["message"]))
 
         monkeypatch.setattr("services.nodes.dispatch.write_app_log", record)
         task = await self._task_with_node(db_session)
@@ -691,11 +692,13 @@ class TestFailureKinds:
         )
 
         logs = await _node_logs_for(db_session, task.id)
-        assert [(log.status, log.llm_output_text) for log in logs] == [
-            (NodeLogStatus.FAILED, "начало ответа"),
-            (NodeLogStatus.SUCCESS, ""),
+        assert [(log.status, log.llm_output_text, log.error_message) for log in logs] == [
+            (NodeLogStatus.FAILED, "начало ответа", SESSION_ERROR_MESSAGE),
+            (NodeLogStatus.SUCCESS, "", None),
         ]
-        assert logged == [task.id]
+        [(logged_task_id, logged_message)] = logged
+        assert logged_task_id == task.id
+        assert "CLI упал" in str(logged_message)
 
     async def test_missing_cli_is_not_retried(
         self,

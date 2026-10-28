@@ -18,8 +18,8 @@ from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
+from services.node_runs import SESSION_ERROR_MESSAGE
 from services.task_status import (
-    SESSION_ERROR_MESSAGE,
     fail_task_after_error,
     first_unfinished_order_index,
     reset_task_to_new,

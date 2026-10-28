@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING
 
 from db.models.enums import NodeLogStatus, NodeType
 
+# Причина в ленте (раздел 15.2); подробности сбоя — в `app_logs`, не пользователю.
+SESSION_ERROR_MESSAGE = "Сбой сессии Claude Code — подробности в журнале ошибок у администратора"
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 

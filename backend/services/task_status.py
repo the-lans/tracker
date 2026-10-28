@@ -37,6 +37,7 @@ from db.models.pipelines import TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
+from services.node_runs import SESSION_ERROR_MESSAGE
 from services.notifications import NotificationEvent, notify_task_event
 
 if TYPE_CHECKING:
@@ -227,8 +228,6 @@ _UNFINISHED_NODE_LOG_STATUSES = (
     NodeLogStatus.RUNNING,
     NodeLogStatus.AWAITING_DECISION,
 )
-# Причина в ленте (раздел 15.2); подробности сбоя — в `app_logs`, не пользователю.
-SESSION_ERROR_MESSAGE = "Сбой сессии Claude Code — подробности в журнале ошибок у администратора"
 _AWAITING_STATUSES = (TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW)
 # Раздел 8.2: сессией задачи владеет воркер ровно в этих статусах — ручные
 # запросы принимаются в её очередь, только пока она активна.

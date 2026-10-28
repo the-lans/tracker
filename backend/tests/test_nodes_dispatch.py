@@ -528,12 +528,29 @@ class TestRecordSdkFailure:
     """Раздел 17.2: в `app_logs` — только ошибки взаимодействия с SDK."""
 
     @pytest.mark.parametrize(
-        ("outcome", "logged"),
+        ("outcome", "logged", "message_part"),
         [
-            (NodeExecutionOutcome(success=True), False),
-            (NodeExecutionOutcome(success=False, error_message="Код возврата 1"), False),
-            (NodeExecutionOutcome(success=False, is_transient=False), True),
-            (NodeExecutionOutcome(success=False, session_lost=True), True),
+            (NodeExecutionOutcome(success=True), False, None),
+            (NodeExecutionOutcome(success=False, error_message="Код возврата 1"), False, None),
+            (
+                NodeExecutionOutcome(
+                    success=False,
+                    is_transient=False,
+                    error_message="authentication_failed",
+                ),
+                True,
+                "authentication_failed",
+            ),
+            (
+                NodeExecutionOutcome(
+                    success=False,
+                    session_lost=True,
+                    error_message="Сбой сессии",
+                    error_details="exit code 1",
+                ),
+                True,
+                "exit code 1",
+            ),
         ],
         ids=["success", "script_or_timeout", "permanent", "cli_crashed"],
     )
@@ -542,6 +559,7 @@ class TestRecordSdkFailure:
         monkeypatch: pytest.MonkeyPatch,
         outcome: NodeExecutionOutcome,
         logged: bool,
+        message_part: str | None,
     ) -> None:
         calls: list[dict[str, object]] = []
 
@@ -556,6 +574,8 @@ class TestRecordSdkFailure:
         assert len(calls) == (1 if logged else 0)
         if logged:
             assert calls[0]["task_id"] == task_id
+            assert message_part is not None
+            assert message_part in str(calls[0]["message"])
 
 
 class TestScriptTaskPaths:
