@@ -560,7 +560,9 @@ class _PermissionCallback:
     ) -> PermissionResult:
         context = self.context
         active = context.node_log_id is not None and context.task_id is not None
-        if context.plan_accepted and tool_name != ASK_USER_QUESTION_TOOL:
+        # Вопрос тоже отклоняется: ожидание ответа перевело бы запись плана из
+        # `success` и затёрло бы решение по плану (раздел 9.3).
+        if context.plan_accepted:
             return PermissionResultDeny(message=PLAN_ACCEPTED_TOOL_DENIED, interrupt=False)
         if tool_name in INTERCEPTED_TOOLS:
             if not active:

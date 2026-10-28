@@ -675,7 +675,7 @@ class TestPlanAcceptanceMode:
         await db_session.refresh(task)
         assert task.current_permission_mode is PermissionMode.ACCEPT_EDITS
 
-    @pytest.mark.parametrize("tool_name", ["Write", "Bash", "ExitPlanMode"])
+    @pytest.mark.parametrize("tool_name", ["Write", "Bash", "ExitPlanMode", "AskUserQuestion"])
     async def test_tools_denied_after_accept(
         self,
         db_session: AsyncSession,
@@ -687,12 +687,17 @@ class TestPlanAcceptanceMode:
         callback = _callback(db_session, task, node_log, auto_accept_plan=True, plan_mode=True)
         await callback("ExitPlanMode", {"plan": "p"}, _TEST_TOOL_CONTEXT)
 
-        result = await callback(tool_name, {"command": "ls"}, _TEST_TOOL_CONTEXT)
+        result = await callback(
+            tool_name,
+            {"command": "ls", "questions": [_question("Какую базу?", "main", "dev")]},
+            _TEST_TOOL_CONTEXT,
+        )
 
         assert isinstance(result, PermissionResultDeny)
         assert (result.message, result.interrupt) == (PLAN_ACCEPTED_TOOL_DENIED, False)
         await db_session.refresh(node_log)
         assert node_log.status is NodeLogStatus.SUCCESS
+        assert node_log.user_input_text == PlanDecisionOption.ACCEPT_AUTO
 
     def test_activate_resets_acceptance(self) -> None:
         context = ActiveNodeContext(plan_accepted=True)
