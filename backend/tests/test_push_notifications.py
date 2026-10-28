@@ -9,13 +9,14 @@ from unittest.mock import Mock, patch
 
 import pytest
 import structlog
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.notifications import PushSubscription
 from db.models.tasks import Task
 from db.models.users import User
 from services import notifications
-from services.notifications import NotificationEvent, notify_task_event
+from services.notifications import NotificationEvent, notify_task_event, task_push_window_key
 from services.push_notifications import (
     PUSH_SEND_TIMEOUT_SECONDS,
     PushMessage,
@@ -25,6 +26,8 @@ from services.push_notifications import (
     send_push_to_user,
 )
 from tests.factories import make_user
+
+AWAITING = NotificationEvent.AWAITING_DECISION
 
 
 class _RecordingSender:
@@ -251,3 +254,76 @@ class TestNotifyTaskEvent:
 
         assert seen == [str(task.id)]
         assert "task_id" not in structlog.contextvars.get_contextvars()
+
+
+class TestPushWindow:
+    """Раздел 18.2: серия запросов решения по задаче — одно уведомление за окно."""
+
+    @pytest.fixture
+    def sent(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        sent: list[str] = []
+
+        async def record(*_args: object, message: PushMessage, **_kwargs: object) -> None:
+            sent.append(message.title)
+
+        monkeypatch.setattr(notifications, "send_push_to_user", record)
+        return sent
+
+    @pytest.mark.parametrize(
+        ("event", "same_task", "expected"),
+        [
+            (NotificationEvent.AWAITING_DECISION, True, 1),
+            (NotificationEvent.AWAITING_DECISION, False, 2),
+            (NotificationEvent.DONE, True, 2),
+        ],
+        ids=["series_of_one_task", "different_tasks", "not_windowed_event"],
+    )
+    async def test_count(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        sent: list[str],
+        event: NotificationEvent,
+        same_task: bool,
+        expected: int,
+    ) -> None:
+        user = await make_user(db_session)
+        first = _task(user)
+        second = first if same_task else _task(user)
+
+        await notify_task_event(db_session, event=event, task=first)
+        await notify_task_event(db_session, event=event, task=second)
+
+        assert len(sent) == expected
+
+    async def test_sent_again_after_window(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        sent: list[str],
+    ) -> None:
+        task = _task(await make_user(db_session))
+        await notify_task_event(db_session, event=AWAITING, task=task)
+        await redis_client.delete(task_push_window_key(task.id, AWAITING))
+
+        await notify_task_event(db_session, event=AWAITING, task=task)
+
+        assert len(sent) == 2
+
+    async def test_sent_without_redis(
+        self,
+        db_session: AsyncSession,
+        sent: list[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:1/0")
+        task = _task(await make_user(db_session))
+
+        for _ in range(2):
+            await notify_task_event(db_session, event=AWAITING, task=task)
+
+        assert len(sent) == 2
+
+
+def _task(user: User) -> Task:
+    return Task(id=uuid.uuid4(), code="RR-12345", title="t", description="d", created_by=user.id)
