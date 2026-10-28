@@ -9,6 +9,9 @@ const ALIGN_CLASS: Record<TableAlign, string> = {
 };
 
 const CELL_CLASS = "border border-border px-2.5 py-1 align-top";
+// Колонка шириной по тексту, но не шире 40% ленты и не уже 28 символов: на
+// широкой ленте таблица помещается, на узкой не сжимается до столбика слов.
+const CELL_TEXT_CLASS = "max-w-[max(28ch,40cqw)] [overflow-wrap:anywhere]";
 
 interface AgentMarkdownTableProps {
   align: TableAlign[];
@@ -19,17 +22,20 @@ interface AgentMarkdownTableProps {
 /**
  * Таблица из ответа агента — рамкой, как её рисует Claude Code CLI: шапка
  * жирным, колонки выровнены по строке-разделителю; на узком экране таблица
- * прокручивается в своём блоке, а не растягивает страницу.
+ * прокручивается в своём блоке, а не растягивает страницу. Ширина колонки —
+ * по тексту, с пределом под ширину ленты; длинный текст переносится в ячейке.
  */
 export function AgentMarkdownTable({ align, header, rows }: AgentMarkdownTableProps) {
   return (
-    <div className="max-w-full overflow-x-auto">
-      <table className="border-collapse font-mono text-small [overflow-wrap:normal]">
+    <div className="@container max-w-full overflow-x-auto">
+      <table className="w-max min-w-full border-collapse font-mono text-small">
         <thead>
           <tr>
             {header.map((cell, column) => (
               <th key={column} scope="col" className={cn(CELL_CLASS, "font-bold text-text", ALIGN_CLASS[align[column]])}>
-                <AgentInline parts={cell} />
+                <div className={CELL_TEXT_CLASS}>
+                  <AgentInline parts={cell} />
+                </div>
               </th>
             ))}
           </tr>
@@ -39,7 +45,9 @@ export function AgentMarkdownTable({ align, header, rows }: AgentMarkdownTablePr
             <tr key={rowIndex}>
               {row.map((cell, column) => (
                 <td key={column} className={cn(CELL_CLASS, ALIGN_CLASS[align[column]])}>
-                  <AgentInline parts={cell} />
+                  <div className={CELL_TEXT_CLASS}>
+                    <AgentInline parts={cell} />
+                  </div>
                 </td>
               ))}
             </tr>
