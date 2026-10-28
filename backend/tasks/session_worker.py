@@ -187,9 +187,9 @@ class _SessionControl:
     workspace: Path
     redis_client: Redis
     active_node_context: ActiveNodeContext
-    # Новый процесс CLI, продолжающий сессию с данным `session_id` с флагом
-    # `--remote-control` (раздел 6.5).
-    bridge_client_factory: Callable[[str], ClaudeAgentClientProtocol]
+    # Новый процесс CLI с флагом `--remote-control` (раздел 6.5), продолжающий
+    # сессию с данным `session_id`; `None` — первого хода ещё не было.
+    bridge_client_factory: Callable[[str | None], ClaudeAgentClientProtocol]
     # Новый процесс CLI с прежними флагами — после падения процесса посреди
     # ноды (раздел 17.3: временный сбой повторяется в той же сессии).
     recovery_client_factory: Callable[[str], ClaudeAgentClientProtocol]
@@ -275,7 +275,7 @@ class _SessionControl:
         await self.db_session.refresh(self.task)
         session_id = self.claude_session.session_id or self.task.session_id
         status = RemoteControlStatus.DISCONNECTED
-        if session_id is None or not self.has_llm:
+        if not self.has_llm:
             logger.info("bridge_reconnect_skipped_no_session", task_id=str(self.task.id))
         else:
             try:

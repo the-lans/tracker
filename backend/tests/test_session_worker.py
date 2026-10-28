@@ -942,6 +942,31 @@ class TestBridgeReconnect:
         assert task.status is TaskStatus.DONE
         assert task.remote_control_status is RemoteControlStatus.CONNECTED
 
+    async def test_before_first_turn(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+    ) -> None:
+        """Мост поднят с первым процессом CLI, а `session_id` появится только с первым ходом."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        await request_bridge_reconnect(redis_client, task.id)
+        first = FakeClaudeAgentClient(messages_per_query=[])
+        second = FakeClaudeAgentClient(messages_per_query=_results(1))
+        worker_env.queued_clients = [first, second]
+
+        await _run_worker(task)
+
+        assert first.queries == []
+        assert second.queries == ["шаг 0"]
+        reconnect_options = worker_env.options[1]
+        assert reconnect_options.resume is None
+        assert REMOTE_CONTROL_EXTRA_ARG in reconnect_options.extra_args
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert task.remote_control_status is RemoteControlStatus.CONNECTED
+
     async def test_last_node_request_dropped(
         self,
         db_session: AsyncSession,
