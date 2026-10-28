@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/apiClient";
+import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { RemoteControlStatus } from "@/lib/types";
 import type {
@@ -28,6 +29,19 @@ import type {
  * перечитываем сами.
  */
 export const BRIDGE_RECONNECT_POLL_MS = 2_000;
+/**
+ * Раздел 15.2: WebSocket присылает статус, только когда тот сменился с его
+ * прошлой отправки. Если REST-запрос карточки попал на короткий промежуточный
+ * статус (например, `in_progress` между двумя запросами разрешения), сокет
+ * его не исправит — пока сессия идёт, карточку перечитываем, как журнал нод.
+ */
+export const ACTIVE_TASK_POLL_MS = 4_000;
+
+function taskRefetchInterval(task: Task | undefined): number | false {
+  if (task?.remote_control_status === RemoteControlStatus.RECONNECTING) return BRIDGE_RECONNECT_POLL_MS;
+  if (task && SESSION_ACTIVE_STATUSES.includes(task.status)) return ACTIVE_TASK_POLL_MS;
+  return false;
+}
 
 const taskKeys = {
   all: ["tasks"] as const,
@@ -63,10 +77,7 @@ export function useTask(taskId: string | undefined) {
     queryKey: taskId ? taskKeys.detail(taskId) : ["tasks", "detail", "none"],
     queryFn: () => api.get<Task>(`/tasks/${taskId}`),
     enabled: Boolean(taskId),
-    refetchInterval: (query) =>
-      query.state.data?.remote_control_status === RemoteControlStatus.RECONNECTING
-        ? BRIDGE_RECONNECT_POLL_MS
-        : false,
+    refetchInterval: (query) => taskRefetchInterval(query.state.data),
   });
 }
 
