@@ -49,11 +49,19 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/** Тело ошибки в формате API (раздел 17.3); чужой JSON (прокси) — не оно. */
+function isApiErrorBody(value: unknown): value is ApiErrorBody {
+  if (typeof value !== "object" || value === null || !("error" in value)) return false;
+  const { error } = value;
+  return typeof error === "object" && error !== null && "message" in error;
+}
+
 async function errorOf(response: Response): Promise<ApiError> {
   const text = await response.text();
   let body: ApiErrorBody | null = null;
   try {
-    body = text ? (JSON.parse(text) as ApiErrorBody) : null;
+    const parsed: unknown = text ? JSON.parse(text) : null;
+    body = isApiErrorBody(parsed) ? parsed : null;
   } catch {
     // Ответ не JSON (например, прокси) — сообщение будет общим.
   }
