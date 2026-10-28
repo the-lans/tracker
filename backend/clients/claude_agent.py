@@ -276,15 +276,22 @@ class ClaudeCodeSession:
         """`session_id` из последнего `ResultMessage` — None до первого ответа."""
         return self._session_id
 
+    @property
+    def _runs_cli(self) -> bool:
+        """Задача без LLM-аккаунта работает без процесса CLI — сессии в логах нет."""
+        return not isinstance(self._client, OfflineAgentClient)
+
     async def connect(self) -> None:
         async with self._lock:
             await self._client.connect()
-            logger.info("session_connected")
+            if self._runs_cli:
+                logger.info("session_connected")
 
     async def disconnect(self) -> None:
         async with self._lock:
             await self._client.disconnect()
-            logger.info("session_disconnected")
+            if self._runs_cli:
+                logger.info("session_disconnected")
 
     async def replace_client(self, client: ClaudeAgentClientProtocol) -> None:
         """

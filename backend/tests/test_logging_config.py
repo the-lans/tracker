@@ -28,7 +28,7 @@ from app_logging.config import bind_task_context, configure_logging, get_logger
 early = get_logger("early")
 configure_logging()
 with bind_task_context(uuid.UUID("{_TASK_ID}")):
-    early.info("probe_event", answer=42)
+    early.info("probe_event", answer=42, error="Код возврата 1")
 """
 
 _STDLIB_PROBE = f"""
@@ -90,6 +90,11 @@ class TestJsonLogs:
         assert entry["message"] == "probe_event"
         assert (entry["source"], entry["level"], entry["answer"]) == ("early", "info", 42)
         assert "timestamp" in entry
+
+    def test_cyrillic_not_escaped(self) -> None:
+        line = next(line for line in _run_probe(_API_PROBE) if "probe_event" in line)
+
+        assert '"error": "Код возврата 1"' in line
 
     def test_task_context_adds_task_id(self) -> None:
         assert _event(_run_probe(_API_PROBE))["task_id"] == str(_TASK_ID)

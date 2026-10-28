@@ -101,6 +101,7 @@ async def send_push_to_user(
     for subscription in subscriptions:
         try:
             await asyncio.to_thread(active_sender.send, subscription=subscription, message=message)
+            logger.info("push_sent", subscription_id=str(subscription.id))
         except SubscriptionExpiredError:
             logger.info("push_subscription_expired", subscription_id=str(subscription.id))
             await db_session.delete(subscription)

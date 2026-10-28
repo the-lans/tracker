@@ -8,6 +8,7 @@ import uuid
 from unittest.mock import Mock, patch
 
 import pytest
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.notifications import PushSubscription
@@ -39,8 +40,6 @@ class _AlwaysExpiredSender:
 class _AlwaysFailingSender:
     def send(self, *, subscription: PushSubscription, message: PushMessage) -> None:
         raise RuntimeError("network error")
-
-
 
 
 async def _make_subscription(db_session: AsyncSession, user: User) -> PushSubscription:
@@ -99,6 +98,40 @@ async def test_generic_send_failure_does_not_raise_or_delete_subscription(
     )
 
     assert await db_session.get(PushSubscription, subscription.id) is not None
+
+
+class TestSendLogs:
+    """Раздел 18.1: по логам видно, ушло ли уведомление в каждую подписку."""
+
+    @pytest.mark.parametrize(
+        ("sender", "event"),
+        [
+            (_RecordingSender(), "push_sent"),
+            (_AlwaysFailingSender(), "push_send_failed"),
+            (_AlwaysExpiredSender(), "push_subscription_expired"),
+        ],
+        ids=["sent", "failed", "expired"],
+    )
+    async def test_outcome_logged(
+        self,
+        db_session: AsyncSession,
+        sender: WebPushSender,
+        event: str,
+    ) -> None:
+        user = await make_user(db_session)
+        subscription = await _make_subscription(db_session, user)
+
+        with structlog.testing.capture_logs() as logs:
+            await send_push_to_user(
+                db_session,
+                user_id=user.id,
+                message=PushMessage(title="t", body="b", data={}),
+                sender=sender,
+            )
+
+        assert [(entry["event"], entry["subscription_id"]) for entry in logs] == [
+            (event, str(subscription.id)),
+        ]
 
 
 async def test_no_subscriptions_is_a_no_op(db_session: AsyncSession) -> None:

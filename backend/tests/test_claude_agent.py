@@ -12,11 +12,13 @@ import asyncio
 from typing import TYPE_CHECKING
 
 import pytest
+import structlog
 from claude_agent_sdk import AssistantMessage, ProcessError, RateLimitInfo, TextBlock
 
 from clients.claude_agent import (
     REMOTE_CONTROL_EXTRA_ARG,
     ClaudeCodeSession,
+    OfflineAgentClient,
     build_claude_agent_options,
 )
 from tests.fakes import (
@@ -235,6 +237,23 @@ class TestStreamingOptions:
 
         assert options.include_partial_messages is True
         assert options.fork_session is fork_session
+
+
+class TestSessionLifecycleLogs:
+    @pytest.mark.parametrize(
+        ("offline", "events"),
+        [(False, ["session_connected", "session_disconnected"]), (True, [])],
+        ids=["cli", "without_llm_account"],
+    )
+    async def test_logged_only_with_cli(self, offline: bool, events: list[str]) -> None:
+        client = OfflineAgentClient() if offline else FakeClaudeAgentClient(messages_per_query=[])
+        session = ClaudeCodeSession(client)
+
+        with structlog.testing.capture_logs() as logs:
+            await session.connect()
+            await session.disconnect()
+
+        assert [entry["event"] for entry in logs] == events
 
 
 class TestTurnTextLength:

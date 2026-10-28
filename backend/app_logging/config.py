@@ -47,7 +47,8 @@ def _shared_processors() -> list[structlog.typing.Processor]:
 def _render_processors() -> list[structlog.typing.Processor]:
     return [
         structlog.processors.EventRenamer("message"),
-        structlog.processors.JSONRenderer(),
+        # Русский текст событий и ошибок читается и ищется в логах как есть.
+        structlog.processors.JSONRenderer(ensure_ascii=False),
     ]
 
 
