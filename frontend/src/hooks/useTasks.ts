@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/apiClient";
 import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
+import { RemoteControlStatus } from "@/lib/types";
 import type {
   BindPipelineRequest,
   DecisionRequest,
@@ -20,6 +21,13 @@ import type {
   TaskRepository,
   TaskUpdateRequest,
 } from "@/lib/types";
+
+/**
+ * Раздел 6.5: статус моста после «Переподключить» меняет воркер, и событием
+ * в WebSocket он не приходит — пока идёт переподключение, карточку задачи
+ * перечитываем сами.
+ */
+export const BRIDGE_RECONNECT_POLL_MS = 2_000;
 
 const taskKeys = {
   all: ["tasks"] as const,
@@ -55,6 +63,10 @@ export function useTask(taskId: string | undefined) {
     queryKey: taskId ? taskKeys.detail(taskId) : ["tasks", "detail", "none"],
     queryFn: () => api.get<Task>(`/tasks/${taskId}`),
     enabled: Boolean(taskId),
+    refetchInterval: (query) =>
+      query.state.data?.remote_control_status === RemoteControlStatus.RECONNECTING
+        ? BRIDGE_RECONNECT_POLL_MS
+        : false,
   });
 }
 
