@@ -92,6 +92,7 @@ PLAN_ACCEPTED_MESSAGE = (
     "сейчас ничего не меняй и заверши ответ."
 )
 PLAN_ACCEPTED_TOOL_DENIED = "План принят: изменения — в следующем запросе. Заверши ответ."
+CONTEXT_ONLY_TOOL_DENIED = "Сейчас только прими контекст: задание придёт следующим сообщением."
 DECISION_TIMEOUT_DENIED = "Истекло время ожидания решения пользователя"
 _TOOL_DESCRIPTION_LIMIT = 500
 
@@ -167,6 +168,8 @@ class ActiveNodeContext:
     plan_mode: bool = False
     # План принят, ход ноды `plan_prompt` дописывается: инструменты запрещены (9.3).
     plan_accepted: bool = False
+    # Ход лишь передаёт контекст (саммари родителя, 6.7): инструменты запрещены.
+    context_only: bool = False
     # Длина ответа текущего хода (`ClaudeCodeSession.turn_text_length`):
     # место решения пользователя в ответе (раздел 15.2).
     output_length: Callable[[], int] | None = None
@@ -179,6 +182,7 @@ class ActiveNodeContext:
         task_id: uuid.UUID,
         auto_accept_plan: bool = False,
         plan_mode: bool = False,
+        context_only: bool = False,
     ) -> None:
         """
         Каждый, кто начинает ход в сессии (нода, ручной запрос, разрешение
@@ -189,6 +193,7 @@ class ActiveNodeContext:
         self.auto_accept_plan = auto_accept_plan
         self.plan_mode = plan_mode
         self.plan_accepted = False
+        self.context_only = context_only
 
     def output_offset(self) -> int | None:
         return self.output_length() if self.output_length is not None else None
@@ -564,6 +569,8 @@ class _PermissionCallback:
         # `success` и затёрло бы решение по плану (раздел 9.3).
         if context.plan_accepted:
             return PermissionResultDeny(message=PLAN_ACCEPTED_TOOL_DENIED, interrupt=False)
+        if context.context_only:
+            return PermissionResultDeny(message=CONTEXT_ONLY_TOOL_DENIED, interrupt=False)
         if tool_name in INTERCEPTED_TOOLS:
             if not active:
                 return PermissionResultDeny(message="Нет активной ноды для обработки решения")

@@ -62,9 +62,14 @@ SUMMARY_REQUEST_PROMPT = (
     "цель, принятые решения и утверждённый план, что сделано, что осталось, важные нюансы и "
     "ограничения. Ответь только пересказом, ничего не меняй в файлах и не запускай инструменты."
 )
+# Раздел 6.7: первое сообщение — только контекст, работа начинается с ноды.
+DELIVERY_INSTRUCTION = (
+    "Учитывай его в работе над этой задачей. Сейчас ничего не делай и не запускай "
+    "инструменты: задание придёт следующим сообщением."
+)
 DELIVERY_MESSAGE = (
     "Контекст родительской задачи {parent_code} «{parent_title}» — пересказ её сессии:\n\n"
-    "{summary}\n\nУчитывай его в работе над этой задачей."
+    "{summary}\n\n" + DELIVERY_INSTRUCTION
 )
 REASON_NO_SESSION = "у родительской задачи нет сессии"
 REASON_PARENT_MISSING = "родительская задача не найдена"
@@ -341,7 +346,11 @@ async def deliver_parent_summary(
         node_log.rendered_prompt = message
         await db_session.commit()
         if active_node_context is not None:
-            active_node_context.activate(node_log_id=node_log.id, task_id=child.id)
+            active_node_context.activate(
+                node_log_id=node_log.id,
+                task_id=child.id,
+                context_only=True,
+            )
         outcome = await execute_llm_node_with_timeout(
             claude_session,
             message,

@@ -25,6 +25,7 @@ from db.models.tasks import Task
 from db.models.users import User
 from services.notifications import NotificationEvent
 from services.plan_mode import (
+    CONTEXT_ONLY_TOOL_DENIED,
     CUSTOM_ANSWER_OPTION,
     DEFAULT_PLAN_OPTIONS,
     PLAN_ACCEPTED_MESSAGE,
@@ -705,6 +706,35 @@ class TestPlanAcceptanceMode:
         context.activate(node_log_id=uuid.uuid4(), task_id=uuid.uuid4())
 
         assert context.plan_accepted is False
+
+
+class TestContextOnlyTurn:
+    """Раздел 6.7: ход с саммари родителя только передаёт контекст."""
+
+    @pytest.mark.parametrize("tool_name", ["Write", "Bash", "ExitPlanMode", "AskUserQuestion"])
+    async def test_tools_denied(self, db_session: AsyncSession, tool_name: str) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        context = ActiveNodeContext()
+        context.activate(node_log_id=node_log.id, task_id=task.id, context_only=True)
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=Redis(),
+        )
+
+        result = await callback(tool_name, {"command": "ls", "plan": "p"}, _TEST_TOOL_CONTEXT)
+
+        assert isinstance(result, PermissionResultDeny)
+        assert (result.message, result.interrupt) == (CONTEXT_ONLY_TOOL_DENIED, False)
+        await db_session.refresh(node_log)
+        assert node_log.status is NodeLogStatus.RUNNING
+
+    def test_next_turn_resets_it(self) -> None:
+        context = ActiveNodeContext(context_only=True)
+
+        context.activate(node_log_id=uuid.uuid4(), task_id=uuid.uuid4())
+
+        assert context.context_only is False
 
 
 def _plan_accepted(result: object) -> bool:
