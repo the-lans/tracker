@@ -27,11 +27,14 @@ export function NodeLogEntry({
   log,
   title,
   streamedText,
+  isLlmTurn = false,
 }: {
   taskId: string;
   log: NodeLog;
   title?: string;
   streamedText?: string;
+  /** Запись — ход агента (промт, слэш-команда, план), а не скрипт или очистка контекста. */
+  isLlmTurn?: boolean;
 }) {
   const [outputOpen, setOutputOpen] = useState(false);
   // Раздел 15.2: служебная реплика помечена источником — один раз, в заголовке записи.
@@ -45,9 +48,18 @@ export function NodeLogEntry({
   // итоговый текст из БД заменяет его.
   const userInput =
     !isAwaitingDecision && log.user_input_text ? describeUserInput(log) : null;
-  const liveText = !log.llm_output_text && log.status === NodeLogStatus.RUNNING ? streamedText : undefined;
+  const isRunning = log.status === NodeLogStatus.RUNNING;
+  const finalText = log.llm_output_text;
+  // Ход не завершён: ответ — из потока, в том числе пока ждёт решения.
+  const streamText = isRunning || isAwaitingDecision ? (streamedText ?? "") : "";
   // Раздел 15.2: решение — в той точке ответа, где агент его запросил.
-  const output = splitOutputAtDecision(log.llm_output_text ?? "", log.decision_output_offset);
+  const output = splitOutputAtDecision(finalText ?? streamText, log.decision_output_offset);
+  const generating = !finalText && isRunning;
+  // После решения генерируется продолжение ответа — оно ниже решения.
+  const liveAfterDecision = generating && log.decision_output_offset !== null;
+  const thinking = generating && isLlmTurn && !(liveAfterDecision ? output.after : output.before);
+  // Ответ, увиденный в потоке, после хода не сворачивается — как в CLI.
+  const keepExpanded = streamedText !== undefined;
 
   return (
     <div className="flex flex-col gap-3">
@@ -77,8 +89,15 @@ export function NodeLogEntry({
         />
       )}
       {isScript && <ScriptOutputBlock stdout={log.script_stdout} exitCode={log.script_exit_code} />}
-      {output.before && <MessageBubble role="llm" text={output.before} />}
-      {liveText && <MessageBubble role="llm" text={liveText} streaming />}
+      {output.before && (
+        <MessageBubble
+          role="llm"
+          text={output.before}
+          streaming={generating && !liveAfterDecision}
+          defaultExpanded={keepExpanded}
+        />
+      )}
+      {thinking && !liveAfterDecision && <MessageBubble role="llm" text="" thinking />}
       {isAwaitingDecision && <DecisionWidget taskId={taskId} log={log} />}
       {!isAwaitingDecision && log.pending_plan_text && log.status === NodeLogStatus.SUCCESS && (
         <MessageBubble role="llm" kind="plan" text={`План принят.\n\n${log.pending_plan_text}`} />
@@ -90,7 +109,10 @@ export function NodeLogEntry({
           text={userInput.text}
         />
       )}
-      {output.after && <MessageBubble role="llm" text={output.after} />}
+      {output.after && (
+        <MessageBubble role="llm" text={output.after} streaming={liveAfterDecision} defaultExpanded={keepExpanded} />
+      )}
+      {thinking && liveAfterDecision && <MessageBubble role="llm" text="" thinking />}
       {/* Пометка «саммари недоступно» сама объясняет себя — без общей ошибки. */}
       {log.status === NodeLogStatus.FAILED && !isSummaryNote && (
         <MessageBubble

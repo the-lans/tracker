@@ -15,12 +15,18 @@ export function MessageBubble({
   text,
   danger,
   streaming = false,
+  thinking = false,
+  defaultExpanded = false,
   kind = role === "user" ? "manual" : danger ? "error" : "agent",
 }: {
   role: "user" | "llm";
   text: string;
   danger?: boolean;
   streaming?: boolean;
+  /** Агент думает: первый фрагмент ответа ещё не пришёл (раздел 15.2). */
+  thinking?: boolean;
+  /** Показать текст целиком, без превью (ответ, увиденный в потоке). */
+  defaultExpanded?: boolean;
   /** Значок кружка: источник запроса или вид ответа. */
   kind?: MessageKind;
 }) {
@@ -50,13 +56,20 @@ export function MessageBubble({
             danger && "border-danger-border bg-danger-tint text-danger-text",
           )}
         >
-          <CollapsibleText
-            text={text}
-            live={streaming}
-            renderText={
-              role === "llm" && !danger ? (shown) => <AgentMessageText text={shown} /> : undefined
-            }
-          />
+          {thinking ? (
+            <div role="status" className="text-text-3">
+              думает…
+            </div>
+          ) : (
+            <CollapsibleText
+              text={text}
+              live={streaming}
+              defaultExpanded={defaultExpanded}
+              renderText={
+                role === "llm" && !danger ? (shown) => <AgentMessageText text={shown} /> : undefined
+              }
+            />
+          )}
         </div>
         {streaming && (
           <div className="mt-1 text-caption font-bold text-text-3" aria-live="polite">
