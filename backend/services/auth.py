@@ -21,12 +21,19 @@ from google.oauth2 import id_token as google_id_token
 from app_logging.config import get_logger
 from db.models.enums import UserRole
 from db.models.users import AllowedEmail, User
-from services.errors import ExternalServiceError, UnauthorizedError, ValidationError
+from services.errors import ExternalServiceError, ForbiddenError, UnauthorizedError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger("auth")
+
+# Раздел 19.1: причина отказа во входе — для человека, она показывается на странице входа.
+UNVERIFIED_EMAIL_MESSAGE = "Email не подтверждён Google — вход запрещён"
+BLOCKED_USER_MESSAGE = "Учётная запись заблокирована — обратитесь к администратору"
+NOT_ALLOWED_MESSAGE = (
+    "Вход для {email} не разрешён — попросите администратора добавить этот email в список допуска"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,19 +98,19 @@ async def authenticate_or_register(
     момент удаления.
     """
     if not identity.email_verified:
-        raise ValidationError("Email не подтверждён Google — вход запрещён")
+        raise ForbiddenError(UNVERIFIED_EMAIL_MESSAGE)
 
     existing_user = await db_session.scalar(sa.select(User).where(User.email == identity.email))
     if existing_user is not None:
         if not existing_user.is_active:
-            raise ValidationError("Учётная запись заблокирована")
+            raise ForbiddenError(BLOCKED_USER_MESSAGE)
         return existing_user
 
     is_allowed = await db_session.scalar(
         sa.select(AllowedEmail.id).where(AllowedEmail.email == identity.email).limit(1),
     )
     if is_allowed is None:
-        raise ValidationError(f"Email {identity.email} не в списке разрешённых (allowed_emails)")
+        raise ForbiddenError(NOT_ALLOWED_MESSAGE.format(email=identity.email))
 
     is_first_user = (await db_session.scalar(sa.select(User.id).limit(1))) is None
     user = User(

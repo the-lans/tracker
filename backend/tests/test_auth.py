@@ -5,22 +5,48 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import UserRole
 from db.models.users import AllowedEmail, User
-from services.auth import GoogleIdentity, authenticate_or_register
-from services.errors import ValidationError
+from services.auth import (
+    BLOCKED_USER_MESSAGE,
+    NOT_ALLOWED_MESSAGE,
+    UNVERIFIED_EMAIL_MESSAGE,
+    GoogleIdentity,
+    authenticate_or_register,
+)
+from services.errors import ForbiddenError
 
 
-async def test_rejects_unverified_email(db_session: AsyncSession) -> None:
-    identity = GoogleIdentity(email="new@example.com", email_verified=False)
+class TestLoginRefused:
+    """Раздел 19.1: отказ во входе — 403 с причиной для человека."""
 
-    with pytest.raises(ValidationError, match="не подтверждён"):
-        await authenticate_or_register(db_session, identity=identity)
+    @pytest.mark.parametrize(
+        ("email_verified", "existing_active", "message"),
+        [
+            (False, None, UNVERIFIED_EMAIL_MESSAGE),
+            (True, None, NOT_ALLOWED_MESSAGE),
+            (True, False, BLOCKED_USER_MESSAGE),
+        ],
+        ids=["unverified", "not_in_allowlist", "blocked"],
+    )
+    async def test_reason(
+        self,
+        db_session: AsyncSession,
+        email_verified: bool,
+        existing_active: bool | None,
+        message: str,
+    ) -> None:
+        email = f"{uuid.uuid4()}@example.com"
+        if existing_active is not None:
+            user = User(id=uuid.uuid4(), email=email, role=UserRole.USER, is_active=existing_active)
+            db_session.add(user)
+            await db_session.flush()
 
+        with pytest.raises(ForbiddenError) as raised:
+            await authenticate_or_register(
+                db_session,
+                identity=GoogleIdentity(email=email, email_verified=email_verified),
+            )
 
-async def test_rejects_email_not_in_allowlist(db_session: AsyncSession) -> None:
-    identity = GoogleIdentity(email="stranger@example.com", email_verified=True)
-
-    with pytest.raises(ValidationError, match="allowed_emails"):
-        await authenticate_or_register(db_session, identity=identity)
+        assert raised.value.message == message.format(email=email)
 
 
 async def test_first_registered_user_becomes_admin(db_session: AsyncSession) -> None:
@@ -70,15 +96,3 @@ async def test_existing_user_logs_in_even_if_removed_from_allowlist(
     )
 
     assert user.id == existing.id
-
-
-async def test_inactive_existing_user_is_rejected(db_session: AsyncSession) -> None:
-    email = f"{uuid.uuid4()}@example.com"
-    db_session.add(User(id=uuid.uuid4(), email=email, role=UserRole.USER, is_active=False))
-    await db_session.flush()
-
-    with pytest.raises(ValidationError, match="заблокирована"):
-        await authenticate_or_register(
-            db_session,
-            identity=GoogleIdentity(email=email, email_verified=True),
-        )

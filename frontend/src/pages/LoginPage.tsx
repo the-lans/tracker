@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { toast } from "sonner";
 import { BrandMark } from "@/components/layout/BrandMark";
 import { api } from "@/lib/apiClient";
 import { errorMessage } from "@/lib/errors";
@@ -13,6 +12,8 @@ export function LoginPage() {
   const { isAuthenticated, login } = useAuth();
   const buttonRef = useRef<HTMLDivElement>(null);
   const [signingIn, setSigningIn] = useState(false);
+  // Раздел 19.1: причина отказа остаётся на странице, пока не будет новой попытки.
+  const [refusal, setRefusal] = useState<string | null>(null);
 
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID || !buttonRef.current) return;
@@ -28,14 +29,11 @@ export function LoginPage() {
         client_id: GOOGLE_CLIENT_ID!,
         callback: (response) => {
           setSigningIn(true);
+          setRefusal(null);
           api
             .post<LoginResponse>("/auth/google", { id_token: response.credential })
             .then((data) => login({ token: data.session_token, user: data.user }))
-            .catch((error: unknown) => {
-              toast.error(
-                errorMessage(error, "Не удалось войти через Google"),
-              );
-            })
+            .catch((error: unknown) => setRefusal(errorMessage(error, "Не удалось войти через Google")))
             .finally(() => setSigningIn(false));
         },
       });
@@ -76,6 +74,14 @@ export function LoginPage() {
         </div>
       )}
       {signingIn && <p className="text-note text-text-3">Выполняется вход…</p>}
+      {refusal && (
+        <p
+          role="alert"
+          className="max-w-sm rounded-lg border border-danger-border bg-danger-tint p-3 text-center text-note text-danger-text"
+        >
+          {refusal}
+        </p>
+      )}
     </div>
   );
 }

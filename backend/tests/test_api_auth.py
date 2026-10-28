@@ -73,8 +73,8 @@ async def test_login_rejects_email_outside_allowlist(api_client: AsyncClient) ->
 
     response = await api_client.post("/auth/google", json={"id_token": "fake-jwt"})
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "validation_error"
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "forbidden"
 
 
 async def test_login_rejects_unverified_email(api_client: AsyncClient) -> None:
@@ -82,7 +82,7 @@ async def test_login_rejects_unverified_email(api_client: AsyncClient) -> None:
 
     response = await api_client.post("/auth/google", json={"id_token": "fake-jwt"})
 
-    assert response.status_code == 422
+    assert response.status_code == 403
 
 
 async def test_login_returns_working_session_token_for_existing_user(
