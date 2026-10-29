@@ -23,6 +23,7 @@ import uuid
 from pathlib import Path
 
 from services.docker_mounts import mount_args
+from services.git_ops import AGENT_GIT_IDENTITY
 from services.llm_accounts import accounts_root
 from services.task_artifacts import resolve_user_files_root
 from services.task_workspace import resolve_repos_root
@@ -69,7 +70,16 @@ def _isolation_args(task_id: uuid.UUID) -> list[str]:
         _CONTAINER_HOME,
         "-e",
         f"HOME={_CONTAINER_HOME}",
+        *_git_identity_args(),
     ]
+
+
+def _git_identity_args() -> list[str]:
+    """Агент коммитит в рабочую ветку, а git-конфига в контейнере нет."""
+    args: list[str] = []
+    for name, value in AGENT_GIT_IDENTITY.items():
+        args += ["-e", f"{name}={value}"]
+    return args
 
 
 async def _task_mount_args(

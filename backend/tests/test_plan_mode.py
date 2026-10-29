@@ -25,9 +25,13 @@ from db.models.tasks import Task
 from db.models.users import User
 from services.notifications import NotificationEvent
 from services.plan_mode import (
+    CONTEXT_ONLY_TOOL_DENIED,
     CUSTOM_ANSWER_OPTION,
     DEFAULT_PLAN_OPTIONS,
+    PLAN_ACCEPTED_MESSAGE,
+    PLAN_ACCEPTED_TOOL_DENIED,
     PLAN_MODE_WRITE_DENIED,
+    PLAN_REVISE_DENIED,
     TOOL_APPROVAL_ALLOW,
     TOOL_APPROVAL_DENY,
     TOOL_APPROVAL_OPTIONS,
@@ -186,7 +190,7 @@ async def test_callback_auto_accepts_plan_without_waiting(db_session: AsyncSessi
 
     result = await callback("ExitPlanMode", {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
 
-    assert result.behavior == "allow"
+    assert _plan_accepted(result)
     await db_session.refresh(node_log)
     assert node_log.pending_plan_text == "1. Сделать X"
     assert node_log.user_input_text == PlanDecisionOption.ACCEPT_AUTO
@@ -235,7 +239,7 @@ async def test_callback_marks_awaiting_decision_and_resolves_plan_review(
         PlanDecisionOption.ACCEPT_DEFAULT,
     )
 
-    assert result.behavior == "allow"
+    assert _plan_accepted(result)
     await db_session.refresh(node_log)
     assert node_log.pending_plan_text == "1. Сделать X"
     assert node_log.pending_options == DEFAULT_PLAN_OPTIONS
@@ -245,34 +249,36 @@ async def test_callback_marks_awaiting_decision_and_resolves_plan_review(
     assert task.current_permission_mode is PermissionMode.DEFAULT
 
 
-async def test_callback_denies_when_revise_chosen(
-    db_session: AsyncSession,
-    redis_client: Redis,
-) -> None:
-    _, node_log, result = await _review_plan_with_decision(
-        db_session,
-        redis_client,
-        PlanDecisionOption.REVISE,
+class TestPlanRevise:
+    """Раздел 9.3: «Доработать план» — отказ с непустым фидбеком, планирование продолжается."""
+
+    @pytest.mark.parametrize(
+        ("feedback_text", "message"),
+        [
+            (None, PLAN_REVISE_DENIED),
+            ("   ", PLAN_REVISE_DENIED),
+            ("добавь обработку ошибок", f"{PLAN_REVISE_DENIED}: добавь обработку ошибок"),
+        ],
+        ids=["no_comment", "blank_comment", "with_comment"],
     )
+    async def test_denial(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        feedback_text: str | None,
+        message: str,
+    ) -> None:
+        _, node_log, result = await _review_plan_with_decision(
+            db_session,
+            redis_client,
+            encode_decision(PlanDecisionOption.REVISE, feedback_text=feedback_text),
+        )
 
-    assert result.behavior == "deny"
-    await db_session.refresh(node_log)
-    # "Доработать план" не завершает planning — статус остаётся running (раздел 9.5).
-    assert node_log.status is NodeLogStatus.RUNNING
-
-
-async def test_callback_passes_revise_feedback_text_to_denial_message(
-    db_session: AsyncSession,
-    redis_client: Redis,
-) -> None:
-    _, _, result = await _review_plan_with_decision(
-        db_session,
-        redis_client,
-        encode_decision(PlanDecisionOption.REVISE, feedback_text="добавь обработку ошибок"),
-    )
-
-    assert result.behavior == "deny"
-    assert result.message == "добавь обработку ошибок"
+        assert isinstance(result, PermissionResultDeny)
+        assert result.message == message
+        assert result.interrupt is False
+        await db_session.refresh(node_log)
+        assert node_log.status is NodeLogStatus.RUNNING
 
 
 async def test_unrelated_task_signal_does_not_reject_pending_plan(
@@ -304,7 +310,7 @@ async def test_unrelated_task_signal_does_not_reject_pending_plan(
     finally:
         await resolver
 
-    assert result.behavior == "allow"
+    assert _plan_accepted(result)
 
 
 class TestDecisionWait:
@@ -348,7 +354,7 @@ class TestDecisionWait:
 
         result = await callback("ExitPlanMode", {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
 
-        assert result.behavior == "allow"
+        assert _plan_accepted(result)
 
 
 async def test_callback_denies_on_timeout_without_resolution(
@@ -406,6 +412,7 @@ def _callback(
     *,
     auto_accept_plan: bool = False,
     plan_mode: bool = False,
+    output_length: Callable[[], int] | None = None,
 ) -> CanUseTool:
     return build_can_use_tool_callback(
         context=ActiveNodeContext(
@@ -413,11 +420,50 @@ def _callback(
             task_id=task.id,
             auto_accept_plan=auto_accept_plan,
             plan_mode=plan_mode,
+            output_length=output_length,
         ),
         session_factory=_non_closing_session_factory(db_session),
         redis_client=Redis(),
         decision_wait_timeout_seconds=5.0,
     )
+
+
+class TestDecisionOutputOffset:
+    """Раздел 15.2: решение в ленте стоит там, где агент его запросил."""
+
+    @pytest.mark.parametrize(
+        ("tool_name", "tool_input", "auto_accept_plan"),
+        [
+            ("AskUserQuestion", {"questions": [_question("Какую базу?", "main", "dev")]}, False),
+            ("ExitPlanMode", {"plan": "1. Сделать X"}, True),
+        ],
+        ids=["question", "plan_auto_accept"],
+    )
+    @pytest.mark.parametrize(("output_length", "offset"), [(42, 42), (None, None)])
+    async def test_offset_recorded(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        tool_name: str,
+        tool_input: dict[str, object],
+        auto_accept_plan: bool,
+        output_length: int | None,
+        offset: int | None,
+    ) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        patch_plan_mode_signals(monkeypatch, _answering(db_session, node_log, ["1"]))
+        callback = _callback(
+            db_session,
+            task,
+            node_log,
+            auto_accept_plan=auto_accept_plan,
+            output_length=None if output_length is None else lambda: output_length,
+        )
+
+        await callback(tool_name, tool_input, _TEST_TOOL_CONTEXT)
+
+        await db_session.refresh(node_log)
+        assert node_log.decision_output_offset == offset
 
 
 class TestAskUserQuestion:
@@ -584,20 +630,22 @@ class TestOtherTools:
 
 
 class TestPlanAcceptanceMode:
+    """Раздел 9.3: принятый план завершает ход ноды `plan_prompt` без изменений."""
+
     @pytest.mark.parametrize(
         ("option", "mode"),
         [
-            (PlanDecisionOption.ACCEPT_AUTO, "acceptEdits"),
-            (PlanDecisionOption.ACCEPT_DEFAULT, "default"),
+            (PlanDecisionOption.ACCEPT_AUTO, PermissionMode.ACCEPT_EDITS),
+            (PlanDecisionOption.ACCEPT_DEFAULT, PermissionMode.DEFAULT),
         ],
         ids=["auto", "confirm_each"],
     )
-    async def test_session_mode_switched(
+    async def test_accept_ends_turn(
         self,
         db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
         option: str,
-        mode: str,
+        mode: PermissionMode,
     ) -> None:
         task, node_log = await _make_task_with_running_node_log(db_session)
         context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True)
@@ -613,14 +661,12 @@ class TestPlanAcceptanceMode:
 
         result = await callback("ExitPlanMode", {"plan": "p"}, _TEST_TOOL_CONTEXT)
 
-        assert isinstance(result, PermissionResultAllow)
-        assert result.updated_permissions is not None
-        assert [(u.type, u.mode, u.destination) for u in result.updated_permissions] == [
-            ("setMode", mode, "session"),
-        ]
-        assert context.plan_mode is False
+        assert _plan_accepted(result)
+        assert (context.plan_mode, context.plan_accepted) == (False, True)
+        await db_session.refresh(task)
+        assert task.current_permission_mode is mode
 
-    async def test_auto_accept_switches_to_accept_edits(self, db_session: AsyncSession) -> None:
+    async def test_auto_accept_ends_turn(self, db_session: AsyncSession) -> None:
         task, node_log = await _make_task_with_running_node_log(db_session)
 
         result = await _callback(db_session, task, node_log, auto_accept_plan=True, plan_mode=True)(
@@ -629,9 +675,73 @@ class TestPlanAcceptanceMode:
             _TEST_TOOL_CONTEXT,
         )
 
-        assert isinstance(result, PermissionResultAllow)
-        assert result.updated_permissions is not None
-        assert result.updated_permissions[0].mode == "acceptEdits"
+        assert _plan_accepted(result)
+        await db_session.refresh(task)
+        assert task.current_permission_mode is PermissionMode.ACCEPT_EDITS
+
+    @pytest.mark.parametrize("tool_name", ["Write", "Bash", "ExitPlanMode", "AskUserQuestion"])
+    async def test_tools_denied_after_accept(
+        self,
+        db_session: AsyncSession,
+        tool_name: str,
+    ) -> None:
+        """Ход дописывается без изменений и без ожидания решения: запись плана — `success`."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        task.current_permission_mode = PermissionMode.DEFAULT
+        callback = _callback(db_session, task, node_log, auto_accept_plan=True, plan_mode=True)
+        await callback("ExitPlanMode", {"plan": "p"}, _TEST_TOOL_CONTEXT)
+
+        result = await callback(
+            tool_name,
+            {"command": "ls", "questions": [_question("Какую базу?", "main", "dev")]},
+            _TEST_TOOL_CONTEXT,
+        )
+
+        assert isinstance(result, PermissionResultDeny)
+        assert (result.message, result.interrupt) == (PLAN_ACCEPTED_TOOL_DENIED, False)
+        await db_session.refresh(node_log)
+        assert node_log.status is NodeLogStatus.SUCCESS
+        assert node_log.user_input_text == PlanDecisionOption.ACCEPT_AUTO
+
+    def test_activate_resets_acceptance(self) -> None:
+        context = ActiveNodeContext(plan_accepted=True)
+
+        context.activate(node_log_id=uuid.uuid4(), task_id=uuid.uuid4())
+
+        assert context.plan_accepted is False
+
+
+class TestContextOnlyTurn:
+    """Раздел 6.7: ход с саммари родителя только передаёт контекст."""
+
+    @pytest.mark.parametrize("tool_name", ["Write", "Bash", "ExitPlanMode", "AskUserQuestion"])
+    async def test_tools_denied(self, db_session: AsyncSession, tool_name: str) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        context = ActiveNodeContext()
+        context.activate(node_log_id=node_log.id, task_id=task.id, context_only=True)
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=Redis(),
+        )
+
+        result = await callback(tool_name, {"command": "ls", "plan": "p"}, _TEST_TOOL_CONTEXT)
+
+        assert isinstance(result, PermissionResultDeny)
+        assert (result.message, result.interrupt) == (CONTEXT_ONLY_TOOL_DENIED, False)
+        await db_session.refresh(node_log)
+        assert node_log.status is NodeLogStatus.RUNNING
+
+    def test_next_turn_resets_it(self) -> None:
+        context = ActiveNodeContext(context_only=True)
+
+        context.activate(node_log_id=uuid.uuid4(), task_id=uuid.uuid4())
+
+        assert context.context_only is False
+
+
+def _plan_accepted(result: object) -> bool:
+    return isinstance(result, PermissionResultDeny) and result.message == PLAN_ACCEPTED_MESSAGE
 
 
 async def _status_of(db_session: AsyncSession, task: Task) -> TaskStatus:
@@ -705,7 +815,10 @@ class TestDecisionStatus:
 
         result = await callback(tool_name, tool_input, _TEST_TOOL_CONTEXT)
 
-        assert result.behavior == "allow"
+        if tool_name == "ExitPlanMode":
+            assert _plan_accepted(result)
+        else:
+            assert result.behavior == "allow"
         assert statuses_while_waiting == [awaiting_status]
         assert await _status_of(db_session, task) is start_status
         assert events == [NotificationEvent.AWAITING_DECISION]
@@ -787,7 +900,7 @@ class TestDecisionStatus:
 
         result = await callback("ExitPlanMode", {"plan": "p"}, _TEST_TOOL_CONTEXT)
 
-        assert result.behavior == "allow"
+        assert _plan_accepted(result)
         assert await _status_of(db_session, task) is TaskStatus.IN_PROGRESS
 
 

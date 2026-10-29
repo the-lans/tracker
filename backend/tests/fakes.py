@@ -52,6 +52,16 @@ def make_text_delta(text: str, *, parent_tool_use_id: str | None = None) -> Stre
     )
 
 
+def make_text_block_start(*, parent_tool_use_id: str | None = None) -> StreamEvent:
+    """Частичное сообщение SDK: начало нового текстового блока ответа."""
+    return StreamEvent(
+        uuid="evt",
+        session_id="sess-1",
+        event={"type": "content_block_start", "content_block": {"type": "text", "text": ""}},
+        parent_tool_use_id=parent_tool_use_id,
+    )
+
+
 def make_rate_limit_event(
     status: RateLimitStatus,
     *,

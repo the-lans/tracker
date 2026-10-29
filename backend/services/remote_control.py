@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from app_logging.config import get_logger
+from app_logging.config import bind_task_context, get_logger
 from db.models.enums import RemoteControlStatus
 from db.models.tasks import Task
 from services.errors import ConflictError
@@ -190,4 +190,5 @@ async def check_session_bridges(db_session: AsyncSession, *, redis_client: Redis
     for task_id in task_ids:
         task = await db_session.get(Task, task_id, populate_existing=True)
         if task is not None and task.status in SESSION_ACTIVE_STATUSES:
-            await check_task_bridge(db_session, task=task, redis_client=redis_client)
+            with bind_task_context(task_id):
+                await check_task_bridge(db_session, task=task, redis_client=redis_client)

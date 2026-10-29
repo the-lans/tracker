@@ -215,7 +215,9 @@ alembic/
                  task_nodes, подключение к Jira, tasks.reset_at, адрес Jira
                  в system_settings, task_repositories.rebase_requested_at,
                  tasks.context_cleared_at, task_nodes.pause_after, nodes.task_id —
-                 свои ноды задачи); новые миграции пишут DDL
+                 свои ноды задачи, node_logs.decision_output_offset — место
+                 решения в ответе, node_logs.error_message — причина
+                 ошибки); новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
@@ -228,9 +230,20 @@ scripts/
                 (`updated_by = NULL`), повторный запуск идемпотентен
   smoke_frontend_image.sh — собирает продовый образ фронтенда и проверяет
                 SPA-фолбэк nginx (запускается в CI после make check)
+  qa/          — стенд ручного E2E-тестирования (docs/qa_e2e_manual.md):
+                stand.sh (.env из qa.env с VAPID-ключами,
+                compose-проект tracker-qa, git-хост qa-git по SSH и мок
+                qa-mocks в его сети, справочники, сертификат Caddy;
+                env/seed/up/data/trust/merge/export/down), qa.env.example —
+                шаблон настроек и секретов стенда (копия qa.env — в
+                .gitignore), seed_qa_data.py — справочники и эталонный
+                пайплайн, pipeline/ — скрипты его script-нод,
+                mock_providers.py — мок Jira и GitLab API, git-server/ —
+                образ git-хоста, seed/qa-calc — тестовый репозиторий
 docs/        — техническая документация: ТЗ, implementation_plan.md (план
               реализации по этапам), migration.md (раздел 20.4 — процедура
-              переноса на новый сервер), remote_control_findings.md
+              переноса на новый сервер), qa_e2e_manual.md (ручное E2E-
+              тестирование в браузере), remote_control_findings.md
               (верификация допущения раздела 6.3), design/ (HTML-референсы
               дашборда и страницы задачи), screen/ (скриншоты страницы задачи)
 .github/     — workflows/ci.yml (сборка образов раннеров → make check →
@@ -472,7 +485,8 @@ Postgres из `backend/tests/conftest.py`:
     Задача, у которой пропал пульс сессии (`services/session_heartbeat.py`),
     после исчерпания попыток переходит в `failed` (ТЗ 6.6).
 17. **Режимы разрешений агента** (`services/plan_mode.py`, ТЗ 9): пока идёт
-    нода `plan_prompt`, правки запрещены; `current_permission_mode =
+    нода `plan_prompt`, правки запрещены, а принятый план завершает ход
+    ноды без изменений — реализуют следующие ноды; `current_permission_mode =
     default` — каждое действие, требующее разрешения, ждёт «Разрешить» /
     «Запретить» в виджете; `NULL`/`acceptEdits` — автономная работа.
     Вопросы агента (`AskUserQuestion`) — в формате SDK: `questions[]` →

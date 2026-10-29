@@ -57,6 +57,14 @@ describe("DecisionWidget", () => {
       }
     });
 
+    test("длинный план показан целиком, без «Показать полностью»", () => {
+      const longPlan = `${"1. Шаг плана.\n".repeat(40)}Последний шаг`;
+      renderWidget(awaitingLog({ pending_plan_text: longPlan, pending_options: PLAN_OPTIONS }));
+
+      expect(screen.getByText("Последний шаг")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Показать полностью →" })).not.toBeInTheDocument();
+    });
+
     test.for(PLAN_OPTIONS)("«$label» отправляет вариант $id", async (option, { api }) => {
       const { user } = renderWidget(planLog);
 

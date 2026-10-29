@@ -144,8 +144,10 @@ class NodeLogResponse(BaseModel):
     rendered_prompt: str | None
     llm_output_text: str | None
     user_input_text: str | None
+    decision_output_offset: int | None
     script_stdout: str | None
     script_exit_code: int | None
+    error_message: str | None
     status: NodeLogStatus
     pending_question: str | None
     pending_plan_text: str | None
@@ -155,11 +157,12 @@ class NodeLogResponse(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    """Раздел 9.6: ответ на `awaiting_input`/`plan_review`.
+    """
+    Раздел 9.6: ответ на `awaiting_input`/`plan_review`.
 
     ``option_id`` — выбор одной из `pending_options` (включая варианты
-    решения по плану, раздел 9.3); ``feedback_text`` — свободный текст,
-    обязателен для "Доработать план" (раздел 9.3), опционален для прочих.
+    решения по плану, раздел 9.3); ``feedback_text`` — необязательный
+    свободный текст, для "Доработать план" — пожелания к плану.
     """
 
     node_log_id: uuid.UUID

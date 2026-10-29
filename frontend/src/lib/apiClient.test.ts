@@ -83,11 +83,16 @@ describe("apiClient", () => {
       expect(errorMessage(error, "Не удалось запустить")).toBe("Задача уже запущена");
     });
 
-    it("ответ не JSON (прокси) — общее сообщение со статусом", async () => {
-      stubFetch(new Response("<html>Bad Gateway</html>", { status: 502 }));
+    it.each([
+      ["не JSON (прокси)", new Response("<html>Bad Gateway</html>", { status: 502 })],
+      ["JSON не в формате API", json(502, { detail: [{ msg: "Field required" }] })],
+      ["пустое тело", new Response(null, { status: 502 })],
+    ])("ответ %s — общее сообщение со статусом", async (_case, response) => {
+      stubFetch(response);
 
       const error = await api.get("/tasks").catch((caught: unknown) => caught);
 
+      expect(error).toBeInstanceOf(ApiError);
       expect(error).toMatchObject({ status: 502, code: "unknown_error", message: "Ошибка запроса (HTTP 502)" });
     });
 

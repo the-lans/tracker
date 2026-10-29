@@ -12,7 +12,7 @@ from services.autostart import find_tasks_due_for_autostart, run_scheduled_autos
 from services.errors import ConflictError, ValidationError
 from services.notifications import NotificationEvent
 from tasks import periodic, session_worker
-from tests.factories import make_task
+from tests.factories import make_pipeline, make_task, make_user
 
 
 async def _make_task(
@@ -22,8 +22,12 @@ async def _make_task(
     auto_start_enabled: bool = True,
     scheduled_start_at: datetime | None = None,
 ) -> Task:
+    owner = await make_user(db_session)
+    pipeline = await make_pipeline(db_session, created_by=owner.id)
     return await make_task(
         db_session,
+        created_by=owner.id,
+        pipeline_id=pipeline.id,
         status=status,
         auto_start_enabled=auto_start_enabled,
         scheduled_start_at=scheduled_start_at,

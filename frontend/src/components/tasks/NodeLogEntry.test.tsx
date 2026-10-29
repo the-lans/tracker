@@ -8,11 +8,37 @@ import { renderWithProviders } from "@/test/renderWithProviders";
 
 const PLAN = "1. Добавить кнопку\n2. Написать тесты";
 
-function renderEntry(log: Partial<NodeLog>, { title, streamedText }: { title?: string; streamedText?: string } = {}) {
+function renderEntry(
+  log: Partial<NodeLog>,
+  { title, streamedText, isAgentTurn }: { title?: string; streamedText?: string; isAgentTurn?: boolean } = {},
+) {
   return renderWithProviders(
-    <NodeLogEntry taskId="t1" log={makeNodeLog(log)} title={title} streamedText={streamedText} />,
+    <NodeLogEntry
+      taskId="t1"
+      log={makeNodeLog(log)}
+      title={title}
+      streamedText={streamedText}
+      isAgentTurn={isAgentTurn}
+    />,
   );
 }
+
+/** Части текста в контейнере идут в этом порядке. */
+function expectOrder(container: HTMLElement, order: string[]) {
+  const text = container.textContent ?? "";
+  const positions = order.map((part) => text.indexOf(part));
+  expect(positions.every((position) => position >= 0)).toBe(true);
+  expect(positions).toEqual([...positions].sort((a, b) => a - b));
+}
+
+const QUESTION = {
+  decision_output_offset: 7,
+  pending_question: "Какую базу?",
+  pending_options: [
+    { id: "0", label: "main" },
+    { id: "1", label: "dev" },
+  ],
+};
 
 describe("NodeLogEntry", () => {
   describe("заголовок записи", () => {
@@ -33,6 +59,75 @@ describe("NodeLogEntry", () => {
       renderEntry({});
 
       expect(screen.getByTitle("Нода пайплайна")).toBeInTheDocument();
+    });
+  });
+
+  describe("решение пользователя в ответе", () => {
+    test.for([
+      { offset: 7, order: ["Уточню.", "main", "Берём базу."] },
+      { offset: null, order: ["Уточню.", "Берём базу.", "main"] },
+    ])("смещение $offset → порядок $order", ({ offset, order }) => {
+      const { container } = renderEntry({
+        llm_output_text: "Уточню.\n\nБерём базу.",
+        decision_output_offset: offset,
+        user_input_text: "0",
+        pending_question: "Какую базу?",
+        pending_options: [
+          { id: "0", label: "main" },
+          { id: "1", label: "dev" },
+        ],
+      });
+
+      expectOrder(container, order);
+    });
+
+    test("ждёт решения — текст до вопроса уже виден над виджетом", () => {
+      const { container } = renderEntry(
+        { ...QUESTION, status: NodeLogStatus.AWAITING_DECISION },
+        { streamedText: "Уточню." },
+      );
+
+      expectOrder(container, ["Уточню.", "Какую базу?"]);
+      expect(screen.queryByText("генерируется…")).not.toBeInTheDocument();
+    });
+
+    test("после ответа продолжение потока — ниже решения", () => {
+      const { container } = renderEntry(
+        { ...QUESTION, status: NodeLogStatus.RUNNING, user_input_text: "0" },
+        { streamedText: "Уточню.\n\nБерём базу." },
+      );
+
+      expectOrder(container, ["Уточню.", "main", "Берём базу.", "генерируется…"]);
+    });
+  });
+
+  describe("поток ответа", () => {
+    test.for([
+      { isAgentTurn: true, streamedText: undefined, thinking: true },
+      { isAgentTurn: false, streamedText: undefined, thinking: false },
+      { isAgentTurn: true, streamedText: "Добавляю", thinking: false },
+    ])("ход агента $isAgentTurn, поток «$streamedText» → думает: $thinking", ({ isAgentTurn, streamedText, thinking }) => {
+      renderEntry({ status: NodeLogStatus.RUNNING }, { isAgentTurn, streamedText });
+
+      expect(screen.queryByText("думает…") !== null).toBe(thinking);
+    });
+
+    test("после ответа на вопрос агент думает — ниже решения", () => {
+      const { container } = renderEntry(
+        { ...QUESTION, status: NodeLogStatus.RUNNING, user_input_text: "0" },
+        { streamedText: "Уточню.", isAgentTurn: true },
+      );
+
+      expectOrder(container, ["Уточню.", "main", "думает…"]);
+    });
+
+    test.for([
+      { streamedText: "Начало", collapsed: false },
+      { streamedText: undefined, collapsed: true },
+    ])("итог после потока «$streamedText» → свёрнут: $collapsed", ({ streamedText, collapsed }) => {
+      renderEntry({ status: NodeLogStatus.SUCCESS, llm_output_text: "Длинный ответ. ".repeat(40) }, { streamedText });
+
+      expect(screen.queryByRole("button", { name: /Показать полностью/ }) !== null).toBe(collapsed);
     });
   });
 
@@ -62,10 +157,15 @@ describe("NodeLogEntry", () => {
     });
 
     test.for([
-      { status: NodeLogStatus.FAILED, trigger: NodeLogTriggerType.PIPELINE, output: null, text: "Ошибка выполнения (попытка 3)" },
-      { status: NodeLogStatus.STOPPED, trigger: NodeLogTriggerType.PIPELINE, output: null, text: "Остановлено пользователем" },
-    ])("$status → «$text»", ({ status, trigger, output, text }) => {
-      renderEntry({ status, trigger_type: trigger, llm_output_text: output, attempt_number: 3 });
+      { status: NodeLogStatus.FAILED, error: null, text: "Ошибка выполнения (попытка 3)" },
+      {
+        status: NodeLogStatus.FAILED,
+        error: "Превышен таймаут выполнения",
+        text: "Ошибка выполнения (попытка 3): Превышен таймаут выполнения",
+      },
+      { status: NodeLogStatus.STOPPED, error: null, text: "Остановлено пользователем" },
+    ])("$status, причина «$error» → «$text»", ({ status, error, text }) => {
+      renderEntry({ status, error_message: error, llm_output_text: null, attempt_number: 3 });
 
       expect(screen.getByText(text)).toBeInTheDocument();
     });

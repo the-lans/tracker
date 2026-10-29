@@ -37,6 +37,7 @@ from db.models.pipelines import TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
+from services.node_runs import SESSION_ERROR_MESSAGE
 from services.notifications import NotificationEvent, notify_task_event
 
 if TYPE_CHECKING:
@@ -338,7 +339,11 @@ async def fail_task_after_error(
     await db_session.execute(
         sa.update(NodeLog)
         .where(NodeLog.task_id == task_id, NodeLog.status.in_(_UNFINISHED_NODE_LOG_STATUSES))
-        .values(status=NodeLogStatus.FAILED, finished_at=now),
+        .values(
+            status=NodeLogStatus.FAILED,
+            finished_at=now,
+            error_message=SESSION_ERROR_MESSAGE,
+        ),
     )
     await db_session.execute(
         sa.update(TaskManualRequestQueue)

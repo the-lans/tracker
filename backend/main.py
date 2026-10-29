@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import traceback
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.auth import router as auth_router
 from api.env_variables import router as env_variables_router
@@ -32,13 +34,21 @@ from app_logging.app_logs import write_app_log
 from app_logging.config import configure_logging, get_logger
 from db.models.enums import AppLogLevel
 from db.session import engine
-from services.errors import AppError
+from services.errors import AppError, ValidationError
 from ws.tasks import router as ws_router
 
 configure_logging()
 logger = get_logger("main")
 
 _API_LOG_SOURCE = "api"
+# Раздел 17.3: ответы самого FastAPI (схема запроса, неизвестный путь) — в
+# том же формате, что и прикладные ошибки.
+_REQUEST_FIELD_LOCATIONS = frozenset({"body", "query", "path", "header", "cookie"})
+_HTTP_ERRORS = {
+    404: ("not_found", "Адрес API не найден"),
+    405: ("method_not_allowed", "Метод не поддерживается этим адресом API"),
+}
+_HTTP_ERROR_CODE = "http_error"
 
 
 @asynccontextmanager
@@ -71,25 +81,70 @@ app.include_router(jira_router)
 app.include_router(ws_router)
 
 
-@app.exception_handler(AppError)
-async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+def _error_response(
+    request: Request,
+    *,
+    status_code: int,
+    code: str,
+    message: str,
+    headers: Mapping[str, str] | None = None,
+) -> JSONResponse:
     request_id = str(uuid.uuid4())
     logger.warning(
         "app_error",
-        code=exc.code,
-        error_message=exc.message,
+        code=code,
+        error_message=message,
         request_id=request_id,
         path=request.url.path,
     )
     return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": code, "message": message, "request_id": request_id}},
+        headers=headers,
+    )
+
+
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    return _error_response(request, status_code=exc.status_code, code=exc.code, message=exc.message)
+
+
+def _field_error(error: dict[str, object]) -> str:
+    loc = error.get("loc")
+    parts = [str(part) for part in loc] if isinstance(loc, (list, tuple)) else []
+    if parts and parts[0] in _REQUEST_FIELD_LOCATIONS:
+        parts = parts[1:]
+    field = ".".join(parts)
+    message = str(error.get("msg", ""))
+    return f"{field}: {message}" if field else message
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_handler(
+    request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    details = "; ".join(_field_error(error) for error in exc.errors())
+    return _error_response(
+        request,
+        status_code=ValidationError.status_code,
+        code=ValidationError.code,
+        message=f"Некорректные данные запроса — {details}",
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(
+    request: Request,
+    exc: StarletteHTTPException,
+) -> JSONResponse:
+    code, message = _HTTP_ERRORS.get(exc.status_code, (_HTTP_ERROR_CODE, str(exc.detail)))
+    return _error_response(
+        request,
         status_code=exc.status_code,
-        content={
-            "error": {
-                "code": exc.code,
-                "message": exc.message,
-                "request_id": request_id,
-            }
-        },
+        code=code,
+        message=message,
+        headers=exc.headers,
     )
 
 

@@ -5,8 +5,10 @@
 действиями, которые режим разрешений сессии не одобряет сам. Все случаи,
 где нужен ответ пользователя, проходят через один виджет выбора (9.6):
 
-- `ExitPlanMode` — решение по плану (9.3); принятый план сразу переключает
-  режим живой сессии (`setMode`) на выбранный пользователем;
+- `ExitPlanMode` — решение по плану (9.3); принятый план завершает ход ноды
+  `plan_prompt` без изменений (до конца хода инструменты запрещены), режим
+  сессии на выбранный пользователем переключает `execute_plan_prompt_node`
+  после хода — реализацию выполняют следующие ноды;
 - `AskUserQuestion` — вопросы агента в формате SDK (`questions[]`), задаются
   по очереди, ответы возвращаются в `answers` (вопрос → выбранный вариант
   или свой текст);
@@ -42,7 +44,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny, PermissionUpdate
+from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from app_logging.config import get_logger
 from db.models.enums import NodeLogStatus, PermissionMode, TaskStatus
@@ -65,6 +67,8 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from clients.claude_agent import UserWaitClock
+
 logger = get_logger("plan_mode")
 
 EXIT_PLAN_MODE_TOOL = "ExitPlanMode"
@@ -82,7 +86,19 @@ TOOL_APPROVAL_OPTIONS: list[dict[str, str]] = [
 PLAN_MODE_WRITE_DENIED = (
     "В режиме планирования изменения запрещены: сначала предложите план (ExitPlanMode)"
 )
+# Раздел 9.3: принятый план завершает ход ноды `plan_prompt` — реализацию
+# выполняют следующие ноды. Отказ без прерывания: агент видит, что план принят,
+# и сам заканчивает ответ (прерванный ход CLI завершает ошибкой).
+PLAN_ACCEPTED_MESSAGE = (
+    "План принят пользователем. Реализацию выполнит следующий запрос — "
+    "сейчас ничего не меняй и заверши ответ."
+)
+PLAN_ACCEPTED_TOOL_DENIED = "План принят: изменения — в следующем запросе. Заверши ответ."
+CONTEXT_ONLY_TOOL_DENIED = "Сейчас только прими контекст: задание придёт следующим сообщением."
 DECISION_TIMEOUT_DENIED = "Истекло время ожидания решения пользователя"
+# Раздел 9.3: у отказа всегда есть текст — пустой отказ API Claude отклоняет
+# (400), и сессия с ним в истории больше не отвечает.
+PLAN_REVISE_DENIED = "Пользователь просит доработать план"
 _TOOL_DESCRIPTION_LIMIT = 500
 
 
@@ -130,6 +146,13 @@ def apply_plan_decision(option: str, *, feedback_text: str | None = None) -> Pla
     raise ValueError(message)
 
 
+def plan_revise_message(feedback_text: str | None) -> str:
+    """Раздел 9.3: фидбек «Доработать план» — с пожеланиями пользователя, если они есть."""
+    if not feedback_text or not feedback_text.strip():
+        return PLAN_REVISE_DENIED
+    return f"{PLAN_REVISE_DENIED}: {feedback_text.strip()}"
+
+
 def decide_plan_auto_completion(*, auto_accept_plan: bool) -> PlanDecisionResult | None:
     """Раздел 9.2: `auto_accept_plan=true` — подтверждение без остановки пайплайна.
 
@@ -155,6 +178,15 @@ class ActiveNodeContext:
     auto_accept_plan: bool = False
     # Идёт нода `plan_prompt` и план ещё не принят: изменения запрещены (9.1).
     plan_mode: bool = False
+    # План принят, ход ноды `plan_prompt` дописывается: инструменты запрещены (9.3).
+    plan_accepted: bool = False
+    # Ход лишь передаёт контекст (саммари родителя, 6.7): инструменты запрещены.
+    context_only: bool = False
+    # Длина ответа текущего хода (`ClaudeCodeSession.turn_text_length`):
+    # место решения пользователя в ответе (раздел 15.2).
+    output_length: Callable[[], int] | None = None
+    # Часы ожидания пользователя сессии: на это время таймаут ноды стоит (7.3).
+    user_wait_clock: UserWaitClock | None = None
     _decision_wait: asyncio.Task[Any] | None = field(default=None, init=False, repr=False)
 
     def activate(
@@ -164,6 +196,7 @@ class ActiveNodeContext:
         task_id: uuid.UUID,
         auto_accept_plan: bool = False,
         plan_mode: bool = False,
+        context_only: bool = False,
     ) -> None:
         """
         Каждый, кто начинает ход в сессии (нода, ручной запрос, разрешение
@@ -173,13 +206,22 @@ class ActiveNodeContext:
         self.task_id = task_id
         self.auto_accept_plan = auto_accept_plan
         self.plan_mode = plan_mode
+        self.plan_accepted = False
+        self.context_only = context_only
+
+    def output_offset(self) -> int | None:
+        return self.output_length() if self.output_length is not None else None
 
     def track_decision_wait(self) -> None:
         self._decision_wait = asyncio.current_task()
+        if self.user_wait_clock is not None:
+            self.user_wait_clock.begin()
 
     def untrack_decision_wait(self) -> None:
         if self._decision_wait is asyncio.current_task():
             self._decision_wait = None
+            if self.user_wait_clock is not None:
+                self.user_wait_clock.end()
 
     async def cancel_decision_wait(self) -> None:
         """
@@ -215,9 +257,11 @@ async def _mark_awaiting_decision(
     pending_question: str | None,
     pending_plan_text: str | None,
     pending_options: list[dict[str, str]],
+    output_offset: int | None,
 ) -> None:
     node_log = await _get_node_log(db_session, node_log_id)
     node_log.status = NodeLogStatus.AWAITING_DECISION
+    node_log.decision_output_offset = output_offset
     node_log.pending_question = pending_question
     node_log.pending_plan_text = pending_plan_text
     node_log.pending_options = pending_options
@@ -234,8 +278,8 @@ def encode_decision(option_id: str, *, feedback_text: str | None = None) -> str:
     """Кодирует решение пользователя (раздел 9.6) в одно текстовое поле
     `node_logs.user_input_text` — API вызывает это перед записью.
 
-    ``feedback_text`` обязателен по смыслу для "Доработать план" (раздел
-    9.3), опционален для прочих вариантов; хранится второй строкой, чтобы
+    ``feedback_text`` — пожелания к доработке плана или комментарий к
+    решению (раздел 9.3), всегда необязателен; хранится второй строкой, чтобы
     не заводить под него отдельную колонку в уже зафиксированной схеме
     (раздел 3.1).
     """
@@ -391,9 +435,11 @@ async def _record_plan_auto_accept(
     node_log_id: uuid.UUID,
     task_id: uuid.UUID,
     plan_text: str | None,
+    output_offset: int | None,
 ) -> None:
     node_log = await _get_node_log(db_session, node_log_id)
     node_log.pending_plan_text = plan_text
+    node_log.decision_output_offset = output_offset
     node_log.user_input_text = PlanDecisionOption.ACCEPT_AUTO
     # Как и при решении пользователя: принятый план — успешная запись, по
     # ней `execute_plan_prompt_node` понимает, что план подтверждён.
@@ -471,11 +517,6 @@ async def _finish_question(
     await db_session.commit()
 
 
-def _set_session_mode(mode: PermissionMode) -> list[PermissionUpdate]:
-    """Режим живой сессии меняется вместе с `tasks.current_permission_mode` (9.4)."""
-    return [PermissionUpdate(type="setMode", mode=mode.value, destination="session")]
-
-
 async def _record_plan_decision(
     db_session: AsyncSession,
     *,
@@ -542,6 +583,12 @@ class _PermissionCallback:
     ) -> PermissionResult:
         context = self.context
         active = context.node_log_id is not None and context.task_id is not None
+        # Вопрос тоже отклоняется: ожидание ответа перевело бы запись плана из
+        # `success` и затёрло бы решение по плану (раздел 9.3).
+        if context.plan_accepted:
+            return PermissionResultDeny(message=PLAN_ACCEPTED_TOOL_DENIED, interrupt=False)
+        if context.context_only:
+            return PermissionResultDeny(message=CONTEXT_ONLY_TOOL_DENIED, interrupt=False)
         if tool_name in INTERCEPTED_TOOLS:
             if not active:
                 return PermissionResultDeny(message="Нет активной ноды для обработки решения")
@@ -588,6 +635,7 @@ class _PermissionCallback:
                         pending_question=question,
                         pending_plan_text=plan_text,
                         pending_options=options,
+                        output_offset=context.output_offset(),
                     )
                     resume_status = await resumable_decision_status(db_session, task_id=task_id)
                     if resume_status is not None:
@@ -680,12 +728,10 @@ class _PermissionCallback:
                     node_log_id=context.node_log_id,
                     task_id=context.task_id,
                     plan_text=plan_text,
+                    output_offset=context.output_offset(),
                 )
-            context.plan_mode = False
             logger.info("plan_auto_accepted", node_log_id=str(context.node_log_id))
-            return PermissionResultAllow(
-                updated_permissions=_set_session_mode(PermissionMode.ACCEPT_EDITS),
-            )
+            return self._finish_plan_turn()
         resolution = await self._await_decision(
             awaiting_status=TaskStatus.PLAN_REVIEW,
             question=None,
@@ -704,10 +750,17 @@ class _PermissionCallback:
                 decision=decision,
             )
         if not decision.allow:
-            return PermissionResultDeny(message=decision.feedback_text or "", interrupt=False)
-        context.plan_mode = False
-        if decision.updated_permission_mode is None:
-            return PermissionResultAllow()
-        return PermissionResultAllow(
-            updated_permissions=_set_session_mode(decision.updated_permission_mode),
-        )
+            return PermissionResultDeny(
+                message=plan_revise_message(decision.feedback_text),
+                interrupt=False,
+            )
+        return self._finish_plan_turn()
+
+    def _finish_plan_turn(self) -> PermissionResult:
+        """
+        Раздел 9.3: план принят — ход ноды заканчивается без изменений, режим
+        сессии переключает `execute_plan_prompt_node` после хода (9.4).
+        """
+        self.context.plan_mode = False
+        self.context.plan_accepted = True
+        return PermissionResultDeny(message=PLAN_ACCEPTED_MESSAGE, interrupt=False)

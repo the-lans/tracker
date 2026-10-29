@@ -34,8 +34,8 @@ function renderCard(
   );
 }
 
-const runButton = () => screen.findByRole("button", { name: "Выполнить промт" });
-const stopButton = () => screen.findByRole("button", { name: "Остановить промт" });
+const runButton = () => screen.findByRole("button", { name: "Выполнить промт Ревью безопасности" });
+const stopButton = () => screen.findByRole("button", { name: "Остановить промт Ревью безопасности" });
 
 describe("TaskLibraryPromptsCard", () => {
   describe("запуск ▶", () => {
@@ -110,6 +110,18 @@ describe("TaskLibraryPromptsCard", () => {
   });
 
   describe("строка промта", () => {
+    test("кнопки ▶ и ■ подписаны названием своего промта", async ({ api }) => {
+      renderCard(api, [
+        makeLibraryPrompt(),
+        makeLibraryPrompt({ id: "lp2", node_id: "l2", name: "Прогнать e2e-тесты" }),
+      ]);
+
+      for (const name of ["Ревью безопасности", "Прогнать e2e-тесты"]) {
+        expect(await screen.findByRole("button", { name: `Выполнить промт ${name}` })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: `Остановить промт ${name}` })).toBeInTheDocument();
+      }
+    });
+
     test.for([
       { status: LibraryPromptRunStatus.NEVER_RUN, label: "не запускался" },
       { status: LibraryPromptRunStatus.QUEUED, label: "в очереди" },

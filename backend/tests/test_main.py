@@ -146,3 +146,85 @@ class TestUnhandledErrorLog:
         started = time.monotonic()
         assert await _crash()
         assert time.monotonic() - started < 5
+
+
+class TestFrameworkErrors:
+    """Раздел 17.3: ошибки самого FastAPI — в стандартном формате ответа."""
+
+    @staticmethod
+    def _client() -> TestClient:
+        from fastapi.exceptions import RequestValidationError
+        from pydantic import BaseModel
+        from starlette.exceptions import HTTPException as StarletteHTTPException
+
+        from main import http_exception_handler, request_validation_handler
+
+        class Body(BaseModel):
+            raw_prompt_text: str
+            limit: int = 1
+
+        probe = FastAPI()
+        probe.exception_handler(RequestValidationError)(request_validation_handler)
+        probe.exception_handler(StarletteHTTPException)(http_exception_handler)
+
+        @probe.post("/prompts")
+        async def create(body: Body) -> dict[str, str]:
+            return {"text": body.raw_prompt_text}
+
+        return TestClient(probe)
+
+    @pytest.mark.parametrize(
+        ("method", "path", "payload", "status", "code", "message_part"),
+        [
+            ("post", "/prompts", {"text": "привет"}, 422, "validation_error", "raw_prompt_text"),
+            (
+                "post",
+                "/prompts",
+                {"raw_prompt_text": "a", "limit": "x"},
+                422,
+                "validation_error",
+                "limit",
+            ),
+            ("get", "/missing", None, 404, "not_found", "Адрес API не найден"),
+            ("get", "/prompts", None, 405, "method_not_allowed", "Метод не поддерживается"),
+        ],
+    )
+    def test_standard_shape(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, str] | None,
+        status: int,
+        code: str,
+        message_part: str,
+    ) -> None:
+        with self._client() as client:
+            response = client.request(method, path, json=payload)
+
+        assert response.status_code == status
+        error = response.json()["error"]
+        assert error["code"] == code
+        assert message_part in error["message"]
+        assert error["request_id"]
+
+    def test_method_not_allowed_keeps_allow_header(self) -> None:
+        with self._client() as client:
+            response = client.get("/prompts")
+
+        assert response.headers["allow"] == "POST"
+
+    @pytest.mark.parametrize(
+        ("method", "path", "status", "code"),
+        [
+            ("post", "/auth/google", 422, "validation_error"),
+            ("get", "/no-such-route", 404, "not_found"),
+        ],
+    )
+    def test_registered_on_app(self, method: str, path: str, status: int, code: str) -> None:
+        from main import app
+
+        with TestClient(app) as client:
+            response = client.request(method, path, json={})
+
+        assert response.status_code == status
+        assert response.json()["error"]["code"] == code

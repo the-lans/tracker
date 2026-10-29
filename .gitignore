@@ -230,3 +230,8 @@ node_modules/
 
 # Личные настройки Claude Code (разрешения инструментов)
 .claude/settings.local.json
+
+# Стенд ручного E2E-тестирования (scripts/qa/stand.sh): ключ, копии
+# репозитория и настройки с секретами (шаблон — scripts/qa/qa.env.example)
+.qa/
+scripts/qa/qa.env

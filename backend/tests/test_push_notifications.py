@@ -8,10 +8,15 @@ import uuid
 from unittest.mock import Mock, patch
 
 import pytest
+import structlog
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.notifications import PushSubscription
+from db.models.tasks import Task
 from db.models.users import User
+from services import notifications
+from services.notifications import NotificationEvent, notify_task_event, task_push_window_key
 from services.push_notifications import (
     PUSH_SEND_TIMEOUT_SECONDS,
     PushMessage,
@@ -21,6 +26,8 @@ from services.push_notifications import (
     send_push_to_user,
 )
 from tests.factories import make_user
+
+AWAITING = NotificationEvent.AWAITING_DECISION
 
 
 class _RecordingSender:
@@ -39,8 +46,6 @@ class _AlwaysExpiredSender:
 class _AlwaysFailingSender:
     def send(self, *, subscription: PushSubscription, message: PushMessage) -> None:
         raise RuntimeError("network error")
-
-
 
 
 async def _make_subscription(db_session: AsyncSession, user: User) -> PushSubscription:
@@ -99,6 +104,40 @@ async def test_generic_send_failure_does_not_raise_or_delete_subscription(
     )
 
     assert await db_session.get(PushSubscription, subscription.id) is not None
+
+
+class TestSendLogs:
+    """Раздел 18.1: по логам видно, ушло ли уведомление в каждую подписку."""
+
+    @pytest.mark.parametrize(
+        ("sender", "event"),
+        [
+            (_RecordingSender(), "push_sent"),
+            (_AlwaysFailingSender(), "push_send_failed"),
+            (_AlwaysExpiredSender(), "push_subscription_expired"),
+        ],
+        ids=["sent", "failed", "expired"],
+    )
+    async def test_outcome_logged(
+        self,
+        db_session: AsyncSession,
+        sender: WebPushSender,
+        event: str,
+    ) -> None:
+        user = await make_user(db_session)
+        subscription = await _make_subscription(db_session, user)
+
+        with structlog.testing.capture_logs() as logs:
+            await send_push_to_user(
+                db_session,
+                user_id=user.id,
+                message=PushMessage(title="t", body="b", data={}),
+                sender=sender,
+            )
+
+        assert [(entry["event"], entry["subscription_id"]) for entry in logs] == [
+            (event, str(subscription.id)),
+        ]
 
 
 async def test_no_subscriptions_is_a_no_op(db_session: AsyncSession) -> None:
@@ -193,3 +232,98 @@ class TestSendDoesNotBlockLoop:
             )
 
         assert webpush.call_args.kwargs["timeout"] == PUSH_SEND_TIMEOUT_SECONDS
+
+
+class TestNotifyTaskEvent:
+    async def test_push_logged_with_task_id(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 17.2: итог отправки ищется по задаче и вне воркера сессии."""
+        seen: list[object] = []
+
+        async def record(*_args: object, **_kwargs: object) -> None:
+            seen.append(structlog.contextvars.get_contextvars().get("task_id"))
+
+        monkeypatch.setattr(notifications, "send_push_to_user", record)
+        user = await make_user(db_session)
+        task = Task(code="RR-12345", title="t", description="d", created_by=user.id)
+
+        await notify_task_event(db_session, event=NotificationEvent.DONE, task=task)
+
+        assert seen == [str(task.id)]
+        assert "task_id" not in structlog.contextvars.get_contextvars()
+
+
+class TestPushWindow:
+    """Раздел 18.2: серия запросов решения по задаче — одно уведомление за окно."""
+
+    @pytest.fixture
+    def sent(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        sent: list[str] = []
+
+        async def record(*_args: object, message: PushMessage, **_kwargs: object) -> None:
+            sent.append(message.title)
+
+        monkeypatch.setattr(notifications, "send_push_to_user", record)
+        return sent
+
+    @pytest.mark.parametrize(
+        ("event", "same_task", "expected"),
+        [
+            (NotificationEvent.AWAITING_DECISION, True, 1),
+            (NotificationEvent.AWAITING_DECISION, False, 2),
+            (NotificationEvent.DONE, True, 2),
+        ],
+        ids=["series_of_one_task", "different_tasks", "not_windowed_event"],
+    )
+    async def test_count(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        sent: list[str],
+        event: NotificationEvent,
+        same_task: bool,
+        expected: int,
+    ) -> None:
+        user = await make_user(db_session)
+        first = _task(user)
+        second = first if same_task else _task(user)
+
+        await notify_task_event(db_session, event=event, task=first)
+        await notify_task_event(db_session, event=event, task=second)
+
+        assert len(sent) == expected
+
+    async def test_sent_again_after_window(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        sent: list[str],
+    ) -> None:
+        task = _task(await make_user(db_session))
+        await notify_task_event(db_session, event=AWAITING, task=task)
+        await redis_client.delete(task_push_window_key(task.id, AWAITING))
+
+        await notify_task_event(db_session, event=AWAITING, task=task)
+
+        assert len(sent) == 2
+
+    async def test_sent_without_redis(
+        self,
+        db_session: AsyncSession,
+        sent: list[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:1/0")
+        task = _task(await make_user(db_session))
+
+        for _ in range(2):
+            await notify_task_event(db_session, event=AWAITING, task=task)
+
+        assert len(sent) == 2
+
+
+def _task(user: User) -> Task:
+    return Task(id=uuid.uuid4(), code="RR-12345", title="t", description="d", created_by=user.id)

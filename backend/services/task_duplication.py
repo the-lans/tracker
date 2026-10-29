@@ -132,6 +132,7 @@ async def duplicate_task(
             ensure_pipeline_attachable(pipeline)
     task = await add_task_with_repositories(db_session, draft=draft, created_by=created_by)
     task.pipeline_id = source.pipeline_id
+    task.auto_accept_plan = source.auto_accept_plan
     await _copy_task_nodes(db_session, source=source, target=task)
     await _copy_env_variables(db_session, source=source, target=task)
     await _copy_library_prompts(db_session, source=source, target=task, added_by=created_by)

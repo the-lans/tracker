@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Maximize2 } from "lucide-react";
 import { MessageBubble } from "@/components/tasks/MessageBubble";
 import { promptKindOf } from "@/components/tasks/messageKinds";
-import { describeUserInput } from "@/lib/userInput";
+import { describeUserInput, turnOutputOf } from "@/lib/userInput";
 import { NodeOutputSheet } from "@/components/tasks/NodeOutputSheet";
 import { ScriptOutputBlock } from "@/components/tasks/ScriptOutputBlock";
 import { DecisionWidget } from "@/components/tasks/DecisionWidget";
@@ -27,11 +27,14 @@ export function NodeLogEntry({
   log,
   title,
   streamedText,
+  isAgentTurn = false,
 }: {
   taskId: string;
   log: NodeLog;
   title?: string;
   streamedText?: string;
+  /** Запись — ход агента (промт, слэш-команда, план), а не скрипт или очистка контекста. */
+  isAgentTurn?: boolean;
 }) {
   const [outputOpen, setOutputOpen] = useState(false);
   // Раздел 15.2: служебная реплика помечена источником — один раз, в заголовке записи.
@@ -41,11 +44,13 @@ export function NodeLogEntry({
   const isAwaitingDecision = log.status === NodeLogStatus.AWAITING_DECISION;
   const isSummaryNote =
     log.trigger_type === NodeLogTriggerType.PARENT_SUMMARY && log.llm_output_text === null;
-  // Раздел 15.2: пока ход идёт, ответ показывается по мере генерации;
-  // итоговый текст из БД заменяет его.
   const userInput =
     !isAwaitingDecision && log.user_input_text ? describeUserInput(log) : null;
-  const liveText = !log.llm_output_text && log.status === NodeLogStatus.RUNNING ? streamedText : undefined;
+  const { before, after, generating, liveAfterDecision, thinking, keepExpanded } = turnOutputOf(
+    log,
+    streamedText,
+    isAgentTurn,
+  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -75,19 +80,15 @@ export function NodeLogEntry({
         />
       )}
       {isScript && <ScriptOutputBlock stdout={log.script_stdout} exitCode={log.script_exit_code} />}
-      {log.llm_output_text && <MessageBubble role="llm" text={log.llm_output_text} />}
-      {liveText && <MessageBubble role="llm" text={liveText} streaming />}
-      {/* Пометка «саммари недоступно» сама объясняет себя — без общей ошибки. */}
-      {log.status === NodeLogStatus.FAILED && !isSummaryNote && (
+      {before && (
         <MessageBubble
           role="llm"
-          danger
-          text={`Ошибка выполнения (попытка ${log.attempt_number})`}
+          text={before}
+          streaming={generating && !liveAfterDecision}
+          defaultExpanded={keepExpanded}
         />
       )}
-      {log.status === NodeLogStatus.STOPPED && (
-        <MessageBubble role="llm" danger kind="stopped" text="Остановлено пользователем" />
-      )}
+      {thinking && !liveAfterDecision && <MessageBubble role="llm" text="" thinking />}
       {isAwaitingDecision && <DecisionWidget taskId={taskId} log={log} />}
       {!isAwaitingDecision && log.pending_plan_text && log.status === NodeLogStatus.SUCCESS && (
         <MessageBubble role="llm" kind="plan" text={`План принят.\n\n${log.pending_plan_text}`} />
@@ -98,6 +99,23 @@ export function NodeLogEntry({
           kind={userInput.automatic ? "plan" : "decision"}
           text={userInput.text}
         />
+      )}
+      {after && (
+        <MessageBubble role="llm" text={after} streaming={liveAfterDecision} defaultExpanded={keepExpanded} />
+      )}
+      {thinking && liveAfterDecision && <MessageBubble role="llm" text="" thinking />}
+      {/* Пометка «саммари недоступно» сама объясняет себя — без общей ошибки. */}
+      {log.status === NodeLogStatus.FAILED && !isSummaryNote && (
+        <MessageBubble
+          role="llm"
+          danger
+          text={[`Ошибка выполнения (попытка ${log.attempt_number})`, log.error_message]
+            .filter(Boolean)
+            .join(": ")}
+        />
+      )}
+      {log.status === NodeLogStatus.STOPPED && (
+        <MessageBubble role="llm" danger kind="stopped" text="Остановлено пользователем" />
       )}
     </div>
   );

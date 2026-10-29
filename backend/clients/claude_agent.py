@@ -19,6 +19,7 @@ Celery-таска на весь активный жизненный цикл с�
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol
 
@@ -42,8 +43,20 @@ if TYPE_CHECKING:
 logger = get_logger("claude_agent")
 
 REMOTE_CONTROL_EXTRA_ARG = "remote-control"
+# Правило 1 CLAUDE.md: ход сессии начинает только запрос трекера. Фоновая
+# команда или запланированное пробуждение агента завершаются ходом без
+# запроса, и его ответ достался бы следующему запросу трекера.
+SEQUENTIAL_TURNS_ENV = {
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+    "CLAUDE_CODE_DISABLE_CRON": "1",
+}
+_CONTENT_BLOCK_START_EVENT = "content_block_start"
 _CONTENT_BLOCK_DELTA_EVENT = "content_block_delta"
 _TEXT_DELTA = "text_delta"
+_TEXT_BLOCK = "text"
+# Текстовые блоки хода — отдельные реплики агента (до и после вызова
+# инструмента): в ответе они идут абзацами, а не сливаются в одну строку.
+TEXT_BLOCK_SEPARATOR = "\n\n"
 
 # Получатель фрагментов ответа по мере генерации (раздел 15.2).
 TextDeltaHandler = Callable[[str], Awaitable[None]]
@@ -128,7 +141,8 @@ def build_claude_agent_options(
     пересказывается история родительской задачи. ``add_dirs`` — каталоги вне
     ``cwd``, с которыми сессии можно работать: артефакты задачи (раздел 14.3).
     ``cli_path`` и ``cli_env`` — обёртка, запускающая CLI в контейнере сессии,
-    и её настройки (раздел 19.3, `services/session_container.py`).
+    и её настройки (раздел 19.3, `services/session_container.py`). Фоновые
+    задачи и пробуждения CLI выключены всегда (`SEQUENTIAL_TURNS_ENV`).
     """
     extra_args: dict[str, str | None] = {}
     if enable_remote_control:
@@ -153,13 +167,40 @@ def build_claude_agent_options(
         cwd=cwd,
         permission_mode=permission_mode,  # type: ignore[arg-type]
         mcp_servers=mcp_servers,
-        env={**(cli_env or {}), "CLAUDE_CONFIG_DIR": claude_config_dir},
+        env={
+            **(cli_env or {}),
+            **SEQUENTIAL_TURNS_ENV,
+            "CLAUDE_CONFIG_DIR": claude_config_dir,
+        },
         cli_path=cli_path,
         extra_args=extra_args,
         can_use_tool=can_use_tool,
         include_partial_messages=True,
         add_dirs=list(add_dirs),
     )
+
+
+def _join_text_blocks(parts: list[str]) -> str:
+    return TEXT_BLOCK_SEPARATOR.join(part for part in parts if part)
+
+
+def _own_text_blocks(message: AssistantMessage) -> list[str]:
+    """
+    Текст ответа самого агента: реплики субагентов не входят ни в поток, ни в
+    итог хода — иначе место решения в потоке и в ответе разошлось бы (15.2).
+    """
+    if message.parent_tool_use_id is not None:
+        return []
+    return [block.text for block in message.content if isinstance(block, TextBlock)]
+
+
+def _starts_text_block(message: StreamEvent) -> bool:
+    """Начало нового текстового блока в ответе самого агента."""
+    if message.parent_tool_use_id is not None:
+        return False
+    event = message.event
+    block = event.get("content_block") or {}
+    return event.get("type") == _CONTENT_BLOCK_START_EVENT and block.get("type") == _TEXT_BLOCK
 
 
 def _text_delta_of(message: StreamEvent) -> str | None:
@@ -210,6 +251,36 @@ class SessionTurnResult:
 _ABORT_DRAIN_TIMEOUT_SECONDS = 10.0
 
 
+class UserWaitClock:
+    """
+    Раздел 7.3: таймаут ноды ограничивает ожидание ответа LLM, а не решения
+    пользователя — время, пока ход ждёт ответа в виджете выбора (9.6), в него
+    не входит.
+    """
+
+    def __init__(self, now: Callable[[], float] = time.monotonic) -> None:
+        self._now = now
+        self._waited = 0.0
+        self._started: float | None = None
+
+    def begin(self) -> None:
+        if self._started is None:
+            self._started = self._now()
+
+    def end(self) -> None:
+        if self._started is not None:
+            self._waited += self._now() - self._started
+            self._started = None
+
+    def is_waiting(self) -> bool:
+        return self._started is not None
+
+    def waited_seconds(self) -> float:
+        """Сколько всего ход ждал пользователя, включая идущее сейчас ожидание."""
+        current = self._now() - self._started if self._started is not None else 0.0
+        return self._waited + current
+
+
 class ClaudeCodeSession:
     """Владелец единственного клиента активной сессии задачи (раздел 6.1, 6.2)."""
 
@@ -233,30 +304,48 @@ class ClaudeCodeSession:
         # Раздел 6.4: текст хода, полученный к этому моменту, — чтобы при
         # остановке, таймауте или падении CLI он не пропал из `node_logs`.
         self._turn_text_parts: list[str] = []
+        # В поток хода уже ушёл текст: следующий текстовый блок отделяется.
+        self._turn_streamed_text = False
+        self.user_wait_clock = UserWaitClock()
 
     def take_partial_turn_text(self) -> str | None:
         """
         Текст прерванного хода (раздел 6.4), полученный до остановки, таймаута
         или падения CLI. Буфер очищается: текст попадает ровно в одну запись.
         """
-        text = "".join(self._turn_text_parts) or None
+        text = _join_text_blocks(self._turn_text_parts) or None
         self._turn_text_parts = []
         return text
+
+    def turn_text_length(self) -> int:
+        """
+        Длина ответа текущего хода, полученного к этому моменту, — в тех же
+        символах, что и итоговый текст хода (раздел 15.2: место решения
+        пользователя в ответе).
+        """
+        return len(_join_text_blocks(self._turn_text_parts))
 
     @property
     def session_id(self) -> str | None:
         """`session_id` из последнего `ResultMessage` — None до первого ответа."""
         return self._session_id
 
+    @property
+    def _runs_cli(self) -> bool:
+        """Задача без LLM-аккаунта работает без процесса CLI — сессии в логах нет."""
+        return not isinstance(self._client, OfflineAgentClient)
+
     async def connect(self) -> None:
         async with self._lock:
             await self._client.connect()
-            logger.info("session_connected")
+            if self._runs_cli:
+                logger.info("session_connected")
 
     async def disconnect(self) -> None:
         async with self._lock:
             await self._client.disconnect()
-            logger.info("session_disconnected")
+            if self._runs_cli:
+                logger.info("session_disconnected")
 
     async def replace_client(self, client: ClaudeAgentClientProtocol) -> None:
         """
@@ -340,6 +429,7 @@ class ClaudeCodeSession:
             self._turn_open = True
             try:
                 self._turn_text_parts = []
+                self._turn_streamed_text = False
                 await self._client.query(prompt)
                 text_parts = self._turn_text_parts
                 result: ResultMessage | None = None
@@ -352,9 +442,7 @@ class ClaudeCodeSession:
                     if isinstance(message, AssistantMessage):
                         if message.error is not None:
                             assistant_error = message.error
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                text_parts.append(block.text)
+                        text_parts.extend(_own_text_blocks(message))
                     if isinstance(message, ResultMessage):
                         result = message
             except ClaudeSDKError:
@@ -377,7 +465,7 @@ class ClaudeCodeSession:
                 session_id=result.session_id,
             )
             return SessionTurnResult(
-                text="".join(text_parts),
+                text=_join_text_blocks(text_parts),
                 result=result,
                 assistant_error=assistant_error,
             )
@@ -385,6 +473,10 @@ class ClaudeCodeSession:
     async def _forward_text_delta(self, message: StreamEvent) -> None:
         if self._on_text_delta is None:
             return
+        if _starts_text_block(message) and self._turn_streamed_text:
+            await self._on_text_delta(TEXT_BLOCK_SEPARATOR)
+            return
         text = _text_delta_of(message)
         if text is not None:
+            self._turn_streamed_text = True
             await self._on_text_delta(text)

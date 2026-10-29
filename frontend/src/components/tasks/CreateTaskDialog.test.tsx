@@ -69,7 +69,19 @@ describe("CreateTaskDialog", () => {
       await user.click(screen.getByRole("button", { name: "Создать" }));
 
       expect(createRequest(api)).toBeUndefined();
-      expect(screen.getByLabelText("Код задачи")).toBeInvalid();
+      const field = screen.getByLabelText("Код задачи");
+      expect(field).toBeInvalid();
+      expect(field).toHaveAttribute("aria-invalid", "true");
+      expect(field).toHaveAccessibleDescription(/не должен содержать пробелов/);
+    });
+
+    test("код без пробелов не помечен ошибкой", async ({ api }) => {
+      const { user } = renderDialog(api);
+
+      await fillRequired(user, "RR-12345");
+
+      expect(screen.getByLabelText("Код задачи")).toHaveAttribute("aria-invalid", "false");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
     test("выбранный репозиторий уходит с ролью и базовой веткой", async ({ api }) => {

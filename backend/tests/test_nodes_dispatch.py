@@ -1,15 +1,18 @@
+import asyncio
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pytest
 from claude_agent_sdk import AssistantMessage, TextBlock
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from clients.claude_agent import ClaudeCodeSession
+from clients.claude_agent import ClaudeCodeSession, UserWaitClock
 from db.models.enums import (
     NodeLogStatus,
     NodeLogTriggerType,
     NodeType,
+    PermissionMode,
     ScriptLanguage,
     TaskStatus,
     UserRole,
@@ -296,31 +299,60 @@ async def _make_task_with_node_log(db_session: AsyncSession) -> tuple[Task, Node
     return task, node_log
 
 
-async def test_execute_plan_prompt_node_switches_to_plan_mode_first(
-    db_session: AsyncSession,
-) -> None:
-    _task, node_log = await _make_task_with_node_log(db_session)
+class TestPlanAcceptedMode:
+    """Раздел 9.4: после хода принятого плана сессия выходит из `plan` в выбранный режим."""
 
-    async def _accept_plan() -> None:
-        node_log.status = NodeLogStatus.SUCCESS
-        await db_session.commit()
-
-    fake = FakeClaudeAgentClient(
-        messages_per_query=[[make_result_message()]],
-        on_query=_accept_plan,
+    @pytest.mark.parametrize(
+        ("task_mode", "session_mode"),
+        [
+            (None, "acceptEdits"),
+            (PermissionMode.ACCEPT_EDITS, "acceptEdits"),
+            (PermissionMode.DEFAULT, "default"),
+        ],
+        ids=["unset", "auto", "confirm_each"],
     )
-    session = ClaudeCodeSession(fake)
+    async def test_switches_after_turn(
+        self,
+        db_session: AsyncSession,
+        task_mode: PermissionMode | None,
+        session_mode: str,
+    ) -> None:
+        task, node_log = await _make_task_with_node_log(db_session)
 
-    outcome = await execute_plan_prompt_node(
-        session,
-        "составь план",
-        db_session=db_session,
-        node_log_id=node_log.id,
-        timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
-    )
+        async def _accept_plan() -> None:
+            node_log.status = NodeLogStatus.SUCCESS
+            task.current_permission_mode = task_mode
+            await db_session.commit()
 
-    assert fake.permission_modes == ["plan"]
-    assert outcome.success is True
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()]],
+            on_query=_accept_plan,
+        )
+
+        outcome = await execute_plan_prompt_node(
+            ClaudeCodeSession(fake),
+            "составь план",
+            db_session=db_session,
+            node_log_id=node_log.id,
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+        )
+
+        assert outcome.success is True
+        assert fake.permission_modes == ["plan", session_mode]
+
+    async def test_not_accepted_stays_in_plan(self, db_session: AsyncSession) -> None:
+        _task, node_log = await _make_task_with_node_log(db_session)
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+
+        await execute_plan_prompt_node(
+            ClaudeCodeSession(fake),
+            "составь план",
+            db_session=db_session,
+            node_log_id=node_log.id,
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+        )
+
+        assert fake.permission_modes == ["plan"]
 
 
 async def test_execute_plan_prompt_node_fails_when_plan_never_accepted(
@@ -393,7 +425,7 @@ async def test_execute_node_dispatches_plan_prompt_type(
     )
 
     assert outcome.success is True
-    assert fake.permission_modes == ["plan"]
+    assert fake.permission_modes == ["plan", "acceptEdits"]
 
 
 async def test_execute_node_plan_prompt_requires_db_session_and_node_log_id(
@@ -456,6 +488,58 @@ class TestScriptRunnerImage:
         assert seen == [expected]
 
 
+class TestTimeoutExcludesUserWait:
+    """Раздел 7.3: время, пока ход ждёт решения пользователя, в таймаут ноды не входит."""
+
+    @pytest.mark.parametrize(
+        ("user_wait_seconds", "success"),
+        [(0.5, True), (0.0, False)],
+        ids=["waits_for_user", "llm_only"],
+    )
+    async def test_outcome(self, user_wait_seconds: float, success: bool) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        fake.message_delay_seconds = 0.6
+        session = ClaudeCodeSession(fake)
+
+        async def user_decides() -> None:
+            session.user_wait_clock.begin()
+            await asyncio.sleep(user_wait_seconds)
+            session.user_wait_clock.end()
+
+        waiting = asyncio.ensure_future(user_decides())
+        outcome = await execute_llm_node_with_timeout(session, "hi", timeout_seconds=0.4)
+        await waiting
+
+        assert outcome.success is success
+
+
+class TestUserWaitPolling:
+    """Раздел 7.3: пока ход ждёт решения, срок не идёт — и цикл не крутится вхолостую."""
+
+    async def test_few_wakeups_near_deadline(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        clock = UserWaitClock()
+        wakeups: list[float | None] = []
+        original_wait = asyncio.wait
+
+        async def counting_wait(*args: Any, **kwargs: Any) -> Any:
+            wakeups.append(kwargs.get("timeout"))
+            return await original_wait(*args, **kwargs)
+
+        monkeypatch.setattr("services.nodes.dispatch.asyncio.wait", counting_wait)
+
+        async def turn() -> NodeExecutionOutcome:
+            await asyncio.sleep(0.09)
+            clock.begin()
+            await asyncio.sleep(0.5)
+            clock.end()
+            return NodeExecutionOutcome(success=True)
+
+        outcome = await dispatch._run_within_active_time(turn(), timeout_seconds=0.1, clock=clock)
+
+        assert outcome.success
+        assert len(wakeups) <= 3
+
+
 class TestPartialReply:
     """Раздел 6.4: полученная до таймаута часть ответа попадает в результат ноды."""
 
@@ -498,12 +582,29 @@ class TestRecordSdkFailure:
     """Раздел 17.2: в `app_logs` — только ошибки взаимодействия с SDK."""
 
     @pytest.mark.parametrize(
-        ("outcome", "logged"),
+        ("outcome", "logged", "message_part"),
         [
-            (NodeExecutionOutcome(success=True), False),
-            (NodeExecutionOutcome(success=False, error_message="Код возврата 1"), False),
-            (NodeExecutionOutcome(success=False, is_transient=False), True),
-            (NodeExecutionOutcome(success=False, session_lost=True), True),
+            (NodeExecutionOutcome(success=True), False, None),
+            (NodeExecutionOutcome(success=False, error_message="Код возврата 1"), False, None),
+            (
+                NodeExecutionOutcome(
+                    success=False,
+                    is_transient=False,
+                    error_message="authentication_failed",
+                ),
+                True,
+                "authentication_failed",
+            ),
+            (
+                NodeExecutionOutcome(
+                    success=False,
+                    session_lost=True,
+                    error_message="Сбой сессии",
+                    error_details="exit code 1",
+                ),
+                True,
+                "exit code 1",
+            ),
         ],
         ids=["success", "script_or_timeout", "permanent", "cli_crashed"],
     )
@@ -512,6 +613,7 @@ class TestRecordSdkFailure:
         monkeypatch: pytest.MonkeyPatch,
         outcome: NodeExecutionOutcome,
         logged: bool,
+        message_part: str | None,
     ) -> None:
         calls: list[dict[str, object]] = []
 
@@ -526,6 +628,8 @@ class TestRecordSdkFailure:
         assert len(calls) == (1 if logged else 0)
         if logged:
             assert calls[0]["task_id"] == task_id
+            assert message_part is not None
+            assert message_part in str(calls[0]["message"])
 
 
 class TestScriptTaskPaths:

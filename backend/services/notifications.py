@@ -13,7 +13,11 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from redis.exceptions import RedisError
+
+from app_logging.config import bind_task_context, get_logger
 from services.push_notifications import PushMessage, send_push_to_user
+from services.redis_connection import redis_connection
 
 if TYPE_CHECKING:
     import uuid
@@ -21,6 +25,9 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from db.models.tasks import Task
+
+
+logger = get_logger("notifications")
 
 
 class NotificationEvent(StrEnum):
@@ -61,6 +68,41 @@ _TITLES: dict[NotificationEvent, str] = {
 }
 
 
+# Раздел 18.2: в режиме «подтверждать каждое действие» агент запрашивает
+# разрешения сериями по несколько за секунды — серия даёт одно уведомление
+# на задачу за окно, о дальнейших запросах пользователь узнаёт в виджете.
+AWAITING_DECISION_PUSH_WINDOW_SECONDS = 30
+_PUSH_WINDOWS_SECONDS: dict[NotificationEvent, int] = {
+    NotificationEvent.AWAITING_DECISION: AWAITING_DECISION_PUSH_WINDOW_SECONDS,
+}
+
+
+def task_push_window_key(task_id: uuid.UUID, event: NotificationEvent) -> str:
+    return f"push:window:{event}:{task_id}"
+
+
+async def _push_suppressed(task: Task, event: NotificationEvent) -> bool:
+    """
+    `SET NX` с TTL (раздел 17.4): уведомление уже ушло в текущем окне. Без
+    Redis уведомление отправляется — лишнее лучше пропущенного.
+    """
+    window = _PUSH_WINDOWS_SECONDS.get(event)
+    if window is None:
+        return False
+    try:
+        async with redis_connection() as redis_client:
+            opened = await redis_client.set(
+                task_push_window_key(task.id, event),
+                "1",
+                nx=True,
+                ex=window,
+            )
+    except RedisError:
+        logger.warning("push_window_unavailable", push_event=event.value, exc_info=True)
+        return False
+    return not opened
+
+
 async def notify_task_event(
     db_session: AsyncSession,
     *,
@@ -69,12 +111,19 @@ async def notify_task_event(
     detail: str = "",
 ) -> None:
     """Отправляет push-уведомление автору задачи (`task.created_by`)."""
+    with bind_task_context(task.id):
+        if await _push_suppressed(task, event):
+            logger.info("push_suppressed_in_window", push_event=event.value)
+            return
     message = PushMessage(
         title=_TITLES[event],
         body=detail or f"{task.code}: {task.title}",
         data={"task_id": str(task.id), "event": event.value},
     )
-    await send_push_to_user(db_session, user_id=task.created_by, message=message)
+    # Периодические проверки обходят задачи вне воркера сессии — итог отправки
+    # всё равно ищется по `task_id` задачи (раздел 17.2).
+    with bind_task_context(task.id):
+        await send_push_to_user(db_session, user_id=task.created_by, message=message)
 
 
 async def notify_user_event(

@@ -25,7 +25,12 @@ from db.models.logs import NodeLog
 from db.models.pipelines import Node
 from services.failure_classification import is_transient_sdk_exception
 from services.node_history import load_node_context_history
-from services.node_runs import apply_node_outcome, mark_node_log_stopped, start_node_log
+from services.node_runs import (
+    SESSION_ERROR_MESSAGE,
+    apply_node_outcome,
+    mark_node_log_stopped,
+    start_node_log,
+)
 from services.nodes.clear_context import ensure_clear_context_allowed
 from services.nodes.dispatch import (
     NodeExecutionOutcome,
@@ -347,7 +352,8 @@ async def _run_attempt(
         return NodeExecutionOutcome(
             success=False,
             llm_output_text=claude_session.take_partial_turn_text(),
-            error_message=f"Сбой сессии Claude Code: {exc}",
+            error_message=SESSION_ERROR_MESSAGE,
+            error_details=f"Сбой сессии Claude Code: {exc}",
             is_transient=is_transient_sdk_exception(exc),
             session_lost=True,
         )

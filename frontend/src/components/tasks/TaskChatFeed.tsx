@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { useTaskOutputStream } from "@/hooks/useTaskStatusSocket";
 import { useTaskLibraryPrompts, useTaskNodes } from "@/hooks/useTasks";
 import { cn } from "@/lib/utils";
-import { TaskStatus, type NodeLog } from "@/lib/types";
+import { isAgentTurn } from "@/components/tasks/messageKinds";
+import { TaskStatus, type NodeLog, type NodeType } from "@/lib/types";
 
 /** Пустая лента: что сделать, чтобы здесь появилась история. */
 const EMPTY_FEED: Record<"new" | "queued" | "other", { title: string; hint: string }> = {
@@ -46,6 +47,10 @@ export function TaskChatFeed({
   const nodeNames = new Map([
     ...(libraryPrompts ?? []).map((prompt): [string, string] => [prompt.node_id, prompt.name]),
     ...(taskNodes ?? []).map((node): [string, string] => [node.node_id, node.name]),
+  ]);
+  const nodeTypes = new Map([
+    ...(libraryPrompts ?? []).map((prompt): [string, NodeType] => [prompt.node_id, prompt.node_type]),
+    ...(taskNodes ?? []).map((node): [string, NodeType] => [node.node_id, node.node_type]),
   ]);
   const feedRef = useRef<HTMLDivElement>(null);
   const previousLength = useRef(0);
@@ -91,6 +96,7 @@ export function TaskChatFeed({
             log={log}
             title={log.node_id ? nodeNames.get(log.node_id) : undefined}
             streamedText={outputStream[log.id]}
+            isAgentTurn={isAgentTurn(log, nodeTypes)}
           />
         ))}
       </div>

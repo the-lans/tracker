@@ -7,6 +7,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import pytest
+import structlog
 
 from db.models.enums import RemoteControlStatus, TaskStatus, UserRole
 from db.models.tasks import Task
@@ -185,9 +186,11 @@ class TestCheckSessionBridges:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         checked: list[uuid.UUID] = []
+        bound: list[object] = []
 
         async def record(_db: AsyncSession, *, task: Task, redis_client: Redis) -> None:
             checked.append(task.id)
+            bound.append(structlog.contextvars.get_contextvars().get("task_id"))
 
         monkeypatch.setattr("services.remote_control.check_task_bridge", record)
         user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
@@ -211,3 +214,5 @@ class TestCheckSessionBridges:
         assert tasks[TaskStatus.REBASE_CONFLICT].id in checked
         assert tasks[TaskStatus.PAUSED].id in checked
         assert tasks[TaskStatus.DONE].id not in checked
+        # Раздел 17.2: события проверки задачи — с её `task_id`.
+        assert bound == [str(task_id) for task_id in checked]

@@ -28,16 +28,20 @@ export function renderHookWithClient<TResult, TProps>(
   return { ...renderHook(hook, { wrapper, initialProps }), queryClient };
 }
 
+/** ``currentUser: null`` — пользователь не вошёл (страница входа); ``login`` — вход, который проверяет тест. */
 export function renderWithProviders(
   ui: ReactElement,
-  { currentUser = makeCurrentUser() }: { currentUser?: CurrentUser } = {},
+  {
+    currentUser = makeCurrentUser(),
+    login = () => {},
+  }: { currentUser?: CurrentUser | null; login?: AuthContextValue["login"] } = {},
 ) {
   const queryClient = createTestQueryClient();
   const auth: AuthContextValue = {
-    token: "test-token",
+    token: currentUser ? "test-token" : null,
     user: currentUser,
-    isAuthenticated: true,
-    login: () => {},
+    isAuthenticated: currentUser !== null,
+    login,
     logout: () => {},
   };
   const wrap = (element: ReactElement) => (

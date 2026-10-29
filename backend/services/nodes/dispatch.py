@@ -9,14 +9,18 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import time
 import uuid
+from collections.abc import Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from app_logging.app_logs import write_app_log
-from clients.claude_agent import ClaudeCodeSession
-from db.models.enums import AppLogLevel, NodeLogStatus, NodeType
+from clients.claude_agent import ClaudeCodeSession, UserWaitClock
+from db.models.enums import AppLogLevel, NodeLogStatus, NodeType, PermissionMode
 from db.models.logs import NodeLog
+from db.models.tasks import Task
 from services.failure_classification import is_transient_assistant_error
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.nodes.script import ScriptExecutionResult, run_script_node
@@ -30,7 +34,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from db.models.pipelines import Node
-    from db.models.tasks import Task
 
 
 async def resolve_node_prompt(
@@ -108,7 +111,8 @@ class NodeExecutionOutcome:
     """
     ``is_transient`` (раздел 17.3) — имеет ли смысл повтор неуспешной попытки;
     ``session_lost`` — процесс CLI упал, и перед повтором сессию нужно
-    переподключить.
+    переподключить. ``error_message`` видит пользователь в ленте,
+    ``error_details`` — только `app_logs` (раздел 17.2).
     """
 
     success: bool
@@ -116,6 +120,7 @@ class NodeExecutionOutcome:
     script_stdout: str | None = None
     script_exit_code: int | None = None
     error_message: str | None = None
+    error_details: str | None = None
     is_transient: bool = True
     session_lost: bool = False
 
@@ -137,7 +142,7 @@ async def record_sdk_failure(
     await write_app_log(
         level=AppLogLevel.ERROR,
         source=source,
-        message=f"Ошибка Claude Agent SDK: {outcome.error_message}",
+        message=f"Ошибка Claude Agent SDK: {outcome.error_details or outcome.error_message}",
         context={
             "node_id": str(node_id) if node_id is not None else None,
             "session_lost": outcome.session_lost,
@@ -160,6 +165,42 @@ async def execute_llm_node(claude_session: ClaudeCodeSession, prompt: str) -> No
     return NodeExecutionOutcome(success=True, llm_output_text=turn.text)
 
 
+# Пока ход ждёт решения пользователя, срок не идёт: ждём не чаще раза в
+# секунду, даже если до таймаута оставались доли секунды.
+_USER_WAIT_POLL_SECONDS = 1.0
+
+
+async def _run_within_active_time(
+    turn: Coroutine[Any, Any, NodeExecutionOutcome],
+    *,
+    timeout_seconds: float,
+    clock: UserWaitClock,
+) -> NodeExecutionOutcome:
+    """
+    Как `asyncio.wait_for`, но время, пока ход ждёт решения пользователя
+    (`clock`), в таймаут не входит (раздел 7.3): срок сдвигается на него.
+    """
+    running = asyncio.ensure_future(turn)
+    started = time.monotonic()
+    waited_before = clock.waited_seconds()
+    try:
+        while True:
+            active = time.monotonic() - started - (clock.waited_seconds() - waited_before)
+            remaining = timeout_seconds - active
+            if remaining <= 0:
+                raise TimeoutError
+            if clock.is_waiting():
+                remaining = max(remaining, _USER_WAIT_POLL_SECONDS)
+            done, _ = await asyncio.wait({running}, timeout=remaining)
+            if done:
+                return running.result()
+    finally:
+        if not running.done():
+            running.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await running
+
+
 async def execute_llm_node_with_timeout(
     claude_session: ClaudeCodeSession,
     prompt: str,
@@ -173,9 +214,10 @@ async def execute_llm_node_with_timeout(
     хвост прерванного хода следующему запросу.
     """
     try:
-        return await asyncio.wait_for(
+        return await _run_within_active_time(
             execute_llm_node(claude_session, prompt),
-            timeout=timeout_seconds,
+            timeout_seconds=timeout_seconds,
+            clock=claude_session.user_wait_clock,
         )
     except TimeoutError:
         partial_text = claude_session.take_partial_turn_text()
@@ -279,7 +321,25 @@ async def execute_plan_prompt_node(
             llm_output_text=outcome.llm_output_text,
             error_message="План не был принят (ExitPlanMode не подтверждён)",
         )
+    assert node_log is not None
+    await _apply_accepted_plan_mode(claude_session, db_session=db_session, task_id=node_log.task_id)
     return outcome
+
+
+async def _apply_accepted_plan_mode(
+    claude_session: ClaudeCodeSession,
+    *,
+    db_session: AsyncSession,
+    task_id: uuid.UUID,
+) -> None:
+    """
+    Раздел 9.4: режим, выбранный при принятии плана, действует со следующей
+    ноды — сессия выходит из `plan` после завершения хода ноды плана.
+    """
+    task = await db_session.get(Task, task_id, populate_existing=True)
+    mode = task.current_permission_mode if task is not None else None
+    accepted_mode = mode or PermissionMode.ACCEPT_EDITS
+    await claude_session.set_permission_mode(accepted_mode.value)
 
 
 async def execute_node(

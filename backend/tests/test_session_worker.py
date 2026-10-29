@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 import sqlalchemy as sa
+import structlog
 from claude_agent_sdk import ClaudeAgentOptions, PermissionResultAllow, ProcessError
 from claude_agent_sdk.types import ToolPermissionContext
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,7 +46,12 @@ from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
 from services.manual_queue import enqueue_freeform_prompt_run
 from services.notifications import NotificationEvent
-from services.plan_mode import PlanDecisionOption, encode_decision
+from services.plan_mode import (
+    PLAN_ACCEPTED_MESSAGE,
+    PLAN_REVISE_DENIED,
+    PlanDecisionOption,
+    encode_decision,
+)
 from services.session_context import clear_task_session_context
 from services.session_heartbeat import is_session_alive
 from services.task_control import (
@@ -552,6 +558,29 @@ async def _refreshed_status(db_session: AsyncSession, task: Task) -> TaskStatus:
     return task.status
 
 
+class TestTaskLogContext:
+    async def test_events_carry_task_id(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """
+        Раздел 17.2: события общих сервисов (сессия, оркестратор) пишутся с
+        `task_id` задачи, которую обрабатывает воркер.
+        """
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        merge_context = [structlog.contextvars.merge_contextvars]
+        with structlog.testing.capture_logs(processors=merge_context) as logs:
+            await _run_worker(task)
+
+        events = {entry["event"]: entry.get("task_id") for entry in logs}
+        for event in ("session_connected", "session_query_started", "node_succeeded"):
+            assert events[event] == str(task.id)
+
+
 class TestConflictAfterRestart:
     async def test_resolved_before_nodes(
         self,
@@ -820,6 +849,7 @@ class TestQuestionDuringPausedPrompt:
         await _add_node(db_session, task, order_index=1)
         statuses_while_asking: list[TaskStatus] = []
         answers: list[str] = []
+        offsets: list[int | None] = []
 
         async def user_answers(*, timeout: float | None) -> bool:
             await db_session.refresh(task)
@@ -828,6 +858,7 @@ class TestQuestionDuringPausedPrompt:
                 sa.select(NodeLog).where(NodeLog.status == NodeLogStatus.AWAITING_DECISION),
             )
             assert pending is not None
+            offsets.append(pending.decision_output_offset)
             pending.user_input_text = "0"
             await db_session.commit()
             return True
@@ -873,6 +904,8 @@ class TestQuestionDuringPausedPrompt:
 
         assert statuses_while_asking == [TaskStatus.AWAITING_INPUT]
         assert answers == ["main"]
+        # Вопрос задан до текста ответа: решение — в начале ответа (раздел 15.2).
+        assert offsets == [0]
         assert observed == [TaskStatus.PAUSED, TaskStatus.PAUSED]
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
@@ -910,6 +943,31 @@ class TestBridgeReconnect:
         assert REMOTE_CONTROL_EXTRA_ARG in reconnect_options.extra_args
         # Новый процесс CLI моста — снова в контейнере сессии (раздел 19.3).
         assert_cli_in_session_container(reconnect_options, task.id)
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert task.remote_control_status is RemoteControlStatus.CONNECTED
+
+    async def test_before_first_turn(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+    ) -> None:
+        """Мост поднят с первым процессом CLI, а `session_id` появится только с первым ходом."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        await request_bridge_reconnect(redis_client, task.id)
+        first = FakeClaudeAgentClient(messages_per_query=[])
+        second = FakeClaudeAgentClient(messages_per_query=_results(1))
+        worker_env.queued_clients = [first, second]
+
+        await _run_worker(task)
+
+        assert first.queries == []
+        assert second.queries == ["шаг 0"]
+        reconnect_options = worker_env.options[1]
+        assert reconnect_options.resume is None
+        assert REMOTE_CONTROL_EXTRA_ARG in reconnect_options.extra_args
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
         assert task.remote_control_status is RemoteControlStatus.CONNECTED
@@ -1083,57 +1141,54 @@ class TestStatefulMcpIsolation:
 
 
 class TestNodeTimeoutWhileAwaitingDecision:
-    async def test_task_fails_instead_of_hanging(
+    async def test_user_wait_not_counted(
         self,
         db_session: AsyncSession,
         worker_env: WorkerEnv,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """
-        Пользователь не принял план за `timeout_seconds` ноды: ход
-        прерывается, ожидание решения в задаче SDK снимается, задача — `failed`,
-        а не висит в `plan_review` или в `in_progress` без воркера.
+        Раздел 7.3: таймаут ноды ограничивает ожидание ответа LLM — план,
+        принятый позже `timeout_seconds`, не прерывает ход и не тратит попытку.
         """
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
         plan_node = await _add_node(db_session, task, order_index=0, node_type=NodeType.PLAN_PROMPT)
         plan_node.prompt_template = "Составь план"
         plan_node.timeout_seconds = 1
         await db_session.flush()
-        sdk_handlers: list[asyncio.Task[Any]] = []
 
-        async def user_never_answers(*_args: Any, **_kwargs: Any) -> bool:
-            await asyncio.Event().wait()
-            return False
+        async def user_decides_late(*_args: Any, **_kwargs: Any) -> bool:
+            await asyncio.sleep(1.5)
+            pending = await db_session.scalar(
+                sa.select(NodeLog).where(NodeLog.status == NodeLogStatus.AWAITING_DECISION),
+            )
+            assert pending is not None
+            pending.user_input_text = encode_decision(PlanDecisionOption.ACCEPT_AUTO)
+            await db_session.commit()
+            return True
 
-        patch_plan_mode_signals(monkeypatch, user_never_answers)
-
-        class HangingClient(FakeClaudeAgentClient):
-            async def interrupt(self) -> None:
-                self.message_delay_seconds = 0
-                await super().interrupt()
+        patch_plan_mode_signals(monkeypatch, user_decides_late)
 
         async def agent_exits_plan_mode() -> None:
             can_use_tool = worker_env.options[0].can_use_tool
             assert can_use_tool is not None
-            # Как в SDK: callback разрешений живёт в своей задаче, не в ходе.
-            sdk_handlers.append(
-                asyncio.ensure_future(
-                    can_use_tool("ExitPlanMode", {"plan": "1. Шаг"}, ToolPermissionContext()),
-                ),
-            )
-            worker_env.client.message_delay_seconds = 30
+            await can_use_tool("ExitPlanMode", {"plan": "1. Шаг"}, ToolPermissionContext())
 
-        worker_env.client = HangingClient(
+        worker_env.client = FakeClaudeAgentClient(
             messages_per_query=_results(1),
             on_query=agent_exits_plan_mode,
         )
 
         await asyncio.wait_for(_run_worker(task), timeout=30)
 
+        logs = (
+            (await db_session.execute(sa.select(NodeLog).where(NodeLog.task_id == task.id)))
+            .scalars()
+            .all()
+        )
+        assert [(log.attempt_number, log.status) for log in logs] == [(1, NodeLogStatus.SUCCESS)]
         await db_session.refresh(task)
-        assert task.status is TaskStatus.FAILED
-        assert task.last_failed_order_index == 0
-        assert all(handler.done() for handler in sdk_handlers)
+        assert task.status is TaskStatus.DONE
 
 
 class TestHistoryRetention:
@@ -1265,7 +1320,8 @@ class TestPlanRevision:
 
         await _run_worker(task)
 
-        assert denials == ["добавь тесты"]
+        assert denials == [f"{PLAN_REVISE_DENIED}: добавь тесты", PLAN_ACCEPTED_MESSAGE]
+        assert worker_env.client.permission_modes == ["plan", "default"]
         logs = (
             (await db_session.execute(sa.select(NodeLog).where(NodeLog.task_id == task.id)))
             .scalars()

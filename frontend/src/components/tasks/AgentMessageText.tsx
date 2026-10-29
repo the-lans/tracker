@@ -1,10 +1,7 @@
-import {
-  highlightCode,
-  parseMarkdown,
-  type CodeTokenKind,
-  type InlinePart,
-} from "@/lib/agentMarkdown";
+import { highlightCode, parseMarkdown, type CodeTokenKind } from "@/lib/agentMarkdown";
 import { cn } from "@/lib/utils";
+import { AgentInline } from "@/components/tasks/AgentInline";
+import { AgentMarkdownTable } from "@/components/tasks/AgentMarkdownTable";
 
 // Та же палитра темы (--term-*), что у вывода скрипта (ScriptOutputText).
 const CODE_TOKEN_CLASS: Record<CodeTokenKind, string> = {
@@ -15,24 +12,7 @@ const CODE_TOKEN_CLASS: Record<CodeTokenKind, string> = {
   comment: "italic text-term-comment",
 };
 
-function Inline({ parts }: { parts: InlinePart[] }) {
-  return (
-    <>
-      {parts.map((part, index) => {
-        if (part.kind === "bold") return <strong key={index} className="font-bold text-text">{part.text}</strong>;
-        if (part.kind === "code")
-          return (
-            <code key={index} className="rounded bg-accent-tint px-1 py-px font-mono text-[0.9em] text-accent">
-              {part.text}
-            </code>
-          );
-        return <span key={index}>{part.text}</span>;
-      })}
-    </>
-  );
-}
-
-/** Ответ агента в ленте: markdown-оформление и подсветка блоков кода. */
+/** Ответ агента в ленте: markdown-оформление, таблицы и подсветка блоков кода. */
 export function AgentMessageText({ text }: { text: string }) {
   const blocks = parseMarkdown(text);
   return (
@@ -45,7 +25,7 @@ export function AgentMessageText({ text }: { text: string }) {
                 key={index}
                 className={cn("font-extrabold text-text", block.level <= 2 ? "text-subtitle" : "text-lead")}
               >
-                <Inline parts={block.parts} />
+                <AgentInline parts={block.parts} />
               </div>
             );
           case "list": {
@@ -60,7 +40,7 @@ export function AgentMessageText({ text }: { text: string }) {
               >
                 {block.items.map((item, itemIndex) => (
                   <li key={itemIndex}>
-                    <Inline parts={item} />
+                    <AgentInline parts={item} />
                   </li>
                 ))}
               </ListTag>
@@ -84,10 +64,12 @@ export function AgentMessageText({ text }: { text: string }) {
                 </code>
               </pre>
             );
+          case "table":
+            return <AgentMarkdownTable key={index} align={block.align} header={block.header} rows={block.rows} />;
           default:
             return (
               <p key={index} className="whitespace-pre-wrap">
-                <Inline parts={block.parts} />
+                <AgentInline parts={block.parts} />
               </p>
             );
         }

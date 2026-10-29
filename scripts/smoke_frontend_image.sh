@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Smoke-тест продового образа фронтенда (frontend/Dockerfile): образ
 # собирается (ловит поломки при смене версии Node), SPA-маршруты отдают
-# index.html, а отсутствующий бандл — 404, а не index.html под видом JS.
+# index.html, а отсутствующий бандл — 404, а не index.html под видом JS;
+# index.html не кешируется, хешированные бандлы — кешируются навсегда.
 set -euo pipefail
 
 IMAGE="tracker-frontend:smoke"
@@ -31,6 +32,18 @@ expect() {
   fi
 }
 
+expect_cache() {
+  local path="$1" expected="$2"
+  local actual
+  actual="$(curl -s -o /dev/null -D - "$BASE_URL$path" | tr -d '\r' | { grep -i '^cache-control:' || true; } | cut -d' ' -f2-)"
+  if [[ "$actual" == "$expected" ]]; then
+    echo "ok   $path Cache-Control: $actual"
+  else
+    echo "FAIL $path Cache-Control: '$actual' (ожидалось '$expected')"
+    failures=$((failures + 1))
+  fi
+}
+
 expect "/" 200 "text/html"
 expect "/tasks/00000000-0000-0000-0000-000000000000" 200 "text/html"
 expect "/admin" 200 "text/html"
@@ -42,6 +55,9 @@ if [[ -z "$bundle_path" ]]; then
   failures=$((failures + 1))
 else
   expect "$bundle_path" 200 "application/javascript"
+  expect_cache "$bundle_path" "public, max-age=31536000, immutable"
 fi
+expect_cache "/" "no-cache"
+expect_cache "/tasks/00000000-0000-0000-0000-000000000000" "no-cache"
 
 exit "$failures"

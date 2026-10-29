@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 import sqlalchemy as sa
-from claude_agent_sdk import AssistantMessage, TextBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    PermissionResultDeny,
+    TextBlock,
+    ToolPermissionContext,
+)
 
 from clients.claude_agent import ClaudeCodeSession
 from db.models.enums import (
@@ -27,7 +32,7 @@ from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task, TaskParentSummary
 from db.models.users import User
 from services.manual_queue import process_manual_queue_once
-from services.parent_summary import deny_all_tools
+from services.parent_summary import DELIVERY_INSTRUCTION, deny_all_tools
 from services.task_control import TaskControlCommand, request_task_control
 from tasks import session_worker
 from tests.factories import make_llm_account, make_user
@@ -298,6 +303,40 @@ class TestIdleParent:
         assert parent_log.trigger_type is NodeLogTriggerType.SUMMARY_FOR_CHILD
         await db_session.refresh(child)
         assert child.status is TaskStatus.DONE
+
+    async def test_delivery_turn_without_tools(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Саммари — только контекст: делать работу агент начинает с первой ноды."""
+        user = await make_user(db_session)
+        parent = await _make_parent(
+            db_session,
+            user,
+            status=TaskStatus.DONE,
+            session_id="sess-parent",
+        )
+        child = await _make_child(db_session, user, parent)
+        worker_env.queued_clients = [FakeClaudeAgentClient(messages_per_query=[_answer(_SUMMARY)])]
+        denied: dict[str, bool] = {}
+
+        async def agent_runs_bash() -> None:
+            can_use_tool = worker_env.options[1].can_use_tool
+            assert can_use_tool is not None
+            result = await can_use_tool("Bash", {"command": "git fetch"}, ToolPermissionContext())
+            denied[worker_env.client.queries[-1][:20]] = isinstance(result, PermissionResultDeny)
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=[_answer("Принято"), [make_result_message()]],
+            on_query=agent_runs_bash,
+        )
+
+        await _run_child(child)
+
+        delivery = worker_env.client.queries[0]
+        assert delivery.endswith(DELIVERY_INSTRUCTION)
+        assert denied == {delivery[:20]: True, "шаг 0": False}
 
     async def test_no_session_note(
         self,

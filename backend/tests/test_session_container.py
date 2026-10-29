@@ -20,6 +20,7 @@ import pytest
 
 import session_cli
 from services import docker_mounts, session_container
+from services.git_ops import GIT_IDENTITY_EMAIL, GIT_IDENTITY_NAME
 from services.maintenance_tasks import purge_orphaned_session_containers
 from services.session_container import (
     SESSION_CONTAINER_PREFIX,
@@ -31,6 +32,8 @@ from services.session_heartbeat import beat
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
+
+    from tests.conftest import ContainerPrefixes
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _SESSION_DOCKERFILE = _BACKEND_DIR.parent / "runners" / "tracker-session" / "Dockerfile"
@@ -255,6 +258,12 @@ touch "$PWD/written-by-agent"
 """
 
 
+_COMMIT_PROBE = """
+git init -q -b main . && git commit -q --allow-empty -m "feat: probe"
+echo "author=$(git log -1 --format='%an <%ae>')"
+"""
+
+
 @pytest.mark.usefixtures("session_roots")
 class TestSessionImage:
     """
@@ -285,6 +294,15 @@ class TestSessionImage:
         assert written.exists()
         assert written.stat().st_uid == os.getuid()
 
+    async def test_agent_can_commit(self, tmp_path: Path) -> None:
+        """Агент коммитит без своего git-конфига — идентичностью трекера."""
+        exit_code, output = await _run_in_session_image(
+            tmp_path, program="sh", argv=["-c", _COMMIT_PROBE]
+        )
+
+        assert exit_code == 0, output
+        assert f"author={GIT_IDENTITY_NAME} <{GIT_IDENTITY_EMAIL}>" in output
+
 
 def test_session_image_cli_matches_worker_sdk() -> None:
     pyproject = tomllib.loads((_BACKEND_DIR / "pyproject.toml").read_text())
@@ -301,8 +319,8 @@ def test_session_image_cli_matches_worker_sdk() -> None:
     assert match.group(1) == pinned
 
 
-async def _run_session_container(task_id: uuid.UUID) -> str:
-    container_name = f"{SESSION_CONTAINER_PREFIX}{task_id}-{uuid.uuid4().hex[:6]}"
+async def _run_session_container(prefix: str, task_id: uuid.UUID) -> str:
+    container_name = f"{prefix}{task_id}-{uuid.uuid4().hex[:6]}"
     process = await asyncio.create_subprocess_exec(
         "docker",
         "run",
@@ -327,12 +345,16 @@ class TestPurgeOrphanedSessionContainers:
         ("alive", "purged"), [(True, False), (False, True)], ids=["alive", "orphaned"]
     )
     async def test_stops_only_without_heartbeat(
-        self, redis_client: Redis, alive: bool, purged: bool
+        self,
+        redis_client: Redis,
+        container_prefixes: ContainerPrefixes,
+        alive: bool,
+        purged: bool,
     ) -> None:
         task_id = uuid.uuid4()
         if alive:
             await beat(redis_client, task_id)
-        container_name = await _run_session_container(task_id)
+        container_name = await _run_session_container(container_prefixes.session, task_id)
         try:
             stopped = await purge_orphaned_session_containers(redis_client)
             assert (container_name in stopped) is purged

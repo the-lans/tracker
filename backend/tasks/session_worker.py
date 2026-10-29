@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from claude_agent_sdk import ClaudeSDKClient, ClaudeSDKError, RateLimitInfo
 from redis.asyncio import Redis
 
-from app_logging.config import get_logger
+from app_logging.config import bind_task_context, get_logger
 from clients.claude_agent import (
     ClaudeAgentClientProtocol,
     ClaudeCodeSession,
@@ -187,9 +187,9 @@ class _SessionControl:
     workspace: Path
     redis_client: Redis
     active_node_context: ActiveNodeContext
-    # Новый процесс CLI, продолжающий сессию с данным `session_id` с флагом
-    # `--remote-control` (раздел 6.5).
-    bridge_client_factory: Callable[[str], ClaudeAgentClientProtocol]
+    # Новый процесс CLI с флагом `--remote-control` (раздел 6.5), продолжающий
+    # сессию с данным `session_id`; `None` — первого хода ещё не было.
+    bridge_client_factory: Callable[[str | None], ClaudeAgentClientProtocol]
     # Новый процесс CLI с прежними флагами — после падения процесса посреди
     # ноды (раздел 17.3: временный сбой повторяется в той же сессии).
     recovery_client_factory: Callable[[str], ClaudeAgentClientProtocol]
@@ -275,7 +275,7 @@ class _SessionControl:
         await self.db_session.refresh(self.task)
         session_id = self.claude_session.session_id or self.task.session_id
         status = RemoteControlStatus.DISCONNECTED
-        if session_id is None or not self.has_llm:
+        if not self.has_llm:
             logger.info("bridge_reconnect_skipped_no_session", task_id=str(self.task.id))
         else:
             try:
@@ -414,6 +414,20 @@ async def _disconnect_quietly(session: ClaudeCodeSession) -> None:
 
 
 async def _run_task_session_async(
+    task_id: uuid.UUID,
+    *,
+    start_after_order_index: int | None,
+    continuation: bool,
+) -> None:
+    with bind_task_context(task_id):
+        await _run_task_session_in_context(
+            task_id,
+            start_after_order_index=start_after_order_index,
+            continuation=continuation,
+        )
+
+
+async def _run_task_session_in_context(
     task_id: uuid.UUID,
     *,
     start_after_order_index: int | None,
@@ -719,6 +733,8 @@ async def _run_claimed_task(
         on_abort=active_node_context.cancel_decision_wait,
         on_rate_limit=_rate_limit_recorder(db_session, task),
     )
+    active_node_context.output_length = session.turn_text_length
+    active_node_context.user_wait_clock = session.user_wait_clock
     control = _SessionControl(
         db_session=db_session,
         task=task,

@@ -14,6 +14,7 @@ const REFRESHED_KEYS = [
   ["tasks", "list", "all"],
   ["tasks", "t1", "node-logs"],
   ["tasks", "t1", "artifacts"],
+  ["tasks", "t1", "repositories"],
   ["tasks", "awaiting-count"],
 ];
 
@@ -66,7 +67,7 @@ describe("useTaskStatusSocket", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  it("смена статуса обновляет задачу и перечитывает ленту, списки и артефакты", () => {
+  it("смена статуса обновляет задачу и перечитывает ленту, списки, артефакты и репозитории", () => {
     const { queryClient } = renderSocket();
 
     act(() => FakeWebSocket.latest().receive({ type: "status", task_id: "t1", status: TaskStatus.PLAN_REVIEW }));

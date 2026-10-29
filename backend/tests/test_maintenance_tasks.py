@@ -35,6 +35,7 @@ from services.maintenance_tasks import (
 )
 from services.nodes.script import CONTAINER_DEADLINE_LABEL, container_deadline
 from services.notifications import NotificationEvent
+from tests.conftest import ContainerPrefixes
 from tests.factories import SAMPLE_ED25519_KEY, make_llm_account, make_task, make_user
 
 
@@ -148,8 +149,8 @@ async def test_find_tasks_requiring_remote_control_check_matches_active_statuses
     assert scripts_only.id in found_ids
 
 
-async def _run_labelled_container(deadline: int) -> str:
-    container_name = f"tracker-node-{uuid.uuid4()}"
+async def _run_labelled_container(prefix: str, deadline: int) -> str:
+    container_name = f"{prefix}{uuid.uuid4()}"
     process = await asyncio.create_subprocess_exec(
         "docker",
         "run",
@@ -181,12 +182,14 @@ class TestPurgeByDeadline:
     )
     async def test_deadline_wins_over_grace(
         self,
+        container_prefixes: ContainerPrefixes,
         deadline_offset: timedelta,
         grace_period: timedelta,
         purged: bool,
     ) -> None:
         now = datetime.now(UTC)
-        container_name = await _run_labelled_container(int((now + deadline_offset).timestamp()))
+        deadline = int((now + deadline_offset).timestamp())
+        container_name = await _run_labelled_container(container_prefixes.node, deadline)
         try:
             stopped = await purge_orphaned_docker_containers(now=now, grace_period=grace_period)
             assert (container_name in stopped) is purged
@@ -197,8 +200,10 @@ class TestPurgeByDeadline:
         assert container_deadline(1800, now=1000.0) > 1000 + 1800
 
 
-async def test_purge_orphaned_docker_containers_stops_stale_and_keeps_fresh() -> None:
-    container_name = f"tracker-node-{uuid.uuid4()}"
+async def test_purge_orphaned_docker_containers_stops_stale_and_keeps_fresh(
+    container_prefixes: ContainerPrefixes,
+) -> None:
+    container_name = f"{container_prefixes.node}{uuid.uuid4()}"
     process = await asyncio.create_subprocess_exec(
         "docker",
         "run",
