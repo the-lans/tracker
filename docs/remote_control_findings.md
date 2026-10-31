@@ -155,3 +155,79 @@ async def main():
 asyncio.run(main())
 PY
 ```
+
+## LLM-прокси: мост и работа сессии через CLIProxyAPI (разделы 6.3, 19.5, 19.7 ТЗ)
+
+Проверка перед реализацией раздела 19.7: CLIProxyAPI v8.0.48 (сборка из тега
+репозитория), Claude Code CLI 2.1.301 в образе `tracker-session`,
+`claude-agent-sdk` 0.2.168, временный шлюз по схеме `llm-gateway`
+(подмена `model` на `<префикс>/<модель>` и уровня рассуждений, ключ прокси
+вместо токена сессии). Подписки — Claude (Pro/Max) и ChatGPT (Codex);
+Google и xAI не проверялись.
+
+### Итог
+
+- **Мост `--remote-control` через прокси невозможен.** CLI с
+  `ANTHROPIC_BASE_URL` и `ANTHROPIC_AUTH_TOKEN` сообщает
+  `apiKeySource: none` и не держит входа claude.ai, а мосту нужен именно он.
+  Скопировать в каталог сессии вход claude.ai нельзя: токены обновления
+  одноразовые, и две копии входа ломают друг другу обновление. Поэтому мост
+  отключён целиком: `remote_control_status = unavailable`.
+- **Claude Code работает на моделях Anthropic и OpenAI (Codex) через
+  прокси:** потоковые ответы, инструменты (`Write`, `Read`, `Bash`),
+  `plan`-режим с `ExitPlanMode`, `AskUserQuestion` (формат SDK
+  `questions[]` → `answers`), запросы разрешений через `can_use_tool`.
+- **Смена провайдера посреди сессии работает** в обе стороны
+  (Codex → Claude → Codex по одной истории `resume`): контекст прошлых ходов
+  сохраняется, ход с инструментом выполняется.
+
+### Детали, которые нужны шлюзу
+
+- CLI проверяет адрес запросом `HEAD /api/hello` и шлёт ходы как
+  `POST /v1/messages?beta=true`; на `HEAD` шлюз отвечает 200 сам.
+- Ответ прокси приходит сжатым, если клиент это разрешил. Шлюз запрашивает у
+  прокси несжатый ответ (`accept-encoding: identity`) и передаёт поток как
+  есть: сжатые байты без заголовка `content-encoding` CLI разбирает как JSON
+  и падает на первом байте.
+- CLI сам шлёт `thinking: {"type": "adaptive"}` и
+  `output_config: {"effort": "medium"}`. Шлюз заменяет
+  `output_config.effort` уровнем из маршрута; прокси сам переводит его
+  провайдеру (для Codex — в `reasoning.effort`, перевод в
+  `internal/translator/codex/claude/codex_claude_request.go`), поэтому
+  суффикс уровня в имени модели не нужен. Подмена модели и уровня
+  проверена на обоих провайдерах.
+- Служебные запросы CLI к быстрой модели идут тем же путём и получают модель
+  маршрута.
+
+### Ответы management API
+
+- Вход: `GET /v8/management/oauth/auth-url?provider=…` → ссылка и `state`;
+  `POST /v8/management/oauth/callback {"provider", "redirect_url"}`;
+  `GET /v8/management/oauth/status?state=…`. Для Codex итог содержит имя
+  созданной учётки (`auth_id`), для Claude — только `{"status": "ok"}`:
+  учётку находим по `auth_id`, а без него — по разнице списка учёток до и
+  после входа (под блокировкой, чтобы два входа не перепутались).
+- `GET /v8/management/credentials` → `{"files": [...]}`: `name`/`id`,
+  `provider`, `email`, `auth_index`, `disabled`, `status`,
+  `requires_sign_in`, `quota_blocked`, `renewal_state`, `prefix`. Имя учётки
+  содержит email подписки — его не показываем другим пользователям и не
+  пишем в логи.
+- `PATCH /v8/management/credentials/fields {"name", "prefix"}` выставляет
+  префикс; `GET /v8/management/credentials/models?name=…` возвращает модели
+  уже с префиксом учётки (`<префикс>/<модель>`).
+
+### Расход окон лимита
+
+`POST /v8/management/requests/api-call` с телом
+`{"auth_index", "method", "url", "header"}`, где `$TOKEN$` в заголовке
+`Authorization: Bearer $TOKEN$` прокси подставляет сам; ответ —
+`{"status_code", "header", "body"}`, токен трекеру не выдаётся.
+
+| Провайдер | Запрос | Поля ответа |
+|---|---|---|
+| Anthropic | `GET https://api.anthropic.com/api/oauth/usage`, заголовок `anthropic-beta: oauth-2025-04-20` | `five_hour.utilization` и `five_hour.resets_at` (ISO 8601), `seven_day.utilization` и `seven_day.resets_at` |
+| OpenAI (Codex) | `GET https://chatgpt.com/backend-api/wham/usage` | `rate_limit.primary_window` (окно 18000 с) и `rate_limit.secondary_window` (604800 с): `used_percent`, `reset_at` (unix-время) |
+
+Адреса и поля не документированы провайдерами публично и могут измениться:
+при ошибке разбора опрос пишет её в `app_logs`, а выбор аккаунта работает по
+неизвестному расходу (раздел 19.7 ТЗ).
