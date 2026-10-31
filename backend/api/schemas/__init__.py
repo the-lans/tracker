@@ -37,6 +37,11 @@ from api.schemas.llm_accounts import (
     LlmProviderResponse,
     LlmThresholdsUpdateRequest,
 )
+from api.schemas.llm_proxy import (
+    ProxyCredentialRequest,
+    ProxyCredentialResponse,
+    ProxyStateResponse,
+)
 from api.schemas.mcp_servers import (
     McpServerCreateRequest,
     McpServerResponse,
@@ -178,4 +183,7 @@ __all__ = [
     "UserResponse",
     "UserUpdateRequest",
     "VapidPublicKeyResponse",
+    "ProxyCredentialRequest",
+    "ProxyCredentialResponse",
+    "ProxyStateResponse",
 ]

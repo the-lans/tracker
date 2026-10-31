@@ -63,6 +63,10 @@ class FakeCliproxy:
         self.api_responses: dict[str, tuple[int, str]] = {}
         self.api_calls: list[dict[str, Any]] = []
         self.down = False
+        self.latest_available = True
+        # Тела вызовов обновления токена и снятия паузы.
+        self.refreshed: list[str] = []
+        self.cooldown_resets: list[str] = []
         self.requests: list[tuple[str, str]] = []
 
     def client(self) -> CliproxyManagementClient:
@@ -189,7 +193,12 @@ class FakeCliproxy:
             return httpx.Response(404, json={"error": "auth file not found"})
         return httpx.Response(200, json={"status": "ok"})
 
-    def _ok(self, _: dict[str, str], __: dict[str, Any]) -> httpx.Response:
+    def _refresh(self, _: dict[str, str], body: dict[str, Any]) -> httpx.Response:
+        self.refreshed.append(body["name"])
+        return httpx.Response(200, json={"status": "ok"})
+
+    def _cooldown_reset(self, _: dict[str, str], body: dict[str, Any]) -> httpx.Response:
+        self.cooldown_resets.append(body["auth_index"])
         return httpx.Response(200, json={"status": "ok"})
 
     def _api_call(self, _: dict[str, str], body: dict[str, Any]) -> httpx.Response:
@@ -199,6 +208,8 @@ class FakeCliproxy:
         return httpx.Response(200, json=payload)
 
     def _latest(self, _: dict[str, str], __: dict[str, Any]) -> httpx.Response:
+        if not self.latest_available:
+            return httpx.Response(502, json={"error": "github unavailable"})
         return httpx.Response(200, json={"latest-version": LATEST_VERSION})
 
 
@@ -212,8 +223,8 @@ _ROUTES = {
     ("PATCH", "/credentials/fields"): FakeCliproxy._fields,
     ("PATCH", "/credentials/status"): FakeCliproxy._set_status,
     ("DELETE", "/credentials"): FakeCliproxy._delete,
-    ("POST", "/credentials/refresh"): FakeCliproxy._ok,
-    ("POST", "/routing/cooldown/reset"): FakeCliproxy._ok,
+    ("POST", "/credentials/refresh"): FakeCliproxy._refresh,
+    ("POST", "/routing/cooldown/reset"): FakeCliproxy._cooldown_reset,
     ("POST", "/requests/api-call"): FakeCliproxy._api_call,
     ("GET", "/server/latest-version"): FakeCliproxy._latest,
 }
