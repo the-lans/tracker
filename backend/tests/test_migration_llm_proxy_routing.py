@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 import pytest
 import pytest_asyncio
 import sqlalchemy as sa
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from tests.migration_support import run_alembic
 
@@ -35,17 +35,20 @@ class _OldLayout:
     task_id: uuid.UUID
 
 
-async def _insert_user(connection: sa.AsyncConnection, email: str) -> uuid.UUID:
+async def _insert_user(connection: AsyncConnection, email: str) -> uuid.UUID:
     user_id = uuid.uuid4()
     await connection.execute(
-        sa.text("INSERT INTO users (id, email, role, is_active) VALUES (:id, :email, 'user', true)"),
+        sa.text(
+            "INSERT INTO users (id, email, role, is_active) "
+            "VALUES (:id, :email, 'user', true)",
+        ),
         {"id": user_id, "email": email},
     )
     return user_id
 
 
 async def _insert_account(
-    connection: sa.AsyncConnection,
+    connection: AsyncConnection,
     *,
     account_id: uuid.UUID,
     owner_id: uuid.UUID,
@@ -53,7 +56,8 @@ async def _insert_account(
 ) -> None:
     await connection.execute(
         sa.text(
-            "INSERT INTO llm_accounts (id, label, claude_config_dir, status, created_by, created_at) "
+            "INSERT INTO llm_accounts "
+            "(id, label, claude_config_dir, status, created_by, created_at) "
             "VALUES (:id, 'main', :dir, 'active', :owner, :created_at)",
         ),
         {
