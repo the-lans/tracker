@@ -184,11 +184,9 @@ data() {
     -v "$QA_DIR/deploy_key:/run/qa/deploy_key:ro" \
     backend python /app/scripts/qa/seed_qa_data.py \
     --admin-email "$QA_ADMIN_EMAIL" \
-    --claude-config-dir "$QA_CLAUDE_ACCOUNT_DIR" \
     --deploy-key /run/qa/deploy_key)
   cat <<EOF
-Тестовые данные готовы. Вход в Claude для LLM-аккаунта «QA»:
-  docker compose exec -e CLAUDE_CONFIG_DIR=$QA_CLAUDE_ACCOUNT_DIR worker claude auth login
+Тестовые данные готовы. Вход в LLM-аккаунт «QA»: страница «LLM-аккаунты» → «Войти».
 EOF
 }
 

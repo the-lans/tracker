@@ -58,6 +58,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine  # noqa: E4
 from sqlalchemy.orm import Session, SessionTransaction  # noqa: E402
 
 from services import maintenance_tasks  # noqa: E402
+from tests.cliproxy_support import FakeCliproxy  # noqa: E402
 from tests.worker_support import WorkerEnv, install_worker_env  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -228,6 +229,25 @@ async def scratch_database(run_migrations: None) -> AsyncIterator[str]:
         async with admin.connect() as connection:
             await connection.execute(sa.text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
         await admin.dispose()
+
+
+@pytest.fixture
+def fake_cliproxy() -> FakeCliproxy:
+    """Фейковый management API LLM-прокси (`tests/cliproxy_support.py`)."""
+    return FakeCliproxy()
+
+
+@pytest.fixture
+def api_cliproxy(fake_cliproxy: FakeCliproxy, redis_client: Redis) -> Iterator[FakeCliproxy]:
+    """API трекера обращается к фейковому прокси вместо `cliproxy`; вход хранится в Redis."""
+    from api.dependencies import get_cliproxy
+    from main import app
+
+    app.dependency_overrides[get_cliproxy] = fake_cliproxy.client
+    try:
+        yield fake_cliproxy
+    finally:
+        app.dependency_overrides.pop(get_cliproxy, None)
 
 
 @pytest_asyncio.fixture

@@ -68,3 +68,8 @@ class LlmAccount(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     usage_checked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     # Раздел 19.2: аккаунт личный — владелец тот, кто его завёл.
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), index=True)
+
+    @property
+    def signed_in(self) -> bool:
+        """Вход выполнен: у аккаунта есть учётка в прокси."""
+        return self.cliproxy_credential is not None

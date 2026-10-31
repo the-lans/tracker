@@ -35,25 +35,23 @@ def lock_key(task_id: uuid.UUID, operation: str) -> str:
 
 
 @asynccontextmanager
-async def acquire_task_operation_lock(
+async def acquire_lock(
     redis_client: Redis,
+    key: str,
     *,
-    task_id: uuid.UUID,
-    operation: str,
     ttl_seconds: int = DEFAULT_LOCK_TTL_SECONDS,
+    busy_message: str,
 ) -> AsyncIterator[None]:
-    """`SET NX` с TTL; поднимает `LockNotAcquiredError`, если уже занята.
+    """`SET NX` с TTL; поднимает `LockNotAcquiredError(busy_message)`, если уже занята.
 
     Освобождение сверяет токен — если TTL истёк и блокировку успел
     перехватить кто-то другой, чужой захват не удаляется по ошибке.
     """
-    key = lock_key(task_id, operation)
     token = str(uuid.uuid4())
     acquired = await redis_client.set(key, token, nx=True, ex=ttl_seconds)
     if not acquired:
-        message = f"Операция {operation!r} для задачи {task_id} уже выполняется"
-        raise LockNotAcquiredError(message)
-    logger.info("distributed_lock_acquired", task_id=str(task_id), operation=operation)
+        raise LockNotAcquiredError(busy_message)
+    logger.info("distributed_lock_acquired", key=key)
     try:
         yield
     finally:
@@ -61,4 +59,22 @@ async def acquire_task_operation_lock(
         current_token = current.decode() if isinstance(current, bytes) else current
         if current_token == token:
             await redis_client.delete(key)
-        logger.info("distributed_lock_released", task_id=str(task_id), operation=operation)
+        logger.info("distributed_lock_released", key=key)
+
+
+@asynccontextmanager
+async def acquire_task_operation_lock(
+    redis_client: Redis,
+    *,
+    task_id: uuid.UUID,
+    operation: str,
+    ttl_seconds: int = DEFAULT_LOCK_TTL_SECONDS,
+) -> AsyncIterator[None]:
+    """Блокировка операции над задачей (`lock:<task_id>:<operation>`)."""
+    async with acquire_lock(
+        redis_client,
+        lock_key(task_id, operation),
+        ttl_seconds=ttl_seconds,
+        busy_message=f"Операция {operation!r} для задачи {task_id} уже выполняется",
+    ):
+        yield

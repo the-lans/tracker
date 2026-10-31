@@ -32,7 +32,7 @@ from db.models.repositories import Repository  # noqa: E402
 from db.models.users import AllowedEmail, User  # noqa: E402
 from db.session import async_session_factory  # noqa: E402
 from services.crypto import encrypt  # noqa: E402
-from services.llm_accounts import account_prefix, next_switch_order, validated_config_dir  # noqa: E402
+from services.llm_accounts import create_account  # noqa: E402
 from services.pipeline_validation import validate_node_shape, validate_pipeline_templates  # noqa: E402
 from services.repository_validation import validate_git_url, validate_repository_name  # noqa: E402
 from services.system_settings import (  # noqa: E402
@@ -50,6 +50,7 @@ GIT_URL = "ssh://git@qa-git/srv/git/qa/qa-calc.git"
 MOCKS_URL = "http://qa-mocks:8090"
 GITLAB_TOKEN = "qa-token"  # noqa: S105 — мок принимает любой токен
 LLM_ACCOUNT_LABEL = "QA"
+LLM_ACCOUNT_PROVIDER = "anthropic"
 PIPELINE_NAME = "QA: фича с тестами"
 TESTS_MAX_RETRIES = 2
 TESTS_RETRY_DELAY_SECONDS = 5
@@ -149,30 +150,21 @@ async def _admin(db_session: AsyncSession, email: str) -> User:
     return user
 
 
-async def _llm_account(db_session: AsyncSession, *, owner: User, config_dir: str) -> None:
-    path = await _existing_or_validated_dir(db_session, config_dir)
-    if path is None:
-        return
-    account_id = uuid.uuid4()
-    db_session.add(
-        LlmAccount(
-            id=account_id,
-            label=LLM_ACCOUNT_LABEL,
-            cliproxy_prefix=account_prefix(account_id),
-            switch_order=await next_switch_order(db_session, owner.id),
-            claude_config_dir=path,
-            created_by=owner.id,
-        ),
+async def _llm_account(db_session: AsyncSession, *, owner: User) -> None:
+    """Аккаунт Claude без входа: вход в него выполняется на странице «LLM-аккаунты»."""
+    exists = sa.select(LlmAccount.id).where(
+        LlmAccount.created_by == owner.id,
+        LlmAccount.label == LLM_ACCOUNT_LABEL,
     )
-    logger.info("qa_llm_account_created", claude_config_dir=path)
-
-
-async def _existing_or_validated_dir(db_session: AsyncSession, config_dir: str) -> str | None:
-    """`None` — аккаунт с этим каталогом уже есть."""
-    exists = sa.select(LlmAccount.id).where(LlmAccount.claude_config_dir == config_dir.rstrip("/"))
     if await db_session.scalar(exists) is not None:
-        return None
-    return await validated_config_dir(db_session, config_dir)
+        return
+    await create_account(
+        db_session,
+        owner_id=owner.id,
+        label=LLM_ACCOUNT_LABEL,
+        provider=LLM_ACCOUNT_PROVIDER,
+    )
+    logger.info("qa_llm_account_created", provider=LLM_ACCOUNT_PROVIDER)
 
 
 async def _repository(db_session: AsyncSession, deploy_key: str) -> None:
@@ -280,10 +272,10 @@ async def _pipeline(db_session: AsyncSession, owner: User) -> None:
     logger.info("qa_pipeline_created", name=PIPELINE_NAME, nodes=len(PIPELINE_NODES))
 
 
-async def _seed(*, admin_email: str, claude_config_dir: str, deploy_key: str) -> None:
+async def _seed(*, admin_email: str, deploy_key: str) -> None:
     async with async_session_factory() as db_session:
         owner = await _admin(db_session, admin_email)
-        await _llm_account(db_session, owner=owner, config_dir=claude_config_dir)
+        await _llm_account(db_session, owner=owner)
         await _repository(db_session, deploy_key)
         await _env_variables(db_session)
         await _library(db_session, owner)
@@ -296,13 +288,11 @@ async def _seed(*, admin_email: str, claude_config_dir: str, deploy_key: str) ->
 def main() -> None:
     parser = argparse.ArgumentParser(description="Тестовые данные стенда ручного E2E")
     parser.add_argument("--admin-email", required=True)
-    parser.add_argument("--claude-config-dir", required=True)
     parser.add_argument("--deploy-key", required=True, type=Path)
     args = parser.parse_args()
     asyncio.run(
         _seed(
             admin_email=args.admin_email,
-            claude_config_dir=args.claude_config_dir,
             deploy_key=args.deploy_key.read_text(),
         ),
     )

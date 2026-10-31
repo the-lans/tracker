@@ -1,4 +1,4 @@
-"""Профиль пользователя (раздел 15.1 ТЗ): собственные данные, SSH-ключ, SFTP и Jira."""
+"""Профиль пользователя (раздел 15.1 ТЗ): данные, SSH-ключ, SFTP, Jira, пороги LLM."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.dependencies import get_current_user
 from api.schemas import (
     JiraConnectionUpdateRequest,
+    LlmThresholdsUpdateRequest,
     SftpConnectionResponse,
     SshKeyUpdateRequest,
     UserResponse,
@@ -18,7 +19,7 @@ from db.models.users import User
 from db.session import get_session
 from services.jira_import import clear_jira_connection, update_jira_connection
 from services.sftp_connection import SftpConnection, sftp_connection_for
-from services.users import clear_ssh_public_key, set_ssh_public_key
+from services.users import clear_ssh_public_key, set_llm_switch_thresholds, set_ssh_public_key
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -75,3 +76,18 @@ async def delete_jira(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     return await clear_jira_connection(db_session, user=current_user)
+
+
+@router.put("/llm-thresholds", response_model=UserResponse)
+async def update_llm_thresholds(
+    body: LlmThresholdsUpdateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Раздел 15.1, 19.7: пороги переключения LLM-аккаунтов, 1..100%."""
+    return await set_llm_switch_thresholds(
+        db_session,
+        user=current_user,
+        five_hour_pct=body.five_hour_pct,
+        week_pct=body.week_pct,
+    )

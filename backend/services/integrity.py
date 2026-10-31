@@ -137,11 +137,24 @@ async def ensure_repository_renamable(session: AsyncSession, repository_id: uuid
         )
 
 
+ACCOUNT_IN_USE = "LLM-аккаунт выбран у задачи или есть в её истории — его можно только выключить"
+
+
 async def ensure_llm_account_deletable(session: AsyncSession, llm_account_id: uuid.UUID) -> None:
-    """Раздел 3.2: LLM-аккаунт, выбранный хотя бы у одной задачи, удалить нельзя."""
-    stmt = sa.select(Task.id).where(Task.llm_account_id == llm_account_id).limit(1)
-    if (await session.execute(stmt)).first() is not None:
-        raise ConflictError("LLM-аккаунт выбран у задачи — удалить его нельзя")
+    """
+    Раздел 3.2: LLM-аккаунт, выбранный у задачи (стартовый или текущий) или
+    записанный в историю `node_logs`, удалить нельзя.
+    """
+    used_by_task = sa.select(Task.id).where(
+        sa.or_(
+            Task.llm_account_id == llm_account_id,
+            Task.current_llm_account_id == llm_account_id,
+        ),
+    )
+    in_history = sa.select(NodeLog.id).where(NodeLog.llm_account_id == llm_account_id)
+    stmt = sa.select(sa.or_(sa.exists(used_by_task), sa.exists(in_history)))
+    if await session.scalar(stmt):
+        raise ConflictError(ACCOUNT_IN_USE)
 
 
 async def ensure_mcp_server_deletable(session: AsyncSession, mcp_server_id: uuid.UUID) -> None:

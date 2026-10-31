@@ -1,12 +1,14 @@
-"""FastAPI-зависимости: текущий пользователь, проверка роли (раздел 19.1, 19.2 ТЗ)."""
+"""FastAPI-зависимости: текущий пользователь, проверка роли (раздел 19.1, 19.2 ТЗ), LLM-прокси."""
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from clients.cliproxy import CliproxyManagementClient, open_cliproxy_client
 from db.models.enums import UserRole
 from db.models.users import User
 from db.session import get_session
@@ -38,3 +40,9 @@ async def require_admin(current_user: Annotated[User, Depends(get_current_user)]
     if current_user.role is not UserRole.ADMIN:
         raise ForbiddenError("Требуется роль admin")
     return current_user
+
+
+async def get_cliproxy() -> AsyncIterator[CliproxyManagementClient]:
+    """Клиент management API LLM-прокси на время запроса (раздел 19.7)."""
+    async with open_cliproxy_client() as client:
+        yield client

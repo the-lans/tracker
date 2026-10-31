@@ -47,12 +47,19 @@ async def make_llm_account(
     owner_id: uuid.UUID,
     claude_config_dir: str | None = None,
     status: LlmAccountStatus = LlmAccountStatus.ACTIVE,
+    provider: str = "anthropic",
+    credential: str | None = None,
+    default_model: str | None = None,
+    label: str = "main",
 ) -> LlmAccount:
     """LLM-аккаунт пользователя (раздел 19.2): путь уникален, если не задан явно."""
     account_id = uuid.uuid4()
     account = LlmAccount(
         id=account_id,
-        label="main",
+        label=label,
+        provider=provider,
+        cliproxy_credential=credential,
+        default_model=default_model,
         cliproxy_prefix=account_prefix(account_id),
         switch_order=await next_switch_order(db_session, owner_id),
         claude_config_dir=claude_config_dir or f"{DEFAULT_ACCOUNTS_ROOT}/{uuid.uuid4().hex}",
