@@ -32,7 +32,7 @@ from db.models.repositories import Repository  # noqa: E402
 from db.models.users import AllowedEmail, User  # noqa: E402
 from db.session import async_session_factory  # noqa: E402
 from services.crypto import encrypt  # noqa: E402
-from services.llm_accounts import validated_config_dir  # noqa: E402
+from services.llm_accounts import account_prefix, next_switch_order, validated_config_dir  # noqa: E402
 from services.pipeline_validation import validate_node_shape, validate_pipeline_templates  # noqa: E402
 from services.repository_validation import validate_git_url, validate_repository_name  # noqa: E402
 from services.system_settings import (  # noqa: E402
@@ -153,7 +153,17 @@ async def _llm_account(db_session: AsyncSession, *, owner: User, config_dir: str
     path = await _existing_or_validated_dir(db_session, config_dir)
     if path is None:
         return
-    db_session.add(LlmAccount(label=LLM_ACCOUNT_LABEL, claude_config_dir=path, created_by=owner.id))
+    account_id = uuid.uuid4()
+    db_session.add(
+        LlmAccount(
+            id=account_id,
+            label=LLM_ACCOUNT_LABEL,
+            cliproxy_prefix=account_prefix(account_id),
+            switch_order=await next_switch_order(db_session, owner.id),
+            claude_config_dir=path,
+            created_by=owner.id,
+        ),
+    )
     logger.info("qa_llm_account_created", claude_config_dir=path)
 
 

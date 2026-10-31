@@ -492,7 +492,7 @@ async def _claude_config_dir(db_session: AsyncSession, task: Task) -> str:
     if task.llm_account_id is None:
         return ""
     llm_account = await db_session.get(LlmAccount, task.llm_account_id)
-    return llm_account.claude_config_dir if llm_account else ""
+    return (llm_account.claude_config_dir or "") if llm_account else ""
 
 
 def _rate_limit_recorder(db_session: AsyncSession, task: Task) -> RateLimitHandler | None:

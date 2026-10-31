@@ -54,7 +54,7 @@ import pytest_asyncio  # noqa: E402
 import redis  # noqa: E402
 import sqlalchemy as sa  # noqa: E402
 from redis.asyncio import Redis  # noqa: E402
-from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine  # noqa: E402
 from sqlalchemy.orm import Session, SessionTransaction  # noqa: E402
 
 from services import maintenance_tasks  # noqa: E402
@@ -212,6 +212,22 @@ def run_migrations(postgres_container: None) -> None:
         check=True,
         env={**os.environ},
     )
+
+
+@pytest_asyncio.fixture
+async def scratch_database(run_migrations: None) -> AsyncIterator[str]:
+    """URL пустой временной базы для тестов миграций; удаляется после теста."""
+    base_url = sa.engine.make_url(os.environ["DATABASE_URL"])
+    name = f"migration_{uuid.uuid4().hex[:8]}"
+    admin = create_async_engine(base_url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    async with admin.connect() as connection:
+        await connection.execute(sa.text(f'CREATE DATABASE "{name}"'))
+    try:
+        yield base_url.set(database=name).render_as_string(hide_password=False)
+    finally:
+        async with admin.connect() as connection:
+            await connection.execute(sa.text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        await admin.dispose()
 
 
 @pytest_asyncio.fixture

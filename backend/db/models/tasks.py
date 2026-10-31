@@ -43,7 +43,12 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     # NULL до атомарной привязки пайплайна (создание task_nodes + заполнение
     # этого поля — одна транзакция, правило 3.2/10 ТЗ).
     pipeline_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("pipelines.id"))
+    # Стартовый аккаунт задачи; дальше воркер переключает аккаунт сам (раздел 19.7).
     llm_account_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("llm_accounts.id"))
+    # Аккаунт последнего обращения к модели — выставляет воркер перед каждым обращением.
+    current_llm_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("llm_accounts.id"),
+    )
     parent_task_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("tasks.id"))
     use_parent_summary: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     session_id: Mapped[str | None] = mapped_column(sa.String)

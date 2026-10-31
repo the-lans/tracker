@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
-from db.models.enums import AppLogLevel, NodeLogStatus, NodeLogTriggerType
+from db.models.enums import AppLogLevel, NodeLogStatus, NodeLogTriggerType, ReasoningEffort
 from db.models.mixins import JsonValue, UUIDPrimaryKeyMixin, pg_enum
 
 _DEFAULT_ATTEMPT_NUMBER = 1
@@ -39,6 +39,15 @@ class NodeLog(UUIDPrimaryKeyMixin, Base):
     script_exit_code: Mapped[int | None] = mapped_column(sa.Integer)
     # Причина `failed` для ленты (раздел 15.2): таймаут, ошибка сессии и т. п.
     error_message: Mapped[str | None] = mapped_column(sa.Text)
+    # Раздел 19.7: аккаунт, модель и уровень (на шкале провайдера) обращения к модели.
+    llm_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("llm_accounts.id"),
+        index=True,
+    )
+    llm_model: Mapped[str | None] = mapped_column(sa.String)
+    reasoning_effort: Mapped[ReasoningEffort | None] = mapped_column(
+        pg_enum(ReasoningEffort, name="reasoning_effort"),
+    )
     status: Mapped[NodeLogStatus] = mapped_column(
         pg_enum(NodeLogStatus, name="node_log_status"),
         default=NodeLogStatus.PENDING,

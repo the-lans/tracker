@@ -41,6 +41,8 @@ class RemoteControlStatus(StrEnum):
     CONNECTED = "connected"
     DISCONNECTED = "disconnected"
     RECONNECTING = "reconnecting"
+    # Раздел 6.3: мост через LLM-прокси невозможен — сессию смотрят в «Диалоге».
+    UNAVAILABLE = "unavailable"
 
 
 class RepositoryRole(StrEnum):
@@ -126,9 +128,21 @@ class AppLogLevel(StrEnum):
 
 
 class LlmAccountStatus(StrEnum):
+    # Вход через прокси не выполнен, истёк или отозван (раздел 19.5).
+    LOGIN_REQUIRED = "login_required"
     ACTIVE = "active"
     RATE_LIMITED = "rate_limited"
     DISABLED = "disabled"
+
+
+class ReasoningEffort(StrEnum):
+    """Общая шкала уровня рассуждений трекера (раздел 19.7), от меньшего к большему."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
 
 
 class EnvVariableScope(StrEnum):

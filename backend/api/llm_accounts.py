@@ -25,7 +25,7 @@ from db.session import get_session
 from services.access import get_llm_account_for_user, owner_filter
 from services.errors import ConflictError
 from services.integrity import ensure_llm_account_deletable
-from services.llm_accounts import validated_config_dir
+from services.llm_accounts import account_prefix, next_switch_order, validated_config_dir
 
 router = APIRouter(prefix="/llm-accounts", tags=["llm-accounts"])
 
@@ -47,9 +47,12 @@ async def create_llm_account(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> LlmAccount:
+    account_id = uuid.uuid4()
     llm_account = LlmAccount(
-        id=uuid.uuid4(),
+        id=account_id,
         label=body.label,
+        cliproxy_prefix=account_prefix(account_id),
+        switch_order=await next_switch_order(db_session, current_user.id),
         claude_config_dir=await validated_config_dir(db_session, body.claude_config_dir),
         status=body.status,
         created_by=current_user.id,

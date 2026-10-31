@@ -33,6 +33,21 @@ _REJECTED = "rejected"
 _ACCOUNTS_ROOT_ENV_VAR = "CLAUDE_ACCOUNTS_ROOT"
 # Volume `claude_accounts` в контейнере worker (docker-compose.yml).
 DEFAULT_ACCOUNTS_ROOT = "/data/claude-accounts"
+_PREFIX_TEMPLATE = "acc-{}"
+_PREFIX_ID_LENGTH = 12
+
+
+def account_prefix(account_id: uuid.UUID) -> str:
+    """Префикс учётки аккаунта в прокси (раздел 3.1): `acc-` и 12 hex-символов id."""
+    return _PREFIX_TEMPLATE.format(account_id.hex[:_PREFIX_ID_LENGTH])
+
+
+async def next_switch_order(db_session: AsyncSession, owner_id: uuid.UUID) -> int:
+    """Место нового аккаунта — в конце порядка переключения владельца (раздел 15.1)."""
+    stmt = sa.select(sa.func.coalesce(sa.func.max(LlmAccount.switch_order), 0)).where(
+        LlmAccount.created_by == owner_id,
+    )
+    return int((await db_session.execute(stmt)).scalar_one()) + 1
 
 
 async def record_rate_limit(
@@ -113,10 +128,10 @@ async def validated_config_dir(
     path = posixpath.normpath(claude_config_dir.strip())
     if not path.startswith(f"{root}/"):
         raise ValidationError(f"Каталог конфигурации должен лежать внутри {root}")
-    stmt = sa.select(LlmAccount.claude_config_dir)
+    stmt = sa.select(LlmAccount.claude_config_dir).where(LlmAccount.claude_config_dir.is_not(None))
     if exclude_account_id is not None:
         stmt = stmt.where(LlmAccount.id != exclude_account_id)
     for other in (await db_session.execute(stmt)).scalars():
-        if _overlaps(path, posixpath.normpath(other)):
+        if other and _overlaps(path, posixpath.normpath(other)):
             raise ConflictError(f"Каталог {path} пересекается с каталогом другого LLM-аккаунта")
     return path

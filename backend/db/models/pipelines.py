@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
-from db.models.enums import NodeType, ScriptLanguage
+from db.models.enums import NodeType, ReasoningEffort, ScriptLanguage
 from db.models.mixins import CreatedAtMixin, CreatedUpdatedAtMixin, UUIDPrimaryKeyMixin, pg_enum
 
 _DEFAULT_TIMEOUT_SECONDS = 600
@@ -73,6 +73,10 @@ class Node(UUIDPrimaryKeyMixin, Base):
     # переменная не настроена для ноды (использование в шаблоне этой ноды не
     # проходит валидацию сохранения).
     llm_output_last_n: Mapped[int | None] = mapped_column(sa.Integer)
+    # Раздел 19.7: уровень рассуждений LLM-ноды; NULL — `default_effort` аккаунта.
+    reasoning_effort: Mapped[ReasoningEffort | None] = mapped_column(
+        pg_enum(ReasoningEffort, name="reasoning_effort"),
+    )
     # Раздел 3.1, 3.2: архивация системного промта библиотеки.
     is_archived: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     # Раздел 19.2: у ноды пайплайна — автор пайплайна, у промта библиотеки —
