@@ -78,6 +78,20 @@ describe("useTaskStatusSocket", () => {
     }
   });
 
+  it("смена аккаунта обновляет задачу и перечитывает аккаунты, статус не трогает", () => {
+    const { queryClient } = renderSocket();
+    queryClient.setQueryData(["llm-accounts"], []);
+
+    act(() =>
+      FakeWebSocket.latest().receive({ type: "llm_account", task_id: "t1", current_llm_account_id: "a2" }),
+    );
+
+    const task = queryClient.getQueryData<Task>(["tasks", "detail", "t1"]);
+    expect([task?.current_llm_account_id, task?.status]).toEqual(["a2", TaskStatus.IN_PROGRESS]);
+    expect(queryClient.getQueryState(["llm-accounts"])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(["tasks", "t1", "node-logs"])?.isInvalidated).toBe(false);
+  });
+
   it("фрагменты ответа копятся по записи лога и не сбрасываются сменой статуса", () => {
     const { result } = renderSocket();
     const socket = FakeWebSocket.latest();

@@ -6,6 +6,8 @@ import { describeUserInput, turnOutputOf } from "@/lib/userInput";
 import { NodeOutputSheet } from "@/components/tasks/NodeOutputSheet";
 import { ScriptOutputBlock } from "@/components/tasks/ScriptOutputBlock";
 import { DecisionWidget } from "@/components/tasks/DecisionWidget";
+import { LlmSwitchNotice } from "@/components/tasks/LlmSwitchNotice";
+import { REASONING_EFFORT_LABEL } from "@/lib/labels";
 import { NodeLogStatus, NodeLogTriggerType, type NodeLog } from "@/lib/types";
 
 /** Метка источника реплики: ручной запуск (раздел 8.2), пересказ для
@@ -22,12 +24,20 @@ function sourceLabelOf(log: NodeLog): string | undefined {
   return undefined;
 }
 
+/** Раздел 15.2: подпись ответа — аккаунт, модель и уровень рассуждений обращения. */
+function routeCaptionOf(log: NodeLog, accountLabel: string | undefined): string | null {
+  if (log.llm_model === null) return null;
+  const effort = log.reasoning_effort ? REASONING_EFFORT_LABEL[log.reasoning_effort] : null;
+  return [accountLabel, log.llm_model, effort].filter(Boolean).join(" · ");
+}
+
 export function NodeLogEntry({
   taskId,
   log,
   title,
   streamedText,
   isAgentTurn = false,
+  accountLabel,
 }: {
   taskId: string;
   log: NodeLog;
@@ -35,6 +45,8 @@ export function NodeLogEntry({
   streamedText?: string;
   /** Запись — ход агента (промт, слэш-команда, план), а не скрипт или очистка контекста. */
   isAgentTurn?: boolean;
+  /** Пометка аккаунта обращения (`log.llm_account_id`). */
+  accountLabel?: string;
 }) {
   const [outputOpen, setOutputOpen] = useState(false);
   // Раздел 15.2: служебная реплика помечена источником — один раз, в заголовке записи.
@@ -52,11 +64,25 @@ export function NodeLogEntry({
     isAgentTurn,
   );
 
+  const routeCaption = routeCaptionOf(log, accountLabel);
+
   return (
     <div className="flex flex-col gap-3">
+      {log.llm_switch_reason && (
+        <LlmSwitchNotice
+          accountLabel={accountLabel ?? "—"}
+          model={log.llm_model}
+          reason={log.llm_switch_reason}
+        />
+      )}
       <div className="flex items-center justify-between gap-2 text-caption font-bold text-text-3">
-        <span className="truncate" title={heading}>
+        <span className="min-w-0 truncate" title={heading}>
           {heading}
+          {routeCaption && (
+            <span className="ml-2 font-normal" aria-label="Аккаунт, модель и уровень">
+              {routeCaption}
+            </span>
+          )}
         </span>
         <button
           type="button"

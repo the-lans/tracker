@@ -1,7 +1,13 @@
 import { screen } from "@testing-library/react";
 import { describe, expect } from "vitest";
 import { NodeLogEntry } from "@/components/tasks/NodeLogEntry";
-import { NodeLogStatus, NodeLogTriggerType, type NodeLog } from "@/lib/types";
+import {
+  LlmSwitchReason,
+  NodeLogStatus,
+  NodeLogTriggerType,
+  ReasoningEffort,
+  type NodeLog,
+} from "@/lib/types";
 import { makeNodeLog, PLAN_OPTIONS } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
@@ -10,7 +16,12 @@ const PLAN = "1. Добавить кнопку\n2. Написать тесты";
 
 function renderEntry(
   log: Partial<NodeLog>,
-  { title, streamedText, isAgentTurn }: { title?: string; streamedText?: string; isAgentTurn?: boolean } = {},
+  {
+    title,
+    streamedText,
+    isAgentTurn,
+    accountLabel,
+  }: { title?: string; streamedText?: string; isAgentTurn?: boolean; accountLabel?: string } = {},
 ) {
   return renderWithProviders(
     <NodeLogEntry
@@ -19,6 +30,7 @@ function renderEntry(
       title={title}
       streamedText={streamedText}
       isAgentTurn={isAgentTurn}
+      accountLabel={accountLabel}
     />,
   );
 }
@@ -210,6 +222,52 @@ describe("NodeLogEntry", () => {
       expect(container).toHaveTextContent("План принят.");
       expect(container).toHaveTextContent("Добавить кнопку");
       expect(container).toHaveTextContent(decision);
+    });
+  });
+
+  describe("аккаунт обращения", () => {
+    const ROUTED = {
+      llm_account_id: "a2",
+      llm_model: "gpt-5.5-codex",
+      reasoning_effort: ReasoningEffort.XHIGH,
+      llm_output_text: "Готово",
+    };
+
+    test("подпись — аккаунт, модель и уровень", () => {
+      renderEntry(ROUTED, { title: "Реализация", accountLabel: "Codex — запасной" });
+
+      expect(screen.getByLabelText("Аккаунт, модель и уровень")).toHaveTextContent(
+        "Codex — запасной · gpt-5.5-codex · очень высокий",
+      );
+    });
+
+    test("у скрипта подписи нет", () => {
+      renderEntry({ script_stdout: "ok", script_exit_code: 0 });
+
+      expect(screen.queryByLabelText("Аккаунт, модель и уровень")).not.toBeInTheDocument();
+    });
+
+    test.for([
+      { reason: LlmSwitchReason.THRESHOLD_5H, text: "порог 5-часового окна" },
+      { reason: LlmSwitchReason.THRESHOLD_WEEK, text: "порог недельного окна" },
+      { reason: LlmSwitchReason.RATE_LIMITED, text: "исчерпан лимит" },
+      { reason: LlmSwitchReason.LOGIN_REQUIRED, text: "нужен повторный вход в прежний аккаунт" },
+    ])("смена аккаунта ($reason) — строка перед ответом", ({ reason, text }) => {
+      const { container } = renderEntry(
+        { ...ROUTED, llm_switch_reason: reason },
+        { accountLabel: "Codex — запасной" },
+      );
+
+      expect(screen.getByRole("note")).toHaveTextContent(
+        `Переключено на аккаунт Codex — запасной (gpt-5.5-codex): ${text}`,
+      );
+      expectOrder(container, ["Переключено на аккаунт", "Готово"]);
+    });
+
+    test("без смены аккаунта строки нет", () => {
+      renderEntry(ROUTED, { accountLabel: "Codex — запасной" });
+
+      expect(screen.queryByRole("note")).not.toBeInTheDocument();
     });
   });
 });

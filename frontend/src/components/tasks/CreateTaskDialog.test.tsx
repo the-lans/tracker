@@ -1,7 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, vi } from "vitest";
 import { CreateTaskDialog } from "@/components/tasks/CreateTaskDialog";
-import { UserRole, type JiraIssueDraft } from "@/lib/types";
+import { LlmAccountStatus, UserRole, type JiraIssueDraft } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
 import { makeCurrentUser, makeLlmAccount, makeTask, makeUser } from "@/test/factories";
 import { test } from "@/test/fixtures";
@@ -132,6 +132,30 @@ describe("CreateTaskDialog", () => {
         ]);
       },
     );
+
+    test("стартовый — только из активных, в порядке переключения", async ({ api }) => {
+      api.respond("GET /llm-accounts", [
+        makeLlmAccount({ id: "a1", label: "Claude — основной" }),
+        makeLlmAccount({ id: "a2", label: "Codex — нужен вход", status: LlmAccountStatus.LOGIN_REQUIRED }),
+        makeLlmAccount({ id: "a3", label: "Claude — выключен", status: LlmAccountStatus.DISABLED }),
+        makeLlmAccount({ id: "a4", label: "Claude — запасной" }),
+      ]);
+      const { user } = renderDialog(api);
+
+      await user.click(screen.getByRole("combobox", { name: "LLM-аккаунт" }));
+
+      expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+        "Claude — основной",
+        "Claude — запасной",
+      ]);
+    });
+
+    test("нет активных аккаунтов — подсказка войти или включить", async ({ api }) => {
+      api.respond("GET /llm-accounts", [makeLlmAccount({ status: LlmAccountStatus.LOGIN_REQUIRED })]);
+      renderDialog(api);
+
+      expect(await screen.findByText(/Нет активных аккаунтов/)).toBeInTheDocument();
+    });
 
     test("без своих аккаунтов — подсказка, что доступны только скрипты", async ({ api }) => {
       api.respond("GET /llm-accounts", [makeLlmAccount({ created_by: "u2" })]);

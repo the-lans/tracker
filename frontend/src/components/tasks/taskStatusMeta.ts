@@ -1,4 +1,4 @@
-import { TaskStatus } from "@/lib/types";
+import { RemoteControlStatus, TaskStatus, type Task } from "@/lib/types";
 import type { BadgeProps } from "@/components/ui/badge";
 
 interface StatusMeta {
@@ -35,3 +35,15 @@ export const SESSION_ACTIVE_STATUSES: TaskStatus[] = [
   TaskStatus.AWAITING_INPUT,
   TaskStatus.REBASE_CONFLICT,
 ];
+
+/**
+ * Раздел 6.3, 6.5: что показать в шапке задачи про мост `claude.ai/code`.
+ * Мост есть только у живой сессии Claude Code (у задачи с LLM-аккаунтом);
+ * через LLM-прокси он недоступен — тогда только подпись, без кнопки.
+ */
+export type BridgeView = "hidden" | "reconnect" | "unavailable";
+
+export function bridgeViewOf(task: Task): BridgeView {
+  if (task.llm_account_id === null || !SESSION_ACTIVE_STATUSES.includes(task.status)) return "hidden";
+  return task.remote_control_status === RemoteControlStatus.UNAVAILABLE ? "unavailable" : "reconnect";
+}
