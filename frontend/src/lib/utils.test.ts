@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatFileSize, formatInterval, formatRelativeShort, initialsFromEmail, plural } from "@/lib/utils";
+import {
+  formatCountdown,
+  formatFileSize,
+  formatInterval,
+  formatRelativeShort,
+  initialsFromEmail,
+  plural,
+} from "@/lib/utils";
 
 const MINUTE_FORMS: [string, string, string] = ["минута", "минуты", "минут"];
 
@@ -38,6 +45,17 @@ describe("formatInterval", () => {
     [1209600, "каждые 2 недели"],
   ])("%i с → «%s»", (seconds, expected) => {
     expect(formatInterval(seconds)).toBe(expected);
+  });
+});
+
+describe("formatCountdown", () => {
+  it.each([
+    [300, "5:00"],
+    [245, "4:05"],
+    [59, "0:59"],
+    [0, "0:00"],
+  ])("%i → «%s»", (seconds, expected) => {
+    expect(formatCountdown(seconds)).toBe(expected);
   });
 });
 

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -300,6 +301,7 @@ class TestLogin:
         )
 
         assert start.json()["url"].startswith("https://auth.example.com/")
+        assert datetime.fromisoformat(start.json()["expires_at"]) > datetime.now(UTC)
         assert waiting.json() == {"state": "wait", "error": None}
         assert done.json() == {"state": "ok", "error": None}
         listed = (await authed_client.get(f"/llm-accounts/{account.id}")).json()

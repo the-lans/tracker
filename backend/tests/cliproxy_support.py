@@ -17,6 +17,8 @@ from clients.cliproxy import CliproxyManagementClient, CliproxySettings
 
 _API = "/v8/management"
 LATEST_VERSION = "v8.0.50"
+# Ошибка сессии входа, когда прокси не дождался адреса после входа.
+CALLBACK_TIMEOUT_ERROR = "Timeout waiting for OAuth callback"
 
 
 def _unknown_state() -> httpx.Response:
@@ -91,6 +93,11 @@ class FakeCliproxy:
         self.credentials[name] = credential
         return credential
 
+    def expire_login(self, state: str) -> None:
+        """Прокси не дождался адреса после входа (5 минут в v8.0.48)."""
+        session = self.sessions[state]
+        session.status, session.error = "error", CALLBACK_TIMEOUT_ERROR
+
     def _handle(self, request: httpx.Request) -> httpx.Response:
         if self.down:
             raise httpx.ConnectError("connection refused", request=request)
@@ -113,6 +120,13 @@ class FakeCliproxy:
         session = self.sessions.get(body.get("state", ""))
         if session is None:
             return _unknown_state()
+        if "code=" not in body.get("redirect_url", ""):
+            error = "code or error is required"
+            return httpx.Response(400, json={"status": "error", "error": error})
+        if session.status != "wait":
+            # Как прокси: сессия, которая уже не ждёт адрес, отвечает 409 с её ошибкой.
+            error = session.error or "oauth flow is already completed"
+            return httpx.Response(409, json={"status": "error", "error": error})
         login = self.next_login
         if login is not None and login.error is not None:
             session.status, session.error = "error", login.error

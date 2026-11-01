@@ -9,8 +9,9 @@
 выставляется префикс аккаунта, и запросы к модели с этим префиксом прокси
 выполняет только ею (раздел 19.7).
 
-Незавершённый вход хранится в Redis (`llm:login:<account_id>`) и через 10
-минут отменяется, в том числе в прокси.
+Незавершённый вход хранится в Redis (`llm:login:<account_id>`) и через 5
+минут отменяется, в том числе в прокси: дольше прокси адрес после входа не
+ждёт.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import json
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
+from http import HTTPStatus
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -40,8 +42,9 @@ if TYPE_CHECKING:
 
 logger = get_logger("llm_account_login")
 
-# Раздел 19.5: незавершённый вход отменяется через 10 минут.
-LOGIN_TIMEOUT = timedelta(minutes=10)
+# Раздел 19.5: CLIProxyAPI ждёт адрес после входа 5 минут (не настраивается),
+# незавершённый вход трекер отменяет в тот же срок.
+LOGIN_TIMEOUT = timedelta(minutes=5)
 # Запись живёт дольше срока входа, чтобы просроченный вход можно было отменить в прокси.
 _RECORD_TTL_SECONDS = 30 * 60
 _RECORD_KEY = "llm:login:{account_id}"
@@ -49,7 +52,18 @@ _DEADLINES_KEY = "llm:login:deadlines"
 _BIND_LOCK_KEY = "lock:cliproxy:login"
 _BIND_LOCK_TTL_SECONDS = 30
 
-_EXPIRED = "Вход не начат или истёк — начните вход заново"
+_SECONDS_PER_MINUTE = 60
+_EXPIRED = (
+    "Время входа истекло: адрес после входа нужно вставить в течение "
+    f"{int(LOGIN_TIMEOUT.total_seconds()) // _SECONDS_PER_MINUTE} минут"
+)
+# Ошибки прокси, когда он уже не ждёт адрес после входа: истекло ожидание или
+# сессия входа удалена.
+_PROXY_EXPIRED_ERRORS = frozenset(
+    {"Timeout waiting for OAuth callback", "unknown or expired state"},
+)
+# Ответы прокси на адрес после входа, когда сессия входа уже не ждёт его.
+_CALLBACK_CLOSED_STATUSES = frozenset({HTTPStatus.NOT_FOUND, HTTPStatus.CONFLICT})
 _TAKEN = "Эта подписка уже подключена к другому LLM-аккаунту"
 _NOT_FOUND = "Прокси не создал новую учётку — возможно, подписка уже подключена к другому аккаунту"
 _AMBIGUOUS = "Одновременно с этим выполнялся другой вход — начните вход заново"
@@ -60,6 +74,7 @@ _BUSY = "Сейчас завершается другой вход — повт�
 class LoginStart:
     url: str
     state: str
+    expires_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +166,7 @@ async def start_login(
     )
     await redis_client.zadd(_DEADLINES_KEY, {str(account.id): deadline.timestamp()})
     logger.info("llm_login_started", account_id=str(account.id), provider=provider.id)
-    return LoginStart(url=start.url, state=start.state)
+    return LoginStart(url=start.url, state=start.state, expires_at=deadline)
 
 
 async def _active_record(
@@ -184,11 +199,17 @@ async def submit_login_callback(
     record = await _active_record(redis_client, cliproxy, account, now=now)
     if record is None:
         return LoginResult(OAuthState.ERROR, _EXPIRED)
-    await cliproxy.oauth_callback(
-        provider=get_provider(account.provider).oauth_provider,
-        state=record.state,
-        redirect_url=redirect_url,
-    )
+    try:
+        await cliproxy.oauth_callback(
+            provider=get_provider(account.provider).oauth_provider,
+            state=record.state,
+            redirect_url=redirect_url,
+        )
+    except CliproxyRequestError as exc:
+        # Сессия входа в прокси уже закрыта (истекло ожидание или вход завершён) —
+        # итог входа в её статусе.
+        if exc.response_status not in _CALLBACK_CLOSED_STATUSES:
+            raise
     return await _finish(db_session, redis_client, cliproxy, account, record)
 
 
@@ -219,8 +240,9 @@ async def _finish(
         return LoginResult(OAuthState.WAIT)
     if status.state is OAuthState.ERROR:
         await _drop(redis_client, account.id)
-        logger.info("llm_login_failed", account_id=str(account.id))
-        return LoginResult(OAuthState.ERROR, status.error)
+        logger.info("llm_login_failed", account_id=str(account.id), error=status.error)
+        expired = status.error in _PROXY_EXPIRED_ERRORS
+        return LoginResult(OAuthState.ERROR, _EXPIRED if expired else status.error)
     try:
         async with acquire_lock(
             redis_client,

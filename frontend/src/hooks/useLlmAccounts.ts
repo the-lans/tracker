@@ -1,4 +1,5 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useCallback } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
 import type {
@@ -89,6 +90,12 @@ export function useCancelLlmLogin(llmAccountId: string) {
     () => api.delete(`/llm-accounts/${llmAccountId}/login`),
     [KEY],
   );
+}
+
+/** Перечитать аккаунты: вход, завершённый опросом статуса, меняет статус аккаунта. */
+export function useRefreshLlmAccounts() {
+  const queryClient = useQueryClient();
+  return useCallback(() => void queryClient.invalidateQueries({ queryKey: KEY }), [queryClient]);
 }
 
 /** Статус входа, пока прокси ждёт завершения OAuth (`wait`). */

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from clients.cliproxy import OAuthState
+from clients.cliproxy import CliproxyRequestError, OAuthState
 from db.models.enums import LlmAccountStatus
 from db.models.llm import LlmAccount
 from services.errors import ConflictError, ValidationError
@@ -86,6 +86,7 @@ class TestStartLogin:
         start = await start_login(redis_client, fake_cliproxy.client(), account, now=_NOW)
 
         assert start.url == f"https://auth.example.com/{start.state}"
+        assert start.expires_at == _NOW + LOGIN_TIMEOUT
         assert fake_cliproxy.sessions[start.state].provider == oauth_provider
         assert fake_cliproxy.sessions[start.state].target is None
 
@@ -300,6 +301,93 @@ class TestLoginProgress:
         assert result.state is OAuthState.ERROR
         assert len(fake_cliproxy.cancelled) == int(started)
         assert ("POST", "/oauth/callback") not in fake_cliproxy.requests
+
+
+class TestProxyClosedLogin:
+    """Прокси ждёт адрес после входа 5 минут; позже он отклоняет колбэк."""
+
+    @pytest.mark.parametrize(
+        ("forgotten", "via_callback"),
+        [(False, True), (False, False), (True, True)],
+        ids=["timeout_callback", "timeout_poll", "unknown_state"],
+    )
+    async def test_expired_in_proxy(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        forgotten: bool,
+        via_callback: bool,
+    ) -> None:
+        account = await _account(db_session)
+        cliproxy = fake_cliproxy.client()
+        start = await start_login(redis_client, cliproxy, account, now=_NOW)
+        if forgotten:
+            del fake_cliproxy.sessions[start.state]
+        else:
+            fake_cliproxy.expire_login(start.state)
+
+        if via_callback:
+            result = await submit_login_callback(
+                db_session,
+                redis_client,
+                cliproxy,
+                account,
+                redirect_url=_REDIRECT,
+                now=_NOW,
+            )
+        else:
+            result = await poll_login(db_session, redis_client, cliproxy, account, now=_NOW)
+
+        assert result.state is OAuthState.ERROR
+        assert result.error is not None and "истекло" in result.error
+        assert account.status is LlmAccountStatus.LOGIN_REQUIRED
+        assert await redis_client.get(f"llm:login:{account.id}") is None
+
+    async def test_already_completed_signs_in(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+    ) -> None:
+        account = await _account(db_session)
+        cliproxy = fake_cliproxy.client()
+        start = await start_login(redis_client, cliproxy, account, now=_NOW)
+        fake_cliproxy.add_credential(_CLAUDE)
+        session = fake_cliproxy.sessions[start.state]
+        session.status, session.created = "ok", _CLAUDE
+
+        result = await submit_login_callback(
+            db_session,
+            redis_client,
+            cliproxy,
+            account,
+            redirect_url=_REDIRECT,
+            now=_NOW,
+        )
+
+        assert result == LoginResult(OAuthState.OK)
+        assert account.cliproxy_credential == _CLAUDE
+
+    async def test_other_rejection_raised(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+    ) -> None:
+        account = await _account(db_session)
+        cliproxy = fake_cliproxy.client()
+        await start_login(redis_client, cliproxy, account, now=_NOW)
+
+        with pytest.raises(CliproxyRequestError):
+            await submit_login_callback(
+                db_session,
+                redis_client,
+                cliproxy,
+                account,
+                redirect_url="http://localhost:54545/callback?state=x",
+                now=_NOW,
+            )
 
 
 class TestCancel:

@@ -65,6 +65,7 @@ class LlmAccountResponse(BaseModel):
 class LlmLoginStartResponse(BaseModel):
     url: str
     state: str
+    expires_at: datetime
 
 
 class LlmLoginCallbackRequest(BaseModel):

@@ -650,6 +650,8 @@ export interface LlmAccountUpdateRequest {
 export interface LlmLoginStart {
   url: string;
   state: string;
+  /** Раздел 19.5: после этого времени прокси не примет адрес после входа. */
+  expires_at: string;
 }
 
 export interface LlmLoginStatus {
