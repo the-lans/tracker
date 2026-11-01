@@ -1,0 +1,29 @@
+# Конфигурация CLIProxyAPI для трекера (раздел 19.7, 20.3 ТЗ).
+# Рендерится deploy/cliproxy/init.sh в volume cliproxy_data при каждом старте
+# стека: ручные правки конфигурации в volume пропадут. Ключи — из .env.
+config-version: 8
+server:
+  port: 8317
+management:
+  # Порт наружу не публикуется: management API доступен только из
+  # внутренней сети стека (backend, worker).
+  allow-remote: true
+  secret-key: "__CLIPROXY_MANAGEMENT_KEY__"
+  disable-control-panel: true
+access:
+  # Клиентский ключ: им к прокси обращается только llm-gateway.
+  api-keys:
+    - "__CLIPROXY_API_KEY__"
+routing:
+  # Учётку выбирает трекер префиксом модели (<prefix>/<model>), прокси сам
+  # на другие учётки не переходит.
+  force-model-prefix: true
+observability:
+  logs:
+    debug: false
+    logging-to-file: false
+    request-log: false
+  usage:
+    usage-statistics-enabled: false
+oauth:
+  auth-dir: "/data/auths"

@@ -14,14 +14,27 @@ from db.session import async_session_factory
 from services.errors import NotFoundError
 
 
-def test_health_endpoint() -> None:
+@pytest.mark.parametrize(
+    ("git_sha", "version"),
+    [("3f2a9c1e" * 5, "3f2a9c1e" * 5), ("", "unknown"), (None, "unknown")],
+    ids=["sha", "empty", "unset"],
+)
+def test_health_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    git_sha: str | None,
+    version: str,
+) -> None:
     from main import app
 
+    if git_sha is None:
+        monkeypatch.delenv("GIT_SHA", raising=False)
+    else:
+        monkeypatch.setenv("GIT_SHA", git_sha)
     with TestClient(app) as client:
         response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json() == {"status": "ok", "version": version}
 
 
 def test_app_error_handler_returns_standard_shape() -> None:

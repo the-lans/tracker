@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import traceback
 import uuid
 from collections.abc import AsyncIterator, Mapping
@@ -185,6 +186,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
+# Раздел 20.7: коммит образа (build-arg GIT_SHA) — по нему развёртывание
+# проверяет, что сервер отвечает новой версией.
+_VERSION_ENV = "GIT_SHA"
+_UNKNOWN_VERSION = "unknown"
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": os.environ.get(_VERSION_ENV) or _UNKNOWN_VERSION}
