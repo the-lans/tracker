@@ -63,7 +63,7 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> Recorded:
 
     monkeypatch.setattr(account_router_module, "write_app_log", app_log)
     monkeypatch.setattr(account_router_module, "notify_task_event", task_push)
-    monkeypatch.setattr(account_router_module, "notify_user_event", user_push)
+    monkeypatch.setattr("services.llm_account_checks.notify_user_event", user_push)
     monkeypatch.setattr("services.llm_usage.write_app_log", app_log)
     return sink
 

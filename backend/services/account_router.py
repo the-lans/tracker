@@ -30,6 +30,7 @@ from db.models.llm import LlmAccount
 from db.models.tasks import Task
 from db.models.users import User
 from services.errors import ExternalServiceError
+from services.llm_account_checks import require_login
 from services.llm_providers import PROVIDERS, get_provider, provider_effort
 from services.llm_routing import (
     AccountChoice,
@@ -41,7 +42,7 @@ from services.llm_routing import (
     publish_route,
 )
 from services.llm_usage import refresh_account_usage
-from services.notifications import NotificationEvent, notify_task_event, notify_user_event
+from services.notifications import NotificationEvent, notify_task_event
 
 if TYPE_CHECKING:
     from claude_agent_sdk import RateLimitInfo
@@ -233,7 +234,7 @@ class TaskAccountRouter:
         другой годный аккаунт; None — ошибка не про аккаунт, классификация обычная.
         """
         if assistant_error == AUTHENTICATION_FAILED:
-            await self._mark_login_required(route.account_id)
+            await require_login(self._db, route.account_id)
         elif assistant_error == RATE_LIMIT:
             await self._mark_rate_limited(route.account_id, resets_at=None)
         else:
@@ -247,29 +248,6 @@ class TaskAccountRouter:
             return
         resets_at = datetime.fromtimestamp(info.resets_at, tz=UTC) if info.resets_at else None
         await self._mark_rate_limited(self.route_in_use.account_id, resets_at=resets_at)
-
-    async def _mark_login_required(self, account_id: uuid.UUID) -> None:
-        stmt = (
-            sa.update(LlmAccount)
-            .where(
-                LlmAccount.id == account_id,
-                LlmAccount.status.in_([LlmAccountStatus.ACTIVE, LlmAccountStatus.RATE_LIMITED]),
-            )
-            .values(status=LlmAccountStatus.LOGIN_REQUIRED)
-            .returning(LlmAccount.created_by, LlmAccount.label)
-        )
-        changed = (await self._db.execute(stmt)).one_or_none()
-        await self._db.commit()
-        if changed is None:
-            return
-        owner_id, label = changed
-        logger.info("llm_account_login_required", account_id=str(account_id))
-        await notify_user_event(
-            self._db,
-            event=NotificationEvent.LLM_LOGIN_REQUIRED,
-            user_id=owner_id,
-            detail=f"Войдите в LLM-аккаунт «{label}» заново",
-        )
 
     async def _mark_rate_limited(
         self,

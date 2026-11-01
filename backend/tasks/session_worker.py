@@ -64,7 +64,7 @@ from services.pipeline_orchestrator import (
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
 from services.redis_connection import redis_connection
-from services.remote_control import record_bridge_status
+from services.remote_control import bridge_unavailable, record_bridge_status
 from services.session_container import SESSION_CLI_PATH, build_session_cli_env
 from services.session_heartbeat import (
     SESSION_OWNER_WAIT_SECONDS,
@@ -277,6 +277,9 @@ class _SessionControl:
         if not await consume_bridge_reconnect(self.redis_client, self.task.id):
             return
         await self.db_session.refresh(self.task)
+        if bridge_unavailable(self.task):
+            logger.info("bridge_reconnect_skipped_unavailable", task_id=str(self.task.id))
+            return
         session_id = self.claude_session.session_id or self.task.session_id
         status = RemoteControlStatus.DISCONNECTED
         if not self.has_llm:
@@ -403,7 +406,7 @@ async def _settle_bridge_request(
     """
     requested = await consume_bridge_reconnect(redis_client, task_id)
     task = await db_session.get(Task, task_id, populate_existing=True)
-    if task is None:
+    if task is None or bridge_unavailable(task):
         return
     if requested or task.remote_control_status is RemoteControlStatus.RECONNECTING:
         logger.info("bridge_reconnect_dropped_after_run", task_id=str(task_id))
@@ -741,7 +744,9 @@ async def _run_claimed_task(
         session_token=lane.session_token,
     )
     start_plan = plan_session_start(existing_session_id=task.session_id)
-    enable_remote_control = start_plan.enable_remote_control and make_client.has_llm
+    enable_remote_control = (
+        start_plan.enable_remote_control and make_client.has_llm and not bridge_unavailable(task)
+    )
     session = ClaudeCodeSession(
         make_client(
             resume_session_id=start_plan.resume_session_id,

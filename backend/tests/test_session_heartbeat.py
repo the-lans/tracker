@@ -155,6 +155,26 @@ class TestCheckTaskBridge:
         assert task.status is TaskStatus.FAILED
         assert events == [NotificationEvent.REMOTE_CONTROL_DISCONNECTED, NotificationEvent.FAILED]
 
+    async def test_unavailable_bridge_fails_quietly(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 6.6: при `unavailable` мост не восстанавливается, о разрыве не сообщается."""
+        events = self._capture_events(monkeypatch)
+        task = await self._task(db_session, attempts=0, status=RemoteControlStatus.UNAVAILABLE)
+
+        for _ in range(3):
+            await check_task_bridge(db_session, task=task, redis_client=redis_client)
+            assert await consume_bridge_reconnect(redis_client, task.id) is False
+
+        assert (task.status, task.remote_control_status) == (
+            TaskStatus.FAILED,
+            RemoteControlStatus.UNAVAILABLE,
+        )
+        assert events == [NotificationEvent.FAILED]
+
     async def test_task_without_llm_fails_without_bridge(
         self,
         db_session: AsyncSession,

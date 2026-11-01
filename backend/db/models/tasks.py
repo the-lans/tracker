@@ -60,7 +60,8 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     auto_accept_plan: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     remote_control_status: Mapped[RemoteControlStatus] = mapped_column(
         pg_enum(RemoteControlStatus, name="remote_control_status"),
-        default=RemoteControlStatus.DISCONNECTED,
+        # Раздел 6.3: мост через LLM-прокси невозможен.
+        default=RemoteControlStatus.UNAVAILABLE,
     )
     remote_control_last_check_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True),

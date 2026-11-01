@@ -20,6 +20,7 @@ import sqlalchemy as sa
 
 from app_logging.app_logs import write_app_log
 from app_logging.config import get_logger
+from clients.cliproxy import open_cliproxy_client
 from clients.gitlab import GitlabClient
 from db.models.enums import (
     AppLogLevel,
@@ -33,7 +34,7 @@ from db.models.tasks import Task, TaskRepository
 from db.session import async_session_factory
 from services import gitlab_sync, maintenance_tasks, users
 from services.autostart import run_scheduled_autostart_check
-from services.llm_accounts import restore_expired_rate_limits
+from services.llm_account_checks import check_llm_accounts
 from services.log_rotation import resolve_archive_root, rotate_node_logs
 from services.manual_queue import STALE_QUEUED_REQUEST_AGE, expire_stale_manual_queue_requests
 from services.periodic_tasks import mark_periodic_task_running, record_periodic_task_run
@@ -110,7 +111,20 @@ def check_scheduled_tasks_for_autostart() -> None:
 @celery_app.task(name="check_llm_account_limits")
 def check_llm_account_limits() -> None:
     async def body(db_session: AsyncSession) -> None:
-        await restore_expired_rate_limits(db_session, now=datetime.now(UTC))
+        async with redis_connection() as redis_client, open_cliproxy_client() as cliproxy:
+            result = await check_llm_accounts(
+                db_session,
+                redis_client=redis_client,
+                cliproxy=cliproxy,
+                now=datetime.now(UTC),
+            )
+        logger.info(
+            "llm_accounts_checked",
+            restored=len(result.restored),
+            polled=len(result.polled),
+            login_required=len(result.login_required),
+            cancelled_logins=result.cancelled_logins,
+        )
 
     _run_periodic("check_llm_account_limits", body)
 

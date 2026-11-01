@@ -1592,6 +1592,17 @@ class TestDuplicateTask:
         assert response.status_code == 409
 
 
+async def _set_bridge(
+    db_session: AsyncSession,
+    task_id: uuid.UUID,
+    status: RemoteControlStatus,
+) -> None:
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    task.remote_control_status = status
+    await db_session.flush()
+
+
 class TestRemoteControlReconnect:
     async def test_hands_request_to_worker(
         self,
@@ -1601,6 +1612,7 @@ class TestRemoteControlReconnect:
     ) -> None:
         task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.PAUSED)
         task_id = uuid.UUID(task_body["id"])
+        await _set_bridge(db_session, task_id, RemoteControlStatus.DISCONNECTED)
 
         response = await authed_client.post(f"/tasks/{task_id}/remote-control/reconnect")
 
@@ -1619,6 +1631,21 @@ class TestRemoteControlReconnect:
         status: TaskStatus,
     ) -> None:
         task_body = await _create_task_in_status(authed_client, db_session, status)
+
+        response = await authed_client.post(f"/tasks/{task_body['id']}/remote-control/reconnect")
+
+        assert response.status_code == 409
+        assert await consume_bridge_reconnect(redis_client, uuid.UUID(task_body["id"])) is False
+
+    async def test_unavailable_bridge_refused(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        redis_client: Redis,
+    ) -> None:
+        """Раздел 6.3: новая задача — мост `unavailable`, переподключать нечего."""
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.PAUSED)
+        assert task_body["remote_control_status"] == "unavailable"
 
         response = await authed_client.post(f"/tasks/{task_body['id']}/remote-control/reconnect")
 

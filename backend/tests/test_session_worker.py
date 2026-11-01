@@ -100,6 +100,7 @@ async def _make_task(
     status: TaskStatus,
     origin: Path | None = None,
     with_llm_account: bool = True,
+    bridge: RemoteControlStatus = RemoteControlStatus.UNAVAILABLE,
 ) -> Task:
     user = await make_user(db_session)
     pipeline = await make_pipeline(db_session, created_by=user.id)
@@ -112,6 +113,7 @@ async def _make_task(
         pipeline_id=pipeline.id,
         status=status,
         llm_account_id=llm_account_id,
+        remote_control_status=bridge,
     )
     if origin is not None:
         repository = await make_repository(
@@ -915,6 +917,10 @@ class TestQuestionDuringPausedPrompt:
         assert task.status is TaskStatus.DONE
 
 
+# Мост, который трекер умеет поднимать (раздел 6.5), — не `unavailable`.
+_BRIDGE_DOWN = RemoteControlStatus.DISCONNECTED
+
+
 class TestBridgeReconnect:
     async def test_resumes_with_bridge(
         self,
@@ -923,7 +929,7 @@ class TestBridgeReconnect:
         redis_client: Redis,
     ) -> None:
         """Раздел 6.5: «Переподключить» пересоздаёт процесс CLI между нодами."""
-        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        task = await _make_task(db_session, status=TaskStatus.QUEUED, bridge=_BRIDGE_DOWN)
         await _add_node(db_session, task, order_index=0)
         await _add_node(db_session, task, order_index=1)
 
@@ -958,7 +964,7 @@ class TestBridgeReconnect:
         redis_client: Redis,
     ) -> None:
         """Мост поднят с первым процессом CLI, а `session_id` появится только с первым ходом."""
-        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        task = await _make_task(db_session, status=TaskStatus.QUEUED, bridge=_BRIDGE_DOWN)
         await _add_node(db_session, task, order_index=0)
         await request_bridge_reconnect(redis_client, task.id)
         first = FakeClaudeAgentClient(messages_per_query=[])
@@ -986,7 +992,7 @@ class TestBridgeReconnect:
         Точки между нодами больше не будет — запрос снимается вместе с
         прогоном, статус не остаётся `reconnecting`.
         """
-        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        task = await _make_task(db_session, status=TaskStatus.QUEUED, bridge=_BRIDGE_DOWN)
         await _add_node(db_session, task, order_index=0)
 
         async def user_presses_reconnect() -> None:
@@ -1006,6 +1012,37 @@ class TestBridgeReconnect:
         assert task.remote_control_status is RemoteControlStatus.DISCONNECTED
         assert await consume_bridge_reconnect(redis_client, task.id) is False
         assert len(worker_env.options) == 1
+
+
+    async def test_unavailable_bridge_untouched(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+    ) -> None:
+        """Раздел 6.3: мост недоступен — CLI без флага моста, запрос переподключения снимается."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        await _add_node(db_session, task, order_index=1)
+
+        async def bridge_requested() -> None:
+            await request_bridge_reconnect(redis_client, task.id)
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(2),
+            on_query=bridge_requested,
+        )
+
+        await _run_worker(task)
+
+        [options] = worker_env.options
+        assert REMOTE_CONTROL_EXTRA_ARG not in options.extra_args
+        await db_session.refresh(task)
+        assert (task.status, task.remote_control_status) == (
+            TaskStatus.DONE,
+            RemoteControlStatus.UNAVAILABLE,
+        )
+        assert await consume_bridge_reconnect(redis_client, task.id) is False
 
 
 class TestSessionContainer:
@@ -1175,7 +1212,7 @@ class TestRestartAfterClearContext:
         user_files_root: Path,
     ) -> None:
         """Раздел 14.2, 11.5: после «Очистить контекст» перезапуск — новая сессия."""
-        task = await _make_task(db_session, status=TaskStatus.FAILED)
+        task = await _make_task(db_session, status=TaskStatus.FAILED, bridge=_BRIDGE_DOWN)
         await _add_node(db_session, task, order_index=0)
         task.last_failed_order_index = 0
         task.session_id = "sess-old"
