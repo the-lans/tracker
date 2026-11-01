@@ -13,8 +13,12 @@ AI-трекер задач — веб-приложение для управле
 очистка контекста/режим планирования) и запускает его вручную или по
 расписанию; каждая задача — ровно одна персистентная сессия Claude Code на
 весь жизненный цикл (задача из одних скриптов без LLM-аккаунта работает без
-сессии). Форму задачи можно заполнить из Jira; файлы задачи — артефакты,
-доступные агенту, скриптам, UI и по SFTP.
+сессии). Трафик моделей идёт через LLM-прокси CLIProxyAPI: аккаунты
+провайдеров (Claude, Codex и др.) подключаются входом OAuth из UI, у аккаунта —
+модель и уровень рассуждений по умолчанию, трекер сам переключает аккаунт
+задачи по порогам расхода окон лимита. Форму задачи можно заполнить из Jira;
+файлы задачи — артефакты, доступные агенту, скриптам, UI и по SFTP. После
+зелёного CI на `main` сервер обновляется сам (GitHub Actions → SSH).
 
 ## 2. Технологический стек
 
@@ -87,6 +91,7 @@ jsdom и Testing Library (ТЗ 21.1); настройка — секция `test`
 |---|---|
 | Docker / Docker Compose | latest* |
 | Caddy (reverse proxy) | 2.x* |
+| CLIProxyAPI (LLM-прокси) | v8.0.48 — `CLIPROXY_VERSION` в `.env.example`; образ собирается из `github.com/router-for-me/CLIProxyAPI` на теге, dependabot его не отслеживает |
 | Claude Agent SDK (Python) | `claude-agent-sdk`, версия — в таблице Backend |
 
 ## 3. Структура репозитория
@@ -96,7 +101,8 @@ backend/
   api/       — HTTP-эндпоинты, валидация входных данных, сериализация ответов
               (auth, tasks, repositories, templates, preview, llm_accounts,
               env_variables, mcp_servers, pipelines, nodes, users, profile,
-              periodic_tasks, monitoring, push, system_settings, jira);
+              periodic_tasks, monitoring, push, system_settings, jira,
+              llm_proxy — состояние LLM-прокси для админки);
               tasks/ — эндпоинты задачи по разделам (crud, lifecycle, nodes,
               manual, env_variables, artifacts; common.py — доступ к задаче
               и сигнал воркеру); dependencies.py — текущий пользователь и
@@ -114,6 +120,20 @@ backend/
               task_launch.py — проверки перед запуском, в т. ч. LLM-аккаунт
               только для LLM-нод; task_editing.py — правка полей задачи;
               jira_import.py — импорт задачи из Jira (раздел 15.6);
+              LLM-прокси (раздел 19.7): llm_providers.py — реестр
+              провайдеров (уровни рассуждений, опрос расхода, план-режим);
+              llm_accounts.py и llm_account_login.py — аккаунты, порядок
+              переключения, вход OAuth через прокси; llm_usage.py — расход
+              5-часового и недельного окна; llm_routing.py — токен сессии,
+              маршрут хода и правило выбора аккаунта choose_account;
+              account_router.py — аккаунт каждого хода задачи, смена по
+              порогам и по ошибке хода; llm_account_checks.py — периодическая
+              сверка аккаунтов с прокси; llm_proxy_admin.py — состояние прокси
+              для админки; claude_config.py — каталог сессии задачи
+              (`CLAUDE_SESSIONS_ROOT/<код>`); maintenance.py — флаг
+              обслуживания `maintenance:deploy` на время обновления сервера;
+              session_history_migration.py — перенос истории сессий из
+              каталогов прежних LLM-аккаунтов (раздел 20.6);
               nodes/ — выполнение нод (dispatch.py, script.py — Docker-раннер,
               clear_context.py); plan_mode.py — callback разрешений SDK:
               решение по плану, вопросы агента, режимы разрешений (раздел 9);
@@ -131,10 +151,15 @@ backend/
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
               (db/session.py — engine/session из DATABASE_URL)
   clients/   — обёртки над Claude Agent SDK (claude_agent.py, в т. ч.
-              OfflineAgentClient для задач без LLM-аккаунта), GitLab API
-              (gitlab.py), Jira REST API (jira.py), классы HTTP-сбоев внешних
-              API (http_errors.py); конфигурация MCP-серверов
+              OfflineAgentClient для задач без LLM-аккаунта и маршрут хода
+              TurnRouter), GitLab API (gitlab.py), Jira REST API (jira.py),
+              management API LLM-прокси (cliproxy.py), классы HTTP-сбоев
+              внешних API (http_errors.py); конфигурация MCP-серверов
               для сессии — services/mcp_config.py
+  llm_gateway/ — шлюз между контейнером сессии и LLM-прокси (сервис
+              `llm-gateway`, `python -m llm_gateway`): по токену сессии
+              подставляет учётку прокси, модель и уровень рассуждений
+              маршрута задачи (rewrite.py), ответ передаёт потоком
   tasks/     — Celery-приложение и задачи: celery_app.py (include модулей,
               очередь sessions, DatabaseScheduler), session_worker.py
               (долгоживущая сессия задачи), periodic.py / periodic_scheduler.py,
@@ -151,8 +176,9 @@ backend/
               ключ хоста (host_key.py), роль БД tracker_sftp (db_role.py,
               вызывается из docker-entrypoint.sh)
   ws/        — WebSocket-обработчики real-time уведомлений (tasks.py —
-              `/ws/tasks/{task_id}/status`: смена статуса и потоковый вывод
-              ответа LLM, разделы 15.2, 18.1)
+              `/ws/tasks/{task_id}/status`: смена статуса, смена текущего
+              LLM-аккаунта задачи — событие `llm_account` — и потоковый
+              вывод ответа LLM, разделы 15.2, 18.1)
   app_logging/ — конфигурация structlog (config.py) и запись в app_logs
               вне транзакции вызывающего кода (app_logs.py) (не "logging" —
               так называется модуль stdlib, вложенный пакет с этим именем
@@ -163,12 +189,13 @@ backend/
   tests/     — pytest (test_*.py, плоско; conftest.py поднимает Postgres и
               Redis в Docker, fakes.py — фейки Claude Agent SDK,
               factories.py — общие тестовые записи (автор, LLM-аккаунт, эталонные SSH-ключи),
+              cliproxy_support.py — фейк management API LLM-прокси,
               git_support.py — локальные bare-репозитории и коммиты для тестов git,
               worker_support.py — обвязка воркера сессии для его тестов и E2E)
 frontend/    — React SPA: дашборд, страница задачи (обзор + диалог),
               конструктор пайплайна/библиотека, CRUD-страницы
               (репозитории/шаблоны/LLM-аккаунты/переменные окружения),
-              админка (раздел 15.5), Web Push (public/service-worker.js,
+              админка (раздел 15.5, в т. ч. вкладка «LLM-прокси»), Web Push (public/service-worker.js,
               src/lib/push.ts, раздел 18.1); Dockerfile + nginx.conf —
               продовый образ (сборка на Node, раздача nginx с SPA-фолбэком
               на index.html для клиентских маршрутов). Общие элементы — по
@@ -192,15 +219,25 @@ frontend/    — React SPA: дашборд, страница задачи (об�
 deploy/
   caddy/     — конфигурация reverse-proxy (handle_path /api/* — срезает
               префикс перед проксированием на backend)
+  cliproxy/  — LLM-прокси: config.template.yaml (обязательные настройки
+              трекера) и init.sh — сервис `cliproxy-init`, при каждом старте
+              рендерит конфигурацию с ключами из `.env` в volume cliproxy_data
   backup/    — встроенный сервис резервного копирования PostgreSQL по
               расписанию (раздел 20.4): Dockerfile, entrypoint.sh (crond),
               backup.sh (pg_dump + ротация по POSTGRES_BACKUP_RETENTION_DAYS)
   install.sh — единственный скрипт установки по разделу 20.2 ТЗ;
               `--restore <каталог>` — перенос на новый сервер (раздел 20.4):
               дамп БД и архивы volume task_repos, user_files, log_archive,
-              claude_accounts, sftp_host_keys; `--update` — обновление
-              установленного сервера (раздел 20.6): свежий код, пересборка
-              всех образов (в т. ч. раннеров и tracker-session), миграции
+              claude_sessions, cliproxy_data, claude_accounts, sftp_host_keys;
+              `--update [--ref <sha>] [--wait-idle <мин>]` — обновление
+              установленного сервера (раздел 20.6): флаг обслуживания,
+              ожидание живых сессий, коммит из origin/main, пересборка всех
+              образов (в т. ч. раннеров и tracker-session), дамп БД,
+              `.deploy/previous_ref`, миграции, перенос истории сессий; код
+              выхода 3 — отменено, сервер не изменён
+  ci_deploy.sh — принудительная команда SSH-ключа развёртывания (раздел
+              20.7): только `deploy <sha> [--force | --wait-idle <мин>]` и
+              `previous-ref`
 runners/
   tracker-runner-python/ — Docker-образ раннера для script-нод (Python)
   tracker-runner-bash/   — Docker-образ раннера для script-нод (Bash)
@@ -217,7 +254,10 @@ alembic/
                  tasks.context_cleared_at, task_nodes.pause_after, nodes.task_id —
                  свои ноды задачи, node_logs.decision_output_offset — место
                  решения в ответе, node_logs.error_message — причина
-                 ошибки); новые миграции пишут DDL
+                 ошибки, LLM-прокси: провайдер, учётка и порядок аккаунтов,
+                 расход окон, пороги пользователя, nodes.reasoning_effort,
+                 tasks.current_llm_account_id, аккаунт, модель и уровень хода
+                 в node_logs); новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
@@ -225,6 +265,9 @@ scripts/
   seed_admin_allowlist.py — заполняет `allowed_emails` email'ом первого
                 администратора (запускается install.sh ДО первого входа —
                 без этого войти в систему не может никто, раздел 19.1)
+  migrate_claude_sessions.py — перенос истории сессий задач из каталогов
+                прежних LLM-аккаунтов (`install.sh --update`/`--restore`,
+                идемпотентен)
   seed_periodic_tasks.py  — заполняет `periodic_tasks` (раздел 16.2);
                 запускается install.sh на шаге 8, до первого входа
                 (`updated_by = NULL`), повторный запуск идемпотентен
@@ -242,12 +285,16 @@ scripts/
                 образ git-хоста, seed/qa-calc — тестовый репозиторий
 docs/        — техническая документация: ТЗ, implementation_plan.md (план
               реализации по этапам), migration.md (раздел 20.4 — процедура
-              переноса на новый сервер), qa_e2e_manual.md (ручное E2E-
+              переноса на новый сервер), deployment.md (разделы 20.6–20.7 —
+              подготовка сервера к автоматическому развёртыванию), qa_e2e_manual.md (ручное E2E-
               тестирование в браузере), remote_control_findings.md
-              (верификация допущения раздела 6.3), design/ (HTML-референсы
+              (верификация допущения раздела 6.3 и проверка LLM-прокси), design/ (HTML-референсы
               дашборда и страницы задачи), screen/ (скриншоты страницы задачи)
 .github/     — workflows/ci.yml (сборка образов раннеров → make check →
-              smoke-тест образа фронтенда) и dependabot.yml
+              smoke-тест образа фронтенда), workflows/deploy.yml
+              (развёртывание после зелёного CI на main, раздел 20.7;
+              scripts/verify_deployment.sh — проверка /api/health и
+              index.html, откат на previous_ref) и dependabot.yml
 docker-compose.yml, docker-compose.prod.yml, .env.example — раздел 20.3 ТЗ
 .mcp.json    — MCP-серверы для Claude Code (раздел 4 ниже)
 .claude/commands/ — команды-промты /promt-* для работы в Claude Code
@@ -278,6 +325,9 @@ cd backend && uvicorn main:app --reload
 cd backend && celery -A tasks.celery_app worker -Q celery -l info
 cd backend && celery -A tasks.celery_app worker -Q sessions -O fair -l info
 cd backend && celery -A tasks.celery_app beat -l info
+
+# шлюз сессий к LLM-прокси (нужны REDIS_URL, CLIPROXY_URL, CLIPROXY_API_KEY)
+cd backend && python -m llm_gateway
 
 # frontend (Vite)
 cd frontend && npm run dev
@@ -331,14 +381,20 @@ cd backend && alembic revision --autogenerate -m "описание измене�
 cd backend && alembic upgrade head
 ```
 
-### Вход в Claude для LLM-аккаунта (раздел 19.5)
-Пользователь заводит аккаунт с каталогом внутри `/data/claude-accounts`
-(volume `claude_accounts` worker'а), затем администратор входит в Claude в
-этом каталоге — команда `claude` есть в образе backend/worker:
+### Вход в LLM-аккаунт (раздел 19.5)
+Только из интерфейса: «LLM-аккаунты» → «Добавить» (пометка и провайдер) →
+«Войти» — ссылка провайдера, после входа адрес, на который провайдер вернул
+браузер, вставляется в диалог; затем выбираются модель и уровень рассуждений
+по умолчанию. Токены хранит LLM-прокси (volume `cliproxy_data`), консоль
+сервера не нужна. Состояние прокси и учёток — «Администрирование» →
+«LLM-прокси».
+
+### Обновление сервера (разделы 20.6–20.7)
 ```bash
-docker compose exec -e CLAUDE_CONFIG_DIR=/data/claude-accounts/<каталог> worker claude auth login
-docker compose exec -e CLAUDE_CONFIG_DIR=/data/claude-accounts/<каталог> worker claude auth status
+deploy/install.sh --update [--ref <sha>] [--wait-idle <минуты>]
 ```
+После зелёного CI на `main` это делает `.github/workflows/deploy.yml`
+(подготовка сервера — `docs/deployment.md`).
 
 ### Доступ к файлам задач по SFTP (раздел 19.6)
 Администратор назначает пользователю логин SFTP (`os_username`) в разделе
@@ -409,8 +465,11 @@ Postgres из `backend/tests/conftest.py`:
    контейнер не попадает. Пути задачи — в `TASK_REPOS_PATH` и
    `TASK_ARTIFACTS_PATH` (текст скрипта не шаблонизируется). Процесс
    Claude Code CLI — тоже в контейнере (`tracker-session`, ТЗ 19.3): только
-   репозитории, артефакты задачи и каталог LLM-аккаунта, окружение по белому
-   списку, без `docker.sock`, ключей шифрования и внутренней сети сервисов.
+   репозитории, артефакты и каталог сессии задачи
+   (`CLAUDE_SESSIONS_ROOT/<код>`), окружение по белому списку (токен сессии
+   вместо ключей провайдера), сеть — только изолированная `llm_sessions`,
+   где есть лишь `llm-gateway`; без `docker.sock`, ключей шифрования и
+   внутренней сети сервисов.
    Git воркера не исполняет код из репозитория: без хуков, без системного и
    глобального конфига, локальный `.git/config` — по белому списку.
 5. **Очистка рабочей директории репозиториев — только вручную и только в
@@ -481,7 +540,9 @@ Postgres из `backend/tests/conftest.py`:
     и обрабатывает конфликт ребейза, очередь ручных запросов FIFO и команды;
     статус `paused` — решение пользователя, см.
     `docs/implementation_plan.md`, п. 6. `claude.ai/code` — только для
-    просмотра сессии: ввод в сессию идёт только через трекер (п. 8).
+    просмотра сессии: ввод в сессию идёт только через трекер (п. 8); через
+    LLM-прокси мост недоступен (`remote_control_status = unavailable`) —
+    его не проверяют и не переподключают.
     Задача, у которой пропал пульс сессии (`services/session_heartbeat.py`),
     после исчерпания попыток переходит в `failed` (ТЗ 6.6).
 17. **Режимы разрешений агента** (`services/plan_mode.py`, ТЗ 9): пока идёт
@@ -495,3 +556,17 @@ Postgres из `backend/tests/conftest.py`:
     использования**: код задачи (`services/task_codes.py`), `git_url`, имя
     репозитория и базовая ветка (`services/repository_validation.py`);
     позиционные аргументы git — после `--`.
+19. **Трафик моделей — только через LLM-прокси** (ТЗ 19.7). Сессия ходит к
+    модели через `llm-gateway` по токену сессии (`services/llm_routing.py`,
+    в Redis — только sha256 токена), шлюз подставляет учётку, модель и
+    уровень маршрута задачи. Токены OAuth провайдеров хранит только
+    CLIProxyAPI (volume `cliproxy_data`), в БД — лишь имя учётки. Аккаунт
+    каждого хода выбирает `services/account_router.py` по порогам автора;
+    `tasks.current_llm_account_id` меняет только воркер (compare-and-swap).
+    Конфигурацию прокси задаёт репозиторий (`deploy/cliproxy/`) — трекер не
+    меняет её через management API.
+20. **Миграция релиза только добавляет** (ТЗ 20.6): откат
+    (`install.sh --update --ref`, автоматический — в `deploy.yml`)
+    возвращает код и образы, а схема БД остаётся новой. Удаление и
+    переименование столбцов, которыми пользуется предыдущая версия, — не
+    раньше следующего релиза.
