@@ -64,6 +64,13 @@ class ForbiddenError(AppError):
     code = "forbidden"
 
 
+class ServiceUnavailableError(AppError):
+    """Сервер обновляется: запуск задач временно недоступен (раздел 20.6 ТЗ)."""
+
+    status_code = 503
+    code = "service_unavailable"
+
+
 class ExternalServiceError(AppError):
     """Ошибка при обращении к внешней системе (GitLab API, MCP-сервер,
     Claude Agent SDK). ``is_transient`` разделяет временные сбои, подлежащие

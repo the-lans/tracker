@@ -17,6 +17,7 @@ import sqlalchemy as sa
 from db.models.enums import NodeType
 from db.models.pipelines import Node, TaskNode
 from services.errors import ValidationError
+from services.maintenance import ensure_not_in_maintenance
 from services.template_context import ensure_no_repository_env_conflicts
 
 if TYPE_CHECKING:
@@ -63,6 +64,7 @@ async def ensure_llm_account_for_launch(db_session: AsyncSession, task: Task) ->
 
 
 async def ensure_task_launchable(db_session: AsyncSession, task: Task) -> None:
+    await ensure_not_in_maintenance()
     if task.pipeline_id is None:
         raise ValidationError(PIPELINE_REQUIRED_MESSAGE)
     await ensure_no_repository_env_conflicts(db_session, task_id=task.id)

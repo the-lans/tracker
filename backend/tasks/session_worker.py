@@ -41,6 +41,7 @@ from services.claude_config import (
 )
 from services.errors import ConflictError
 from services.llm_routing import llm_session_token
+from services.maintenance import maintenance_active
 from services.manual_queue import DEFAULT_FREEFORM_TIMEOUT_SECONDS, process_manual_queue_once
 from services.mcp_config import build_mcp_server_config
 from services.output_stream import build_output_publisher
@@ -103,6 +104,8 @@ if TYPE_CHECKING:
 logger = get_logger("tasks.session_worker")
 
 _CONTINUATION_COUNTDOWN_SECONDS = 1
+# Как часто отложенный на время обновления таск проверяет флаг обслуживания.
+MAINTENANCE_RETRY_SECONDS = 30
 # `failed` — «Перезапустить с текущей ноды» (раздел 14.2).
 _CLAIMABLE_STATUSES = (TaskStatus.QUEUED, TaskStatus.FAILED)
 # Продолжение после `clear_context`: пока сессия передавалась, периодическая
@@ -420,6 +423,19 @@ async def _disconnect_quietly(session: ClaudeCodeSession) -> None:
         logger.exception("session_disconnect_failed")
 
 
+def _defer_until_maintenance_ends(task_id: uuid.UUID, start_after_order_index: int | None) -> None:
+    """
+    Раздел 20.6: во время обновления задача не берётся из очереди — таск
+    откладывается и повторяет попытку, пока флаг обслуживания не снят.
+    """
+    logger.info("task_claim_deferred_by_maintenance", task_id=str(task_id))
+    run_task_session.apply_async(
+        args=[str(task_id)],
+        kwargs={"start_after_order_index": start_after_order_index, "continuation": False},
+        countdown=MAINTENANCE_RETRY_SECONDS,
+    )
+
+
 async def _run_task_session_async(
     task_id: uuid.UUID,
     *,
@@ -446,6 +462,9 @@ async def _run_task_session_in_context(
             logger.warning("task_not_found", task_id=str(task_id))
             return
         async with redis_connection() as redis_client:
+            if not continuation and await maintenance_active(redis_client):
+                _defer_until_maintenance_ends(task_id, start_after_order_index)
+                return
             try:
                 # Раздел 17.4: сначала владение сессией, затем статус — второй
                 # исполнитель той же задачи уходит, ничего не изменив.
