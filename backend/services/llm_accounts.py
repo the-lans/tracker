@@ -20,8 +20,9 @@ import sqlalchemy as sa
 
 from app_logging.config import get_logger
 from clients.cliproxy import CliproxyRequestError, CliproxyUnavailableError
-from db.models.enums import LlmAccountStatus
+from db.models.enums import LlmAccountStatus, ReasoningEffort
 from db.models.llm import LlmAccount
+from services.access import owner_filter
 from services.errors import ConflictError, ValidationError
 from services.integrity import ACCOUNT_IN_USE, commit_or_conflict, ensure_llm_account_deletable
 from services.llm_providers import get_provider
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from clients.cliproxy import CliproxyManagementClient
+    from db.models.users import User
 
 logger = get_logger("llm_accounts")
 
@@ -150,6 +152,46 @@ async def owned_accounts(db_session: AsyncSession, owner_id: uuid.UUID) -> list[
         .order_by(LlmAccount.switch_order)
     )
     return list((await db_session.execute(stmt)).scalars().all())
+
+
+async def visible_accounts(db_session: AsyncSession, user: User) -> list[LlmAccount]:
+    """Раздел 15.1: свои аккаунты в порядке переключения, у `admin` — все, по владельцам."""
+    stmt = (
+        sa.select(LlmAccount)
+        .where(owner_filter(LlmAccount.created_by, user))
+        .order_by(LlmAccount.created_by, LlmAccount.switch_order)
+    )
+    return list((await db_session.execute(stmt)).scalars().all())
+
+
+async def update_account(
+    db_session: AsyncSession,
+    cliproxy: CliproxyManagementClient,
+    account: LlmAccount,
+    *,
+    label: str | None,
+    default_model: str | None,
+    default_effort: ReasoningEffort | None,
+    enabled: bool | None,
+    now: datetime,
+) -> LlmAccount:
+    """
+    Правка аккаунта; None — поле не меняется. Модель проверяется по учётке до
+    любых изменений (422), включение синхронизируется с прокси (502 — ничего
+    не изменено).
+    """
+    if default_model is not None:
+        await ensure_model_available(cliproxy, account, default_model)
+        account.default_model = default_model
+    if label is not None:
+        account.label = label
+    if default_effort is not None:
+        account.default_effort = default_effort
+    if enabled is not None:
+        await set_account_enabled(db_session, cliproxy, account, enabled=enabled, now=now)
+    await db_session.commit()
+    await db_session.refresh(account)
+    return account
 
 
 def _enabled_status(account: LlmAccount, *, now: datetime) -> LlmAccountStatus:

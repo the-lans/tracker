@@ -5,7 +5,7 @@
 в `active` аккаунты с истёкшим окном лимита, опросить расход окон у
 аккаунтов со входом, перевести в `login_required` аккаунты, учётке которых
 прокси требует повторного входа (или учётки в прокси больше нет), и
-отменить незавершённые входы старше 10 минут. Сбой одного аккаунта не
+отменить незавершённые входы старше 5 минут. Сбой одного аккаунта не
 останавливает остальные.
 
 `require_login` — переход в `login_required` по compare-and-swap статуса с
@@ -119,6 +119,9 @@ async def check_llm_accounts(
     now: datetime,
 ) -> AccountsCheckResult:
     result = AccountsCheckResult(restored=await restore_expired_rate_limits(db_session, now=now))
+    # Аккаунты — до списка учёток: вход, завершившийся между двумя запросами, в
+    # сверку не попадёт, а не окажется «без учётки в прокси».
+    accounts = await _signed_in_accounts(db_session)
     try:
         listed = await cliproxy.list_credentials()
     except ExternalServiceError as exc:
@@ -126,7 +129,7 @@ async def check_llm_accounts(
         logger.warning("llm_accounts_check_proxy_unavailable", error=exc.message)
         return result
     credentials = {credential.name: credential for credential in listed}
-    for account in await _signed_in_accounts(db_session):
+    for account in accounts:
         await _check_account(
             db_session,
             cliproxy,

@@ -13,6 +13,8 @@ from typing import Any
 from services.llm_routing import TurnRoute
 
 MESSAGES_PATH = "/v1/messages"
+COUNT_TOKENS_PATH = "/v1/messages/count_tokens"
+MODELS_PATH = "/v1/models"
 _OUTPUT_CONFIG_FIELD = "output_config"
 _EFFORT_FIELD = "effort"
 

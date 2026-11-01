@@ -25,7 +25,7 @@ from services.task_status import (
     reset_task_to_new,
     transition_task_status,
 )
-from tests.factories import make_task
+from tests.factories import make_llm_account, make_task
 
 
 async def _make_task(db_session: AsyncSession, *, status: TaskStatus = TaskStatus.NEW) -> Task:
@@ -426,6 +426,16 @@ class TestRunAfterReset:
         await db_session.flush()
         await reset_task_to_new(db_session, task_id=task.id)
         return task, nodes
+
+    async def test_current_llm_account_cleared(self, db_session: AsyncSession) -> None:
+        task = await _make_task(db_session, status=TaskStatus.DONE)
+        account = await make_llm_account(db_session, owner_id=task.created_by)
+        task.current_llm_account_id = account.id
+        await db_session.flush()
+
+        reset = await reset_task_to_new(db_session, task_id=task.id)
+
+        assert reset.current_llm_account_id is None
 
     async def test_restart_point_ignores_previous_run(self, db_session: AsyncSession) -> None:
         task, _ = await self._done_then_reset(db_session)

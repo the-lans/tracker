@@ -13,7 +13,6 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-import sqlalchemy as sa
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +31,7 @@ from clients.cliproxy import CliproxyManagementClient
 from db.models.llm import LlmAccount
 from db.models.users import User
 from db.session import get_session
-from services.access import get_llm_account_for_user, owner_filter
+from services.access import get_llm_account_for_user
 from services.llm_account_login import (
     LoginResult,
     LoginStart,
@@ -45,9 +44,9 @@ from services.llm_accounts import (
     account_models,
     create_account,
     delete_account,
-    ensure_model_available,
     reorder_accounts,
-    set_account_enabled,
+    update_account,
+    visible_accounts,
 )
 from services.llm_providers import PROVIDERS
 from services.redis_connection import redis_connection
@@ -90,12 +89,7 @@ async def create_llm_account(
 @router.get("", response_model=list[LlmAccountResponse])
 async def list_llm_accounts(db_session: DbSession, current_user: CurrentUser) -> list[LlmAccount]:
     """Раздел 15.1: в порядке переключения (у admin — по владельцам)."""
-    stmt = (
-        sa.select(LlmAccount)
-        .where(owner_filter(LlmAccount.created_by, current_user))
-        .order_by(LlmAccount.created_by, LlmAccount.switch_order)
-    )
-    return list((await db_session.execute(stmt)).scalars().all())
+    return await visible_accounts(db_session, current_user)
 
 
 @router.put("/order", response_model=list[LlmAccountResponse])
@@ -130,24 +124,16 @@ async def update_llm_account(
     cliproxy: Cliproxy,
 ) -> LlmAccount:
     llm_account = await get_llm_account_for_user(db_session, llm_account_id, user=current_user)
-    if body.default_model is not None:
-        await ensure_model_available(cliproxy, llm_account, body.default_model)
-        llm_account.default_model = body.default_model
-    if body.label is not None:
-        llm_account.label = body.label
-    if body.default_effort is not None:
-        llm_account.default_effort = body.default_effort
-    if body.enabled is not None:
-        await set_account_enabled(
-            db_session,
-            cliproxy,
-            llm_account,
-            enabled=body.enabled,
-            now=datetime.now(UTC),
-        )
-    await db_session.commit()
-    await db_session.refresh(llm_account)
-    return llm_account
+    return await update_account(
+        db_session,
+        cliproxy,
+        llm_account,
+        label=body.label,
+        default_model=body.default_model,
+        default_effort=body.default_effort,
+        enabled=body.enabled,
+        now=datetime.now(UTC),
+    )
 
 
 @router.delete("/{llm_account_id}", status_code=204)

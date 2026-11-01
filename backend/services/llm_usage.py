@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -33,6 +33,9 @@ _TOKEN_HEADER = {"Authorization": "Bearer $TOKEN$"}
 _HTTP_OK = 200
 # Расход, при котором окно исчерпано (раздел 3.1, статус `rate_limited`).
 EXHAUSTED_PCT = Decimal(100)
+# Лимит исчерпан, а время сброса неизвестно: аккаунт возвращается в работу
+# проверкой `check_llm_account_limits` через час (раздел 16.2).
+UNKNOWN_RATE_LIMIT_WINDOW = timedelta(hours=1)
 _PCT_QUANTUM = Decimal("0.01")
 _FIVE_HOURS_SECONDS = 5 * 60 * 60
 _WEEK_SECONDS = 7 * 24 * 60 * 60
@@ -214,7 +217,7 @@ def apply_usage(account: LlmAccount, snapshot: UsageSnapshot, *, now: datetime) 
     exhausted, resets_at = _exhausted_until(snapshot)
     if exhausted and account.status is LlmAccountStatus.ACTIVE:
         account.status = LlmAccountStatus.RATE_LIMITED
-        account.rate_limit_resets_at = resets_at
+        account.rate_limit_resets_at = resets_at or now + UNKNOWN_RATE_LIMIT_WINDOW
 
 
 async def refresh_account_usage(

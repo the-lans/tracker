@@ -128,12 +128,14 @@ class TestAuth:
         assert response.status_code == 503
         assert upstream.requests == []
 
+    @pytest.mark.parametrize("path", ["/", "/api/hello"])
     async def test_head_answered_locally(
         self,
         gateway: httpx.AsyncClient,
         upstream: Upstream,
+        path: str,
     ) -> None:
-        response = await gateway.head("/")
+        response = await gateway.head(path)
 
         assert (response.status_code, upstream.requests) == (200, [])
 
@@ -201,18 +203,26 @@ class TestRewrite:
         assert sent.headers["accept-encoding"] == "identity"
         assert sent.headers["anthropic-beta"] == "oauth-2025-04-20"
 
-    async def test_models_list_passed(
+    async def test_models_list_only_route_model(
         self,
         gateway: httpx.AsyncClient,
         upstream: Upstream,
         token: str,
     ) -> None:
-        upstream.reply = (200, b'{"data": []}', {"content-type": "application/json"})
-
         response = await gateway.get("/v1/models", headers={"x-api-key": token})
 
-        assert (response.status_code, response.json()) == (200, {"data": []})
-        assert (upstream.requests[-1].method, upstream.requests[-1].content) == ("GET", b"")
+        assert response.status_code == 200
+        assert [model["id"] for model in response.json()["data"]] == [_ROUTE.model]
+        assert upstream.requests == []
+
+    async def test_models_list_needs_token(
+        self,
+        gateway: httpx.AsyncClient,
+        upstream: Upstream,
+    ) -> None:
+        response = await gateway.get("/v1/models", headers={"x-api-key": "unknown"})
+
+        assert (response.status_code, upstream.requests) == (401, [])
 
     @pytest.mark.parametrize("content", [b"not json", b"[1]"])
     async def test_invalid_body(
@@ -225,6 +235,43 @@ class TestRewrite:
         response = await gateway.post("/v1/messages", content=content, headers={"x-api-key": token})
 
         assert (response.status_code, upstream.requests) == (400, [])
+
+
+class TestAllowedPaths:
+    """У других эндпоинтов прокси модель бывает в адресе — их шлюз не пропускает."""
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("POST", "/v1beta/models/acc-ffffffffffff/claude-sonnet-5-5:generateContent"),
+            ("POST", "/v1/chat/completions"),
+            ("POST", "/v1/responses"),
+            ("GET", "/v1/models/acc-ffffffffffff/claude-sonnet-5-5"),
+            ("GET", "/v0/management/auth-files"),
+            ("GET", "/v1/messages"),
+        ],
+        ids=[
+            "gemini",
+            "chat_completions",
+            "responses",
+            "model_by_path",
+            "management",
+            "get_messages",
+        ],
+    )
+    async def test_rejected_without_proxy(
+        self,
+        gateway: httpx.AsyncClient,
+        upstream: Upstream,
+        token: str,
+        method: str,
+        path: str,
+    ) -> None:
+        headers = {"x-api-key": token}
+        response = await gateway.request(method, path, json=_message(), headers=headers)
+
+        assert response.status_code == 404
+        assert upstream.requests == []
 
 
 class TestUpstream:

@@ -17,6 +17,7 @@ from db.models.llm import LlmAccount
 from services import llm_usage
 from services.llm_providers import UsageSource
 from services.llm_usage import (
+    UNKNOWN_RATE_LIMIT_WINDOW,
     UsageFormatError,
     UsageSnapshot,
     UsageWindow,
@@ -164,6 +165,20 @@ class TestApplyUsage:
         assert (account.status, account.rate_limit_resets_at) == (
             LlmAccountStatus.RATE_LIMITED,
             resets_at,
+        )
+
+    def test_unknown_reset_waits_an_hour(self) -> None:
+        account = _account()
+        snapshot = UsageSnapshot(
+            five_hour=UsageWindow(Decimal(100), None),
+            week=UsageWindow(None, None),
+        )
+
+        apply_usage(account, snapshot, now=_NOW)
+
+        assert (account.status, account.rate_limit_resets_at) == (
+            LlmAccountStatus.RATE_LIMITED,
+            _NOW + UNKNOWN_RATE_LIMIT_WINDOW,
         )
 
     @pytest.mark.parametrize(

@@ -388,7 +388,9 @@ async def reset_task_to_new(db_session: AsyncSession, *, task_id: uuid.UUID) -> 
     Возвращает завершённую или упавшую задачу в `new`: пайплайн и состав нод
     снова можно менять, «Запустить» пройдёт пайплайн с начала в той же
     сессии. Точка перезапуска и автозапуск сбрасываются; `reset_at` отделяет
-    новый прогон от прежних выполнений нод (`_current_run_filter`).
+    новый прогон от прежних выполнений нод (`_current_run_filter`). Текущий
+    LLM-аккаунт сбрасывается: первое обращение нового прогона уходит
+    стартовому аккаунту (п. 1 раздела 19.7).
     """
     task = await db_session.get(Task, task_id, populate_existing=True)
     if task is None or task.status not in RESETTABLE_STATUSES:
@@ -402,5 +404,6 @@ async def reset_task_to_new(db_session: AsyncSession, *, task_id: uuid.UUID) -> 
             "last_failed_order_index": None,
             "auto_start_enabled": False,
             "reset_at": datetime.now(UTC),
+            "current_llm_account_id": None,
         },
     )

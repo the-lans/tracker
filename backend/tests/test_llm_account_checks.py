@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 _NOW = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
 _ANTHROPIC_USAGE = "https://api.anthropic.com/api/oauth/usage"
 _OPENAI_USAGE = "https://chatgpt.com/backend-api/wham/usage"
+_NEW_CREDENTIAL = "new-owner@example.com.json"
 
 
 @pytest.fixture
@@ -186,6 +187,44 @@ class TestSignIn:
         assert (first.login_required, second.login_required) == ([account.id], [])
         assert pushes == [(NotificationEvent.LLM_LOGIN_REQUIRED, account.created_by)]
         assert fake_cliproxy.api_calls == []
+
+
+    async def test_login_finished_during_check_kept(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        pushes: list[tuple[NotificationEvent, uuid.UUID]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        owner = await make_user(db_session)
+        account = await make_llm_account(
+            db_session,
+            owner_id=owner.id,
+            status=LlmAccountStatus.LOGIN_REQUIRED,
+        )
+        cliproxy = fake_cliproxy.client()
+        list_credentials = cliproxy.list_credentials
+
+        async def listed_then_signed_in() -> Any:
+            # Прокси уже отдал список, а вход аккаунта завершился сразу после.
+            credentials = await list_credentials()
+            account.status, account.cliproxy_credential = LlmAccountStatus.ACTIVE, _NEW_CREDENTIAL
+            await db_session.commit()
+            fake_cliproxy.add_credential(_NEW_CREDENTIAL)
+            return credentials
+
+        monkeypatch.setattr(cliproxy, "list_credentials", listed_then_signed_in)
+
+        result = await check_llm_accounts(
+            db_session,
+            redis_client=redis_client,
+            cliproxy=cliproxy,
+            now=_NOW,
+        )
+
+        await db_session.refresh(account)
+        assert (account.status, result.login_required, pushes) == (LlmAccountStatus.ACTIVE, [], [])
 
 
 @pytest.mark.usefixtures("pushes")

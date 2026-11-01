@@ -6,6 +6,12 @@ ASGI-приложение шлюза `llm-gateway` (раздел 19.7 ТЗ).
 подмена `model` и уровня рассуждений → прокси с ключом клиентского API.
 Ответ прокси запрашивается несжатым и передаётся потоком без изменений.
 Проверку адреса `HEAD` от CLI шлюз подтверждает сам.
+
+В прокси уходят только ход и подсчёт токенов (`MESSAGES_PATH`,
+`COUNT_TOKENS_PATH`): у других эндпоинтов прокси модель бывает в адресе, и
+подмена `model` в теле не удержала бы сессию на учётке её маршрута. Список
+моделей шлюз отдаёт сам — только модель маршрута, без префиксов чужих учёток.
+Остальные пути — 404 без обращения к прокси.
 """
 
 from __future__ import annotations
@@ -23,8 +29,14 @@ from starlette.routing import Route
 
 from app_logging.config import get_logger
 from llm_gateway.config import LOGGER_NAME, GatewayConfig
-from llm_gateway.rewrite import InvalidRequestBodyError, rewrite_body
-from services.llm_routing import read_route, resolve_session_token
+from llm_gateway.rewrite import (
+    COUNT_TOKENS_PATH,
+    MESSAGES_PATH,
+    MODELS_PATH,
+    InvalidRequestBodyError,
+    rewrite_body,
+)
+from services.llm_routing import TurnRoute, read_route, resolve_session_token
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -48,6 +60,8 @@ _DROPPED_RESPONSE_HEADERS = frozenset(
     {"content-length", "content-encoding", "transfer-encoding", "connection"},
 )
 _IDENTITY_ENCODING = "identity"
+# Методы, которыми шлюз отвечает 404 на пути вне белого списка.
+_REJECTED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 
 
 def _error(status_code: int, error_type: str, message: str) -> JSONResponse:
@@ -82,6 +96,12 @@ def _response_headers(headers: httpx.Headers) -> dict[str, str]:
     }
 
 
+def _models_list(route: TurnRoute) -> dict[str, object]:
+    """Список моделей в формате Anthropic API: только модель маршрута задачи."""
+    model = {"type": "model", "id": route.model, "display_name": route.model}
+    return {"data": [model], "has_more": False, "first_id": route.model, "last_id": route.model}
+
+
 class LlmGateway:
     def __init__(
         self,
@@ -94,9 +114,7 @@ class LlmGateway:
         self._redis = redis_client
         self._upstream = upstream
 
-    async def handle(self, request: Request) -> Response:
-        if request.method == "HEAD":
-            return Response(status_code=200)
+    async def _route(self, request: Request) -> tuple[uuid.UUID, TurnRoute] | Response:
         token = session_token(request.headers)
         task_id = await resolve_session_token(self._redis, token) if token else None
         if task_id is None:
@@ -105,6 +123,19 @@ class LlmGateway:
         if route is None:
             logger.warning("llm_gateway_no_route", task_id=str(task_id), path=request.url.path)
             return _error(503, "api_error", "Для задачи не выбран LLM-аккаунт")
+        return task_id, route
+
+    async def models(self, request: Request) -> Response:
+        resolved = await self._route(request)
+        if isinstance(resolved, Response):
+            return resolved
+        return JSONResponse(_models_list(resolved[1]))
+
+    async def messages(self, request: Request) -> Response:
+        resolved = await self._route(request)
+        if isinstance(resolved, Response):
+            return resolved
+        task_id, route = resolved
         content = await request.body()
         if content:
             try:
@@ -150,6 +181,15 @@ async def _health(_: Request) -> Response:
     return JSONResponse({"status": "ok"})
 
 
+async def _address_check(_: Request) -> Response:
+    return Response(status_code=200)
+
+
+async def _not_found(request: Request) -> Response:
+    logger.warning("llm_gateway_path_rejected", method=request.method, path=request.url.path)
+    return _error(404, "not_found_error", "Шлюз не пропускает этот запрос")
+
+
 def create_app(
     *,
     config: GatewayConfig,
@@ -160,6 +200,10 @@ def create_app(
     return Starlette(
         routes=[
             Route("/health", _health, methods=["GET"]),
-            Route("/{path:path}", gateway.handle, methods=["GET", "POST", "HEAD"]),
+            Route(MESSAGES_PATH, gateway.messages, methods=["POST"]),
+            Route(COUNT_TOKENS_PATH, gateway.messages, methods=["POST"]),
+            Route(MODELS_PATH, gateway.models, methods=["GET"]),
+            Route("/{path:path}", _address_check, methods=["HEAD"]),
+            Route("/{path:path}", _not_found, methods=_REJECTED_METHODS),
         ],
     )

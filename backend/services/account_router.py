@@ -46,7 +46,7 @@ from services.llm_routing import (
     choose_account,
     publish_route,
 )
-from services.llm_usage import refresh_account_usage
+from services.llm_usage import UNKNOWN_RATE_LIMIT_WINDOW, refresh_account_usage
 from services.notifications import NotificationEvent, notify_task_event
 
 if TYPE_CHECKING:
@@ -64,9 +64,6 @@ USAGE_MAX_AGE = timedelta(seconds=60)
 # Раздел 18.2: «все выше порога» — не чаще раза в час на пользователя.
 ABOVE_THRESHOLD_PUSH_WINDOW_SECONDS = 60 * 60
 _ABOVE_THRESHOLD_PUSH_KEY = "push:window:llm_above_threshold:{user_id}"
-# Ошибка `rate_limit` без времени сброса: окно лимита неизвестно, аккаунт
-# возвращается в работу проверкой `check_llm_account_limits` через час.
-_UNKNOWN_RATE_LIMIT_WINDOW = timedelta(hours=1)
 _REJECTED = "rejected"
 
 AUTHENTICATION_FAILED = "authentication_failed"
@@ -271,7 +268,7 @@ class TaskAccountRouter:
         if account is None or account.status is not LlmAccountStatus.ACTIVE:
             return
         account.status = LlmAccountStatus.RATE_LIMITED
-        account.rate_limit_resets_at = resets_at or self._clock() + _UNKNOWN_RATE_LIMIT_WINDOW
+        account.rate_limit_resets_at = resets_at or self._clock() + UNKNOWN_RATE_LIMIT_WINDOW
         await self._db.commit()
         logger.info(
             "llm_account_rate_limited",
