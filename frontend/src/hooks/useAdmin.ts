@@ -14,6 +14,7 @@ import type {
   NodeRun,
   PeriodicTask,
   PeriodicTaskUpdateRequest,
+  ProxyState,
   SystemSettings,
   User,
   UserUpdateRequest,
@@ -171,4 +172,33 @@ export function useLibraryUsage() {
     queryKey: ["admin", "library-usage"],
     queryFn: () => api.get<LibraryUsage[]>("/nodes/library-usage"),
   });
+}
+
+const LLM_PROXY_KEY = ["admin", "llm-proxy"] as const;
+
+/** Раздел 15.5: состояние LLM-прокси и всех его учёток. */
+export function useLlmProxyState() {
+  return useQuery({ queryKey: LLM_PROXY_KEY, queryFn: () => api.get<ProxyState>("/llm-proxy") });
+}
+
+export function useRefreshProxyCredential() {
+  return useInvalidatingMutation(
+    (name: string) => api.post("/llm-proxy/credentials/refresh", { name }),
+    [LLM_PROXY_KEY],
+  );
+}
+
+export function useResetProxyCooldown() {
+  return useInvalidatingMutation(
+    (name: string) => api.post("/llm-proxy/credentials/cooldown/reset", { name }),
+    [LLM_PROXY_KEY],
+  );
+}
+
+/** Удаляется только учётка «без владельца». */
+export function useDeleteProxyCredential() {
+  return useInvalidatingMutation(
+    (name: string) => api.delete(`/llm-proxy/credentials?name=${encodeURIComponent(name)}`),
+    [LLM_PROXY_KEY],
+  );
 }

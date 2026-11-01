@@ -16,7 +16,10 @@ export type MockRoutes = Record<string, MockResponse | ((body: unknown) => MockR
 const API_PREFIX = "/api";
 
 function isErrorResponse(value: unknown): value is { error: { status: number; message: string } } {
-  return typeof value === "object" && value !== null && "error" in value;
+  if (typeof value !== "object" || value === null || !("error" in value)) return false;
+  // Поле `error` бывает и в обычном ответе (статус входа LLM-аккаунта) — ошибка задаёт статус.
+  const { error } = value;
+  return typeof error === "object" && error !== null && "status" in error;
 }
 
 function jsonResponse(status: number, body: unknown): Response {

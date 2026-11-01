@@ -4,6 +4,7 @@ import type {
   JiraConnectionUpdate,
   JiraIssueDraft,
   JiraServer,
+  LlmThresholdsUpdate,
   SftpConnection,
   SshKeyUpdateRequest,
   User,
@@ -20,6 +21,15 @@ export function useUpdateSshKey() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: SshKeyUpdateRequest) => api.put<User>("/profile/ssh-key", body),
+    onSuccess: (profile) => queryClient.setQueryData(PROFILE_KEY, profile),
+  });
+}
+
+/** Раздел 19.7: пороги переключения LLM-аккаунта в профиле. */
+export function useUpdateLlmThresholds() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: LlmThresholdsUpdate) => api.put<User>("/profile/llm-thresholds", body),
     onSuccess: (profile) => queryClient.setQueryData(PROFILE_KEY, profile),
   });
 }

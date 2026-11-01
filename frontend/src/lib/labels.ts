@@ -5,8 +5,11 @@ import {
   NodeType,
   EnvVariableScope,
   LlmAccountStatus,
+  LlmSwitchReason,
   McpIsolationMode,
   PeriodicRunStatus,
+  ReasoningEffort,
+  RemoteControlStatus,
   RepositoryRole,
   UserRole,
 } from "@/lib/types";
@@ -22,6 +25,7 @@ export const USER_ROLE_LABEL: Record<UserRole, string> = {
 };
 
 export const LLM_ACCOUNT_STATUS_LABEL: Record<LlmAccountStatus, string> = {
+  [LlmAccountStatus.LOGIN_REQUIRED]: "нужен вход",
   [LlmAccountStatus.ACTIVE]: "активен",
   [LlmAccountStatus.RATE_LIMITED]: "упёрся в лимит",
   [LlmAccountStatus.DISABLED]: "отключён",
@@ -58,6 +62,7 @@ export const REPOSITORY_ROLE_LABEL: Record<RepositoryRole, string> = {
 };
 
 export const LLM_ACCOUNT_STATUS_TONE: Record<LlmAccountStatus, BadgeTone> = {
+  [LlmAccountStatus.LOGIN_REQUIRED]: "warning",
   [LlmAccountStatus.ACTIVE]: "success",
   [LlmAccountStatus.RATE_LIMITED]: "warning",
   [LlmAccountStatus.DISABLED]: "danger",
@@ -111,4 +116,34 @@ export const NODE_LOG_STATUS_TONE: Record<NodeLogStatus, BadgeTone> = {
   [NodeLogStatus.SUCCESS]: "success",
   [NodeLogStatus.FAILED]: "danger",
   [NodeLogStatus.STOPPED]: "warning",
+};
+
+/** Раздел 19.7: общая шкала уровня рассуждений. */
+export const REASONING_EFFORT_LABEL: Record<ReasoningEffort, string> = {
+  [ReasoningEffort.LOW]: "низкий",
+  [ReasoningEffort.MEDIUM]: "средний",
+  [ReasoningEffort.HIGH]: "высокий",
+  [ReasoningEffort.XHIGH]: "очень высокий",
+  [ReasoningEffort.MAX]: "максимальный",
+};
+
+/** Раздел 15.2: причина строки «Переключено на аккаунт …» в «Диалоге». */
+export const LLM_SWITCH_REASON_LABEL: Record<LlmSwitchReason, string> = {
+  [LlmSwitchReason.START]: "первое обращение задачи",
+  [LlmSwitchReason.KEPT]: "аккаунт не менялся",
+  [LlmSwitchReason.THRESHOLD_5H]: "порог 5-часового окна",
+  [LlmSwitchReason.THRESHOLD_WEEK]: "порог недельного окна",
+  [LlmSwitchReason.RATE_LIMITED]: "исчерпан лимит",
+  [LlmSwitchReason.LOGIN_REQUIRED]: "нужен повторный вход в прежний аккаунт",
+  [LlmSwitchReason.DISABLED]: "прежний аккаунт выключен",
+  [LlmSwitchReason.UNSUITABLE]: "прежний аккаунт не подходит для ноды",
+  [LlmSwitchReason.ALL_ABOVE_THRESHOLD]: "все аккаунты выше порога — выбран наименее израсходованный",
+};
+
+/** Раздел 6.3, 15.1: статус моста `/remote-control`. */
+export const REMOTE_CONTROL_STATUS_LABEL: Record<RemoteControlStatus, string> = {
+  [RemoteControlStatus.CONNECTED]: "мост подключён",
+  [RemoteControlStatus.RECONNECTING]: "мост переподключается",
+  [RemoteControlStatus.DISCONNECTED]: "мост отключён",
+  [RemoteControlStatus.UNAVAILABLE]: "Просмотр в claude.ai/code недоступен",
 };
