@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -18,6 +19,7 @@ from services.llm_routing import (
     TurnRoute,
     choose_account,
     issue_session_token,
+    llm_session_token,
     publish_route,
     read_route,
     renew_session_token,
@@ -71,6 +73,21 @@ class TestSessionToken:
         await publish_route(redis_client, task_id, _route())
 
         await revoke_session_token(redis_client, task_id=task_id, token=token)
+
+        assert await resolve_session_token(redis_client, token) is None
+        assert await read_route(redis_client, task_id) is None
+
+
+class TestSessionTokenScope:
+    async def test_renewed_then_revoked(self, redis_client: Redis) -> None:
+        task_id = uuid.uuid4()
+
+        async with llm_session_token(redis_client, task_id, interval=0.01) as token:
+            await publish_route(redis_client, task_id, _route())
+            await redis_client.expire(f"llm:route:{task_id}", 5)
+            await asyncio.sleep(0.05)
+            assert await redis_client.ttl(f"llm:route:{task_id}") > 5
+            assert await resolve_session_token(redis_client, token) == task_id
 
         assert await resolve_session_token(redis_client, token) is None
         assert await read_route(redis_client, task_id) is None

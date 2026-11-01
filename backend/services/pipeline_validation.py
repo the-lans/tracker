@@ -29,6 +29,10 @@ if TYPE_CHECKING:
 _LIBRARY_FORBIDDEN_NODE_TYPES = frozenset({NodeType.CLEAR_CONTEXT, NodeType.PLAN_PROMPT})
 # Раздел 13.1: своя нода задачи — промт или слэш-команда.
 CUSTOM_TASK_NODE_TYPES = frozenset({NodeType.PLAIN_PROMPT, NodeType.SLASH_COMMAND})
+# Раздел 3.1 `nodes.reasoning_effort`: уровень рассуждений — только у нод, обращающихся к модели.
+REASONING_EFFORT_NODE_TYPES = frozenset(
+    {NodeType.PLAIN_PROMPT, NodeType.SLASH_COMMAND, NodeType.PLAN_PROMPT},
+)
 
 # Нода и её позиция в порядке выполнения (`None` — позиции нет).
 type OrderedNodes = list[tuple[int | None, Node]]
@@ -42,6 +46,10 @@ def validate_node_shape(node: Node, *, check_description: bool = True) -> None:
     библиотеки: при создании и при изменении описания. Прочие правки (в том
     числе архивация) промтов, заведённых до этого правила, не блокируются.
     """
+    if node.reasoning_effort is not None and node.node_type not in REASONING_EFFORT_NODE_TYPES:
+        raise ValidationError(
+            f"Уровень рассуждений не задаётся у ноды {node.node_type} (раздел 3.1 ТЗ)",
+        )
     if node.task_id is not None:
         if node.node_type not in CUSTOM_TASK_NODE_TYPES:
             raise ValidationError(

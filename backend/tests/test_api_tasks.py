@@ -1309,10 +1309,7 @@ class TestCleanupRepositories:
 
 
 class TestForgetSession:
-    """
-    Раздел 5: после очистки контекста и смены LLM-аккаунта реплики прежней
-    сессии не попадают в `{{node.llm_output_last_n}}`.
-    """
+    """Раздел 5: после очистки контекста реплики прежней сессии не попадают в `{{node.*}}`."""
 
     async def test_clear_context(
         self,
@@ -1327,24 +1324,38 @@ class TestForgetSession:
         await db_session.refresh(task)
         assert task.context_cleared_at is not None
 
-    async def test_llm_account_change(
+
+class TestStartAccountChange:
+    """
+    Раздел 14.1: сессия хранится в каталоге задачи — смена стартового аккаунта
+    её не забывает, а следующий запуск начинается с выбранного аккаунта.
+    """
+
+    @pytest.mark.parametrize("changed", [True, False])
+    async def test_session_kept(
         self,
         authed_client: AsyncClient,
         db_session: AsyncSession,
+        changed: bool,
     ) -> None:
-        # После «Вернуть в новые» сессия прежнего прогона ещё сохранена.
+        # После «Вернуть в новые» сессия прежнего прогона сохранена.
         task = await _task_in_status(authed_client, db_session, TaskStatus.NEW)
-        account = await make_llm_account(db_session, owner_id=task.created_by)
+        current = await make_llm_account(db_session, owner_id=task.created_by)
+        task.llm_account_id = task.current_llm_account_id = current.id
+        await db_session.flush()
+        chosen = current
+        if changed:
+            chosen = await make_llm_account(db_session, owner_id=task.created_by)
 
         response = await authed_client.patch(
             f"/tasks/{task.id}",
-            json={"llm_account_id": str(account.id)},
+            json={"llm_account_id": str(chosen.id)},
         )
 
         assert response.status_code == 200, response.text
         await db_session.refresh(task)
-        assert task.session_id is None
-        assert task.context_cleared_at is not None
+        assert (task.session_id, task.context_cleared_at) == ("sess-old", None)
+        assert task.current_llm_account_id == (None if changed else current.id)
 
 
 class TestClearContext:

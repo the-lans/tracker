@@ -23,6 +23,7 @@ from services.session_container import (
     SESSION_TASK_LABEL,
 )
 from tasks import session_worker
+from tests.cliproxy_support import FakeCliproxy
 from tests.fakes import FakeClaudeAgentClient
 
 if TYPE_CHECKING:
@@ -30,6 +31,8 @@ if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeAgentOptions
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from clients.cliproxy import CliproxyManagementClient
 
 GIT_AUTHOR_ARGS = ["-c", "user.email=test@example.com", "-c", "user.name=Test"]
 
@@ -105,8 +108,8 @@ def install_worker_env(
 ) -> WorkerEnv:
     env = WorkerEnv(repos_root=tmp_path / "repos")
     monkeypatch.setenv("TRACKER_REPOS_ROOT", str(env.repos_root))
-    # Каталоги LLM-аккаунтов тестовых задач — во временной директории теста.
-    monkeypatch.setattr("tests.factories.DEFAULT_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
+    # Директории сессий тестовых задач — во временной директории теста.
+    monkeypatch.setenv("CLAUDE_SESSIONS_ROOT", str(tmp_path / "sessions"))
     monkeypatch.setattr(session_worker, "async_session_factory", lambda: SharedSession(db_session))
 
     @asynccontextmanager
@@ -115,6 +118,14 @@ def install_worker_env(
         yield redis_client
 
     monkeypatch.setattr(session_worker, "redis_connection", shared_redis)
+    # LLM-прокси — фейковый (`tests/cliproxy_support.py`): учёток нет, расход не опрашивается.
+    fake_cliproxy = FakeCliproxy()
+
+    @asynccontextmanager
+    async def fake_cliproxy_client() -> AsyncIterator[CliproxyManagementClient]:
+        yield fake_cliproxy.client()
+
+    monkeypatch.setattr(session_worker, "open_cliproxy_client", fake_cliproxy_client)
     monkeypatch.setattr(
         session_worker,
         "ClaudeSDKClient",

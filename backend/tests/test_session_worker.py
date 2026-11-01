@@ -11,6 +11,8 @@ import asyncio
 import json
 import subprocess
 import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,6 +37,7 @@ from db.models.enums import (
     ScriptLanguage,
     TaskStatus,
 )
+from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.pipelines import Node, TaskNode
@@ -44,6 +47,7 @@ from services import gitlab_sync
 from services import task_status as task_status_module
 from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
+from services.llm_routing import resolve_session_token
 from services.manual_queue import enqueue_freeform_prompt_run
 from services.notifications import NotificationEvent
 from services.plan_mode import (
@@ -1024,6 +1028,144 @@ class TestSessionContainer:
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
 
+    async def test_session_reaches_model_through_gateway(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        tmp_path: Path,
+    ) -> None:
+        """
+        Разделы 6.4, 19.7: история — в директории сессии задачи, модель — через
+        шлюз по токену, который действует, пока воркер держит сессию.
+        """
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        resolved: list[uuid.UUID | None] = []
+
+        async def check_token() -> None:
+            token = worker_env.options[0].env["ANTHROPIC_AUTH_TOKEN"]
+            resolved.append(await resolve_session_token(redis_client, token))
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(1),
+            on_query=check_token,
+        )
+
+        await _run_worker(task)
+
+        [options] = worker_env.options
+        assert options.env["CLAUDE_CONFIG_DIR"] == str(tmp_path / "sessions" / task.code)
+        assert options.env["ANTHROPIC_BASE_URL"] == "http://llm-gateway:8320"
+        assert resolved == [task.id]
+        token = options.env["ANTHROPIC_AUTH_TOKEN"]
+        assert await resolve_session_token(redis_client, token) is None
+
+
+class TestAccountSwitching:
+    """
+    Раздел 19.7, сценарий 13 раздела 21.2: аккаунт выбирается перед каждым
+    ходом, сессия при переключении не меняется, `node_logs` фиксирует аккаунт.
+    """
+
+    async def _task_with_spare(
+        self,
+        db_session: AsyncSession,
+        nodes: int,
+    ) -> tuple[Task, LlmAccount, LlmAccount]:
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        start = await db_session.get(LlmAccount, task.llm_account_id)
+        assert start is not None
+        spare = await make_llm_account(db_session, owner_id=task.created_by, label="spare")
+        for order_index in range(nodes):
+            await _add_node(db_session, task, order_index=order_index)
+        return task, start, spare
+
+    async def _attempts(self, db_session: AsyncSession, task: Task) -> list[uuid.UUID | None]:
+        stmt = (
+            sa.select(NodeLog.llm_account_id)
+            .where(NodeLog.task_id == task.id)
+            .order_by(NodeLog.started_at)
+        )
+        return list((await db_session.execute(stmt)).scalars())
+
+    async def test_threshold_switches_next_node(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        task, start, spare = await self._task_with_spare(db_session, nodes=2)
+        queries = 0
+
+        async def exhaust_start_after_first_turn() -> None:
+            nonlocal queries
+            queries += 1
+            if queries == 1:
+                start.usage_5h_pct = Decimal("95")
+                start.usage_checked_at = datetime.now(UTC)
+                await db_session.flush()
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(2),
+            on_query=exhaust_start_after_first_turn,
+        )
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert await self._attempts(db_session, task) == [start.id, spare.id]
+        assert task.current_llm_account_id == spare.id
+        assert len(worker_env.options) == 1
+
+    async def test_limit_mid_turn_retried_on_other_account(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        task, start, spare = await self._task_with_spare(db_session, nodes=1)
+        # Вторая попытка ноды — повтор по retry-политике (раздел 11.7).
+        await db_session.execute(
+            sa.update(Node).where(Node.pipeline_id == task.pipeline_id).values(max_retries=2),
+        )
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=[
+                [make_assistant_error("rate_limit"), make_result_message(is_error=True)],
+                [make_result_message(session_id="sess-worker")],
+            ],
+        )
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        await db_session.refresh(start)
+        assert task.status is TaskStatus.DONE
+        assert await self._attempts(db_session, task) == [start.id, spare.id]
+        assert start.status is LlmAccountStatus.RATE_LIMITED
+
+    async def test_no_account_fails_node(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        task, start, spare = await self._task_with_spare(db_session, nodes=1)
+        for account in (start, spare):
+            account.status = LlmAccountStatus.DISABLED
+        await db_session.flush()
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.FAILED
+        assert worker_env.client.queries == []
+        [message] = (
+            await db_session.execute(
+                sa.select(NodeLog.error_message).where(NodeLog.task_id == task.id).limit(1),
+            )
+        ).scalars()
+        assert message == "Нет доступного LLM-аккаунта"
+
 
 class TestRestartAfterClearContext:
     async def test_opens_new_session_with_bridge(
@@ -1199,13 +1341,9 @@ class TestHistoryRetention:
         tmp_path: Path,
     ) -> None:
         """Раздел 6.4: CLI не должен удалить историю, пока задача существует."""
-        config_dir = tmp_path / "llm-account"
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
-        account = await make_llm_account(
-            db_session,
-            owner_id=task.created_by,
-            claude_config_dir=str(config_dir),
-        )
+        config_dir = tmp_path / "sessions" / task.code
+        account = await make_llm_account(db_session, owner_id=task.created_by)
         task.llm_account_id = account.id
         await _add_node(db_session, task, order_index=0)
         worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
@@ -1251,11 +1389,7 @@ class TestRateLimitEvents:
     ) -> None:
         """Раздел 16.2: CLI сообщил об упоре в лимит — аккаунт задачи `rate_limited`."""
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
-        account = await make_llm_account(
-            db_session,
-            owner_id=task.created_by,
-            claude_config_dir=str(tmp_path / "acc"),
-        )
+        account = await make_llm_account(db_session, owner_id=task.created_by)
         task.llm_account_id = account.id
         await _add_node(db_session, task, order_index=0)
         worker_env.client = FakeClaudeAgentClient(

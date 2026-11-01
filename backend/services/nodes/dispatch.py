@@ -18,10 +18,11 @@ from typing import TYPE_CHECKING, Any
 
 from app_logging.app_logs import write_app_log
 from clients.claude_agent import ClaudeCodeSession, UserWaitClock
-from db.models.enums import AppLogLevel, NodeLogStatus, NodeType, PermissionMode
+from db.models.enums import AppLogLevel, NodeLogStatus, NodeType, PermissionMode, ReasoningEffort
 from db.models.logs import NodeLog
 from db.models.tasks import Task
 from services.failure_classification import is_transient_assistant_error
+from services.llm_routing import NoLlmAccountAvailableError, TurnRoute
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.nodes.script import ScriptExecutionResult, run_script_node
 from services.task_artifacts import task_artifacts_dir
@@ -123,6 +124,8 @@ class NodeExecutionOutcome:
     error_details: str | None = None
     is_transient: bool = True
     session_lost: bool = False
+    # Аккаунт, модель и уровень хода (раздел 19.7); у скриптов — None.
+    route: TurnRoute | None = None
 
 
 async def record_sdk_failure(
@@ -152,17 +155,39 @@ async def record_sdk_failure(
     )
 
 
-async def execute_llm_node(claude_session: ClaudeCodeSession, prompt: str) -> NodeExecutionOutcome:
-    """Выполняет `plain_prompt`/`slash_command` — единая точка обращения к сессии (раздел 6.2)."""
-    turn = await claude_session.send_and_collect_text(prompt)
+async def execute_llm_node(
+    claude_session: ClaudeCodeSession,
+    prompt: str,
+    *,
+    effort: ReasoningEffort | None = None,
+    node_type: NodeType | None = None,
+) -> NodeExecutionOutcome:
+    """
+    Выполняет `plain_prompt`/`slash_command` — единая точка обращения к сессии
+    (раздел 6.2). Нет ни одного `active` LLM-аккаунта — сбой, временный для
+    ноды пайплайна (раздел 19.7, п. 5): повтор выберет аккаунт заново.
+    """
+    try:
+        turn = await claude_session.send_and_collect_text(
+            prompt,
+            effort=effort,
+            node_type=node_type,
+        )
+    except NoLlmAccountAvailableError as exc:
+        return NodeExecutionOutcome(success=False, error_message=exc.message)
     if turn.is_error:
+        # Отклонённый вход и лимит временны, только пока у автора есть другой аккаунт.
+        is_transient = turn.account_transient
+        if is_transient is None:
+            is_transient = is_transient_assistant_error(turn.assistant_error)
         return NodeExecutionOutcome(
             success=False,
             llm_output_text=turn.text,
             error_message=turn.result.result or "Сессия вернула ошибку",
-            is_transient=is_transient_assistant_error(turn.assistant_error),
+            is_transient=is_transient,
+            route=turn.route,
         )
-    return NodeExecutionOutcome(success=True, llm_output_text=turn.text)
+    return NodeExecutionOutcome(success=True, llm_output_text=turn.text, route=turn.route)
 
 
 # Пока ход ждёт решения пользователя, срок не идёт: ждём не чаще раза в
@@ -206,6 +231,8 @@ async def execute_llm_node_with_timeout(
     prompt: str,
     *,
     timeout_seconds: float,
+    effort: ReasoningEffort | None = None,
+    node_type: NodeType | None = None,
 ) -> NodeExecutionOutcome:
     """Раздел 3.1: `timeout_seconds` применяется одинаково к нодам пайплайна
     и к запускам из библиотеки, для ЛЮБОГО типа ноды — включая LLM-ноды, не
@@ -215,7 +242,7 @@ async def execute_llm_node_with_timeout(
     """
     try:
         return await _run_within_active_time(
-            execute_llm_node(claude_session, prompt),
+            execute_llm_node(claude_session, prompt, effort=effort, node_type=node_type),
             timeout_seconds=timeout_seconds,
             clock=claude_session.user_wait_clock,
         )
@@ -226,6 +253,7 @@ async def execute_llm_node_with_timeout(
             success=False,
             llm_output_text=partial_text,
             error_message="Превышен таймаут выполнения",
+            route=claude_session.turn_route,
         )
 
 
@@ -290,6 +318,7 @@ async def execute_plan_prompt_node(
     db_session: AsyncSession,
     node_log_id: uuid.UUID,
     timeout_seconds: float,
+    effort: ReasoningEffort | None = None,
 ) -> NodeExecutionOutcome:
     """Раздел 9.1: переводит сессию в `permission_mode="plan"` перед отправкой.
 
@@ -307,6 +336,8 @@ async def execute_plan_prompt_node(
         claude_session,
         prompt,
         timeout_seconds=timeout_seconds,
+        effort=effort,
+        node_type=NodeType.PLAN_PROMPT,
     )
     if not outcome.success:
         return outcome
@@ -320,6 +351,7 @@ async def execute_plan_prompt_node(
             success=False,
             llm_output_text=outcome.llm_output_text,
             error_message="План не был принят (ExitPlanMode не подтверждён)",
+            route=outcome.route,
         )
     assert node_log is not None
     await _apply_accepted_plan_mode(claude_session, db_session=db_session, task_id=node_log.task_id)
@@ -385,9 +417,12 @@ async def execute_node(
             db_session=db_session,
             node_log_id=node_log_id,
             timeout_seconds=timeout_seconds,
+            effort=node.reasoning_effort,
         )
     return await execute_llm_node_with_timeout(
         claude_session,
         prompt,
         timeout_seconds=timeout_seconds,
+        effort=node.reasoning_effort,
+        node_type=node.node_type,
     )

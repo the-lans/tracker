@@ -11,10 +11,8 @@ LLM-прокси, а также статус лимита (раздел 16.2, `c
 
 from __future__ import annotations
 
-import os
-import posixpath
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import httpx
@@ -29,17 +27,12 @@ from services.integrity import ACCOUNT_IN_USE, commit_or_conflict, ensure_llm_ac
 from services.llm_providers import get_provider
 
 if TYPE_CHECKING:
-    from claude_agent_sdk import RateLimitInfo
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from clients.cliproxy import CliproxyManagementClient
 
 logger = get_logger("llm_accounts")
 
-_REJECTED = "rejected"
-_ACCOUNTS_ROOT_ENV_VAR = "CLAUDE_ACCOUNTS_ROOT"
-# Volume `claude_accounts` в контейнере worker (docker-compose.yml).
-DEFAULT_ACCOUNTS_ROOT = "/data/claude-accounts"
 _ORDER_CONFLICT = "Порядок LLM-аккаунтов изменился одновременно — обновите страницу"
 _PREFIX_TEMPLATE = "acc-{}"
 _PREFIX_ID_LENGTH = 12
@@ -56,37 +49,6 @@ async def next_switch_order(db_session: AsyncSession, owner_id: uuid.UUID) -> in
         LlmAccount.created_by == owner_id,
     )
     return int((await db_session.execute(stmt)).scalar_one()) + 1
-
-
-async def record_rate_limit(
-    db_session: AsyncSession,
-    *,
-    account_id: uuid.UUID,
-    info: RateLimitInfo,
-) -> None:
-    """
-    `rejected` — аккаунт упёрся в лимит до `resets_at`; иначе — снова `active`.
-
-    Аккаунт, отключённый администратором (`disabled`), не трогается.
-    """
-    account = await db_session.get(LlmAccount, account_id)
-    if account is None or account.status is LlmAccountStatus.DISABLED:
-        return
-    if info.status == _REJECTED:
-        account.status = LlmAccountStatus.RATE_LIMITED
-        account.rate_limit_resets_at = (
-            datetime.fromtimestamp(info.resets_at, tz=UTC) if info.resets_at else None
-        )
-    else:
-        account.status = LlmAccountStatus.ACTIVE
-        account.rate_limit_resets_at = None
-    await db_session.commit()
-    logger.info(
-        "llm_account_rate_limit_recorded",
-        account_id=str(account_id),
-        status=account.status.value,
-        resets_at=account.rate_limit_resets_at,
-    )
 
 
 async def restore_expired_rate_limits(
@@ -110,10 +72,6 @@ async def restore_expired_rate_limits(
     if restored:
         logger.info("llm_account_rate_limits_restored", account_ids=[str(i) for i in restored])
     return restored
-
-
-def accounts_root() -> str:
-    return posixpath.normpath(os.environ.get(_ACCOUNTS_ROOT_ENV_VAR, DEFAULT_ACCOUNTS_ROOT))
 
 
 async def create_account(

@@ -14,24 +14,32 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import json
 import secrets
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from redis.exceptions import RedisError
+
+from app_logging.config import get_logger
 from db.models.enums import LlmAccountStatus, ReasoningEffort
 from services.llm_providers import PROVIDERS
-from services.session_heartbeat import HEARTBEAT_TTL_SECONDS
+from services.session_heartbeat import HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_TTL_SECONDS
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
     from db.models.llm import LlmAccount
+
+logger = get_logger("llm_routing")
 
 # Раздел 19.7: токен — 256 случайных бит.
 _SESSION_TOKEN_BYTES = 32
@@ -101,6 +109,44 @@ async def renew_session_token(redis_client: Redis, *, task_id: uuid.UUID, token:
 
 async def revoke_session_token(redis_client: Redis, *, task_id: uuid.UUID, token: str) -> None:
     await redis_client.delete(_session_key(token), _route_key(task_id))
+
+
+async def _keep_renewing(
+    redis_client: Redis,
+    *,
+    task_id: uuid.UUID,
+    token: str,
+    interval: float,
+) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await renew_session_token(redis_client, task_id=task_id, token=token)
+        except RedisError:
+            # Пропуск одного продления не страшен: TTL покрывает три интервала.
+            logger.warning("llm_session_token_renew_failed", task_id=str(task_id))
+
+
+@asynccontextmanager
+async def llm_session_token(
+    redis_client: Redis,
+    task_id: uuid.UUID,
+    *,
+    interval: float = HEARTBEAT_INTERVAL_SECONDS,
+) -> AsyncIterator[str]:
+    """Токен сессии на время работы воркера с задачей; по выходе отзывается вместе с маршрутом."""
+    token = await issue_session_token(redis_client, task_id)
+    renewing = asyncio.create_task(
+        _keep_renewing(redis_client, task_id=task_id, token=token, interval=interval),
+    )
+    try:
+        yield token
+    finally:
+        renewing.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await renewing
+        with contextlib.suppress(RedisError):
+            await revoke_session_token(redis_client, task_id=task_id, token=token)
 
 
 async def resolve_session_token(redis_client: Redis, token: str) -> uuid.UUID | None:

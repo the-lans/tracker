@@ -49,6 +49,7 @@ async def _copy_custom_node(db_session: AsyncSession, node: Node, *, target: Tas
         timeout_seconds=node.timeout_seconds,
         max_retries=node.max_retries,
         retry_base_delay_seconds=node.retry_base_delay_seconds,
+        reasoning_effort=node.reasoning_effort,
         is_skipped=False,
         is_library_item=False,
         is_archived=False,

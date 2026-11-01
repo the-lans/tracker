@@ -504,3 +504,49 @@ class TestExecutionDefaultsOnUpdate:
 
         assert response.status_code == 200, response.text
         assert (response.json()["timeout_seconds"], response.json()["max_retries"]) == (1800, 7)
+
+
+def _library_prompt(**fields: object) -> dict[str, object]:
+    return {
+        "name": "n",
+        "description": "d",
+        "node_type": NodeType.PLAIN_PROMPT.value,
+        "prompt_template": "x",
+        **fields,
+    }
+
+
+class TestReasoningEffort:
+    """Раздел 3.1 `nodes.reasoning_effort`: уровень ноды или по умолчанию аккаунта."""
+
+    async def test_kept_until_cleared(self, authed_client: AsyncClient) -> None:
+        created = await authed_client.post("/nodes", json=_library_prompt(reasoning_effort="max"))
+        assert created.status_code == 201, created.text
+        node_id = created.json()["id"]
+
+        renamed = await authed_client.patch(f"/nodes/{node_id}", json={"name": "m"})
+        cleared = await authed_client.patch(f"/nodes/{node_id}", json={"reasoning_effort": None})
+
+        assert created.json()["reasoning_effort"] == "max"
+        assert renamed.json()["reasoning_effort"] == "max"
+        assert cleared.json()["reasoning_effort"] is None
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {
+                "name": "s",
+                "description": "d",
+                "node_type": NodeType.SCRIPT.value,
+                "script_language": "bash",
+                "script_content": "true",
+                "reasoning_effort": "low",
+            },
+            _library_prompt(reasoning_effort="extreme"),
+        ],
+        ids=["script", "unknown_level"],
+    )
+    async def test_rejected(self, authed_client: AsyncClient, payload: dict[str, object]) -> None:
+        response = await authed_client.post("/nodes", json=payload)
+
+        assert response.status_code == 422

@@ -138,6 +138,7 @@ async def create_node(
         is_skipped=body.is_skipped,
         is_library_item=body.pipeline_id is None,
         llm_output_last_n=body.llm_output_last_n,
+        reasoning_effort=body.reasoning_effort,
         created_by=created_by,
     )
     await _validate_and_flush(db_session, node)
@@ -218,6 +219,8 @@ async def update_node(
         node.is_archived = body.is_archived
     if body.llm_output_last_n is not None:
         node.llm_output_last_n = body.llm_output_last_n
+    if "reasoning_effort" in body.model_fields_set:
+        node.reasoning_effort = body.reasoning_effort
 
     await _validate_and_flush(
         db_session,

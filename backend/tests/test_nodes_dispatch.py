@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from claude_agent_sdk import AssistantMessage, TextBlock
+from claude_agent_sdk import AssistantMessage, Message, TextBlock
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.claude_agent import ClaudeCodeSession, UserWaitClock
@@ -13,6 +13,7 @@ from db.models.enums import (
     NodeLogTriggerType,
     NodeType,
     PermissionMode,
+    ReasoningEffort,
     ScriptLanguage,
     TaskStatus,
     UserRole,
@@ -34,7 +35,13 @@ from services.nodes.dispatch import (
 )
 from services.nodes.script import ScriptExecutionResult
 from tests.factories import make_pipeline, make_task, make_user
-from tests.fakes import FakeClaudeAgentClient, make_result_message
+from tests.fakes import (
+    FAKE_ROUTE,
+    FakeClaudeAgentClient,
+    FakeTurnRouter,
+    make_assistant_error,
+    make_result_message,
+)
 
 _GENEROUS_TIMEOUT_SECONDS = 30
 
@@ -662,3 +669,87 @@ class TestScriptTaskPaths:
 
         assert outcome.success is True, outcome.error_message
         assert (user_files_root / "RR-55555" / "report.txt").read_text() == str(repos_path)
+
+
+def _llm_node(node_type: NodeType, effort: ReasoningEffort | None) -> Node:
+    return Node(
+        name="n",
+        node_type=node_type,
+        prompt_template="go",
+        reasoning_effort=effort,
+        timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+    )
+
+
+class TestTurnAccount:
+    """Раздел 19.7: аккаунт хода выбирается по уровню и типу ноды."""
+
+    @pytest.mark.parametrize(
+        ("node_type", "effort"),
+        [(NodeType.PLAIN_PROMPT, ReasoningEffort.MAX), (NodeType.SLASH_COMMAND, None)],
+    )
+    async def test_node_effort_and_type_routed(
+        self,
+        tmp_path: Path,
+        node_type: NodeType,
+        effort: ReasoningEffort | None,
+    ) -> None:
+        router = FakeTurnRouter()
+        session = ClaudeCodeSession(
+            FakeClaudeAgentClient(messages_per_query=[[make_result_message()]]),
+            router=router,
+        )
+
+        outcome = await execute_node(
+            _llm_node(node_type, effort),
+            prompt="go",
+            claude_session=session,
+            repos_path=tmp_path,
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+        )
+
+        assert router.routed == [(effort, node_type)]
+        assert (outcome.success, outcome.route) == (True, FAKE_ROUTE)
+
+    async def test_no_account_is_transient_failure(self) -> None:
+        client = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        session = ClaudeCodeSession(client, router=FakeTurnRouter(available=False))
+
+        outcome = await execute_llm_node(session, "go")
+
+        assert (outcome.success, outcome.is_transient, outcome.route) == (False, True, None)
+        assert outcome.error_message == "Нет доступного LLM-аккаунта"
+        assert client.queries == []
+
+    @pytest.mark.parametrize(
+        ("account_transient", "expected"),
+        [(True, True), (False, False), (None, False)],
+        ids=["other_account", "last_account", "not_account_error"],
+    )
+    async def test_rejected_login_transient_with_other_account(
+        self,
+        account_transient: bool | None,
+        expected: bool,
+    ) -> None:
+        messages: list[Message] = [
+            make_assistant_error("authentication_failed"),
+            make_result_message(is_error=True),
+        ]
+        session = ClaudeCodeSession(
+            FakeClaudeAgentClient(messages_per_query=[messages]),
+            router=FakeTurnRouter(transient=account_transient),
+        )
+
+        outcome = await execute_llm_node(session, "go")
+
+        assert (outcome.success, outcome.is_transient) == (False, expected)
+        assert outcome.route == FAKE_ROUTE
+
+    async def test_timeout_keeps_route(self) -> None:
+        client = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        client.message_delay_seconds = 1.0
+        session = ClaudeCodeSession(client, router=FakeTurnRouter())
+
+        outcome = await execute_llm_node_with_timeout(session, "go", timeout_seconds=0.05)
+
+        assert (outcome.success, outcome.route) == (False, FAKE_ROUTE)

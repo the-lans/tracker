@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from services.claude_config import ensure_history_retention
+from services.claude_config import ensure_history_retention, session_config_dir
+from services.errors import ValidationError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -57,3 +58,27 @@ class TestEnsureHistoryRetention:
 
     def test_no_config_dir(self) -> None:
         ensure_history_retention("", days=_DAYS)
+
+
+class TestSessionConfigDir:
+    def test_created_under_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_SESSIONS_ROOT", str(tmp_path / "sessions"))
+
+        directory = session_config_dir("RR-12345")
+
+        assert directory == tmp_path / "sessions" / "RR-12345"
+        assert directory.is_dir()
+
+    @pytest.mark.parametrize("code", ["../RR-1", "RR 1", ""])
+    def test_unsafe_code_rejected(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        code: str,
+    ) -> None:
+        monkeypatch.setenv("CLAUDE_SESSIONS_ROOT", str(tmp_path / "sessions"))
+
+        with pytest.raises(ValidationError):
+            session_config_dir(code)
+
+        assert not (tmp_path / "sessions").exists()

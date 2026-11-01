@@ -7,8 +7,6 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
-from claude_agent_sdk import RateLimitInfo
-from claude_agent_sdk.types import RateLimitStatus
 
 from clients.cliproxy import CliproxyUnavailableError
 from db.models.enums import LlmAccountStatus, NodeLogTriggerType
@@ -21,7 +19,6 @@ from services.llm_accounts import (
     delete_account,
     ensure_model_available,
     owned_accounts,
-    record_rate_limit,
     reorder_accounts,
     restore_expired_rate_limits,
     set_account_enabled,
@@ -32,43 +29,11 @@ from tests.factories import make_llm_account, make_task, make_user
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-_RESETS_AT = datetime(2026, 10, 20, 18, 0, tzinfo=UTC)
 
 
 async def _account(db_session: AsyncSession, status: LlmAccountStatus) -> LlmAccount:
     owner = await make_user(db_session)
     return await make_llm_account(db_session, owner_id=owner.id, status=status)
-
-
-class TestRecordRateLimit:
-    @pytest.mark.parametrize(
-        ("start", "event_status", "expected", "resets_at"),
-        [
-            (LlmAccountStatus.ACTIVE, "rejected", LlmAccountStatus.RATE_LIMITED, _RESETS_AT),
-            (LlmAccountStatus.RATE_LIMITED, "allowed", LlmAccountStatus.ACTIVE, None),
-            (LlmAccountStatus.ACTIVE, "allowed_warning", LlmAccountStatus.ACTIVE, None),
-            (LlmAccountStatus.DISABLED, "rejected", LlmAccountStatus.DISABLED, None),
-        ],
-        ids=["rejected", "allowed_again", "warning_only", "disabled_untouched"],
-    )
-    async def test_status(
-        self,
-        db_session: AsyncSession,
-        start: LlmAccountStatus,
-        event_status: RateLimitStatus,
-        expected: LlmAccountStatus,
-        resets_at: datetime | None,
-    ) -> None:
-        account = await _account(db_session, start)
-        info = RateLimitInfo(
-            status=event_status,
-            resets_at=int(_RESETS_AT.timestamp()),
-        )
-
-        await record_rate_limit(db_session, account_id=account.id, info=info)
-
-        assert account.status is expected
-        assert account.rate_limit_resets_at == resets_at
 
 
 class TestRestoreExpiredRateLimits:
