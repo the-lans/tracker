@@ -13,7 +13,9 @@ volume-данных, без изменений кода или повторно�
 | Репозитории задач (включая профили MCP-инструментов, раздел 10.3) | volume `task_repos` | Архив `tar` |
 | Артефакты задач (раздел 14.3) | volume `user_files` | Архив `tar` |
 | Архив истории выполнения (`rotate_task_logs`, раздел 16.2) | volume `log_archive` | Архив `tar` |
-| Входы в Claude и история сессий LLM-аккаунтов (разделы 6.4, 19.5) | volume `claude_accounts` | Архив `tar` |
+| История сессий задач (раздел 6.4) | volume `claude_sessions` | Архив `tar` |
+| Конфигурация и учётки LLM-прокси с токенами OAuth (разделы 19.4, 19.7) | volume `cliproxy_data` | Архив `tar` — **секрет**: передаётся так же, как `.env`, по защищённому каналу, копии после переноса удаляются |
+| Каталоги LLM-аккаунтов прежней версии, где входы и сессии хранились у аккаунта | volume `claude_accounts` | Архив `tar`, если volume есть: из него восстановление переносит историю сессий в `claude_sessions` (раздел 20.6); содержит файлы входа — передаётся как секрет |
 | Ключ хоста SFTP-шлюза (разделы 15.1, 20.4) | volume `sftp_host_keys` | Архив `tar` — иначе у сервера сменится отпечаток и клиенты SFTP/sshfs увидят предупреждение о подмене |
 | Роль БД SFTP-шлюза `tracker_sftp` | кластер PostgreSQL | Не переносится: `pg_dump` не сохраняет роли, её заново создаёт entrypoint backend по `SFTP_DB_PASSWORD` из `.env` |
 | TLS-сертификаты Caddy | volumes `caddy_data`/`caddy_config` | Не переносятся — Caddy сам перевыпустит сертификат на новом сервере при первом запуске (раздел 20.2, шаг 10); перенос усложнил бы процедуру без реальной пользы |
@@ -34,32 +36,30 @@ volume-данных, без изменений кода или повторно�
 2. Заархивировать volume-данные и скопировать вместе с `.env` и последним дампом на новый сервер (пример через `docker run` + `tar`, без остановки сервисов — репозитории задач не должны меняться на лету во время архивации, поэтому короткая пауза `worker`/`beat` разумна для консистентности архива `task_repos`):
 
    ```bash
-   docker compose stop worker session-worker beat
-   docker run --rm -v tracker_task_repos:/data -v "$(pwd)":/backup alpine \
-     tar czf /backup/task_repos.tar.gz -C /data .
-   docker run --rm -v tracker_user_files:/data -v "$(pwd)":/backup alpine \
-     tar czf /backup/user_files.tar.gz -C /data .
-   docker run --rm -v tracker_log_archive:/data -v "$(pwd)":/backup alpine \
-     tar czf /backup/log_archive.tar.gz -C /data .
-   docker run --rm -v tracker_claude_accounts:/data -v "$(pwd)":/backup alpine \
-     tar czf /backup/claude_accounts.tar.gz -C /data .
-   docker run --rm -v tracker_sftp_host_keys:/data -v "$(pwd)":/backup alpine \
-     tar czf /backup/sftp_host_keys.tar.gz -C /data .
-   docker compose start worker session-worker beat
+   docker compose stop worker session-worker beat cliproxy
+   for volume in task_repos user_files log_archive claude_sessions cliproxy_data \
+     sftp_host_keys claude_accounts; do
+     docker volume inspect "tracker_${volume}" >/dev/null 2>&1 || continue
+     docker run --rm -v "tracker_${volume}:/data" -v "$(pwd)":/backup alpine \
+       tar czf "/backup/${volume}.tar.gz" -C /data .
+   done
+   docker compose start cliproxy worker session-worker beat
 
    docker cp "$(docker compose ps -q backup)":/backups/<файл-дампа>.sql.gz ./
    ```
 
-   Перенести на новый сервер: `.env`, `task_repos.tar.gz`, `user_files.tar.gz`,
-   `log_archive.tar.gz`, `claude_accounts.tar.gz` (входы в Claude и история сессий LLM-аккаунтов; у сервера версии без volume `claude_accounts` этого архива нет — восстановление его пропустит),
-   `sftp_host_keys.tar.gz` (ключ хоста SFTP-шлюза; у сервера версии без шлюза его нет — шлюз создаст новый ключ),
-   `<файл-дампа>.sql.gz` (например, `scp`).
+   Перенести на новый сервер (например, `scp`): `.env`, `<файл-дампа>.sql.gz`,
+   `task_repos.tar.gz`, `user_files.tar.gz`, `log_archive.tar.gz` и
+   необязательные архивы — те, чьи volumes есть на старом сервере:
+   `claude_sessions.tar.gz`, `cliproxy_data.tar.gz` (без него пользователи
+   войдут в LLM-аккаунты заново), `sftp_host_keys.tar.gz` (без него шлюз
+   создаст новый ключ хоста), `claude_accounts.tar.gz`. `.env`,
+   `cliproxy_data.tar.gz` и `claude_accounts.tar.gz` содержат секреты: только
+   защищённый канал, копии на промежуточных машинах удалить.
 
 ### На новом сервере
 
-3. Сложить перенесённые файлы в один каталог, например `/root/transfer`:
-   `.env`, `<файл-дампа>.sql.gz`, `task_repos.tar.gz`, `user_files.tar.gz`,
-   `log_archive.tar.gz`, `claude_accounts.tar.gz`, `sftp_host_keys.tar.gz`.
+3. Сложить перенесённые файлы в один каталог, например `/root/transfer`.
 4. Запустить `deploy/install.sh` (тот же скрипт, что и для обычной
    установки, раздел 20.2) в режиме восстановления:
 
@@ -67,18 +67,22 @@ volume-данных, без изменений кода или повторно�
    bash install.sh --restore /root/transfer
    ```
 
-   Скрипт сначала проверяет, что в каталоге есть все пять файлов (если
-   дампов несколько — берёт самый свежий по имени), и только потом:
-   ставит Docker при необходимости, клонирует репозиторий, кладёт
-   перенесённый `.env` в `${INSTALL_DIR}/.env` (прежний, если был,
-   сохраняется как `.env.before-restore`), собирает образы, поднимает
-   PostgreSQL и Redis, восстанавливает дамп в пустую БД **до** миграций,
-   распаковывает архивы в volumes `task_repos`/`user_files`/`log_archive`/`claude_accounts` через сервис
-   `backend` и `sftp_host_keys` — через сервис `sftp` (у backend он только
-   для чтения), применяет миграции и запускает прикладные сервисы. Генерация
-   секретов, интерактивные вопросы и seed пропускаются: всё это уже есть
-   в `.env` и дампе. Если `.env` старого сервера не знает `SFTP_DB_PASSWORD`
-   (версия без SFTP-шлюза), скрипт дописывает сгенерированный пароль.
+   Скрипт сначала проверяет, что в каталоге есть `.env`, дамп и три
+   обязательных архива (если дампов несколько — берёт самый свежий по
+   имени), и только потом: ставит Docker при необходимости, клонирует
+   репозиторий, кладёт перенесённый `.env` в `${INSTALL_DIR}/.env` (прежний,
+   если был, сохраняется как `.env.before-restore`), собирает образы,
+   поднимает PostgreSQL и Redis, восстанавливает дамп в пустую БД **до**
+   миграций, распаковывает архивы в volumes через сервис, который их
+   монтирует: `backend` — `task_repos`, `user_files`, `log_archive`,
+   `claude_sessions`, `claude_accounts`; `cliproxy-init` — `cliproxy_data`;
+   `sftp` — `sftp_host_keys` (у backend он только для чтения). Отсутствующий
+   необязательный архив пропускается. Затем применяет миграции, переносит
+   историю сессий из `claude_accounts`, если он был (раздел 20.6), и
+   запускает прикладные сервисы. Генерация секретов, интерактивные вопросы и
+   seed пропускаются: всё это уже есть в `.env` и дампе. Значения, которых
+   `.env` старого сервера не знает (`SFTP_DB_PASSWORD`, ключи LLM-прокси),
+   скрипт дописывает; версия прокси и коммит сборки берутся из репозитория.
 
    Важно: `SECRET_ENCRYPTION_KEY`/`SESSION_SECRET_KEY` обязаны быть теми же,
    что на старом сервере, — иначе расшифровка перенесённых
@@ -98,22 +102,18 @@ volume-данных, без изменений кода или повторно�
 
 ```bash
 cd /opt/tracker
-docker compose stop backend worker session-worker beat
+docker compose stop cliproxy llm-gateway backend worker session-worker beat sftp
 
-docker run --rm -v tracker_task_repos:/data -v "$(pwd)":/backup alpine \
-  sh -c "rm -rf /data/* && tar xzf /backup/task_repos.tar.gz -C /data"
-docker run --rm -v tracker_user_files:/data -v "$(pwd)":/backup alpine \
-  sh -c "rm -rf /data/* && tar xzf /backup/user_files.tar.gz -C /data"
-docker run --rm -v tracker_log_archive:/data -v "$(pwd)":/backup alpine \
-  sh -c "rm -rf /data/* && tar xzf /backup/log_archive.tar.gz -C /data"
-docker run --rm -v tracker_claude_accounts:/data -v "$(pwd)":/backup alpine \
-  sh -c "rm -rf /data/* && tar xzf /backup/claude_accounts.tar.gz -C /data"
-docker run --rm -v tracker_sftp_host_keys:/data -v "$(pwd)":/backup alpine \
-  sh -c "rm -rf /data/* && tar xzf /backup/sftp_host_keys.tar.gz -C /data"
+for archive in *.tar.gz; do
+  volume="tracker_${archive%.tar.gz}"
+  docker run --rm -v "${volume}:/data" -v "$(pwd)":/backup alpine \
+    sh -c "find /data -mindepth 1 -delete && tar xzf '/backup/${archive}' -C /data"
+done
 
 docker compose up -d --wait postgres
 zcat <файл-дампа>.sql.gz | docker compose exec -T postgres psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"
-docker compose up -d backend worker session-worker beat sftp frontend caddy backup
+docker compose run --rm backend python /app/scripts/migrate_claude_sessions.py
+docker compose up -d cliproxy llm-gateway backend worker session-worker beat sftp frontend caddy backup
 ```
 
 В этом варианте миграции уже применены к пустой БД до восстановления
@@ -126,5 +126,8 @@ docker compose up -d backend worker session-worker beat sftp frontend caddy back
   видны (подтверждает восстановление дампа БД).
 - Запустить существующую задачу с уже клонированным репозиторием — рабочая
   директория на месте (подтверждает восстановление `task_repos`).
+- Раздел «LLM-аккаунты» — аккаунты в статусе «Активен» с расходом окон
+  (подтверждает восстановление `cliproxy_data`); «Администрирование» →
+  «LLM-прокси» — прокси доступен.
 - `docker compose logs backup` — расписание из `.env` подхвачено
   (`[entrypoint.sh] расписание: ...`), а не дефолт.

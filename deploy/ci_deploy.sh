@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Принудительная команда ключа развёртывания (раздел 20.7 ТЗ, docs/deployment.md):
 #
-#   command="<DEPLOY_PATH>/deploy/ci_deploy.sh",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 …
+#   command="<каталог установки>/deploy/ci_deploy.sh",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 …
 #
 # SSH передаёт запрошенную команду в SSH_ORIGINAL_COMMAND; принимаются только
 #
