@@ -25,7 +25,13 @@ from redis.exceptions import RedisError
 
 from app_logging.app_logs import write_app_log
 from app_logging.config import get_logger
-from db.models.enums import AppLogLevel, LlmAccountStatus, NodeType, ReasoningEffort
+from db.models.enums import (
+    AppLogLevel,
+    LlmAccountStatus,
+    LlmSwitchReason,
+    NodeType,
+    ReasoningEffort,
+)
 from db.models.llm import LlmAccount
 from db.models.tasks import Task
 from db.models.users import User
@@ -35,7 +41,6 @@ from services.llm_providers import PROVIDERS, get_provider, provider_effort
 from services.llm_routing import (
     AccountChoice,
     NoLlmAccountAvailableError,
-    SwitchReason,
     SwitchThresholds,
     TurnRoute,
     choose_account,
@@ -115,10 +120,18 @@ class TaskAccountRouter:
             thresholds=await self._thresholds(),
             plan_prompt=node_type is NodeType.PLAN_PROMPT,
         )
-        route = _turn_route(choice.account, effort)
+        switched = previous_id is not None and previous_id != choice.account.id
+        route = _turn_route(
+            choice.account,
+            effort,
+            switch_reason=choice.reason if switched else None,
+        )
         await publish_route(self._redis, task.id, route)
-        await self._set_current(choice, previous_id)
-        if choice.reason is SwitchReason.ALL_ABOVE_THRESHOLD:
+        await self._set_current(choice)
+        if switched:
+            assert previous_id is not None
+            await self._log_switch(previous_id, choice)
+        if choice.reason is LlmSwitchReason.ALL_ABOVE_THRESHOLD:
             await self._notify_all_above_threshold()
         self.route_in_use = route
         return route
@@ -171,23 +184,22 @@ class TaskAccountRouter:
             None,
         )
 
-    async def _set_current(self, choice: AccountChoice, previous_id: uuid.UUID | None) -> None:
+    async def _set_current(self, choice: AccountChoice) -> None:
         task = self._task
         chosen_id = choice.account.id
-        if task.current_llm_account_id != chosen_id:
-            # Compare-and-swap: аккаунт задачи меняет только её воркер.
-            await self._db.execute(
-                sa.update(Task)
-                .where(
-                    Task.id == task.id,
-                    Task.current_llm_account_id.is_not_distinct_from(task.current_llm_account_id),
-                )
-                .values(current_llm_account_id=chosen_id),
+        if task.current_llm_account_id == chosen_id:
+            return
+        # Compare-and-swap: аккаунт задачи меняет только её воркер.
+        await self._db.execute(
+            sa.update(Task)
+            .where(
+                Task.id == task.id,
+                Task.current_llm_account_id.is_not_distinct_from(task.current_llm_account_id),
             )
-            await self._db.commit()
-            await self._db.refresh(task, ["current_llm_account_id"])
-        if previous_id is not None and previous_id != chosen_id:
-            await self._log_switch(previous_id, choice)
+            .values(current_llm_account_id=chosen_id),
+        )
+        await self._db.commit()
+        await self._db.refresh(task, ["current_llm_account_id"])
 
     async def _log_switch(self, previous_id: uuid.UUID, choice: AccountChoice) -> None:
         context = {
@@ -285,7 +297,12 @@ def _usage_stale(account: LlmAccount, *, now: datetime) -> bool:
     return checked_at is None or now - checked_at > USAGE_MAX_AGE
 
 
-def _turn_route(account: LlmAccount, effort: ReasoningEffort | None) -> TurnRoute:
+def _turn_route(
+    account: LlmAccount,
+    effort: ReasoningEffort | None,
+    *,
+    switch_reason: LlmSwitchReason | None,
+) -> TurnRoute:
     assert account.default_model is not None
     chosen_effort = effort or account.default_effort
     return TurnRoute(
@@ -294,6 +311,7 @@ def _turn_route(account: LlmAccount, effort: ReasoningEffort | None) -> TurnRout
         model=account.default_model,
         effort=chosen_effort,
         provider_effort=provider_effort(get_provider(account.provider), chosen_effort),
+        switch_reason=switch_reason,
     )
 
 

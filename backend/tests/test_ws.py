@@ -2,7 +2,7 @@
 
 Проверки авторизации (без токена / с недействительным токеном) не касаются
 БД — они безопасно проверяются через `TestClient.websocket_connect`
-(отдельный event loop `anyio`-портала), в отличие от `_fetch_status`,
+(отдельный event loop `anyio`-портала), в отличие от `_fetch_state`,
 использующего `db.session.async_session_factory` — тестируется напрямую
 как обычная async-функция в event loop'е `pytest-asyncio`, чтобы не
 столкнуться с привязкой asyncpg-соединений к loop'у (см.
@@ -30,8 +30,9 @@ from db.session import async_session_factory
 from services.auth_tokens import issue_session_token
 from services.output_stream import output_channel_name, publish_output_delta
 from ws.tasks import (
+    TaskState,
     _access_denied_close_code,
-    _fetch_status,
+    _fetch_state,
     serve_task_events,
     stream_task_events,
 )
@@ -90,17 +91,17 @@ class TestAuthMessage:
         assert exc_info.value.code == 4401
 
 
-async def test_fetch_status_returns_none_for_unknown_task(run_migrations: None) -> None:
-    assert await _fetch_status(uuid.uuid4()) is None
+async def test_fetch_state_returns_none_for_unknown_task(run_migrations: None) -> None:
+    assert await _fetch_state(uuid.uuid4()) is None
 
 
-async def test_fetch_status_returns_current_status(run_migrations: None) -> None:
-    """`_fetch_status` читает через `db.session.async_session_factory`
+async def test_fetch_state_returns_current_status(run_migrations: None) -> None:
+    """`_fetch_state` читает через `db.session.async_session_factory`
     (реальный, отдельный от `db_session`-фикстуры пул соединений) — фикстура
     `db_session` оборачивает изменения в транзакцию, которая откатывается
     после теста и потому НИКОГДА не видна из другого соединения (см.
     docstring модуля). Здесь строка коммитится по-настоящему через тот же
-    `async_session_factory`, которым пользуется сам `_fetch_status`, и
+    `async_session_factory`, которым пользуется сам `_fetch_state`, и
     удаляется вручную по завершении теста."""
     user_id = uuid.uuid4()
     task_id = uuid.uuid4()
@@ -122,8 +123,7 @@ async def test_fetch_status_returns_current_status(run_migrations: None) -> None
         await session.commit()
 
     try:
-        status = await _fetch_status(task_id)
-        assert status is TaskStatus.IN_PROGRESS
+        assert await _fetch_state(task_id) == TaskState(TaskStatus.IN_PROGRESS)
     finally:
         async with async_session_factory() as session:
             task = await session.get(Task, task_id)
@@ -139,12 +139,18 @@ class TestStreamTaskEvents:
     async def test_forwards_status_and_output(self, redis_client: Redis) -> None:
         task_id = uuid.uuid4()
         node_log_id = uuid.uuid4()
-        statuses = [TaskStatus.IN_PROGRESS, TaskStatus.IN_PROGRESS, TaskStatus.PLAN_REVIEW]
+        account_id = uuid.uuid4()
+        states = [
+            TaskState(TaskStatus.IN_PROGRESS),
+            TaskState(TaskStatus.IN_PROGRESS),
+            TaskState(TaskStatus.IN_PROGRESS, current_llm_account_id=account_id),
+            TaskState(TaskStatus.PLAN_REVIEW, current_llm_account_id=account_id),
+        ]
         sent: list[dict[str, Any]] = []
         received_status = asyncio.Event()
 
-        async def fetch_status(_task_id: uuid.UUID) -> TaskStatus | None:
-            return statuses.pop(0) if statuses else None
+        async def fetch_state(_task_id: uuid.UUID) -> TaskState | None:
+            return states.pop(0) if states else None
 
         async def send(payload: dict[str, Any]) -> None:
             sent.append(payload)
@@ -155,7 +161,7 @@ class TestStreamTaskEvents:
                 send,
                 task_id=task_id,
                 redis_client=redis_client,
-                fetch_status=fetch_status,
+                fetch_state=fetch_state,
             ),
         )
         await asyncio.wait_for(received_status.wait(), timeout=5)
@@ -170,6 +176,11 @@ class TestStreamTaskEvents:
         assert sent == [
             {"type": "status", "task_id": str(task_id), "status": "in_progress"},
             {"type": "output_delta", "node_log_id": str(node_log_id), "text": "Привет"},
+            {
+                "type": "llm_account",
+                "task_id": str(task_id),
+                "current_llm_account_id": str(account_id),
+            },
             {"type": "status", "task_id": str(task_id), "status": "plan_review"},
         ]
 
@@ -196,15 +207,15 @@ class TestServeTaskEvents:
             async def close(self, code: int) -> None:
                 raise AssertionError(f"сокет уже закрыт клиентом, close({code}) не нужен")
 
-        async def fetch_status(_task_id: uuid.UUID) -> TaskStatus | None:
-            return TaskStatus.DONE
+        async def fetch_state(_task_id: uuid.UUID) -> TaskState | None:
+            return TaskState(TaskStatus.DONE)
 
         serving = asyncio.create_task(
             serve_task_events(
                 IdleClient(),  # type: ignore[arg-type]
                 task_id=task_id,
                 redis_client=redis_client,
-                fetch_status=fetch_status,
+                fetch_state=fetch_state,
             ),
         )
         channel = output_channel_name(task_id)
@@ -234,8 +245,8 @@ class TestAccessRecheck:
         async def check_access() -> int | None:
             return checks.pop(0)
 
-        async def fetch_status(_task_id: uuid.UUID) -> TaskStatus | None:
-            return TaskStatus.IN_PROGRESS
+        async def fetch_state(_task_id: uuid.UUID) -> TaskState | None:
+            return TaskState(TaskStatus.IN_PROGRESS)
 
         async def send(_payload: dict[str, Any]) -> None:
             return None
@@ -245,7 +256,7 @@ class TestAccessRecheck:
                 send,
                 task_id=uuid.uuid4(),
                 redis_client=redis_client,
-                fetch_status=fetch_status,
+                fetch_state=fetch_state,
                 check_access=check_access,
             ),
             timeout=5,

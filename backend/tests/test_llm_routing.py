@@ -9,12 +9,11 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from db.models.enums import LlmAccountStatus, ReasoningEffort
+from db.models.enums import LlmAccountStatus, LlmSwitchReason, ReasoningEffort
 from db.models.llm import LlmAccount
 from services.llm_routing import (
     SESSION_TOKEN_TTL_SECONDS,
     NoLlmAccountAvailableError,
-    SwitchReason,
     SwitchThresholds,
     TurnRoute,
     choose_account,
@@ -134,7 +133,7 @@ def _choose(
     current: LlmAccount | None = None,
     start: LlmAccount | None = None,
     plan_prompt: bool = False,
-) -> tuple[LlmAccount, SwitchReason]:
+) -> tuple[LlmAccount, LlmSwitchReason]:
     choice = choose_account(
         accounts,
         current_id=current.id if current else None,
@@ -149,23 +148,23 @@ class TestFirstCall:
     def test_start_account_below_threshold(self) -> None:
         first, start = _account(1), _account(2, pct_5h="50")
 
-        assert _choose([first, start], start=start) == (start, SwitchReason.START)
+        assert _choose([first, start], start=start) == (start, LlmSwitchReason.START)
 
     @pytest.mark.parametrize(
         ("start_fields", "reason"),
         [
-            ({"pct_5h": "93"}, SwitchReason.THRESHOLD_5H),
-            ({"pct_week": "95.5"}, SwitchReason.THRESHOLD_WEEK),
-            ({"status": LlmAccountStatus.RATE_LIMITED}, SwitchReason.RATE_LIMITED),
-            ({"status": LlmAccountStatus.LOGIN_REQUIRED}, SwitchReason.LOGIN_REQUIRED),
-            ({"status": LlmAccountStatus.DISABLED}, SwitchReason.DISABLED),
-            ({"model": None}, SwitchReason.UNSUITABLE),
+            ({"pct_5h": "93"}, LlmSwitchReason.THRESHOLD_5H),
+            ({"pct_week": "95.5"}, LlmSwitchReason.THRESHOLD_WEEK),
+            ({"status": LlmAccountStatus.RATE_LIMITED}, LlmSwitchReason.RATE_LIMITED),
+            ({"status": LlmAccountStatus.LOGIN_REQUIRED}, LlmSwitchReason.LOGIN_REQUIRED),
+            ({"status": LlmAccountStatus.DISABLED}, LlmSwitchReason.DISABLED),
+            ({"model": None}, LlmSwitchReason.UNSUITABLE),
         ],
     )
     def test_start_account_skipped(
         self,
         start_fields: dict[str, Any],
-        reason: SwitchReason,
+        reason: LlmSwitchReason,
     ) -> None:
         start = _account(1, **start_fields)
         second = _account(2)
@@ -175,7 +174,7 @@ class TestFirstCall:
     def test_without_start_account(self) -> None:
         first = _account(1)
 
-        assert _choose([first, _account(2)]) == (first, SwitchReason.START)
+        assert _choose([first, _account(2)]) == (first, LlmSwitchReason.START)
 
 
 class TestCurrentAccount:
@@ -186,21 +185,21 @@ class TestCurrentAccount:
 
         assert _choose([first, current], current=current, start=first) == (
             current,
-            SwitchReason.KEPT,
+            LlmSwitchReason.KEPT,
         )
 
     @pytest.mark.parametrize(
         ("current_fields", "reason"),
         [
-            ({"pct_5h": "93.00"}, SwitchReason.THRESHOLD_5H),
-            ({"pct_week": "90"}, SwitchReason.THRESHOLD_WEEK),
-            ({"status": LlmAccountStatus.RATE_LIMITED}, SwitchReason.RATE_LIMITED),
+            ({"pct_5h": "93.00"}, LlmSwitchReason.THRESHOLD_5H),
+            ({"pct_week": "90"}, LlmSwitchReason.THRESHOLD_WEEK),
+            ({"status": LlmAccountStatus.RATE_LIMITED}, LlmSwitchReason.RATE_LIMITED),
         ],
     )
     def test_switch_to_first_below(
         self,
         current_fields: dict[str, Any],
-        reason: SwitchReason,
+        reason: LlmSwitchReason,
     ) -> None:
         full = _account(1, pct_5h="99")
         current = _account(2, **current_fields)
@@ -212,7 +211,7 @@ class TestCurrentAccount:
         first = _account(1, pct_5h="10")
         current = _account(2, pct_5h="94")
 
-        assert _choose([first, current], current=current) == (first, SwitchReason.THRESHOLD_5H)
+        assert _choose([first, current], current=current) == (first, LlmSwitchReason.THRESHOLD_5H)
 
 
 class TestAllAboveThreshold:
@@ -223,7 +222,7 @@ class TestAllAboveThreshold:
 
         assert _choose([current, least, other], current=current) == (
             least,
-            SwitchReason.ALL_ABOVE_THRESHOLD,
+            LlmSwitchReason.ALL_ABOVE_THRESHOLD,
         )
 
     def test_tie_keeps_switch_order(self) -> None:
@@ -239,13 +238,13 @@ class TestPlanPrompt:
 
         assert _choose([current, codex], current=current, plan_prompt=True) == (
             codex,
-            SwitchReason.UNSUITABLE,
+            LlmSwitchReason.UNSUITABLE,
         )
 
     def test_provider_without_plan_kept_for_other_nodes(self) -> None:
         current = _account(1, provider="google")
 
-        assert _choose([current], current=current)[1] is SwitchReason.KEPT
+        assert _choose([current], current=current)[1] is LlmSwitchReason.KEPT
 
 
 class TestNoAccount:

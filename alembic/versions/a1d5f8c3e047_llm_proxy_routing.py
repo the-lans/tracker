@@ -18,6 +18,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 _EFFORT_TYPE = "reasoning_effort"
 _EFFORT_VALUES = "'low', 'medium', 'high', 'xhigh', 'max'"
+_SWITCH_REASON_TYPE = "llm_switch_reason"
+_SWITCH_REASON_VALUES = (
+    "'start', 'kept', 'threshold_5h', 'threshold_week', 'rate_limited', "
+    "'login_required', 'disabled', 'unsuitable', 'all_above_threshold'"
+)
 _DEFAULT_THRESHOLD_PCT = 93
 _THRESHOLD_COLUMNS = ("llm_switch_threshold_5h_pct", "llm_switch_threshold_week_pct")
 
@@ -31,14 +36,18 @@ def _add_enum_values() -> None:
             "BEFORE 'active'",
         )
         op.execute("ALTER TYPE remote_control_status ADD VALUE IF NOT EXISTS 'unavailable'")
-    op.execute(
-        f"""
-        DO $$ BEGIN
-            CREATE TYPE {_EFFORT_TYPE} AS ENUM ({_EFFORT_VALUES});
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$
-        """,
-    )
+    for type_name, values in (
+        (_EFFORT_TYPE, _EFFORT_VALUES),
+        (_SWITCH_REASON_TYPE, _SWITCH_REASON_VALUES),
+    ):
+        op.execute(
+            f"""
+            DO $$ BEGIN
+                CREATE TYPE {type_name} AS ENUM ({values});
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $$
+            """,
+        )
 
 
 def _upgrade_llm_accounts() -> None:
@@ -133,7 +142,8 @@ def _upgrade_runs() -> None:
         ALTER TABLE node_logs
             ADD COLUMN IF NOT EXISTS llm_account_id UUID REFERENCES llm_accounts (id),
             ADD COLUMN IF NOT EXISTS llm_model VARCHAR,
-            ADD COLUMN IF NOT EXISTS reasoning_effort {_EFFORT_TYPE}
+            ADD COLUMN IF NOT EXISTS reasoning_effort {_EFFORT_TYPE},
+            ADD COLUMN IF NOT EXISTS llm_switch_reason {_SWITCH_REASON_TYPE}
         """,
     )
     op.execute(
@@ -162,7 +172,8 @@ def downgrade() -> None:
         ALTER TABLE node_logs
             DROP COLUMN IF EXISTS llm_account_id,
             DROP COLUMN IF EXISTS llm_model,
-            DROP COLUMN IF EXISTS reasoning_effort
+            DROP COLUMN IF EXISTS reasoning_effort,
+            DROP COLUMN IF EXISTS llm_switch_reason
         """,
     )
     op.execute("ALTER TABLE nodes DROP COLUMN IF EXISTS reasoning_effort")
@@ -188,3 +199,4 @@ def downgrade() -> None:
         """,
     )
     op.execute(f"DROP TYPE IF EXISTS {_EFFORT_TYPE}")
+    op.execute(f"DROP TYPE IF EXISTS {_SWITCH_REASON_TYPE}")

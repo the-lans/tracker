@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from clients.claude_agent import REMOTE_CONTROL_EXTRA_ARG
 from db.models.enums import (
     LlmAccountStatus,
+    LlmSwitchReason,
     McpAuthType,
     McpIsolationMode,
     MergeStatus,
@@ -1119,12 +1120,20 @@ class TestAccountSwitching:
         return task, start, spare
 
     async def _attempts(self, db_session: AsyncSession, task: Task) -> list[uuid.UUID | None]:
+        return [account_id for account_id, _ in await self._switches(db_session, task)]
+
+    async def _switches(
+        self,
+        db_session: AsyncSession,
+        task: Task,
+    ) -> list[tuple[uuid.UUID | None, LlmSwitchReason | None]]:
         stmt = (
-            sa.select(NodeLog.llm_account_id)
+            sa.select(NodeLog.llm_account_id, NodeLog.llm_switch_reason)
             .where(NodeLog.task_id == task.id)
             .order_by(NodeLog.started_at)
         )
-        return list((await db_session.execute(stmt)).scalars())
+        rows = await db_session.execute(stmt)
+        return [(row.llm_account_id, row.llm_switch_reason) for row in rows]
 
     async def test_threshold_switches_next_node(
         self,
@@ -1151,7 +1160,10 @@ class TestAccountSwitching:
 
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
-        assert await self._attempts(db_session, task) == [start.id, spare.id]
+        assert await self._switches(db_session, task) == [
+            (start.id, None),
+            (spare.id, LlmSwitchReason.THRESHOLD_5H),
+        ]
         assert task.current_llm_account_id == spare.id
         assert len(worker_env.options) == 1
 

@@ -10,6 +10,8 @@ WebSocket-канал задачи (раздел 15.2, 18.1 ТЗ): `/ws/tasks/{ta
   publish через все них означало бы рисковать разойтись местами.
   Полноценный push (раздел 18, Web Push) на закрытую вкладку — отдельный
   механизм (`services/notifications.py`, `services/push_notifications.py`).
+- ``{"type": "llm_account", "task_id", "current_llm_account_id"}`` — смена
+  аккаунта, на котором работает сессия (раздел 19.7); тот же опрос БД.
 - ``{"type": "output_delta", "node_log_id", "text"}`` — фрагменты ответа
   LLM по мере генерации (раздел 15.2). Их публикует воркер в Redis
   (`services/output_stream.py`), опросом БД их не получить.
@@ -26,6 +28,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -59,10 +62,39 @@ SendJson = Callable[[dict[str, Any]], Awaitable[None]]
 AccessCheck = Callable[[], Awaitable[int | None]]
 
 
-async def _fetch_status(task_id: uuid.UUID) -> TaskStatus | None:
+@dataclass(frozen=True, slots=True)
+class TaskState:
+    """То, что канал задачи отслеживает опросом БД."""
+
+    status: TaskStatus
+    current_llm_account_id: uuid.UUID | None = None
+
+
+FetchState = Callable[[uuid.UUID], Awaitable[TaskState | None]]
+
+
+async def _fetch_state(task_id: uuid.UUID) -> TaskState | None:
     async with async_session_factory() as db_session:
         task = await db_session.get(Task, task_id)
-        return task.status if task is not None else None
+        if task is None:
+            return None
+        return TaskState(status=task.status, current_llm_account_id=task.current_llm_account_id)
+
+
+def _changes(task_id: uuid.UUID, state: TaskState, last: TaskState | None) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    if last is None or state.status != last.status:
+        events.append({"type": "status", "task_id": str(task_id), "status": state.status.value})
+    if last is not None and state.current_llm_account_id != last.current_llm_account_id:
+        account_id = state.current_llm_account_id
+        events.append(
+            {
+                "type": "llm_account",
+                "task_id": str(task_id),
+                "current_llm_account_id": str(account_id) if account_id is not None else None,
+            },
+        )
+    return events
 
 
 async def stream_task_events(
@@ -70,25 +102,25 @@ async def stream_task_events(
     *,
     task_id: uuid.UUID,
     redis_client: Redis,
-    fetch_status: Callable[[uuid.UUID], Awaitable[TaskStatus | None]] = _fetch_status,
+    fetch_state: FetchState = _fetch_state,
     check_access: AccessCheck | None = None,
 ) -> int:
     """Пересылает события задачи; возвращает код закрытия: задача удалена или доступ потерян."""
     pubsub = redis_client.pubsub()
     await pubsub.subscribe(output_channel_name(task_id))
     loop = asyncio.get_running_loop()
-    last_status: TaskStatus | None = None
+    last_state: TaskState | None = None
     next_status_check = loop.time()
     polls = 0
     try:
         while True:
             if loop.time() >= next_status_check:
-                status = await fetch_status(task_id)
-                if status is None:
+                state = await fetch_state(task_id)
+                if state is None:
                     return _TASK_NOT_FOUND_CLOSE_CODE
-                if status != last_status:
-                    await send({"type": "status", "task_id": str(task_id), "status": status.value})
-                    last_status = status
+                for event in _changes(task_id, state, last_state):
+                    await send(event)
+                last_state = state
                 polls += 1
                 if check_access is not None and polls % ACCESS_RECHECK_POLLS == 0:
                     close_code = await check_access()
@@ -124,7 +156,7 @@ async def serve_task_events(
     *,
     task_id: uuid.UUID,
     redis_client: Redis,
-    fetch_status: Callable[[uuid.UUID], Awaitable[TaskStatus | None]] = _fetch_status,
+    fetch_state: FetchState = _fetch_state,
     check_access: AccessCheck | None = None,
 ) -> None:
     """
@@ -137,7 +169,7 @@ async def serve_task_events(
             websocket.send_json,
             task_id=task_id,
             redis_client=redis_client,
-            fetch_status=fetch_status,
+            fetch_state=fetch_state,
             check_access=check_access,
         ),
     )

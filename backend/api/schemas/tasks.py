@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from db.models.enums import (
     LibraryPromptRunStatus,
+    LlmSwitchReason,
     ManualRequestStatus,
     ManualRequestType,
     MergeStatus,
@@ -20,6 +21,7 @@ from db.models.enums import (
     NodeLogTriggerType,
     NodeType,
     PermissionMode,
+    ReasoningEffort,
     RemoteControlStatus,
     RepositoryRole,
     TaskStatus,
@@ -98,6 +100,7 @@ class TaskResponse(BaseModel):
     status: TaskStatus
     pipeline_id: uuid.UUID | None
     llm_account_id: uuid.UUID | None
+    current_llm_account_id: uuid.UUID | None
     parent_task_id: uuid.UUID | None
     use_parent_summary: bool
     session_id: str | None
@@ -148,6 +151,10 @@ class NodeLogResponse(BaseModel):
     script_stdout: str | None
     script_exit_code: int | None
     error_message: str | None
+    llm_account_id: uuid.UUID | None
+    llm_model: str | None
+    reasoning_effort: ReasoningEffort | None
+    llm_switch_reason: LlmSwitchReason | None
     status: NodeLogStatus
     pending_question: str | None
     pending_plan_text: str | None

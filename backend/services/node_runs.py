@@ -36,12 +36,16 @@ async def start_node_log(db_session: AsyncSession, node_log: NodeLog) -> NodeLog
 
 
 def record_turn_route(node_log: NodeLog, route: TurnRoute | None) -> None:
-    """Аккаунт, модель и уровень (после перевода провайдеру), которыми выполнен ход."""
+    """
+    Аккаунт, модель и уровень (после перевода провайдеру), которыми выполнен
+    ход, и причина смены аккаунта, если он сменился.
+    """
     if route is None:
         return
     node_log.llm_account_id = route.account_id
     node_log.llm_model = route.model
     node_log.reasoning_effort = route.provider_effort
+    node_log.llm_switch_reason = route.switch_reason
 
 
 def mark_node_log_stopped(

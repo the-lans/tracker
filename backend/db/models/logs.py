@@ -10,7 +10,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
-from db.models.enums import AppLogLevel, NodeLogStatus, NodeLogTriggerType, ReasoningEffort
+from db.models.enums import (
+    AppLogLevel,
+    LlmSwitchReason,
+    NodeLogStatus,
+    NodeLogTriggerType,
+    ReasoningEffort,
+)
 from db.models.mixins import JsonValue, UUIDPrimaryKeyMixin, pg_enum
 
 _DEFAULT_ATTEMPT_NUMBER = 1
@@ -47,6 +53,10 @@ class NodeLog(UUIDPrimaryKeyMixin, Base):
     llm_model: Mapped[str | None] = mapped_column(sa.String)
     reasoning_effort: Mapped[ReasoningEffort | None] = mapped_column(
         pg_enum(ReasoningEffort, name="reasoning_effort"),
+    )
+    # Раздел 15.2: почему обращение ушло не на аккаунт прежнего обращения.
+    llm_switch_reason: Mapped[LlmSwitchReason | None] = mapped_column(
+        pg_enum(LlmSwitchReason, name="llm_switch_reason"),
     )
     status: Mapped[NodeLogStatus] = mapped_column(
         pg_enum(NodeLogStatus, name="node_log_status"),

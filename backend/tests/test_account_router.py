@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from claude_agent_sdk import RateLimitInfo
 
-from db.models.enums import LlmAccountStatus, NodeType, ReasoningEffort
+from db.models.enums import LlmAccountStatus, LlmSwitchReason, NodeType, ReasoningEffort
 from db.models.llm import LlmAccount
 from db.models.tasks import Task
 from services import account_router as account_router_module
@@ -200,7 +200,7 @@ class TestRoute:
             node_type=None,
         )
 
-        assert route.account_id == spare.id
+        assert (route.account_id, route.switch_reason) == (spare.id, LlmSwitchReason.THRESHOLD_5H)
         await db_session.refresh(task)
         assert task.current_llm_account_id == spare.id
         assert [(entry["message"], entry["context"]) for entry in recorded.app_logs] == [
@@ -280,6 +280,10 @@ class TestRoute:
         second = await router.route(effort=None, node_type=None)
 
         assert (first.account_id, second.account_id) == (least.id, least.id)
+        assert (first.switch_reason, second.switch_reason) == (
+            LlmSwitchReason.ALL_ABOVE_THRESHOLD,
+            None,
+        )
         assert recorded.pushes == [(NotificationEvent.LLM_ACCOUNTS_ABOVE_THRESHOLD, task.id)]
         assert [entry["context"]["reason"] for entry in recorded.app_logs] == [
             "all_above_threshold",

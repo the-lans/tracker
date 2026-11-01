@@ -24,13 +24,12 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from decimal import Decimal
-from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from redis.exceptions import RedisError
 
 from app_logging.config import get_logger
-from db.models.enums import LlmAccountStatus, ReasoningEffort
+from db.models.enums import LlmAccountStatus, LlmSwitchReason, ReasoningEffort
 from services.llm_providers import PROVIDERS
 from services.session_heartbeat import HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_TTL_SECONDS
 
@@ -68,6 +67,8 @@ class TurnRoute:
     # Уровень трекера (нода или аккаунт) и уровень, ушедший провайдеру после перевода.
     effort: ReasoningEffort
     provider_effort: ReasoningEffort
+    # Почему аккаунт сменился по сравнению с прежним обращением; None — не сменился.
+    switch_reason: LlmSwitchReason | None = None
 
     def to_json(self) -> str:
         return json.dumps({**asdict(self), "account_id": str(self.account_id)})
@@ -81,7 +82,12 @@ class TurnRoute:
             model=data["model"],
             effort=ReasoningEffort(data["effort"]),
             provider_effort=ReasoningEffort(data["provider_effort"]),
+            switch_reason=_optional_reason(data.get("switch_reason")),
         )
+
+
+def _optional_reason(raw: str | None) -> LlmSwitchReason | None:
+    return LlmSwitchReason(raw) if raw is not None else None
 
 
 def _session_key(token: str) -> str:
@@ -164,26 +170,10 @@ async def read_route(redis_client: Redis, task_id: uuid.UUID) -> TurnRoute | Non
     return TurnRoute.from_json(raw) if raw is not None else None
 
 
-class SwitchReason(StrEnum):
-    """Почему ход выполняется этим аккаунтом (событие `llm_account_switched`)."""
-
-    START = "start"
-    KEPT = "kept"
-    THRESHOLD_5H = "threshold_5h"
-    THRESHOLD_WEEK = "threshold_week"
-    RATE_LIMITED = "rate_limited"
-    LOGIN_REQUIRED = "login_required"
-    DISABLED = "disabled"
-    # Прежний аккаунт активен, но не годится для хода: нет модели по умолчанию
-    # или провайдер недопустим для ноды `plan_prompt`.
-    UNSUITABLE = "unsuitable"
-    ALL_ABOVE_THRESHOLD = "all_above_threshold"
-
-
 _STATUS_REASONS = {
-    LlmAccountStatus.RATE_LIMITED: SwitchReason.RATE_LIMITED,
-    LlmAccountStatus.LOGIN_REQUIRED: SwitchReason.LOGIN_REQUIRED,
-    LlmAccountStatus.DISABLED: SwitchReason.DISABLED,
+    LlmAccountStatus.RATE_LIMITED: LlmSwitchReason.RATE_LIMITED,
+    LlmAccountStatus.LOGIN_REQUIRED: LlmSwitchReason.LOGIN_REQUIRED,
+    LlmAccountStatus.DISABLED: LlmSwitchReason.DISABLED,
 }
 
 
@@ -198,7 +188,7 @@ class SwitchThresholds:
 @dataclass(frozen=True, slots=True)
 class AccountChoice:
     account: LlmAccount
-    reason: SwitchReason
+    reason: LlmSwitchReason
 
 
 def _above(pct: Decimal | None, threshold: int) -> bool:
@@ -206,11 +196,11 @@ def _above(pct: Decimal | None, threshold: int) -> bool:
     return pct is not None and pct >= threshold
 
 
-def _threshold_reason(account: LlmAccount, thresholds: SwitchThresholds) -> SwitchReason | None:
+def _threshold_reason(account: LlmAccount, thresholds: SwitchThresholds) -> LlmSwitchReason | None:
     if _above(account.usage_5h_pct, thresholds.five_hour):
-        return SwitchReason.THRESHOLD_5H
+        return LlmSwitchReason.THRESHOLD_5H
     if _above(account.usage_week_pct, thresholds.week):
-        return SwitchReason.THRESHOLD_WEEK
+        return LlmSwitchReason.THRESHOLD_WEEK
     return None
 
 
@@ -226,14 +216,14 @@ def _leave_reason(
     thresholds: SwitchThresholds,
     *,
     plan_prompt: bool,
-) -> SwitchReason:
+) -> LlmSwitchReason:
     """Почему прежний аккаунт задачи не выполняет этот ход."""
     status_reason = _STATUS_REASONS.get(account.status)
     if status_reason is not None:
         return status_reason
     if not _suitable(account, plan_prompt=plan_prompt):
-        return SwitchReason.UNSUITABLE
-    return _threshold_reason(account, thresholds) or SwitchReason.UNSUITABLE
+        return LlmSwitchReason.UNSUITABLE
+    return _threshold_reason(account, thresholds) or LlmSwitchReason.UNSUITABLE
 
 
 def _larger_window(account: LlmAccount) -> Decimal:
@@ -264,13 +254,15 @@ def choose_account(
     previous_id = current_id if current_id is not None else start_id
     previous = by_id.get(previous_id) if previous_id is not None else None
     if previous is not None and previous in below:
-        return AccountChoice(previous, SwitchReason.KEPT if current_id else SwitchReason.START)
+        reason = LlmSwitchReason.KEPT if current_id else LlmSwitchReason.START
+        return AccountChoice(previous, reason)
     if not below:
         # П. 4: работа продолжается до настоящего лимита на наименее израсходованном аккаунте.
-        return AccountChoice(min(candidates, key=_larger_window), SwitchReason.ALL_ABOVE_THRESHOLD)
+        least_used = min(candidates, key=_larger_window)
+        return AccountChoice(least_used, LlmSwitchReason.ALL_ABOVE_THRESHOLD)
     reason = (
         _leave_reason(previous, thresholds, plan_prompt=plan_prompt)
         if previous is not None
-        else SwitchReason.START
+        else LlmSwitchReason.START
     )
     return AccountChoice(below[0], reason)
