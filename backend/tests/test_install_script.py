@@ -429,11 +429,12 @@ class TestUpdate:
 
         result = _update(stubs, install_dir, "--ref", "abc1234")
 
-        assert result.returncode != 0
+        assert result.returncode == 3
         assert "origin/main" in result.stdout
         calls = _calls(stubs)
         assert not any("checkout" in call or "compose build" in call for call in calls)
         assert "redis-cli DEL maintenance:deploy" in calls[-1]
+        assert not (install_dir / ".deploy").exists()
 
     def test_waits_for_idle(self, stubs: Path, install_dir: Path) -> None:
         (stubs / "live-sessions").write_text("2\n1\n0\n")
@@ -451,7 +452,7 @@ class TestUpdate:
 
         result = _update(stubs, install_dir, "--wait-idle", "0")
 
-        assert result.returncode != 0
+        assert result.returncode == 3
         assert "не завершились" in result.stdout
         calls = _calls(stubs)
         assert not any("fetch" in call or "compose build" in call for call in calls)

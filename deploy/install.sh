@@ -45,9 +45,8 @@ LIVE_SESSION_STATUSES="'in_progress','paused','plan_review','awaiting_input','re
 MAINTENANCE_KEY="maintenance:deploy"
 MAINTENANCE_TTL_MARGIN_SECONDS=3600
 MAINTENANCE_SET=""
-# Коммит до обновления — цель отката (раздел 20.7).
+# .deploy/previous_ref — коммит до обновления, цель отката (раздел 20.7).
 DEPLOY_STATE_DIR="${INSTALL_DIR}/.deploy"
-PREVIOUS_REF=""
 # Архив -> точка монтирования volume[ -> сервис, по умолчанию backend]
 # (docker-compose.yml).
 RESTORE_ARCHIVES=(
@@ -71,6 +70,15 @@ log() { echo "[install.sh] $*"; }
 die() {
   log "Ошибка: $*"
   exit 1
+}
+
+# --update прерван до перехода на новый код: сервер не изменён, откатывать
+# нечего (deploy/ci_deploy.sh и .github/workflows/deploy.yml, раздел 20.7).
+EXIT_UNCHANGED=3
+
+die_unchanged() {
+  log "Ошибка: $* — сервер не изменён"
+  exit "${EXIT_UNCHANGED}"
 }
 
 usage() {
@@ -552,10 +560,10 @@ step_wait_idle() {
   deadline=$(( $(date +%s) + WAIT_IDLE_MINUTES * 60 ))
   while true; do
     count="$(_live_session_count)"
-    [[ "${count}" =~ ^[0-9]+$ ]] || die "не удалось узнать число живых сессий: ${count}"
+    [[ "${count}" =~ ^[0-9]+$ ]] || die_unchanged "не удалось узнать число живых сессий: ${count}"
     [ "${count}" -eq 0 ] && return 0
     if [ "$(date +%s)" -ge "${deadline}" ]; then
-      die "живые сессии (${count}) не завершились за ${WAIT_IDLE_MINUTES} мин — обновление отменено, сервисы не перезапускались"
+      die_unchanged "живые сессии (${count}) не завершились за ${WAIT_IDLE_MINUTES} мин"
     fi
     log "Живых сессий: ${count}, ожидание"
     sleep "${WAIT_IDLE_POLL_SECONDS}"
@@ -564,17 +572,20 @@ step_wait_idle() {
 
 # Переход на коммит из истории origin/main: вершина ветки или --ref (в том
 # числе откат). Незакоммиченные правки на сервере git не затирает — при
-# конфликте checkout прерывает обновление.
+# конфликте checkout прерывает обновление. Прежний коммит — цель отката.
 step_fetch_code() {
-  local target="${UPDATE_REF:-origin/main}" commit
+  local target="${UPDATE_REF:-origin/main}" commit previous
   log "Обновление: получение кода (${target}) в ${INSTALL_DIR}"
-  PREVIOUS_REF="$(git -C "${INSTALL_DIR}" rev-parse HEAD)"
-  git -C "${INSTALL_DIR}" fetch origin
+  previous="$(git -C "${INSTALL_DIR}" rev-parse HEAD)"
+  git -C "${INSTALL_DIR}" fetch origin || die_unchanged "не удалось получить код из origin"
   commit="$(git -C "${INSTALL_DIR}" rev-parse --verify --quiet "${target}^{commit}")" \
-    || die "коммит ${target} не найден"
+    || die_unchanged "коммит ${target} не найден"
   git -C "${INSTALL_DIR}" merge-base --is-ancestor "${commit}" origin/main \
-    || die "коммит ${commit} не входит в историю origin/main"
-  git -C "${INSTALL_DIR}" checkout --detach "${commit}"
+    || die_unchanged "коммит ${commit} не входит в историю origin/main"
+  git -C "${INSTALL_DIR}" checkout --detach "${commit}" \
+    || die_unchanged "переход на ${commit} мешают локальные правки"
+  mkdir -p "${DEPLOY_STATE_DIR}"
+  echo "${previous}" > "${DEPLOY_STATE_DIR}/previous_ref"
 }
 
 # Перед миграциями: откат возвращает код и образы, а схема остаётся новой —
@@ -582,8 +593,6 @@ step_fetch_code() {
 step_dump_database() {
   log "Обновление: дамп БД перед миграциями"
   ( cd "${INSTALL_DIR}" && docker compose exec -T backup /usr/local/bin/backup.sh )
-  mkdir -p "${DEPLOY_STATE_DIR}"
-  echo "${PREVIOUS_REF}" > "${DEPLOY_STATE_DIR}/previous_ref"
 }
 
 # Образы раннеров и tracker-session не входят в docker-compose.yml — без
