@@ -5,11 +5,14 @@
 #   deploy/install.sh                     — новая установка
 #   deploy/install.sh --restore <каталог> — перенос на новый сервер (раздел
 #     20.4, docs/migration.md): в каталоге .env, дамп БД *.sql.gz,
-#     task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz, claude_accounts.tar.gz
-#     и sftp_host_keys.tar.gz со старого сервера
-#   deploy/install.sh --update            — обновление установленного сервера
-#     до свежего кода (раздел 20.6): пересборка всех образов, в том числе
-#     раннеров и tracker-session, миграции и перезапуск сервисов
+#     task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz и необязательные
+#     claude_sessions.tar.gz, cliproxy_data.tar.gz, claude_accounts.tar.gz,
+#     sftp_host_keys.tar.gz со старого сервера
+#   deploy/install.sh --update [--ref <коммит>] [--wait-idle <минуты>] —
+#     обновление установленного сервера (раздел 20.6): флаг обслуживания,
+#     ожидание живых сессий, переход на коммит из origin/main, пересборка
+#     всех образов (в том числе раннеров и tracker-session), дамп БД,
+#     миграции, перенос истории сессий и перезапуск сервисов
 
 set -euo pipefail
 
@@ -29,6 +32,22 @@ RESTORE_DIR=""
 RESTORE_DUMP=""
 # --update: обновление уже установленного сервера.
 UPDATE_MODE=""
+# --ref: коммит из истории origin/main вместо её вершины (в том числе откат).
+UPDATE_REF=""
+# --wait-idle: сколько минут ждать завершения живых сессий.
+WAIT_IDLE_MINUTES=""
+WAIT_IDLE_POLL_SECONDS="${WAIT_IDLE_POLL_SECONDS:-15}"
+# Статусы задач с живой сессией (services/task_status.py::SESSION_ACTIVE_STATUSES).
+LIVE_SESSION_STATUSES="'in_progress','paused','plan_review','awaiting_input','rebase_conflict'"
+# Флаг обслуживания (services/maintenance.py::MAINTENANCE_KEY): запуск задач
+# отвечает 503, воркер не берёт задачи из queued. TTL — срок ожидания плюс
+# запас на сборку и миграции: упавший скрипт не оставит флаг навсегда.
+MAINTENANCE_KEY="maintenance:deploy"
+MAINTENANCE_TTL_MARGIN_SECONDS=3600
+MAINTENANCE_SET=""
+# Коммит до обновления — цель отката (раздел 20.7).
+DEPLOY_STATE_DIR="${INSTALL_DIR}/.deploy"
+PREVIOUS_REF=""
 # Архив -> точка монтирования volume[ -> сервис, по умолчанию backend]
 # (docker-compose.yml).
 RESTORE_ARCHIVES=(
@@ -38,6 +57,10 @@ RESTORE_ARCHIVES=(
 )
 # Необязательные: на сервере прежней версии такого volume ещё не было.
 RESTORE_OPTIONAL_ARCHIVES=(
+  "claude_sessions:/data/claude-sessions"
+  # Учётки прокси с токенами OAuth; volume подключён только к прокси.
+  "cliproxy_data:/data:cliproxy-init"
+  # Каталоги аккаунтов прежней версии — источник переноса истории сессий.
   "claude_accounts:/data/claude-accounts"
   # У backend этот volume только для чтения — распаковывает сам шлюз.
   "sftp_host_keys:/data/sftp-host-keys:sftp"
@@ -51,7 +74,7 @@ die() {
 }
 
 usage() {
-  echo "Использование: $0 [--restore <каталог с .env, *.sql.gz, task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz, claude_accounts.tar.gz> | --update]"
+  echo "Использование: $0 [--restore <каталог с .env, *.sql.gz и архивами volume> | --update [--ref <коммит>] [--wait-idle <минуты>]]"
 }
 
 parse_args() {
@@ -65,6 +88,16 @@ parse_args() {
       --update)
         UPDATE_MODE="1"
         shift
+        ;;
+      --ref)
+        [ "$#" -ge 2 ] || { usage; exit 2; }
+        UPDATE_REF="$2"
+        shift 2
+        ;;
+      --wait-idle)
+        [ "$#" -ge 2 ] || { usage; exit 2; }
+        WAIT_IDLE_MINUTES="$2"
+        shift 2
         ;;
       -h | --help)
         usage
@@ -80,6 +113,24 @@ parse_args() {
   if [ -n "${RESTORE_DIR}" ] && [ -n "${UPDATE_MODE}" ]; then
     log "--restore и --update несовместимы"
     usage
+    exit 2
+  fi
+  _validate_update_options
+}
+
+_validate_update_options() {
+  if [ -z "${UPDATE_MODE}" ] && { [ -n "${UPDATE_REF}" ] || [ -n "${WAIT_IDLE_MINUTES}" ]; }; then
+    log "--ref и --wait-idle применяются только с --update"
+    usage
+    exit 2
+  fi
+  # Коммит попадает в командную строку git — только шестнадцатеричный SHA.
+  if [ -n "${UPDATE_REF}" ] && ! [[ "${UPDATE_REF}" =~ ^[0-9a-f]{7,40}$ ]]; then
+    log "--ref ожидает SHA коммита, получено: ${UPDATE_REF}"
+    exit 2
+  fi
+  if [ -n "${WAIT_IDLE_MINUTES}" ] && ! [[ "${WAIT_IDLE_MINUTES}" =~ ^[0-9]+$ ]]; then
+    log "--wait-idle ожидает число минут, получено: ${WAIT_IDLE_MINUTES}"
     exit 2
   fi
 }
@@ -174,9 +225,42 @@ _ensure_env_value() {
   log "В ${ENV_FILE} добавлено значение ${key}"
 }
 
+# Ставит значение всегда: строка есть — заменяется, нет — дописывается.
+_put_env_value() {
+  local key="$1" value="$2"
+  if grep -q "^${key}=" "${ENV_FILE}"; then
+    _set_env_value "${key}" "${value}"
+  else
+    echo "${key}=${value}" >> "${ENV_FILE}"
+  fi
+}
+
+_env_file_value() {
+  sed -n "s|^$1=||p" "$2" | tail -n 1
+}
+
 # Раздел 20.5: пароль роли БД SFTP-шлюза входит в DATABASE_URL — только hex.
 _generate_sftp_db_password() {
   openssl rand -hex 24
+}
+
+# Раздел 19.4: ключи LLM-прокси; init.sh принимает только буквы и цифры.
+_generate_cliproxy_key() {
+  openssl rand -hex 32
+}
+
+# Перед каждой сборкой, во всех режимах: секреты, которых не знал .env
+# прежней версии, версия прокси из репозитория (обновление прокси — смена
+# версии в .env.example) и коммит сборки для /api/health (раздел 20.7).
+step_prepare_env_for_build() {
+  _ensure_env_value SFTP_DB_PASSWORD "$(_generate_sftp_db_password)"
+  _ensure_env_value CLIPROXY_API_KEY "$(_generate_cliproxy_key)"
+  _ensure_env_value CLIPROXY_MANAGEMENT_KEY "$(_generate_cliproxy_key)"
+  local cliproxy_version
+  cliproxy_version="$(_env_file_value CLIPROXY_VERSION "${ENV_EXAMPLE}")"
+  [ -n "${cliproxy_version}" ] || die "в ${ENV_EXAMPLE} не задана CLIPROXY_VERSION"
+  _put_env_value CLIPROXY_VERSION "${cliproxy_version}"
+  _put_env_value GIT_SHA "$(git -C "${INSTALL_DIR}" rev-parse HEAD)"
 }
 
 # Шаг 3: генерация .env из .env.example — все секреты через openssl rand
@@ -254,8 +338,10 @@ step_prompt_critical_values() {
 
 # Шаг 5: сборка Docker-образов
 step_build_images() {
-  log "Шаг 5/11: сборка образов backend, frontend, раннеров script-нод и сессии"
-  ( cd "${INSTALL_DIR}" && docker compose build backend frontend )
+  log "Шаг 5/11: сборка образов сервисов стека (в том числе LLM-прокси), раннеров script-нод и сессии"
+  # Все сервисы с build: у worker, beat, sftp и llm-gateway свои образы из
+  # Dockerfile backend — сборка одного backend оставила бы их на старом коде.
+  ( cd "${INSTALL_DIR}" && docker compose build )
   # Раннеры не входят в docker-compose.yml — запускаются on-demand Celery
   # worker'ом через docker.sock (раздел 11.4, 19.3), а не как долгоживущий
   # сервис; имена образов обязаны совпадать с
@@ -305,8 +391,10 @@ _seed_periodic_tasks() {
 
 # Шаг 9: старт прикладных сервисов
 step_start_app_services() {
-  log "Шаг 9/11: запуск backend, worker, session-worker, beat, sftp, frontend, caddy, backup"
-  ( cd "${INSTALL_DIR}" && docker compose up -d backend worker session-worker beat sftp frontend caddy backup )
+  log "Шаг 9/11: запуск cliproxy, llm-gateway, backend, worker, session-worker, beat, sftp, frontend, caddy, backup"
+  # cliproxy-init (конфигурация прокси с ключами из .env) запускается как зависимость cliproxy.
+  ( cd "${INSTALL_DIR}" \
+    && docker compose up -d cliproxy llm-gateway backend worker session-worker beat sftp frontend caddy backup )
 }
 
 # Шаг 10: получение TLS-сертификата — выполняется автоматически Caddy
@@ -317,10 +405,18 @@ step_wait_tls() {
 # Шаг 11: первый вход администратора
 step_final_instructions() {
   log "Шаг 11/11: откройте https://<DOMAIN> и войдите через Google OAuth (${ADMIN_EMAIL}) — первый пользователь автоматически получит роль admin"
-  # Раздел 19.5: вход в Claude выполняется в каталоге уже заведённого LLM-аккаунта.
   # Раздел 15.1, 20.3: доступ к файлам задач по SFTP/sshfs.
   log "SFTP-шлюз слушает порт SFTP_PORT из ${ENV_FILE} (по умолчанию 2222) — откройте его в файрволе; инструкция подключения — в профиле трекера"
-  log "Вход в Claude для LLM-аккаунта (после того как пользователь завёл его в разделе «LLM-аккаунты»): cd ${INSTALL_DIR} && docker compose exec -e CLAUDE_CONFIG_DIR=<каталог аккаунта> worker claude auth login"
+  # Раздел 19.5: вход в аккаунт провайдера — через LLM-прокси из интерфейса.
+  log "LLM-аккаунты: пользователь заводит аккаунт в разделе «LLM-аккаунты» и входит в провайдера по ссылке из диалога входа — консоль сервера для этого не нужна"
+}
+
+# Перенос истории сессий из каталогов аккаунтов прежней версии (раздел
+# 20.6); идемпотентен, на сервере без них ничего не делает.
+step_migrate_sessions() {
+  log "Перенос истории сессий задач в их каталоги"
+  ( cd "${INSTALL_DIR}" \
+    && docker compose run --rm backend python /app/scripts/migrate_claude_sessions.py )
 }
 
 # --- Восстановление на новом сервере (раздел 20.4, docs/migration.md) ---
@@ -350,7 +446,6 @@ step_restore_env() {
     log "Прежний ${ENV_FILE} сохранён как ${ENV_FILE}.before-restore"
   fi
   cp "${RESTORE_DIR}/.env" "${ENV_FILE}"
-  _ensure_env_value SFTP_DB_PASSWORD "$(_generate_sftp_db_password)"
 }
 
 # В пустую БД и до миграций: дамп содержит схему старого сервера, миграции
@@ -386,6 +481,7 @@ step_restore_volumes() {
 run_install() {
   step_generate_env
   step_prompt_critical_values
+  step_prepare_env_for_build
   step_build_images
   step_start_infra
   step_run_migrations
@@ -399,11 +495,13 @@ run_install() {
 # Seed не нужен: пользователи, allowlist и periodic_tasks уже в дампе.
 run_restore() {
   step_restore_env
+  step_prepare_env_for_build
   step_build_images
   step_start_infra
   step_restore_database
   step_restore_volumes
   step_run_migrations
+  step_migrate_sessions
   step_start_app_services
   step_wait_tls
   log "Восстановление завершено: откройте https://<DOMAIN> и войдите прежним аккаунтом администратора"
@@ -416,24 +514,99 @@ validate_update() {
   [ -f "${ENV_FILE}" ] || die "нет ${ENV_FILE} — сначала обычная установка"
 }
 
-step_pull_repo() {
-  log "Обновление: получение свежего кода в ${INSTALL_DIR}"
-  # Только перемотка вперёд: локальные правки на сервере не затираются молча.
-  git -C "${INSTALL_DIR}" pull --ff-only
+_redis_cli() {
+  # Пароль — через окружение клиента, не в аргументах командной строки.
+  ( cd "${INSTALL_DIR}" \
+    && REDISCLI_AUTH="$(_env_file_value REDIS_PASSWORD "${ENV_FILE}")" \
+      docker compose exec -T -e REDISCLI_AUTH redis redis-cli "$@" )
+}
+
+_set_maintenance_flag() {
+  local ttl=$(( ${WAIT_IDLE_MINUTES:-0} * 60 + MAINTENANCE_TTL_MARGIN_SECONDS ))
+  [ "$(_redis_cli SET "${MAINTENANCE_KEY}" 1 EX "${ttl}")" = "OK" ] \
+    || die "не удалось поставить флаг обслуживания в Redis"
+  MAINTENANCE_SET="1"
+}
+
+# Вызывается и в конце обновления, и по выходу с ошибкой (trap EXIT).
+_clear_maintenance_flag() {
+  [ -n "${MAINTENANCE_SET}" ] || return 0
+  MAINTENANCE_SET=""
+  _redis_cli DEL "${MAINTENANCE_KEY}" >/dev/null \
+    || log "Флаг обслуживания не снят — он истечёт сам по TTL"
+}
+
+_live_session_count() {
+  local query="SELECT count(*) FROM tasks WHERE status IN (${LIVE_SESSION_STATUSES})"
+  ( cd "${INSTALL_DIR}" \
+    && docker compose exec -T postgres \
+      sh -c 'psql -tA -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "${query}" )
+}
+
+# Сессии, шедшие во время перезапуска, упадут в failed (раздел 6.6) — до
+# перезапуска ждём, пока их не останется; новые не стартуют из-за флага.
+step_wait_idle() {
+  [ -n "${WAIT_IDLE_MINUTES}" ] || return 0
+  log "Обновление: ожидание завершения живых сессий (до ${WAIT_IDLE_MINUTES} мин)"
+  local deadline count
+  deadline=$(( $(date +%s) + WAIT_IDLE_MINUTES * 60 ))
+  while true; do
+    count="$(_live_session_count)"
+    [[ "${count}" =~ ^[0-9]+$ ]] || die "не удалось узнать число живых сессий: ${count}"
+    [ "${count}" -eq 0 ] && return 0
+    if [ "$(date +%s)" -ge "${deadline}" ]; then
+      die "живые сессии (${count}) не завершились за ${WAIT_IDLE_MINUTES} мин — обновление отменено, сервисы не перезапускались"
+    fi
+    log "Живых сессий: ${count}, ожидание"
+    sleep "${WAIT_IDLE_POLL_SECONDS}"
+  done
+}
+
+# Переход на коммит из истории origin/main: вершина ветки или --ref (в том
+# числе откат). Незакоммиченные правки на сервере git не затирает — при
+# конфликте checkout прерывает обновление.
+step_fetch_code() {
+  local target="${UPDATE_REF:-origin/main}" commit
+  log "Обновление: получение кода (${target}) в ${INSTALL_DIR}"
+  PREVIOUS_REF="$(git -C "${INSTALL_DIR}" rev-parse HEAD)"
+  git -C "${INSTALL_DIR}" fetch origin
+  commit="$(git -C "${INSTALL_DIR}" rev-parse --verify --quiet "${target}^{commit}")" \
+    || die "коммит ${target} не найден"
+  git -C "${INSTALL_DIR}" merge-base --is-ancestor "${commit}" origin/main \
+    || die "коммит ${commit} не входит в историю origin/main"
+  git -C "${INSTALL_DIR}" checkout --detach "${commit}"
+}
+
+# Перед миграциями: откат возвращает код и образы, а схема остаётся новой —
+# дамп позволяет вернуть и данные (раздел 20.6).
+step_dump_database() {
+  log "Обновление: дамп БД перед миграциями"
+  ( cd "${INSTALL_DIR}" && docker compose exec -T backup /usr/local/bin/backup.sh )
+  mkdir -p "${DEPLOY_STATE_DIR}"
+  echo "${PREVIOUS_REF}" > "${DEPLOY_STATE_DIR}/previous_ref"
 }
 
 # Образы раннеров и tracker-session не входят в docker-compose.yml — без
 # пересборки здесь сессии и script-ноды остались бы на старых образах или
 # не нашли бы новый (раздел 19.3).
 run_update() {
-  step_pull_repo
-  _ensure_env_value SFTP_DB_PASSWORD "$(_generate_sftp_db_password)"
+  trap _clear_maintenance_flag EXIT
+  step_start_infra
+  _set_maintenance_flag
+  step_wait_idle
+  step_fetch_code
+  step_prepare_env_for_build
   step_build_images
   step_start_infra
+  # Redis мог быть пересоздан новой конфигурацией — флаг ставится заново.
+  _set_maintenance_flag
+  step_dump_database
   step_run_migrations
   _seed_periodic_tasks
+  step_migrate_sessions
   step_start_app_services
-  log "Обновление завершено"
+  _clear_maintenance_flag
+  log "Обновление завершено: $(git -C "${INSTALL_DIR}" rev-parse HEAD)"
 }
 
 main() {

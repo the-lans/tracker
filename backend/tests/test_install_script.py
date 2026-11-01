@@ -18,6 +18,9 @@ from pathlib import Path
 
 import pytest
 
+from services.maintenance import MAINTENANCE_KEY
+from services.task_status import SESSION_ACTIVE_STATUSES
+
 _INSTALL_SCRIPT = Path(__file__).resolve().parents[2] / "deploy" / "install.sh"
 # Системные утилиты, которые нужны скрипту и заглушкам. PATH теста состоит
 # только из каталога заглушек: настоящий docker (на CI он в /usr/bin) не
@@ -39,7 +42,15 @@ _SYSTEM_TOOLS = (
     "sed",
     "grep",
     "openssl",
+    "mkdir",
+    "date",
+    "sleep",
+    "head",
+    "wc",
 )
+_PREVIOUS_SHA = "1" * 40
+_TARGET_SHA = "2" * 40
+_REDIS_PASSWORD = "redis-pass-from-env"
 
 _DOCKER_STUB = """#!/bin/sh
 echo "docker $*" >> "$STUB_LOG"
@@ -55,6 +66,32 @@ esac
 if [ "$1" = "version" ]; then
   cat "$STUB_DIR/engine-version" 2>/dev/null || echo "27.3.1"
 fi
+case "$*" in
+  *"redis-cli SET"*) echo "OK" ;;
+  *psql*)
+    # Число живых сессий: по строке файла на опрос, последняя повторяется.
+    if [ -s "$STUB_DIR/live-sessions" ]; then
+      head -n 1 "$STUB_DIR/live-sessions"
+      if [ "$(wc -l < "$STUB_DIR/live-sessions")" -gt 1 ]; then
+        sed -i.bak 1d "$STUB_DIR/live-sessions"
+      fi
+    else
+      echo 0
+    fi
+    ;;
+esac
+exit 0
+"""
+# Ведёт себя как git в установленном репозитории: HEAD, переход на коммит,
+# проверка, что коммит входит в историю origin/main.
+_GIT_STUB = f"""#!/bin/sh
+echo "git $*" >> "$STUB_LOG"
+case "$*" in
+  *"rev-parse --verify"*) echo "{_TARGET_SHA}" ;;
+  *"rev-parse HEAD"*) cat "$STUB_DIR/git-head" 2>/dev/null || echo "{_PREVIOUS_SHA}" ;;
+  *"merge-base --is-ancestor"*) [ -f "$STUB_DIR/not-ancestor" ] && exit 1 ;;
+  *"checkout --detach"*) for last; do :; done; echo "$last" > "$STUB_DIR/git-head" ;;
+esac
 exit 0
 """
 _LOGGING_STUB = """#!/bin/sh
@@ -94,7 +131,7 @@ def stubs(tmp_path: Path) -> Path:
         (stub_dir / tool).symlink_to(tool_path)
     _write_executable(stub_dir / "docker", _DOCKER_STUB)
     (stub_dir / "docker.real").write_text(_DOCKER_STUB)
-    _write_executable(stub_dir / "git", _LOGGING_STUB.format(name="git"))
+    _write_executable(stub_dir / "git", _GIT_STUB)
     _write_executable(stub_dir / "curl", _CURL_STUB)
     _write_executable(stub_dir / "sudo", _SUDO_STUB)
     _write_executable(stub_dir / "apt-get", _APT_STUB)
@@ -105,6 +142,7 @@ def stubs(tmp_path: Path) -> Path:
 def install_dir(tmp_path: Path) -> Path:
     directory = tmp_path / "opt-tracker"
     (directory / ".git").mkdir(parents=True)
+    (directory / ".env.example").write_text("CLIPROXY_VERSION=v8.0.48\nCLIPROXY_API_KEY=\n")
     return directory
 
 
@@ -120,6 +158,7 @@ def _run_bash(
         "INSTALL_DIR": str(install_dir),
         "STUB_DIR": str(stubs),
         "STUB_LOG": str(stubs / "calls.log"),
+        "WAIT_IDLE_POLL_SECONDS": "0",
     }
     return subprocess.run(
         [str(stubs / "bash"), "-c", script, "install.sh", *args],
@@ -133,6 +172,32 @@ def _run_bash(
 def _calls(stubs: Path) -> list[str]:
     log = stubs / "calls.log"
     return log.read_text().splitlines() if log.exists() else []
+
+
+def _assert_in_order(calls: list[str], expected: list[str]) -> None:
+    """Каждый ожидаемый фрагмент — в вызове после предыдущего найденного."""
+    position = -1
+    for fragment in expected:
+        position = next(
+            (index for index in range(position + 1, len(calls)) if fragment in calls[index]),
+            -1,
+        )
+        assert position >= 0, f"нет вызова «{fragment}» в нужном порядке: {calls}"
+
+
+def _env(install_dir: Path) -> dict[str, str]:
+    lines = (install_dir / ".env").read_text().splitlines()
+    return dict(line.split("=", 1) for line in lines if "=" in line)
+
+
+def _update(stubs: Path, install_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return _run_bash(
+        f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+        "--update",
+        *args,
+        stubs=stubs,
+        install_dir=install_dir,
+    )
 
 
 def _make_restore_dir(tmp_path: Path, *, skip: str | None = None) -> Path:
@@ -154,6 +219,8 @@ def _make_restore_dir(tmp_path: Path, *, skip: str | None = None) -> Path:
         "task_repos.tar.gz",
         "user_files.tar.gz",
         "log_archive.tar.gz",
+        "claude_sessions.tar.gz",
+        "cliproxy_data.tar.gz",
         "claude_accounts.tar.gz",
         "sftp_host_keys.tar.gz",
     ):
@@ -166,6 +233,26 @@ def _make_restore_dir(tmp_path: Path, *, skip: str | None = None) -> Path:
 class TestScriptSyntax:
     def test_valid(self) -> None:
         subprocess.run(["bash", "-n", str(_INSTALL_SCRIPT)], check=True)
+
+
+class TestSharedConstants:
+    """Скрипт и backend договариваются о ключе флага и статусах живых сессий."""
+
+    def _value(self, stubs: Path, install_dir: Path, name: str) -> str:
+        result = _run_bash(
+            f'source "{_INSTALL_SCRIPT}" && printf %s "${name}"',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+        return result.stdout
+
+    def test_maintenance_key(self, stubs: Path, install_dir: Path) -> None:
+        assert self._value(stubs, install_dir, "MAINTENANCE_KEY") == MAINTENANCE_KEY
+
+    def test_live_session_statuses(self, stubs: Path, install_dir: Path) -> None:
+        raw = self._value(stubs, install_dir, "LIVE_SESSION_STATUSES")
+        statuses = {item.strip("'") for item in raw.split(",")}
+        assert statuses == {status.value for status in SESSION_ACTIVE_STATUSES}
 
 
 class TestRestore:
@@ -187,34 +274,37 @@ class TestRestore:
 
         assert result.returncode == 0, result.stdout + result.stderr
         docker_calls = [call for call in _calls(stubs) if call.startswith("docker")]
-        expected_order = [
-            "docker compose build backend frontend",
-            "docker compose up -d --wait postgres redis",
-            "docker compose exec -T postgres",
-            "task_repos.tar.gz",
-            "user_files.tar.gz",
-            "log_archive.tar.gz",
-            "claude_accounts.tar.gz",
-            "sftp_host_keys.tar.gz",
-            "docker compose run --rm backend alembic upgrade head",
-            "docker compose up -d backend worker session-worker beat sftp frontend caddy backup",
-        ]
-        positions = [
-            next(index for index, call in enumerate(docker_calls) if expected in call)
-            for expected in expected_order
-        ]
-        assert positions == sorted(positions)
+        _assert_in_order(
+            docker_calls,
+            [
+                "docker compose build",
+                "docker compose up -d --wait postgres redis",
+                "docker compose exec -T postgres",
+                "task_repos.tar.gz",
+                "user_files.tar.gz",
+                "log_archive.tar.gz",
+                "claude_sessions.tar.gz",
+                "cliproxy_data.tar.gz",
+                "claude_accounts.tar.gz",
+                "sftp_host_keys.tar.gz",
+                "docker compose run --rm backend alembic upgrade head",
+                "migrate_claude_sessions.py",
+                "docker compose up -d cliproxy llm-gateway backend worker session-worker beat sftp"
+                " frontend caddy backup",
+            ],
+        )
         assert not any("seed_" in call for call in docker_calls)
         assert (stubs / "psql-input").read_text() == "-- fresh dump\n"
-        # Ключи старого сервера сохранены; пароль роли шлюза .env прежней
-        # версии не знал — он дописан.
-        env_lines = (install_dir / ".env").read_text().splitlines()
-        assert env_lines[0] == "SECRET_ENCRYPTION_KEY=старый-ключ"
-        assert env_lines[1].startswith("SFTP_DB_PASSWORD=")
-        assert len(env_lines[1].removeprefix("SFTP_DB_PASSWORD=")) == 48
-        # У backend volume ключа хоста только для чтения — распаковывает шлюз.
-        [host_keys_call] = [call for call in docker_calls if "sftp_host_keys.tar.gz" in call]
-        assert "--entrypoint sh sftp" in host_keys_call
+        # Ключи старого сервера сохранены; пароль роли шлюза и ключи прокси
+        # .env прежней версии не знал — они дописаны.
+        env = _env(install_dir)
+        assert env["SECRET_ENCRYPTION_KEY"] == "старый-ключ"
+        assert len(env["SFTP_DB_PASSWORD"]) == 48
+        assert len(env["CLIPROXY_MANAGEMENT_KEY"]) == 64
+        # Volume ключа хоста у backend только для чтения, учётки прокси — только у прокси.
+        for archive, service in [("sftp_host_keys", "sftp"), ("cliproxy_data", "cliproxy-init")]:
+            [call] = [call for call in docker_calls if f"{archive}.tar.gz" in call]
+            assert f"--entrypoint sh {service}" in call
 
     @pytest.mark.parametrize(
         "missing",
@@ -241,14 +331,19 @@ class TestRestore:
         assert missing in result.stdout
         assert _calls(stubs) == []
 
-    def test_without_claude_accounts(
+    @pytest.mark.parametrize(
+        "archive",
+        ["claude_accounts.tar.gz", "claude_sessions.tar.gz", "cliproxy_data.tar.gz"],
+    )
+    def test_optional_archive_missing(
         self,
         tmp_path: Path,
         stubs: Path,
         install_dir: Path,
+        archive: str,
     ) -> None:
-        """Перенос с сервера прежней версии: volume `claude_accounts` там ещё не было."""
-        restore_dir = _make_restore_dir(tmp_path, skip="claude_accounts.tar.gz")
+        """Перенос с сервера другой версии: такого volume там не было."""
+        restore_dir = _make_restore_dir(tmp_path, skip=archive)
 
         result = _run_bash(
             f'exec bash "{_INSTALL_SCRIPT}" "$@"',
@@ -259,10 +354,10 @@ class TestRestore:
         )
 
         assert result.returncode == 0, result.stdout + result.stderr
-        assert "claude_accounts.tar.gz нет в переносе" in result.stdout
+        assert f"{archive} нет в переносе" in result.stdout
         docker_calls = [call for call in _calls(stubs) if call.startswith("docker")]
         assert any("log_archive.tar.gz" in call for call in docker_calls)
-        assert not any("claude_accounts.tar.gz" in call for call in docker_calls)
+        assert not any(archive in call for call in docker_calls)
 
     def test_unknown_argument(self, stubs: Path, install_dir: Path) -> None:
         result = _run_bash(
@@ -278,59 +373,146 @@ class TestRestore:
 class TestUpdate:
     """Раздел 20.6: обновление пересобирает все образы, в том числе вне compose."""
 
-    def test_steps_in_order(self, stubs: Path, install_dir: Path) -> None:
-        (install_dir / ".env").write_text("SECRET_ENCRYPTION_KEY=ключ\nSFTP_DB_PASSWORD=пароль\n")
-
-        result = _run_bash(
-            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
-            "--update",
-            stubs=stubs,
-            install_dir=install_dir,
+    @pytest.fixture(autouse=True)
+    def installed(self, install_dir: Path) -> None:
+        (install_dir / ".env").write_text(
+            "SECRET_ENCRYPTION_KEY=ключ\nSFTP_DB_PASSWORD=пароль\n"
+            f"REDIS_PASSWORD={_REDIS_PASSWORD}\nCLIPROXY_VERSION=v1.0.0\nGIT_SHA={_PREVIOUS_SHA}\n",
         )
+
+    def test_steps_in_order(self, stubs: Path, install_dir: Path) -> None:
+        result = _update(stubs, install_dir)
 
         assert result.returncode == 0, result.stdout + result.stderr
         calls = _calls(stubs)
-        expected_order = [
-            "pull --ff-only",
-            "docker compose build backend frontend",
-            "docker build -t tracker-runner-python:latest",
-            "docker build -t tracker-runner-bash:latest",
-            "docker build -t tracker-session:latest",
-            "docker compose up -d --wait postgres redis",
-            "alembic upgrade head",
-            "seed_periodic_tasks.py",
-            "docker compose up -d backend worker session-worker beat sftp frontend caddy backup",
-        ]
-        positions = [
-            next(index for index, call in enumerate(calls) if expected in call)
-            for expected in expected_order
-        ]
-        assert positions == sorted(positions)
+        _assert_in_order(
+            calls,
+            [
+                "docker compose up -d --wait postgres redis",
+                "redis-cli SET maintenance:deploy 1 EX 3600",
+                "fetch origin",
+                "rev-parse --verify --quiet origin/main^{commit}",
+                f"merge-base --is-ancestor {_TARGET_SHA} origin/main",
+                f"checkout --detach {_TARGET_SHA}",
+                "docker compose build",
+                "docker build -t tracker-runner-python:latest",
+                "docker build -t tracker-runner-bash:latest",
+                "docker build -t tracker-session:latest",
+                "docker compose up -d --wait postgres redis",
+                "redis-cli SET maintenance:deploy",
+                "exec -T backup /usr/local/bin/backup.sh",
+                "alembic upgrade head",
+                "seed_periodic_tasks.py",
+                "migrate_claude_sessions.py",
+                "docker compose up -d cliproxy llm-gateway backend worker session-worker beat sftp",
+                "redis-cli DEL maintenance:deploy",
+            ],
+        )
         assert not any("seed_admin_allowlist" in call or "git clone" in call for call in calls)
+        assert not any(_REDIS_PASSWORD in call for call in calls)
+        assert not any("psql" in call for call in calls)
+        env = _env(install_dir)
+        assert (env["GIT_SHA"], env["CLIPROXY_VERSION"]) == (_TARGET_SHA, "v8.0.48")
+        assert len(env["CLIPROXY_API_KEY"]) == 64
         assert (install_dir / ".env").read_text().count("SFTP_DB_PASSWORD=") == 1
+        previous_ref = install_dir / ".deploy" / "previous_ref"
+        assert previous_ref.read_text().strip() == _PREVIOUS_SHA
+
+    def test_ref(self, stubs: Path, install_dir: Path) -> None:
+        result = _update(stubs, install_dir, "--ref", "abc1234")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert any("rev-parse --verify --quiet abc1234^{commit}" in call for call in _calls(stubs))
+
+    def test_ref_outside_main(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "not-ancestor").touch()
+
+        result = _update(stubs, install_dir, "--ref", "abc1234")
+
+        assert result.returncode != 0
+        assert "origin/main" in result.stdout
+        calls = _calls(stubs)
+        assert not any("checkout" in call or "compose build" in call for call in calls)
+        assert "redis-cli DEL maintenance:deploy" in calls[-1]
+
+    def test_waits_for_idle(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "live-sessions").write_text("2\n1\n0\n")
+
+        result = _update(stubs, install_dir, "--wait-idle", "5")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        calls = _calls(stubs)
+        assert sum("psql" in call for call in calls) == 3
+        assert "redis-cli SET maintenance:deploy 1 EX 3900" in "\n".join(calls)
+        _assert_in_order(calls, ["redis-cli SET", "psql", "fetch origin"])
+
+    def test_wait_idle_timeout(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "live-sessions").write_text("1\n")
+
+        result = _update(stubs, install_dir, "--wait-idle", "0")
+
+        assert result.returncode != 0
+        assert "не завершились" in result.stdout
+        calls = _calls(stubs)
+        assert not any("fetch" in call or "compose build" in call for call in calls)
+        assert "redis-cli DEL maintenance:deploy" in calls[-1]
 
     def test_requires_installation(self, stubs: Path, install_dir: Path) -> None:
-        result = _run_bash(
-            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
-            "--update",
-            stubs=stubs,
-            install_dir=install_dir,
-        )
+        (install_dir / ".env").unlink()
+
+        result = _update(stubs, install_dir)
 
         assert result.returncode != 0
         assert not any(call.startswith("docker") for call in _calls(stubs))
 
     def test_not_with_restore(self, tmp_path: Path, stubs: Path, install_dir: Path) -> None:
+        result = _update(stubs, install_dir, "--restore", str(_make_restore_dir(tmp_path)))
+
+        assert result.returncode == 2
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["--ref", "abc1234"],
+            ["--wait-idle", "5"],
+            ["--update", "--ref", "main;reboot"],
+            ["--update", "--ref", "origin/main"],
+            ["--update", "--wait-idle", "soon"],
+        ],
+        ids=["ref_without_update", "wait_without_update", "ref_injection", "ref_name", "minutes"],
+    )
+    def test_bad_arguments(self, stubs: Path, install_dir: Path, args: list[str]) -> None:
         result = _run_bash(
             f'exec bash "{_INSTALL_SCRIPT}" "$@"',
-            "--update",
-            "--restore",
-            str(_make_restore_dir(tmp_path)),
+            *args,
             stubs=stubs,
             install_dir=install_dir,
         )
 
         assert result.returncode == 2
+        assert _calls(stubs) == []
+
+
+class TestPrepareEnv:
+    """Ключи прокси генерируются один раз, версия прокси и коммит — из репозитория."""
+
+    def test_values(self, stubs: Path, install_dir: Path) -> None:
+        (install_dir / ".env").write_text(
+            "CLIPROXY_API_KEY=keep\nCLIPROXY_VERSION=v1.0.0\nGIT_SHA=\n",
+        )
+
+        result = _run_bash(
+            f'source "{_INSTALL_SCRIPT}" && step_prepare_env_for_build',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        env = _env(install_dir)
+        assert (env["CLIPROXY_API_KEY"], env["CLIPROXY_VERSION"]) == ("keep", "v8.0.48")
+        assert env["GIT_SHA"] == _PREVIOUS_SHA
+        assert env["CLIPROXY_MANAGEMENT_KEY"].isalnum()
+        assert len(env["CLIPROXY_MANAGEMENT_KEY"]) == 64
 
 
 class TestEnsureEnvValue:
