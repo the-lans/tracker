@@ -35,7 +35,10 @@ MOCKS_PORT="${QA_MOCKS_PORT:-8090}"
 REPO_PATH="/srv/git/qa/qa-calc.git"
 GIT_URL="ssh://git@${GIT_CONTAINER}${REPO_PATH}"
 TRACKER_ENV="$ROOT_DIR/.env"
-GENERATED_SECRETS=(SECRET_ENCRYPTION_KEY SESSION_SECRET_KEY POSTGRES_PASSWORD REDIS_PASSWORD SFTP_DB_PASSWORD)
+GENERATED_SECRETS=(
+  SECRET_ENCRYPTION_KEY SESSION_SECRET_KEY POSTGRES_PASSWORD REDIS_PASSWORD SFTP_DB_PASSWORD
+  CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY
+)
 
 as_git() {
   docker exec -u git "$GIT_CONTAINER" sh -c "$1"
@@ -114,8 +117,11 @@ make_env() {
   # уже использованы данными в volume.
   local key
   for key in "${GENERATED_SECRETS[@]}"; do
-    [[ -n "$(env_value "$TRACKER_ENV" "$key")" ]] || set_env_value "$TRACKER_ENV" "$key" "$(openssl rand -hex 32)"
+    [[ -n "$(env_value "$TRACKER_ENV" "$key")" ]] || ensure_env_value "$TRACKER_ENV" "$key" "$(openssl rand -hex 32)"
   done
+  # Версия LLM-прокси — из репозитория, коммит сборки — для /api/health (раздел 20.7).
+  ensure_env_value "$TRACKER_ENV" CLIPROXY_VERSION "$(env_value "$ROOT_DIR/.env.example" CLIPROXY_VERSION)"
+  ensure_env_value "$TRACKER_ENV" GIT_SHA "$(git -C "$ROOT_DIR" rev-parse HEAD)"
   [[ -n "$(env_value "$TRACKER_ENV" VAPID_PRIVATE_KEY)" ]] || generate_vapid
 
   if [[ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" && -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]]; then
