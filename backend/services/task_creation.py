@@ -83,9 +83,32 @@ async def _validate_draft(
         raise ValidationError("Саммари родителя требует выбранной родительской задачи")
     if draft.parent_task_id is not None:
         await _ensure_exists(db_session, Task, draft.parent_task_id, "Родительская задача")
-    code_taken = await db_session.scalar(sa.select(Task.id).where(Task.code == draft.code))
-    if code_taken is not None:
-        raise TaskCodeTakenError(f"Задача с кодом {draft.code} уже существует")
+    if await _code_is_taken(db_session, draft.code):
+        raise _code_taken(draft.code)
+
+
+async def _code_is_taken(db_session: AsyncSession, code: str) -> bool:
+    return await db_session.scalar(sa.select(Task.id).where(Task.code == code)) is not None
+
+
+def _code_taken(code: str) -> TaskCodeTakenError:
+    return TaskCodeTakenError(f"Задача с кодом {code} уже существует")
+
+
+async def _flush_task(db_session: AsyncSession, task: Task) -> None:
+    """
+    Одновременное создание с тем же кодом проходит проверку в обоих запросах —
+    второй упирается в уникальность `tasks.code`: это тот же 409, а не 500.
+    """
+    code = task.code
+    db_session.add(task)
+    try:
+        await db_session.flush()
+    except sa.exc.IntegrityError as exc:
+        await db_session.rollback()
+        if await _code_is_taken(db_session, code):
+            raise _code_taken(code) from exc
+        raise
 
 
 async def add_task_with_repositories(
@@ -111,7 +134,7 @@ async def add_task_with_repositories(
         llm_account_id=draft.llm_account_id,
         created_by=created_by,
     )
-    db_session.add(task)
+    await _flush_task(db_session, task)
     for attached in draft.repositories:
         db_session.add(
             TaskRepository(
