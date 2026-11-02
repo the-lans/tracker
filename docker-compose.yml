@@ -134,6 +134,8 @@ services:
       # Раздел 19.7: management API LLM-прокси (вход в аккаунты, расход окон).
       CLIPROXY_MANAGEMENT_URL: http://cliproxy:8317
       CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY}
+      # Раздел 15.5: версия собранного прокси для админки «LLM-прокси».
+      CLIPROXY_VERSION: ${CLIPROXY_VERSION}
       # Раздел 19.3, 19.7: контейнер сессии подключается к изолированной сети,
       # где кроме него есть только llm-gateway.
       TRACKER_SESSION_LLM_NETWORK: ${COMPOSE_PROJECT_NAME:-tracker}-llm-sessions
@@ -351,8 +353,10 @@ volumes:
 
 networks:
   # Раздел 19.3, 19.7: сеть контейнеров сессий — без выхода к сервисам
-  # стека, в ней только llm-gateway. Имя фиксировано: воркер подключает к
-  # ней контейнер сессии по имени (TRACKER_SESSION_LLM_NETWORK).
+  # стека, в ней только llm-gateway. Выход в интернет (MCP-серверы) у неё
+  # есть: Docker не подключает контейнер к стандартной bridge вместе с
+  # пользовательской сетью, и вторая сеть сессии невозможна. Имя
+  # фиксировано: воркер подключает к ней контейнер сессии по имени
+  # (TRACKER_SESSION_LLM_NETWORK).
   llm_sessions:
     name: ${COMPOSE_PROJECT_NAME:-tracker}-llm-sessions
-    internal: true

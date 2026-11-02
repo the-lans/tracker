@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import pytest
+import structlog
 
 from tests.cliproxy_support import LATEST_VERSION, FakeCliproxy
 from tests.factories import make_llm_account
@@ -154,6 +155,37 @@ class TestActions:
 
         assert response.status_code == 204
         assert api_cliproxy.cooldown_resets == [credential.auth_index]
+
+    @pytest.mark.parametrize(
+        ("method", "path", "event"),
+        [
+            ("POST", "/llm-proxy/credentials/refresh", "cliproxy_credential_refreshed"),
+            ("POST", "/llm-proxy/credentials/cooldown/reset", "cliproxy_cooldown_reset"),
+            ("DELETE", "/llm-proxy/credentials", "cliproxy_orphan_credential_deleted"),
+        ],
+    )
+    async def test_action_logged_by_auth_index(
+        self,
+        admin_client: AsyncClient,
+        api_cliproxy: FakeCliproxy,
+        method: str,
+        path: str,
+        event: str,
+    ) -> None:
+        credential = api_cliproxy.add_credential(_ORPHAN, provider="codex")
+        name = {"name": _ORPHAN}
+
+        with structlog.testing.capture_logs() as logs:
+            if method == "POST":
+                response = await admin_client.post(path, json=name)
+            else:
+                response = await admin_client.delete(path, params=name)
+
+        assert response.status_code == 204
+        entry = next(entry for entry in logs if entry["event"] == event)
+        assert entry["auth_index"] == credential.auth_index
+        # Имя учётки содержит email владельца подписки — в логи оно не попадает.
+        assert _ORPHAN not in str(entry)
 
     @pytest.mark.parametrize(
         "path",

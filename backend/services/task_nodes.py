@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import sqlalchemy as sa
 
 from app_logging.config import get_logger
-from db.models.enums import NodeType, TaskStatus
+from db.models.enums import NodeType, ReasoningEffort, TaskStatus
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, TaskNode
 from db.models.tasks import Task
@@ -50,6 +50,7 @@ class TaskNodeView:
     # Текст — только у своей ноды задачи: её правят со страницы задачи.
     prompt_template: str | None
     command_invocation: str | None
+    reasoning_effort: ReasoningEffort | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,7 @@ class CustomNodeDraft:
     node_type: NodeType
     prompt_template: str | None = None
     command_invocation: str | None = None
+    reasoning_effort: ReasoningEffort | None = None
 
 
 def is_position_editable(task: Task, order_index: int, *, restart_point_open: bool) -> bool:
@@ -137,6 +139,7 @@ async def list_task_nodes(db_session: AsyncSession, task: Task) -> list[TaskNode
             is_custom=node.task_id is not None,
             prompt_template=node.prompt_template if node.task_id is not None else None,
             command_invocation=node.command_invocation if node.task_id is not None else None,
+            reasoning_effort=node.reasoning_effort,
         )
         for task_node, node in await load_task_node_rows(db_session, task.id)
     ]
@@ -281,6 +284,7 @@ def _apply_draft(node: Node, draft: CustomNodeDraft) -> None:
     node.node_type = draft.node_type
     node.prompt_template = None if is_command else text
     node.command_invocation = text if is_command else None
+    node.reasoning_effort = draft.reasoning_effort
     validate_node_shape(node)
 
 

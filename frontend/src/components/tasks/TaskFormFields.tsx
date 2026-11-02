@@ -6,28 +6,34 @@ import { useLlmAccounts } from "@/hooks/useLlmAccounts";
 import { useAuth } from "@/hooks/useAuth";
 import type { TaskFormValues } from "@/components/tasks/taskForm.types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
-import { LlmAccountStatus } from "@/lib/types";
+import { startAccountOptions } from "@/lib/llmAccounts";
 
 const WHITESPACE_RE = /\s/;
 
-/** Поля задачи: код, название, описание, гайд, LLM-аккаунт, репозитории. */
+/**
+ * Поля задачи: код, название, описание, гайд, LLM-аккаунт, репозитории.
+ * ``codeError`` — ошибка кода от сервера (код занят или недопустим).
+ */
 export function TaskFormFields({
   value,
   onChange,
+  codeError = null,
 }: {
   value: TaskFormValues;
   onChange: (patch: Partial<TaskFormValues>) => void;
+  codeError?: string | null;
 }) {
   const { user } = useAuth();
   const { data: allLlmAccounts } = useLlmAccounts();
-  // Раздел 19.2: у задачи — только аккаунт её автора; `admin` видит и чужие.
-  const ownAccounts = allLlmAccounts?.filter((account) => account.created_by === user?.id);
-  // Раздел 15.2: стартовый — из `active` по порядку переключения; уже выбранный не пропадает.
-  const llmAccounts = ownAccounts?.filter(
-    (account) => account.status === LlmAccountStatus.ACTIVE || account.id === value.llmAccountId,
-  );
+  const options =
+    allLlmAccounts && startAccountOptions(allLlmAccounts, user?.id, value.llmAccountId || null);
+  const ownAccounts = options?.own;
+  const llmAccounts = options?.choices;
   // Раздел 3.1: код задачи — текст без пробелов (из него строится ветка).
-  const codeInvalid = WHITESPACE_RE.test(value.code);
+  const codeMessage = WHITESPACE_RE.test(value.code)
+    ? "Код задачи не должен содержать пробелов"
+    : codeError;
+  const codeInvalid = codeMessage !== null;
 
   return (
     <>
@@ -46,7 +52,7 @@ export function TaskFormFields({
         />
         {codeInvalid && (
           <div id="task-code-error" role="alert" className="mt-1 text-meta font-semibold text-danger-text">
-            Код задачи не должен содержать пробелов
+            {codeMessage}
           </div>
         )}
         <div id="task-code-hint" className="mt-1 text-meta text-text-3">

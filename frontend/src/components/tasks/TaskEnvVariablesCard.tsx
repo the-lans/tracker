@@ -8,12 +8,13 @@ import { useCreateTaskEnvVariable, useTaskEnvVariables } from "@/hooks/useTaskEn
 import { toastError } from "@/lib/errors";
 import { TaskStatus, type Task } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
 
 /** Раздел 5, 15.2: переменные уровня задачи — приоритет над репозиторием и
  * глобальными; подставляются в момент отправки, поэтому меняются и во время
  * выполнения (кроме выполненной задачи). */
 export function TaskEnvVariablesCard({ task }: { task: Task }) {
-  const { data: variables } = useTaskEnvVariables(task.id);
+  const { data: variables, isLoading } = useTaskEnvVariables(task.id);
   const create = useCreateTaskEnvVariable(task.id);
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
@@ -39,7 +40,9 @@ export function TaskEnvVariablesCard({ task }: { task: Task }) {
         <span>Переменные задачи</span>
         {variables && <span>{variables.length}</span>}
       </CardTitle>
-      {variables?.length ? (
+      {isLoading ? (
+        <LoadingState />
+      ) : variables?.length ? (
         <div className="flex flex-col">
           {variables.map((variable) => (
             <TaskEnvVariableRow

@@ -17,7 +17,7 @@ from db.models.enums import RepositoryRole
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from services.access import ensure_llm_account_of_owner
-from services.errors import ConflictError, NotFoundError, ValidationError
+from services.errors import NotFoundError, TaskCodeTakenError, ValidationError
 from services.repository_validation import validate_branch_name
 from services.task_codes import validate_task_code
 from services.task_workspace import build_branch_name
@@ -77,6 +77,7 @@ async def _validate_draft(
             db_session,
             draft.llm_account_id,
             owner_id=created_by,
+            require_active=True,
         )
     if draft.use_parent_summary and draft.parent_task_id is None:
         raise ValidationError("Саммари родителя требует выбранной родительской задачи")
@@ -84,7 +85,7 @@ async def _validate_draft(
         await _ensure_exists(db_session, Task, draft.parent_task_id, "Родительская задача")
     code_taken = await db_session.scalar(sa.select(Task.id).where(Task.code == draft.code))
     if code_taken is not None:
-        raise ConflictError(f"Задача с кодом {draft.code} уже существует")
+        raise TaskCodeTakenError(f"Задача с кодом {draft.code} уже существует")
 
 
 async def add_task_with_repositories(

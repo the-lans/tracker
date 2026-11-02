@@ -44,6 +44,22 @@ class TestRegistry:
         assert set(PROVIDERS[provider_id].effort_levels) == set(ReasoningEffort)
 
 
+class TestOffersModel:
+    @pytest.mark.parametrize(
+        ("provider_id", "model", "offered"),
+        [
+            ("openai", "gpt-6.1-sol", True),
+            ("openai", "gpt-image-2", False),
+            ("openai", "gpt-image-2.5-flare", False),
+            ("openai", "codex-auto-review", False),
+            ("anthropic", "claude-sonnet-5-5", True),
+            ("anthropic", "gpt-image-2", True),
+        ],
+    )
+    def test_agent_models_only(self, provider_id: str, model: str, offered: bool) -> None:
+        assert get_provider(provider_id).offers_model(model) is offered
+
+
 class TestProviderEffort:
     @pytest.mark.parametrize(
         ("provider_id", "expected"),

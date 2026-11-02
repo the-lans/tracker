@@ -129,7 +129,7 @@ export const REASONING_EFFORT_LABEL: Record<ReasoningEffort, string> = {
 
 /** Раздел 15.2: причина строки «Переключено на аккаунт …» в «Диалоге». */
 export const LLM_SWITCH_REASON_LABEL: Record<LlmSwitchReason, string> = {
-  [LlmSwitchReason.START]: "первое обращение задачи",
+  [LlmSwitchReason.START]: "стартовый аккаунт задачи",
   [LlmSwitchReason.KEPT]: "аккаунт не менялся",
   [LlmSwitchReason.THRESHOLD_5H]: "порог 5-часового окна",
   [LlmSwitchReason.THRESHOLD_WEEK]: "порог недельного окна",

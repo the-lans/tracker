@@ -10,7 +10,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import NodeType, TaskStatus, UserRole
+from db.models.enums import LlmAccountStatus, NodeType, TaskStatus, UserRole
 from db.models.llm import LlmAccount
 from db.models.pipelines import Node, Pipeline
 from db.models.repositories import Template
@@ -27,7 +27,7 @@ from services.access import (
     get_template_for_user,
     owner_filter,
 )
-from services.errors import NotFoundError, UnauthorizedError
+from services.errors import NotFoundError, UnauthorizedError, ValidationError
 from services.llm_accounts import account_prefix
 from tests.factories import make_llm_account, make_user
 
@@ -130,6 +130,39 @@ class TestEnsureLlmAccountOfOwner:
 
         with pytest.raises(NotFoundError):
             await ensure_llm_account_of_owner(db_session, account_id, owner_id=owner.id)
+
+
+    @pytest.mark.parametrize(
+        ("status", "require_active", "allowed"),
+        [
+            (LlmAccountStatus.ACTIVE, True, True),
+            (LlmAccountStatus.DISABLED, True, False),
+            (LlmAccountStatus.LOGIN_REQUIRED, True, False),
+            (LlmAccountStatus.RATE_LIMITED, True, False),
+            (LlmAccountStatus.DISABLED, False, True),
+        ],
+    )
+    async def test_active_required_for_new_choice(
+        self,
+        db_session: AsyncSession,
+        status: LlmAccountStatus,
+        require_active: bool,
+        allowed: bool,
+    ) -> None:
+        owner = await make_user(db_session)
+        account = await make_llm_account(db_session, owner_id=owner.id, status=status)
+
+        check = ensure_llm_account_of_owner(
+            db_session,
+            account.id,
+            owner_id=owner.id,
+            require_active=require_active,
+        )
+        if allowed:
+            await check
+        else:
+            with pytest.raises(ValidationError):
+                await check
 
 
 class TestOwnerFilter:

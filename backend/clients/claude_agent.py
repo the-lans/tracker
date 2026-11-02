@@ -19,6 +19,7 @@ Celery-таска на весь активный жизненный цикл с�
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol
@@ -53,6 +54,12 @@ SEQUENTIAL_TURNS_ENV = {
     "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
     "CLAUDE_CODE_DISABLE_CRON": "1",
 }
+# Раздел 19.3: коммиты и PR агента — без трейлеров и подписи Claude Code.
+# Передаётся флагом `--settings`: он приоритетнее `.claude/settings.json`
+# репозитория задачи, и репозиторий не может вернуть подпись.
+SESSION_CLI_SETTINGS = json.dumps(
+    {"attribution": {"commit": "", "pr": "", "sessionUrl": False}},
+)
 _CONTENT_BLOCK_START_EVENT = "content_block_start"
 _CONTENT_BLOCK_DELTA_EVENT = "content_block_delta"
 _TEXT_DELTA = "text_delta"
@@ -161,7 +168,8 @@ def build_claude_agent_options(
     ``cwd``, с которыми сессии можно работать: артефакты задачи (раздел 14.3).
     ``cli_path`` и ``cli_env`` — обёртка, запускающая CLI в контейнере сессии,
     и её настройки (раздел 19.3, `services/session_container.py`). Фоновые
-    задачи и пробуждения CLI выключены всегда (`SEQUENTIAL_TURNS_ENV`).
+    задачи и пробуждения CLI выключены всегда (`SEQUENTIAL_TURNS_ENV`), подпись
+    Claude Code в коммитах и PR — тоже (`SESSION_CLI_SETTINGS`).
     """
     extra_args: dict[str, str | None] = {}
     if enable_remote_control:
@@ -196,6 +204,7 @@ def build_claude_agent_options(
         can_use_tool=can_use_tool,
         include_partial_messages=True,
         add_dirs=list(add_dirs),
+        settings=SESSION_CLI_SETTINGS,
     )
 
 

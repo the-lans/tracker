@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -270,6 +271,24 @@ class TestStreamingOptions:
 
         assert options.include_partial_messages is True
         assert options.fork_session is fork_session
+
+    @pytest.mark.parametrize("enable_remote_control", [False, True])
+    def test_commit_attribution_disabled(self, enable_remote_control: bool) -> None:
+        options = build_claude_agent_options(
+            resume_session_id=None,
+            cwd="tracker/repos/RR-00001/",
+            permission_mode=None,
+            mcp_servers={},
+            claude_config_dir="/data/claude-sessions/RR-00001",
+            enable_remote_control=enable_remote_control,
+        )
+
+        assert options.settings is not None
+        assert json.loads(options.settings)["attribution"] == {
+            "commit": "",
+            "pr": "",
+            "sessionUrl": False,
+        }
 
 
 class TestSessionLifecycleLogs:

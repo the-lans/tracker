@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DialogFooter } from "@/components/ui/dialog";
-import { ReasoningEffortSelect } from "@/components/llmAccounts/ReasoningEffortSelect";
+import { NodeEffortField } from "@/components/nodes/NodeEffortField";
 import { NodeExecutionFields } from "@/components/nodes/NodeExecutionFields";
 import { PromptTemplateField } from "@/components/nodes/PromptTemplateField";
 import { ScriptFields } from "@/components/nodes/ScriptFields";
@@ -187,14 +187,7 @@ export function NodeForm({
       </div>
 
       {EFFORT_TYPES.includes(nodeType) && (
-        <div>
-          <Label htmlFor="node-effort">Уровень рассуждений</Label>
-          <ReasoningEffortSelect id="node-effort" value={effort} onChange={setEffort} allowDefault />
-          <p className="mt-1 text-meta text-text-3">
-            Применяется к модели того аккаунта, на котором нода выполнится, и переводится на шкалу
-            его провайдера.
-          </p>
-        </div>
+        <NodeEffortField id="node-effort" value={effort} onChange={setEffort} />
       )}
 
       <NodeExecutionFields

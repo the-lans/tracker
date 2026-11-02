@@ -104,11 +104,8 @@ def _networks(args: list[str]) -> list[str]:
 
 
 def _spec_network(spec: dict[str, Any]) -> str:
-    return _networks(spec["docker_args"])[0]
-
-
-def _spec_llm_network(spec: dict[str, Any]) -> str:
-    return _networks(spec["docker_args"])[1]
+    [network] = _networks(spec["docker_args"])
+    return network
 
 
 @pytest.fixture
@@ -160,7 +157,8 @@ class TestSessionDockerArgs:
             f"{config_dir}:{config_dir}:rw",
         ]
         assert f"{SESSION_TASK_LABEL}={task_id}" in args
-        assert _networks(args) == ["bridge", "tracker-llm-sessions"]
+        # Одна сеть: `bridge` вместе с пользовательской сетью Docker не подключает.
+        assert _networks(args) == ["tracker-llm-sessions"]
         assert args[-2:] == ["-w", f"{tmp_path}/repos/RR-1"]
         assert "--privileged" not in args
         assert not any("docker.sock" in arg for arg in args)
@@ -183,10 +181,9 @@ class TestSessionDockerArgs:
         ("variable", "value", "read"),
         [
             (session_container.SESSION_IMAGE_ENV, "registry.example.com/session:1", _spec_image),
-            (session_container.SESSION_NETWORK_ENV, "tracker-agents", _spec_network),
-            (session_container.SESSION_LLM_NETWORK_ENV, "qa-llm-sessions", _spec_llm_network),
+            (session_container.SESSION_LLM_NETWORK_ENV, "qa-llm-sessions", _spec_network),
         ],
-        ids=["image", "network", "llm_network"],
+        ids=["image", "llm_network"],
     )
     async def test_overrides_from_env(
         self,
@@ -207,16 +204,19 @@ class TestSessionDockerArgs:
 
         assert read(json.loads(env[SESSION_DOCKER_SPEC_ENV])) == value
 
+    @pytest.mark.parametrize("network", ["bridge", "tracker-agents"])
     async def test_without_llm_network(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        network: str,
     ) -> None:
         monkeypatch.setenv(session_container.SESSION_LLM_NETWORK_ENV, "")
+        monkeypatch.setenv(session_container.SESSION_NETWORK_ENV, network)
 
         args = await self._docker_args(tmp_path, task_id=uuid.uuid4(), with_artifacts=False)
 
-        assert _networks(args) == ["bridge"]
+        assert _networks(args) == [network]
 
     async def test_parent_fork_without_artifacts(self, tmp_path: Path) -> None:
         args = await self._docker_args(tmp_path, task_id=uuid.uuid4(), with_artifacts=False)

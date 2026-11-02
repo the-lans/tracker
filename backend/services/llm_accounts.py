@@ -108,11 +108,16 @@ async def account_models(
     cliproxy: CliproxyManagementClient,
     account: LlmAccount,
 ) -> list[str]:
-    """Модели учётки аккаунта без префикса; до входа список пуст."""
+    """
+    Модели учётки аккаунта без префикса, кроме не годных агенту по реестру
+    провайдера; до входа список пуст.
+    """
     if account.cliproxy_credential is None:
         return []
+    provider = get_provider(account.provider)
     models = await cliproxy.credential_models(account.cliproxy_credential)
-    return [_strip_prefix(account, model_id) for model_id in models]
+    stripped = (_strip_prefix(account, model_id) for model_id in models)
+    return [model for model in stripped if provider.offers_model(model)]
 
 
 async def ensure_model_available(

@@ -15,13 +15,13 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import sqlalchemy as sa
 
-from db.models.enums import UserRole
+from db.models.enums import LlmAccountStatus, UserRole
 from db.models.llm import LlmAccount
 from db.models.pipelines import Node, Pipeline
 from db.models.repositories import Template
 from db.models.tasks import Task
 from db.models.users import User
-from services.errors import NotFoundError, UnauthorizedError
+from services.errors import NotFoundError, UnauthorizedError, ValidationError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -158,14 +158,21 @@ async def ensure_llm_account_of_owner(
     llm_account_id: uuid.UUID,
     *,
     owner_id: uuid.UUID,
+    require_active: bool = False,
 ) -> None:
     """
     Раздел 19.2: LLM-аккаунт задачи — только один из аккаунтов её автора,
-    в том числе когда задачу создаёт или меняет `admin`.
+    в том числе когда задачу создаёт или меняет `admin`; `require_active` —
+    новый стартовый аккаунт, он должен быть в работе (раздел 15.2).
     """
     llm_account = await db_session.get(LlmAccount, llm_account_id)
     if llm_account is None or llm_account.created_by != owner_id:
         raise NotFoundError(f"LLM-аккаунт {llm_account_id} не найден у автора задачи")
+    if require_active and llm_account.status is not LlmAccountStatus.ACTIVE:
+        # Раздел 15.2: стартовый аккаунт выбирается только из активных.
+        raise ValidationError(
+            f"LLM-аккаунт «{llm_account.label}» не активен — выберите активный аккаунт",
+        )
 
 
 async def authorize_task_stream(

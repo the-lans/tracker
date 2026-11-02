@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 import pytest_asyncio
+import structlog
 
 from db.models.enums import ReasoningEffort
 from llm_gateway.app import create_app, session_token
@@ -164,6 +165,25 @@ class TestRewrite:
         assert sent["model"] == "acc-0123456789ab/gpt-6-sol"
         assert sent["output_config"] == {"effort": "xhigh", "format": {"type": "text"}}
         assert sent["stream"] is True
+
+    async def test_request_logged_with_route(
+        self,
+        gateway: httpx.AsyncClient,
+        token: str,
+    ) -> None:
+        with structlog.testing.capture_logs() as logs:
+            await gateway.post(
+                "/v1/messages",
+                json=_message(),
+                headers={"authorization": f"Bearer {token}"},
+            )
+
+        entry = next(entry for entry in logs if entry["event"] == "llm_gateway_request")
+        assert {key: entry[key] for key in ("account_id", "model", "reasoning_effort")} == {
+            "account_id": str(_ROUTE.account_id),
+            "model": "gpt-6-sol",
+            "reasoning_effort": "xhigh",
+        }
 
     async def test_count_tokens_without_effort(
         self,

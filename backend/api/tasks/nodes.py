@@ -46,6 +46,7 @@ def _draft(content: TaskCustomNodeContent) -> CustomNodeDraft:
         node_type=content.node_type,
         prompt_template=content.prompt_template,
         command_invocation=content.command_invocation,
+        reasoning_effort=content.reasoning_effort,
     )
 
 

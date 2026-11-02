@@ -1,7 +1,14 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, vi } from "vitest";
 import { TaskNodesCard } from "@/components/tasks/TaskNodesCard";
-import { NodeLogStatus, NodeType, TaskStatus, type NodeLog, type TaskNodeItem } from "@/lib/types";
+import {
+  NodeLogStatus,
+  NodeType,
+  ReasoningEffort,
+  TaskStatus,
+  type NodeLog,
+  type TaskNodeItem,
+} from "@/lib/types";
 import { makeNode, makeNodeLog, makeTask, makeTaskNode } from "@/test/factories";
 import type { MockedApi } from "@/test/apiMock";
 import { test } from "@/test/fixtures";
@@ -244,6 +251,7 @@ describe("TaskNodesCard", () => {
       name: "Вопросы по задаче",
       is_custom: true,
       prompt_template: "Задай вопросы по {{task.code}}",
+      reasoning_effort: ReasoningEffort.LOW,
     });
 
     function insertButtons() {
@@ -302,6 +310,8 @@ describe("TaskNodesCard", () => {
       const dialog = await openInsertAfter(user, analysis.name);
       await user.type(within(dialog).getByLabelText("Название"), "Вопросы");
       await user.type(within(dialog).getByLabelText("Текст промта"), "Задай вопросы");
+      await user.click(within(dialog).getByRole("combobox", { name: "Уровень рассуждений" }));
+      await user.click(await screen.findByRole("option", { name: "высокий" }));
       await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
 
       expect(api.mutations()).toEqual([
@@ -313,6 +323,7 @@ describe("TaskNodesCard", () => {
             node_type: NodeType.PLAIN_PROMPT,
             prompt_template: "Задай вопросы",
             command_invocation: null,
+            reasoning_effort: ReasoningEffort.HIGH,
             after_task_node_id: "tn1",
           },
         },
@@ -335,6 +346,7 @@ describe("TaskNodesCard", () => {
         node_type: NodeType.SLASH_COMMAND,
         prompt_template: null,
         command_invocation: "/review",
+        reasoning_effort: null,
         after_task_node_id: "tn2",
       });
     });
@@ -347,6 +359,7 @@ describe("TaskNodesCard", () => {
           is_library_item: true,
           name: "Вопросы перед реализацией",
           prompt_template: "Составь список вопросов",
+          reasoning_effort: ReasoningEffort.MEDIUM,
         }),
         makeNode({ id: "l2", pipeline_id: null, is_library_item: true, name: "Линтер", node_type: NodeType.SCRIPT }),
       ]);
@@ -360,6 +373,9 @@ describe("TaskNodesCard", () => {
 
       expect(within(dialog).getByLabelText("Название")).toHaveValue("Вопросы перед реализацией");
       expect(within(dialog).getByLabelText("Текст промта")).toHaveValue("Составь список вопросов");
+      expect(within(dialog).getByRole("combobox", { name: "Уровень рассуждений" })).toHaveTextContent(
+        "средний",
+      );
     });
 
     test("ошибка сохранения оставляет диалог открытым", async ({ api, toasts }) => {
@@ -395,6 +411,7 @@ describe("TaskNodesCard", () => {
               node_type: NodeType.PLAIN_PROMPT,
               prompt_template: "Задай вопросы по {{task.code}} и CSV",
               command_invocation: null,
+              reasoning_effort: ReasoningEffort.LOW,
             },
           },
         },

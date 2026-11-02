@@ -36,6 +36,11 @@ class TestLlmProxy:
         context = compose["services"]["cliproxy"]["build"]["context"]
         assert context == "https://github.com/router-for-me/CLIProxyAPI.git#${CLIPROXY_VERSION}"
 
+    def test_backend_knows_proxy_version(self, compose: dict[str, Any]) -> None:
+        # Админка «LLM-прокси» показывает версию из окружения backend (раздел 15.5).
+        environment = compose["services"]["backend"]["environment"]
+        assert environment["CLIPROXY_VERSION"] == "${CLIPROXY_VERSION}"
+
     def test_tokens_only_in_proxy(self, compose: dict[str, Any]) -> None:
         """Раздел 19.4: volume с токенами OAuth — только у прокси и его init."""
         owners = {
@@ -51,8 +56,9 @@ class TestLlmProxy:
 
 
 class TestSessionNetwork:
-    def test_network_internal_and_named(self, compose: dict[str, Any]) -> None:
-        assert compose["networks"]["llm_sessions"] == {"name": _SESSION_NETWORK, "internal": True}
+    def test_network_named(self, compose: dict[str, Any]) -> None:
+        # Выход наружу нужен MCP-серверам: другой сети у контейнера сессии нет.
+        assert compose["networks"]["llm_sessions"] == {"name": _SESSION_NETWORK}
 
     def test_only_gateway_on_session_network(self, compose: dict[str, Any]) -> None:
         on_network = {

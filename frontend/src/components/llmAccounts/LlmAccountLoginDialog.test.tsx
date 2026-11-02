@@ -119,6 +119,25 @@ describe("LlmAccountLoginDialog", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  test("неверный адрес — ошибка под полем, вход продолжается", async ({ api, toasts }) => {
+    api.respond(`POST ${LOGIN}/callback`, {
+      error: { status: 422, message: "Это не адрес после входа" },
+    });
+    const { user } = renderDialog(api);
+
+    await submitRedirect(user);
+
+    const field = screen.getByLabelText("Адрес после входа");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Это не адрес после входа");
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(toasts.error).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Завершить вход" })).toBeInTheDocument();
+
+    await user.type(field, "x");
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   test("отмена отменяет вход в прокси", async ({ api }) => {
     const { user, onClose } = renderDialog(api);
 
