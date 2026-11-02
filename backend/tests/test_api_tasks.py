@@ -31,6 +31,7 @@ from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
+from services import task_creation
 from services.plan_mode import PlanDecisionOption, encode_decision
 from services.task_control import (
     TaskControlCommand,
@@ -1461,6 +1462,19 @@ class TestClearContext:
         assert response.status_code == 409
 
 
+@pytest.fixture
+def skip_draft_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Второй из одновременных запросов: проверка формы уже пройдена, а строку
+    с тем же кодом успел вставить первый.
+    """
+
+    async def _passed(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(task_creation, "_validate_draft", _passed)
+
+
 class TestCreateTaskValidation:
     @pytest.mark.parametrize(
         ("status", "expected_code"),
@@ -1498,6 +1512,37 @@ class TestCreateTaskValidation:
 
         assert response.status_code == 409
         assert response.json()["error"]["code"] == "task_code_taken"
+
+    async def test_code_taken_concurrently(
+        self,
+        authed_client: AsyncClient,
+        skip_draft_validation: None,
+    ) -> None:
+        await _create_task(authed_client, code="RR-20003")
+
+        response = await authed_client.post(
+            "/tasks",
+            json={"code": "RR-20003", "title": "t", "description": "d"},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "task_code_taken"
+
+    async def test_other_integrity_error_not_code_taken(
+        self,
+        authed_client: AsyncClient,
+        skip_draft_validation: None,
+    ) -> None:
+        with pytest.raises(sa.exc.IntegrityError):
+            await authed_client.post(
+                "/tasks",
+                json={
+                    "code": "RR-20004",
+                    "title": "t",
+                    "description": "d",
+                    "llm_account_id": str(uuid.uuid4()),
+                },
+            )
 
     @pytest.mark.parametrize(
         ("parent", "use_summary", "expected_code"),
