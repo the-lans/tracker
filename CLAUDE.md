@@ -42,7 +42,7 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | Компонент | Версия |
 |---|---|
 | Python | 3.12* |
-| FastAPI (async) | 0.159.1 |
+| FastAPI (async) | 0.162.0 |
 | Uvicorn[standard] | 0.54.0* (ASGI-сервер, не назван в ТЗ напрямую) |
 | SQLAlchemy (async) | 2.1.6 |
 | asyncpg | 0.32.0* (асинхронный драйвер Postgres для SQLAlchemy async) |
@@ -50,16 +50,16 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | Celery | 5.6.3 |
 | redis-py | 8.1.0 |
 | structlog | 26.1.0 |
-| claude-agent-sdk | 0.2.172 |
+| claude-agent-sdk | 0.2.175 |
 | asyncssh | 2.24.1* (SFTP-шлюз, раздел 19.6) |
 | httpx | 0.28.1* (клиенты GitLab и Jira, тесты API) |
 | cryptography | 50.0.2* (шифрование секретов и токена сессии, раздел 19.4) |
 | google-auth | 2.62.0* (проверка Google id_token, раздел 19.1) |
 | pywebpush | 2.5.0* (Web Push, раздел 18.1) |
 | PostgreSQL | 15+ |
-| pytest / pytest-asyncio / pytest-cov | 9.1.1 / 1.4.0* / 7.1.0* |
-| ruff | 0.17.1 |
-| mypy | 2.4.0 |
+| pytest / pytest-asyncio / pytest-cov | 9.2.0 / 1.4.1* / 7.1.0* |
+| ruff | 0.17.3 |
+| mypy | 2.4.1 |
 
 ### Frontend (`frontend/package.json`)
 | Компонент | Версия |
