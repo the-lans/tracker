@@ -417,6 +417,7 @@ export interface TaskNodeItem {
   is_custom: boolean;
   prompt_template: string | null;
   command_invocation: string | null;
+  reasoning_effort: ReasoningEffort | null;
 }
 
 /** Раздел 13.1: свой промт задачи — промт или слэш-команда. */
@@ -425,6 +426,8 @@ export interface TaskCustomNodeContent {
   node_type: NodeType;
   prompt_template: string | null;
   command_invocation: string | null;
+  /** Раздел 3.1: `null` — уровень аккаунта по умолчанию. */
+  reasoning_effort: ReasoningEffort | null;
 }
 
 /** `after_task_node_id` — нода, после которой вставить; `null` — в начало. */

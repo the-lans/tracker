@@ -101,6 +101,7 @@ export function makeTaskNode(overrides: Partial<TaskNodeItem> = {}): TaskNodeIte
     is_custom: false,
     prompt_template: null,
     command_invocation: null,
+    reasoning_effort: null,
     ...overrides,
   };
 }

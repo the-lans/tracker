@@ -7,15 +7,20 @@ export interface RecordedRequest {
   body: unknown;
 }
 
+/** Ошибка API: HTTP-статус, сообщение и код ошибки сервера (по умолчанию `error`). */
+interface MockError {
+  error: { status: number; message: string; code?: string };
+}
+
 /** Ответ API: JSON-тело или ошибка с HTTP-статусом и сообщением сервера. */
-export type MockResponse = unknown | { error: { status: number; message: string } };
+export type MockResponse = unknown | MockError;
 
 /** Ключ маршрута — «МЕТОД /путь», например `"POST /tasks/t1/start"`. */
 export type MockRoutes = Record<string, MockResponse | ((body: unknown) => MockResponse)>;
 
 const API_PREFIX = "/api";
 
-function isErrorResponse(value: unknown): value is { error: { status: number; message: string } } {
+function isErrorResponse(value: unknown): value is MockError {
   if (typeof value !== "object" || value === null || !("error" in value)) return false;
   // Поле `error` бывает и в обычном ответе (статус входа LLM-аккаунта) — ошибка задаёт статус.
   const { error } = value;
@@ -54,7 +59,7 @@ export function mockApi(initialRoutes: MockRoutes = {}) {
     }
     if (isErrorResponse(response)) {
       return jsonResponse(response.error.status, {
-        error: { code: "error", message: response.error.message },
+        error: { code: response.error.code ?? "error", message: response.error.message },
       });
     }
     return jsonResponse(200, response);

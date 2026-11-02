@@ -54,6 +54,8 @@ async def update_task(
             db_session,
             changes[_LLM_ACCOUNT_FIELD],
             owner_id=task.created_by,
+            # Прежний аккаунт можно оставить, даже если он уже выключен.
+            require_active=changes[_LLM_ACCOUNT_FIELD] != task.llm_account_id,
         )
     _restart_on_chosen_account(task, changes)
 

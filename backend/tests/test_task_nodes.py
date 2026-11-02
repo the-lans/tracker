@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -452,6 +453,40 @@ class TestEditDeleteCustomNode:
             "/review",
         )
         assert view.prompt_template is None
+
+    @pytest.mark.parametrize(
+        ("initial", "edited"),
+        [
+            (ReasoningEffort.LOW, ReasoningEffort.MAX),
+            (ReasoningEffort.HIGH, None),
+            (None, ReasoningEffort.MEDIUM),
+        ],
+        ids=["changed", "reset-to-account", "set-later"],
+    )
+    async def test_reasoning_effort_saved(
+        self,
+        db_session: AsyncSession,
+        initial: ReasoningEffort | None,
+        edited: ReasoningEffort | None,
+    ) -> None:
+        task, _ = await _new_task(db_session, 1)
+        draft = CustomNodeDraft(
+            name="Уточнения",
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="Задай вопросы",
+            reasoning_effort=initial,
+        )
+        task_node = await _add(db_session, task, after=None, draft=draft)
+        assert (await list_task_nodes(db_session, task))[0].reasoning_effort is initial
+
+        await update_custom_task_node(
+            db_session,
+            task=task,
+            task_node_id=task_node.id,
+            draft=replace(draft, reasoning_effort=edited),
+        )
+
+        assert (await list_task_nodes(db_session, task))[0].reasoning_effort is edited
 
     async def test_delete_without_history(self, db_session: AsyncSession) -> None:
         task, task_nodes = await _new_task(db_session, 2)

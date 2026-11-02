@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from services.errors import ValidationError
+from services.errors import InvalidTaskCodeError
 from services.task_codes import MAX_TASK_CODE_LENGTH, validate_task_code
 
 if TYPE_CHECKING:
@@ -53,7 +53,7 @@ class TestValidateTaskCode:
         ],
     )
     def test_rejected(self, code: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidTaskCodeError):
             validate_task_code(code)
 
 
@@ -65,7 +65,7 @@ class TestCreateTaskCode:
             json={"code": code, "title": "t", "description": "d"},
         )
         assert response.status_code == 422
-        assert response.json()["error"]["code"] == "validation_error"
+        assert response.json()["error"]["code"] == "invalid_task_code"
 
     async def test_any_text_without_spaces_accepted(self, authed_client: AsyncClient) -> None:
         response = await authed_client.post(

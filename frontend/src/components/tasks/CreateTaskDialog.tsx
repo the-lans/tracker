@@ -1,6 +1,5 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { JiraImportField } from "@/components/tasks/JiraImportField";
@@ -8,7 +7,7 @@ import { ParentTaskFields } from "@/components/tasks/ParentTaskFields";
 import { TaskFormFields } from "@/components/tasks/TaskFormFields";
 import { EMPTY_TASK_FORM, toTaskRequest, type TaskFormValues } from "@/components/tasks/taskForm.types";
 import { useCreateTask } from "@/hooks/useTasks";
-import { errorMessage } from "@/lib/errors";
+import { useTaskCodeError } from "@/hooks/useTaskCodeError";
 
 export function CreateTaskDialog({
   open,
@@ -23,6 +22,12 @@ export function CreateTaskDialog({
   const [parentTaskId, setParentTaskId] = useState("");
   const [useParentSummary, setUseParentSummary] = useState(false);
   const [jiraIssueKey, setJiraIssueKey] = useState<string | null>(null);
+  const { codeError, onFieldsChange, onSaveError } = useTaskCodeError("Не удалось создать задачу");
+
+  function changeFields(patch: Partial<TaskFormValues>) {
+    onFieldsChange(patch);
+    setValues((prev) => ({ ...prev, ...patch }));
+  }
 
   function reset() {
     setValues(EMPTY_TASK_FORM);
@@ -46,9 +51,7 @@ export function CreateTaskDialog({
           onOpenChange(false);
           navigate(`/tasks/${task.id}`);
         },
-        onError: (error) => {
-          toast.error(errorMessage(error, "Не удалось создать задачу"));
-        },
+        onError: onSaveError,
       },
     );
   }
@@ -63,18 +66,14 @@ export function CreateTaskDialog({
           <JiraImportField
             onImported={(draft) => {
               setJiraIssueKey(draft.code);
-              setValues((prev) => ({
-                ...prev,
+              changeFields({
                 code: draft.code,
                 title: draft.title,
                 description: draft.description,
-              }));
+              });
             }}
           />
-          <TaskFormFields
-            value={values}
-            onChange={(patch) => setValues((prev) => ({ ...prev, ...patch }))}
-          />
+          <TaskFormFields value={values} onChange={changeFields} codeError={codeError} />
           <ParentTaskFields
             parentTaskId={parentTaskId}
             useParentSummary={useParentSummary}

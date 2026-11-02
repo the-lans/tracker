@@ -1,12 +1,11 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { TaskFormFields } from "@/components/tasks/TaskFormFields";
 import { toTaskRequest, type TaskFormValues } from "@/components/tasks/taskForm.types";
 import { useDuplicateTask, useTaskRepositories } from "@/hooks/useTasks";
-import { errorMessage } from "@/lib/errors";
+import { useTaskCodeError } from "@/hooks/useTaskCodeError";
 import type { Task, TaskRepository } from "@/lib/types";
 
 function initialValues(task: Task, repositories: TaskRepository[]): TaskFormValues {
@@ -37,6 +36,9 @@ function DuplicateTaskForm({
   const navigate = useNavigate();
   const duplicateTask = useDuplicateTask(task.id);
   const [values, setValues] = useState(() => initialValues(task, repositories));
+  const { codeError, onFieldsChange, onSaveError } = useTaskCodeError(
+    "Не удалось дублировать задачу",
+  );
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -45,9 +47,7 @@ function DuplicateTaskForm({
         onClose();
         navigate(`/tasks/${copy.id}`);
       },
-      onError: (error) => {
-        toast.error(errorMessage(error, "Не удалось дублировать задачу"));
-      },
+      onError: onSaveError,
     });
   }
 
@@ -55,7 +55,11 @@ function DuplicateTaskForm({
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
       <TaskFormFields
         value={values}
-        onChange={(patch) => setValues((prev) => ({ ...prev, ...patch }))}
+        onChange={(patch) => {
+          onFieldsChange(patch);
+          setValues((prev) => ({ ...prev, ...patch }));
+        }}
+        codeError={codeError}
       />
       <div className="text-meta text-text-3">
         В копию перейдут пайплайн с отмеченными нодами, переменные задачи и системные промты.

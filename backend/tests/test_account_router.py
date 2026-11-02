@@ -11,8 +11,16 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from claude_agent_sdk import RateLimitInfo
 
-from db.models.enums import LlmAccountStatus, LlmSwitchReason, NodeType, ReasoningEffort
+from db.models.enums import (
+    LlmAccountStatus,
+    LlmSwitchReason,
+    NodeLogStatus,
+    NodeLogTriggerType,
+    NodeType,
+    ReasoningEffort,
+)
 from db.models.llm import LlmAccount
+from db.models.logs import NodeLog
 from db.models.tasks import Task
 from services import account_router as account_router_module
 from services.account_router import TaskAccountRouter
@@ -214,6 +222,60 @@ class TestRoute:
             ),
         ]
         assert recorded.pushes == []
+
+    @pytest.mark.parametrize(
+        ("turns", "switched"),
+        [
+            ([], False),
+            (["start"], False),
+            (["other"], True),
+            (["start", "other"], True),
+            (["other", "start"], False),
+        ],
+        ids=["no_turns", "last_on_start", "last_on_other", "latest_wins", "back_on_start"],
+    )
+    async def test_after_reset_compared_with_last_turn(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+        recorded: Recorded,
+        turns: list[str],
+        switched: bool,
+    ) -> None:
+        other = await setup.account()
+        start = await setup.account()
+        task = await setup.task(start)
+        accounts = {"start": start, "other": other}
+        for minute, name in enumerate(turns):
+            db_session.add(
+                NodeLog(
+                    task_id=task.id,
+                    trigger_type=NodeLogTriggerType.FREEFORM_MANUAL,
+                    status=NodeLogStatus.SUCCESS,
+                    llm_account_id=accounts[name].id,
+                    started_at=_NOW - timedelta(minutes=10 - minute),
+                ),
+            )
+        # Ход без времени начала не считается последним.
+        db_session.add(
+            NodeLog(
+                task_id=task.id,
+                trigger_type=NodeLogTriggerType.FREEFORM_MANUAL,
+                llm_account_id=other.id,
+            ),
+        )
+        await db_session.flush()
+
+        route = await _router(db_session, redis_client, fake_cliproxy, task).route(
+            effort=None,
+            node_type=None,
+        )
+
+        assert route.account_id == start.id
+        assert route.switch_reason == (LlmSwitchReason.START if switched else None)
+        assert len(recorded.app_logs) == (1 if switched else 0)
 
     @pytest.mark.parametrize(
         ("checked_at", "polled"),

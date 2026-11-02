@@ -6,6 +6,7 @@ import { useTaskRepositories } from "@/hooks/useTasks";
 import { MergeStatus } from "@/lib/types";
 import { REPOSITORY_ROLE_LABEL } from "@/lib/labels";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { LoadingState } from "@/components/common/feedback/LoadingState";
 
 const MERGE_STATUS_LABELS: Record<MergeStatus, string> = {
   [MergeStatus.NOT_PUSHED]: "не запушено",
@@ -15,7 +16,7 @@ const MERGE_STATUS_LABELS: Record<MergeStatus, string> = {
 };
 
 export function TaskRepositoriesCard({ taskId }: { taskId: string }) {
-  const { data: taskRepositories } = useTaskRepositories(taskId);
+  const { data: taskRepositories, isLoading } = useTaskRepositories(taskId);
   const { data: repositories } = useRepositories();
   const namesById = new Map((repositories ?? []).map((repository) => [repository.id, repository.name]));
 
@@ -25,7 +26,9 @@ export function TaskRepositoriesCard({ taskId }: { taskId: string }) {
         <span>Репозитории</span>
         {taskRepositories && <span>{taskRepositories.length}</span>}
       </CardTitle>
-      {taskRepositories?.length ? (
+      {isLoading ? (
+        <LoadingState />
+      ) : taskRepositories?.length ? (
         <div className="flex flex-col">
           {taskRepositories.map((taskRepository) => (
             <div

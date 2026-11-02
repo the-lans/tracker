@@ -111,6 +111,9 @@ class FakeCliproxy:
         return handler(self, params, body)
 
     def _auth_url(self, params: dict[str, str], _: dict[str, Any]) -> httpx.Response:
+        if "name" in params and params["name"] not in self.credentials:
+            # Как прокси: повторный вход в удалённую учётку.
+            return httpx.Response(404, json={"error": "auth file not found"})
         state = uuid.uuid4().hex
         self.sessions[state] = _Session(provider=params["provider"], target=params.get("name"))
         url = f"https://auth.example.com/{state}"

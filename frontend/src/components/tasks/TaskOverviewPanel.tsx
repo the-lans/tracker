@@ -14,6 +14,7 @@ import { TaskEnvVariablesCard } from "@/components/tasks/TaskEnvVariablesCard";
 import { TaskLibraryPromptsCard } from "@/components/tasks/TaskLibraryPromptsCard";
 import { TaskPipelineCard } from "@/components/tasks/TaskPipelineCard";
 import { TaskRepositoriesCard } from "@/components/tasks/TaskRepositoriesCard";
+import { TaskStartAccountCard } from "@/components/tasks/TaskStartAccountCard";
 
 export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: NodeLog[] }) {
   const updateTask = useUpdateTask(task.id);
@@ -26,6 +27,7 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
 
   const environment = (
     <>
+      <TaskStartAccountCard task={task} pending={updateTask.isPending} onUpdate={update} />
       <TaskRepositoriesCard taskId={task.id} />
       <TaskEnvVariablesCard task={task} />
       <TaskArtifactsCard task={task} />

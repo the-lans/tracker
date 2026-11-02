@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 _NOW = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
-_REDIRECT = "http://localhost:54545/callback?code=abc&state=x"
+_REDIRECT = "http://localhost:54545/callback?code=abc"
 _CLAUDE = "claude-owner@example.com.json"
 _CODEX = "codex-owner@example.com.json"
 
@@ -103,6 +103,18 @@ class TestStartLogin:
 
         assert fake_cliproxy.sessions[start.state].target == _CLAUDE
 
+    async def test_deleted_credential_starts_new_login(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+    ) -> None:
+        account = await _account(db_session, credential=_CLAUDE)
+
+        start = await start_login(redis_client, fake_cliproxy.client(), account, now=_NOW)
+
+        assert fake_cliproxy.sessions[start.state].target is None
+
     async def test_restart_cancels_previous(
         self,
         db_session: AsyncSession,
@@ -162,6 +174,36 @@ class TestBinding:
         assert result.state is OAuthState.OK
         assert (account.cliproxy_credential, account.status) == (_CLAUDE, LlmAccountStatus.ACTIVE)
 
+    @pytest.mark.parametrize(
+        ("provider", "oauth_provider", "previous", "name", "returns_auth_id"),
+        [
+            ("anthropic", "claude", _CLAUDE, _CLAUDE, False),
+            ("openai", "codex", _CODEX, _CODEX, True),
+            ("openai", "codex", _CODEX, "codex-other@example.com.json", True),
+        ],
+        ids=["same_name_by_diff", "same_name_by_auth_id", "other_subscription"],
+    )
+    async def test_deleted_credential_rebound(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        provider: str,
+        oauth_provider: str,
+        previous: str,
+        name: str,
+        returns_auth_id: bool,
+    ) -> None:
+        fake_cliproxy.add_credential("other-user@example.com.json", provider=oauth_provider)
+        fake_cliproxy.next_login = NextLogin(name=name, returns_auth_id=returns_auth_id)
+        account = await _account(db_session, provider=provider, credential=previous)
+
+        result = await _sign_in(db_session, redis_client, fake_cliproxy, account)
+
+        assert result == LoginResult(OAuthState.OK)
+        assert (account.cliproxy_credential, account.status) == (name, LlmAccountStatus.ACTIVE)
+        assert fake_cliproxy.credentials[name].prefix == account.cliproxy_prefix
+
     async def test_disabled_account_stays_disabled(
         self,
         db_session: AsyncSession,
@@ -186,9 +228,11 @@ class TestBinding:
         fake_cliproxy.next_login = NextLogin(name=_CODEX, returns_auth_id=True)
         account = await _account(db_session, provider="openai")
 
-        with pytest.raises(ConflictError):
-            await _sign_in(db_session, redis_client, fake_cliproxy, account)
+        result = await _sign_in(db_session, redis_client, fake_cliproxy, account)
 
+        assert result == LoginResult(
+            OAuthState.ERROR, "Эта подписка уже подключена к другому LLM-аккаунту"
+        )
         assert account.cliproxy_credential is None
         assert fake_cliproxy.credentials[_CODEX].prefix is None
 
@@ -203,8 +247,15 @@ class TestBinding:
         fake_cliproxy.next_login = NextLogin(name=_CLAUDE, returns_auth_id=False)
         account = await _account(db_session)
 
-        with pytest.raises(ConflictError):
-            await _sign_in(db_session, redis_client, fake_cliproxy, account)
+        result = await _sign_in(db_session, redis_client, fake_cliproxy, account)
+
+        assert result.state is OAuthState.ERROR
+        assert result.error is not None and "уже подключена" in result.error
+        # Повторный опрос не подменяет причину на «время входа истекло».
+        again = await poll_login(
+            db_session, redis_client, fake_cliproxy.client(), account, now=_NOW
+        )
+        assert again.state is OAuthState.ERROR
 
     async def test_two_new_credentials_conflict(
         self,
@@ -218,15 +269,17 @@ class TestBinding:
         fake_cliproxy.add_credential("claude-parallel@example.com.json")
         fake_cliproxy.next_login = NextLogin(name=_CLAUDE, returns_auth_id=False)
 
-        with pytest.raises(ConflictError):
-            await submit_login_callback(
-                db_session,
-                redis_client,
-                cliproxy,
-                account,
-                redirect_url=_REDIRECT,
-                now=_NOW,
-            )
+        result = await submit_login_callback(
+            db_session,
+            redis_client,
+            cliproxy,
+            account,
+            redirect_url=_REDIRECT,
+            now=_NOW,
+        )
+
+        assert result.state is OAuthState.ERROR
+        assert account.cliproxy_credential is None
 
     async def test_busy_binding_conflicts(
         self,
@@ -301,6 +354,72 @@ class TestLoginProgress:
         assert result.state is OAuthState.ERROR
         assert len(fake_cliproxy.cancelled) == int(started)
         assert ("POST", "/oauth/callback") not in fake_cliproxy.requests
+
+
+class TestRedirectCheck:
+    """Адрес возврата проверяется до прокси и не тратит его сессию входа."""
+
+    @pytest.mark.parametrize(
+        "redirect_url",
+        [
+            "не адрес",
+            "ftp://localhost/callback?code=abc",
+            "http:///callback?code=abc",
+            "http://localhost:54545/callback",
+            "http://localhost:54545/callback?code=",
+            "http://localhost:54545/callback?code=abc&state=other",
+        ],
+        ids=["text", "scheme", "no_host", "no_code", "empty_code", "other_login"],
+    )
+    async def test_rejected_before_proxy(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        redirect_url: str,
+    ) -> None:
+        account = await _account(db_session)
+        cliproxy = fake_cliproxy.client()
+        await start_login(redis_client, cliproxy, account, now=_NOW)
+
+        with pytest.raises(ValidationError):
+            await submit_login_callback(
+                db_session,
+                redis_client,
+                cliproxy,
+                account,
+                redirect_url=redirect_url,
+                now=_NOW,
+            )
+
+        assert ("POST", "/oauth/callback") not in fake_cliproxy.requests
+        still = await poll_login(db_session, redis_client, cliproxy, account, now=_NOW)
+        assert still == LoginResult(OAuthState.WAIT)
+
+    @pytest.mark.parametrize("with_state", [False, True], ids=["no_state", "same_state"])
+    async def test_accepted(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        with_state: bool,
+    ) -> None:
+        fake_cliproxy.next_login = NextLogin(name=_CLAUDE, returns_auth_id=False)
+        account = await _account(db_session)
+        cliproxy = fake_cliproxy.client()
+        start = await start_login(redis_client, cliproxy, account, now=_NOW)
+        suffix = f"&state={start.state}" if with_state else ""
+
+        result = await submit_login_callback(
+            db_session,
+            redis_client,
+            cliproxy,
+            account,
+            redirect_url=f" {_REDIRECT}{suffix} ",
+            now=_NOW,
+        )
+
+        assert result == LoginResult(OAuthState.OK)
 
 
 class TestProxyClosedLogin:
@@ -385,7 +504,7 @@ class TestProxyClosedLogin:
                 redis_client,
                 cliproxy,
                 account,
-                redirect_url="http://localhost:54545/callback?state=x",
+                redirect_url="http://localhost:54545/callback?error=access_denied",
                 now=_NOW,
             )
 

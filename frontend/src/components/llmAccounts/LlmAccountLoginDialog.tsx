@@ -36,6 +36,7 @@ export function LlmAccountLoginDialog({
   const submit = useSubmitLlmLogin(account.id);
   const cancel = useCancelLlmLogin(account.id);
   const [redirectUrl, setRedirectUrl] = useState("");
+  const [redirectError, setRedirectError] = useState<string | null>(null);
   const [result, setResult] = useState<LlmLoginStatus | null>(null);
   const waiting = result?.state === LlmLoginState.WAIT;
   const { data: polled } = useLlmLoginStatus(account.id, waiting);
@@ -69,13 +70,14 @@ export function LlmAccountLoginDialog({
   function handleRestart() {
     setResult(null);
     setRedirectUrl("");
+    setRedirectError(null);
     beginLogin();
   }
 
   function handleSubmit() {
     submit.mutate(redirectUrl.trim(), {
       onSuccess: setResult,
-      onError: (error) => toast.error(errorMessage(error, "Не удалось завершить вход")),
+      onError: (error) => setRedirectError(errorMessage(error, "Не удалось завершить вход")),
     });
   }
 
@@ -123,8 +125,18 @@ export function LlmAccountLoginDialog({
               id="llm-redirect"
               placeholder="http://localhost:…/callback?code=…"
               value={redirectUrl}
-              onChange={(e) => setRedirectUrl(e.target.value)}
+              aria-invalid={redirectError ? true : undefined}
+              aria-describedby={redirectError ? "llm-redirect-error" : undefined}
+              onChange={(e) => {
+                setRedirectUrl(e.target.value);
+                setRedirectError(null);
+              }}
             />
+            {redirectError && (
+              <p id="llm-redirect-error" role="alert" className="mt-1 text-meta text-danger-text">
+                {redirectError}
+              </p>
+            )}
           </div>
           {waiting && <p className="text-meta text-text-3">Прокси завершает вход…</p>}
           {failure && (

@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from http import HTTPStatus
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs, urlsplit
 
 import sqlalchemy as sa
 
@@ -30,7 +31,7 @@ from clients.cliproxy import CliproxyRequestError, OAuthState, OAuthStatus
 from db.models.enums import LlmAccountStatus
 from db.models.llm import LlmAccount
 from services.distributed_lock import LockNotAcquiredError, acquire_lock
-from services.errors import ConflictError
+from services.errors import ConflictError, ValidationError
 from services.integrity import commit_or_conflict
 from services.llm_providers import get_provider
 
@@ -68,6 +69,17 @@ _TAKEN = "Эта подписка уже подключена к другому 
 _NOT_FOUND = "Прокси не создал новую учётку — возможно, подписка уже подключена к другому аккаунту"
 _AMBIGUOUS = "Одновременно с этим выполнялся другой вход — начните вход заново"
 _BUSY = "Сейчас завершается другой вход — повторите через несколько секунд"
+_REDIRECT_SCHEMES = frozenset({"http", "https"})
+# Провайдер возвращает браузер с `code` после входа или с `error` при отказе.
+_REDIRECT_RESULT_FIELDS = ("code", "error")
+_STATE_FIELD = "state"
+_NOT_REDIRECT = (
+    "Это не адрес после входа: скопируйте из адресной строки адрес, на который "
+    "перешёл браузер, — в нём есть code"
+)
+_OTHER_LOGIN = (
+    "Адрес относится к другому входу: откройте ссылку входа из этого окна и войдите снова"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,14 +160,15 @@ async def start_login(
     """Ссылка входа; прежний незавершённый вход этого аккаунта отменяется."""
     provider = get_provider(account.provider)
     await cancel_login(redis_client, cliproxy, account)
-    known = (
-        None
-        if account.cliproxy_credential is not None
-        else sorted(await _provider_credentials(cliproxy, provider.oauth_provider))
-    )
+    credentials = await _provider_credentials(cliproxy, provider.oauth_provider)
+    relogin = account.cliproxy_credential in credentials
+    if account.cliproxy_credential is not None and not relogin:
+        # Учётку удалили в прокси — вход создаст новую, как у нового аккаунта.
+        logger.info("llm_login_credential_missing", account_id=str(account.id))
+    known = None if relogin else sorted(credentials)
     start = await cliproxy.oauth_auth_url(
         provider=provider.oauth_provider,
-        credential=account.cliproxy_credential,
+        credential=account.cliproxy_credential if relogin else None,
     )
     deadline = now + LOGIN_TIMEOUT
     record = _Record(state=start.state, deadline=deadline.isoformat(), known=known)
@@ -186,6 +199,22 @@ async def _active_record(
     return record
 
 
+def _ensure_redirect_of_login(redirect_url: str, *, state: str) -> None:
+    """
+    Адрес возврата проверяется до прокси: мусор или адрес чужого входа не
+    тратят сессию входа, которую прокси ждёт (раздел 19.5).
+    """
+    parts = urlsplit(redirect_url)
+    if parts.scheme not in _REDIRECT_SCHEMES or not parts.netloc:
+        raise ValidationError(_NOT_REDIRECT)
+    query = parse_qs(parts.query)
+    if not any(query.get(field) for field in _REDIRECT_RESULT_FIELDS):
+        raise ValidationError(_NOT_REDIRECT)
+    redirect_state = query.get(_STATE_FIELD)
+    if redirect_state and redirect_state[0] != state:
+        raise ValidationError(_OTHER_LOGIN)
+
+
 async def submit_login_callback(
     db_session: AsyncSession,
     redis_client: Redis,
@@ -199,6 +228,8 @@ async def submit_login_callback(
     record = await _active_record(redis_client, cliproxy, account, now=now)
     if record is None:
         return LoginResult(OAuthState.ERROR, _EXPIRED)
+    redirect_url = redirect_url.strip()
+    _ensure_redirect_of_login(redirect_url, state=record.state)
     try:
         await cliproxy.oauth_callback(
             provider=get_provider(account.provider).oauth_provider,
@@ -253,9 +284,12 @@ async def _finish(
             await _bind(db_session, cliproxy, account, record=record, status=status)
     except LockNotAcquiredError as exc:
         raise ConflictError(str(exc)) from exc
-    except ConflictError:
+    except ConflictError as exc:
+        # Итог входа — ошибка с причиной: запись входа удалена, и повторный
+        # опрос иначе ответил бы «время входа истекло».
         await _drop(redis_client, account.id)
-        raise
+        logger.info("llm_login_rejected", account_id=str(account.id), error=str(exc))
+        return LoginResult(OAuthState.ERROR, str(exc))
     await _drop(redis_client, account.id)
     return LoginResult(OAuthState.OK)
 
@@ -271,7 +305,7 @@ async def _new_credential(
     if status.credential is not None:
         return status.credential
     oauth_provider = get_provider(account.provider).oauth_provider
-    bound = set((await db_session.execute(_bound_credentials())).scalars())
+    bound = set((await db_session.execute(_bound_credentials(account.id))).scalars())
     fresh = await _provider_credentials(cliproxy, oauth_provider) - set(record.known or []) - bound
     if not fresh:
         raise ConflictError(_NOT_FOUND)
@@ -280,9 +314,14 @@ async def _new_credential(
     return fresh.pop()
 
 
-def _bound_credentials() -> sa.Select[str | None]:
+def _bound_credentials(account_id: uuid.UUID) -> sa.Select[str | None]:
+    """
+    Учётки других аккаунтов: прежняя учётка этого аккаунта может вернуться под
+    тем же именем.
+    """
     return sa.select(LlmAccount.cliproxy_credential).where(
         LlmAccount.cliproxy_credential.is_not(None),
+        LlmAccount.id != account_id,
     )
 
 
@@ -295,7 +334,7 @@ async def _bind(
     status: OAuthStatus,
 ) -> None:
     """Привязывает учётку к аккаунту и выставляет ей префикс; аккаунт снова в работе."""
-    if account.cliproxy_credential is not None:
+    if record.known is None and account.cliproxy_credential is not None:
         credential = account.cliproxy_credential
     else:
         credential = await _new_credential(
