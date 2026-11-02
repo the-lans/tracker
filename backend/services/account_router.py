@@ -33,6 +33,7 @@ from db.models.enums import (
     ReasoningEffort,
 )
 from db.models.llm import LlmAccount
+from db.models.logs import NodeLog
 from db.models.tasks import Task
 from db.models.users import User
 from services.errors import ExternalServiceError
@@ -108,8 +109,10 @@ class TaskAccountRouter:
         task = self._task
         await self._db.refresh(task, ["current_llm_account_id", "llm_account_id"])
         accounts = await self._accounts()
-        previous_id = task.current_llm_account_id or task.llm_account_id
-        await self._refresh_stale_usage(accounts, previous_id)
+        # Расход обновляется у аккаунта, который останется при выборе: текущего или стартового.
+        kept_id = task.current_llm_account_id or task.llm_account_id
+        await self._refresh_stale_usage(accounts, kept_id)
+        previous_id = await self._previous_account_id()
         choice = choose_account(
             accounts,
             current_id=task.current_llm_account_id,
@@ -132,6 +135,27 @@ class TaskAccountRouter:
             await self._notify_all_above_threshold()
         self.route_in_use = route
         return route
+
+    async def _previous_account_id(self) -> uuid.UUID | None:
+        """
+        Аккаунт предыдущего обращения задачи (раздел 15.2): текущий, а после
+        сброса текущего («Вернуть в новые», смена стартового) — аккаунт её
+        последнего хода; у задачи без ходов — стартовый.
+        """
+        task = self._task
+        if task.current_llm_account_id is not None:
+            return task.current_llm_account_id
+        last_turn = (
+            sa.select(NodeLog.llm_account_id)
+            .where(
+                NodeLog.task_id == task.id,
+                NodeLog.llm_account_id.is_not(None),
+                NodeLog.started_at.is_not(None),
+            )
+            .order_by(NodeLog.started_at.desc())
+            .limit(1)
+        )
+        return await self._db.scalar(last_turn) or task.llm_account_id
 
     async def _accounts(self) -> list[LlmAccount]:
         stmt = (

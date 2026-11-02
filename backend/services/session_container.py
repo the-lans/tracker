@@ -17,6 +17,9 @@ stdin/stdout контейнера — `ClaudeSDKClient`, callback разреше
 К модели CLI обращается только через `llm-gateway` (раздел 19.7): адрес шлюза
 и токен сессии — в `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`, а контейнер
 подключён к сети `llm_sessions`, где кроме контейнеров сессий есть только шлюз.
+Сеть одна: Docker не подключает контейнер к стандартной `bridge` вместе с
+пользовательской сетью, поэтому выход наружу (MCP-серверы) даёт сама
+`llm_sessions`.
 """
 
 from __future__ import annotations
@@ -38,12 +41,13 @@ SESSION_CLI_PATH = Path(__file__).resolve().parent.parent / "session_cli.py"
 SESSION_DOCKER_SPEC_ENV = "TRACKER_SESSION_DOCKER_SPEC"
 SESSION_IMAGE_ENV = "TRACKER_SESSION_IMAGE"
 DEFAULT_SESSION_IMAGE = "tracker-session:latest"
-# Сеть по умолчанию — внешняя `bridge` Docker, не сеть сервисов compose:
-# Postgres, Redis и backend из контейнера недоступны (раздел 19.3).
+# Сеть без `llm_sessions` (разработка без compose) — внешняя `bridge` Docker,
+# не сеть сервисов compose: Postgres, Redis и backend из контейнера недоступны
+# (раздел 19.3).
 SESSION_NETWORK_ENV = "TRACKER_SESSION_NETWORK"
 DEFAULT_SESSION_NETWORK = "bridge"
-# Изолированная сеть `llm_sessions` с шлюзом (docker-compose.yml); пустое
-# значение — без неё (разработка без compose).
+# Сеть `llm_sessions` с шлюзом (docker-compose.yml): в ней только контейнеры
+# сессий и llm-gateway; пустое значение — без неё.
 SESSION_LLM_NETWORK_ENV = "TRACKER_SESSION_LLM_NETWORK"
 DEFAULT_SESSION_LLM_NETWORK = "tracker-llm-sessions"
 LLM_GATEWAY_URL_ENV = "LLM_GATEWAY_URL"
@@ -62,11 +66,9 @@ _CONTAINER_HOME = "/tmp"
 
 
 def _network_args() -> list[str]:
-    args = ["--network", os.environ.get(SESSION_NETWORK_ENV, DEFAULT_SESSION_NETWORK)]
     llm_network = os.environ.get(SESSION_LLM_NETWORK_ENV, DEFAULT_SESSION_LLM_NETWORK)
-    if llm_network:
-        args += ["--network", llm_network]
-    return args
+    network = llm_network or os.environ.get(SESSION_NETWORK_ENV, DEFAULT_SESSION_NETWORK)
+    return ["--network", network]
 
 
 def _isolation_args(task_id: uuid.UUID) -> list[str]:

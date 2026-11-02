@@ -142,9 +142,16 @@ class LlmGateway:
                 content = rewrite_body(request.url.path, content, route)
             except InvalidRequestBodyError:
                 return _error(400, "invalid_request_error", "Тело запроса — не JSON-объект")
-        return await self._forward(request, task_id=task_id, content=content)
+        return await self._forward(request, task_id=task_id, route=route, content=content)
 
-    async def _forward(self, request: Request, *, task_id: uuid.UUID, content: bytes) -> Response:
+    async def _forward(
+        self,
+        request: Request,
+        *,
+        task_id: uuid.UUID,
+        route: TurnRoute,
+        content: bytes,
+    ) -> Response:
         upstream_request = self._upstream.build_request(
             request.method,
             f"{self._config.cliproxy_url}{request.url.path}",
@@ -166,6 +173,10 @@ class LlmGateway:
             task_id=str(task_id),
             path=request.url.path,
             status_code=upstream_response.status_code,
+            # Раздел 19.7: чем выполнен запрос — для сверки с `node_logs` хода.
+            account_id=str(route.account_id),
+            model=route.model,
+            reasoning_effort=route.provider_effort.value,
         )
         # `aiter_bytes`: если прокси всё же сжал ответ, сессия получит его распакованным
         # (заголовок `content-encoding` не пересылается).

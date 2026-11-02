@@ -75,6 +75,7 @@ export function TaskCustomNodeDialog({
                 node_type: editing.node_type,
                 prompt_template: editing.prompt_template,
                 command_invocation: editing.command_invocation,
+                reasoning_effort: editing.reasoning_effort,
               }
             }
             nodeId={editing?.node_id}

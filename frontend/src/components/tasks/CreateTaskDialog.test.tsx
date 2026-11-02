@@ -104,14 +104,37 @@ describe("CreateTaskDialog", () => {
 
     test("ошибка сервера оставляет форму открытой с введёнными данными", async ({ api, toasts }) => {
       const { user, onOpenChange } = renderDialog(api);
-      api.respond("POST /tasks", { error: { status: 409, message: "Задача с кодом RR-12345 уже есть" } });
+      api.respond("POST /tasks", { error: { status: 409, message: "Пайплайн в архиве" } });
 
       await fillRequired(user);
       await user.click(screen.getByRole("button", { name: "Создать" }));
 
-      await expect.poll(() => toasts.error.mock.calls).toEqual([["Задача с кодом RR-12345 уже есть"]]);
+      await expect.poll(() => toasts.error.mock.calls).toEqual([["Пайплайн в архиве"]]);
       expect(onOpenChange).not.toHaveBeenCalled();
       expect(screen.getByLabelText("Код задачи")).toHaveValue("RR-12345");
+      expect(screen.getByLabelText("Код задачи")).not.toHaveAttribute("aria-invalid", "true");
+    });
+
+    test.for([
+      { code: "task_code_taken", status: 409, message: "Задача с кодом RR-12345 уже существует" },
+      { code: "invalid_task_code", status: 422, message: "Код задачи не может содержать «..» и «@{»" },
+    ])("ошибка «$code» — под полем кода, без уведомления", async (error, { api, toasts }) => {
+      const { user, onOpenChange } = renderDialog(api);
+      api.respond("POST /tasks", { error });
+
+      await fillRequired(user);
+      await user.click(screen.getByRole("button", { name: "Создать" }));
+
+      const field = screen.getByLabelText("Код задачи");
+      await vi.waitFor(() => expect(field).toHaveAccessibleDescription(new RegExp(error.message)));
+      expect(field).toHaveAttribute("aria-invalid", "true");
+      expect(toasts.error).not.toHaveBeenCalled();
+      expect(onOpenChange).not.toHaveBeenCalled();
+
+      await user.type(field, "-2");
+
+      expect(field).not.toHaveAttribute("aria-invalid", "true");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
   });
 

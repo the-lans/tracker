@@ -41,6 +41,13 @@ class LlmProvider:
     # Проверено ли, что `plan`-режим, `ExitPlanMode` и вопросы агента работают
     # на моделях провайдера (раздел 19.7, `docs/remote_control_findings.md`).
     plan_prompt_allowed: bool
+    # Модели учётки, которые не годятся агенту (картинки, служебные): прокси
+    # отдаёт их в одном списке с моделями для диалога и не различает типом.
+    excluded_model_prefixes: tuple[str, ...] = ()
+
+    def offers_model(self, model: str) -> bool:
+        """Можно ли выбрать модель моделью аккаунта по умолчанию (раздел 19.7)."""
+        return not model.startswith(self.excluded_model_prefixes)
 
 
 def _nearest_lower(*supported: ReasoningEffort) -> Mapping[ReasoningEffort, ReasoningEffort]:
@@ -74,6 +81,7 @@ PROVIDERS: Mapping[str, LlmProvider] = MappingProxyType(
                 effort_levels=_nearest_lower(_E.LOW, _E.MEDIUM, _E.HIGH, _E.XHIGH),
                 usage_source=UsageSource.OPENAI_WHAM,
                 plan_prompt_allowed=True,
+                excluded_model_prefixes=("gpt-image-", "codex-auto-review"),
             ),
             LlmProvider(
                 id="google",

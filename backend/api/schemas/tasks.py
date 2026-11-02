@@ -228,6 +228,7 @@ class TaskNodeResponse(BaseModel):
     is_custom: bool
     prompt_template: str | None
     command_invocation: str | None
+    reasoning_effort: ReasoningEffort | None
 
 
 class TaskCustomNodeContent(BaseModel):
@@ -237,6 +238,8 @@ class TaskCustomNodeContent(BaseModel):
     node_type: NodeType
     prompt_template: str | None = None
     command_invocation: str | None = None
+    # Раздел 3.1: уровень рассуждений своего промта; `None` — уровень аккаунта.
+    reasoning_effort: ReasoningEffort | None = None
 
 
 class TaskCustomNodeCreateRequest(TaskCustomNodeContent):

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import (
     LibraryPromptRunStatus,
+    LlmAccountStatus,
     ManualRequestStatus,
     NodeLogStatus,
     NodeLogTriggerType,
@@ -930,6 +931,29 @@ class TestCustomTaskNodes:
 
         assert response.status_code == status, response.text
 
+    @pytest.mark.parametrize(
+        ("effort", "status"),
+        [("xhigh", 201), (None, 201), ("ultra", 422)],
+    )
+    async def test_reasoning_effort(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        effort: str | None,
+        status: int,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 1)
+
+        response = await authed_client.post(
+            f"/tasks/{task_body['id']}/nodes",
+            json={**self._PROMPT, "reasoning_effort": effort},
+        )
+
+        assert response.status_code == status, response.text
+        if status == 201:
+            assert response.json()["reasoning_effort"] == effort
+
     async def test_pause_after_set_on_insert(
         self,
         authed_client: AsyncClient,
@@ -1357,6 +1381,39 @@ class TestStartAccountChange:
         assert (task.session_id, task.context_cleared_at) == ("sess-old", None)
         assert task.current_llm_account_id == (None if changed else current.id)
 
+    @pytest.mark.parametrize("changed", [True, False], ids=["new_choice", "kept"])
+    async def test_inactive_account(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        changed: bool,
+    ) -> None:
+        # Раздел 15.2: новым стартовым — только активный; выключенный прежний остаётся.
+        task = await _task_in_status(authed_client, db_session, TaskStatus.NEW)
+        previous = await make_llm_account(
+            db_session,
+            owner_id=task.created_by,
+            status=LlmAccountStatus.DISABLED,
+        )
+        task.llm_account_id = previous.id
+        await db_session.flush()
+        chosen = previous
+        if changed:
+            chosen = await make_llm_account(
+                db_session,
+                owner_id=task.created_by,
+                status=LlmAccountStatus.LOGIN_REQUIRED,
+            )
+
+        response = await authed_client.patch(
+            f"/tasks/{task.id}",
+            json={"llm_account_id": str(chosen.id), "title": "Новое название"},
+        )
+
+        assert response.status_code == (422 if changed else 200), response.text
+        await db_session.refresh(task)
+        assert task.llm_account_id == previous.id
+
 
 class TestClearContext:
     async def test_resets_session_in_failed(
@@ -1405,6 +1462,32 @@ class TestClearContext:
 
 
 class TestCreateTaskValidation:
+    @pytest.mark.parametrize(
+        ("status", "expected_code"),
+        [(LlmAccountStatus.ACTIVE, 201), (LlmAccountStatus.DISABLED, 422)],
+    )
+    async def test_start_account_active(
+        self,
+        authed_client: AsyncClient,
+        current_user: User,
+        db_session: AsyncSession,
+        status: LlmAccountStatus,
+        expected_code: int,
+    ) -> None:
+        account = await make_llm_account(db_session, owner_id=current_user.id, status=status)
+
+        response = await authed_client.post(
+            "/tasks",
+            json={
+                "code": "RR-20002",
+                "title": "t",
+                "description": "d",
+                "llm_account_id": str(account.id),
+            },
+        )
+
+        assert response.status_code == expected_code, response.text
+
     async def test_code_taken(self, authed_client: AsyncClient) -> None:
         await _create_task(authed_client, code="RR-20001")
 
@@ -1414,6 +1497,7 @@ class TestCreateTaskValidation:
         )
 
         assert response.status_code == 409
+        assert response.json()["error"]["code"] == "task_code_taken"
 
     @pytest.mark.parametrize(
         ("parent", "use_summary", "expected_code"),
@@ -1580,6 +1664,17 @@ class TestDuplicateTask:
         copy_id = response.json()["id"]
         prompts = (await authed_client.get(f"/tasks/{copy_id}/library-prompts")).json()
         assert [prompt["name"] for prompt in prompts] == ["lib"]
+
+    async def test_code_taken(self, authed_client: AsyncClient, db_session: AsyncSession) -> None:
+        source = await self._done_source(authed_client, db_session)
+
+        response = await authed_client.post(
+            f"/tasks/{source.id}/duplicate",
+            json={"code": source.code, "title": "t", "description": "d"},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "task_code_taken"
 
     async def test_requires_done(self, authed_client: AsyncClient) -> None:
         source = await _create_task(authed_client)

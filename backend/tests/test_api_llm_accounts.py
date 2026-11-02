@@ -323,6 +323,25 @@ class TestLogin:
         assert response.status_code == 204
         assert api_cliproxy.cancelled == [start["state"]]
 
+    async def test_not_redirect_rejected(
+        self,
+        authed_client: AsyncClient,
+        api_cliproxy: FakeCliproxy,
+        current_user: User,
+        db_session: AsyncSession,
+    ) -> None:
+        account = await make_llm_account(db_session, owner_id=current_user.id)
+        await authed_client.post(f"/llm-accounts/{account.id}/login")
+
+        response = await authed_client.post(
+            f"/llm-accounts/{account.id}/login/callback",
+            json={"redirect_url": "не адрес"},
+        )
+
+        assert response.status_code == 422
+        assert "адрес после входа" in response.json()["error"]["message"]
+        assert ("POST", "/oauth/callback") not in api_cliproxy.requests
+
     async def test_callback_without_login(
         self,
         authed_client: AsyncClient,

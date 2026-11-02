@@ -109,6 +109,29 @@ class TestModels:
 
         assert models == ["claude-opus-5-5", "claude-x"]
 
+    async def test_unsuitable_models_hidden(
+        self,
+        db_session: AsyncSession,
+        fake_cliproxy: FakeCliproxy,
+    ) -> None:
+        owner = await make_user(db_session)
+        account = await make_llm_account(
+            db_session,
+            owner_id=owner.id,
+            provider="openai",
+            credential="codex-owner@example.com.json",
+        )
+        fake_cliproxy.add_credential(
+            "codex-owner@example.com.json",
+            provider="codex",
+            models=[f"{account.cliproxy_prefix}/{m}" for m in ("gpt-6.1-sol", "gpt-image-2")],
+        )
+        cliproxy = fake_cliproxy.client()
+
+        assert await account_models(cliproxy, account) == ["gpt-6.1-sol"]
+        with pytest.raises(ValidationError):
+            await ensure_model_available(cliproxy, account, "gpt-image-2")
+
     async def test_empty_before_login(
         self,
         db_session: AsyncSession,

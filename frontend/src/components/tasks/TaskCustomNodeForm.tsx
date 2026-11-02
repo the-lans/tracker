@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { NodeEffortField } from "@/components/nodes/NodeEffortField";
 import { PromptTemplateField } from "@/components/nodes/PromptTemplateField";
 import { SlashCommandField } from "@/components/nodes/SlashCommandField";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import { NODE_TYPE_LABEL } from "@/lib/labels";
 import {
   NodeType,
   type NodeItem,
+  type ReasoningEffort,
   type TaskCustomNodeContent,
   type TemplatePreviewRequest,
 } from "@/lib/types";
@@ -59,6 +61,9 @@ export function TaskCustomNodeForm({
   const [commandInvocation, setCommandInvocation] = useState(
     initial?.command_invocation ?? "",
   );
+  const [effort, setEffort] = useState<ReasoningEffort | null>(
+    initial?.reasoning_effort ?? null,
+  );
   const isCommand = nodeType === NodeType.SLASH_COMMAND;
   const text = isCommand ? commandInvocation : promptTemplate;
   const sources = (libraryNodes ?? []).filter((node) =>
@@ -70,6 +75,7 @@ export function TaskCustomNodeForm({
     setNodeType(source.node_type);
     setPromptTemplate(source.prompt_template ?? "");
     setCommandInvocation(source.command_invocation ?? "");
+    setEffort(source.reasoning_effort);
   }
 
   function previewRequest(): TemplatePreviewRequest {
@@ -88,6 +94,7 @@ export function TaskCustomNodeForm({
       node_type: nodeType,
       prompt_template: isCommand ? null : promptTemplate,
       command_invocation: isCommand ? commandInvocation : null,
+      reasoning_effort: effort,
     });
   }
 
@@ -155,6 +162,7 @@ export function TaskCustomNodeForm({
           previewRequest={previewRequest}
         />
       )}
+      <NodeEffortField id="custom-node-effort" value={effort} onChange={setEffort} />
       <DialogFooter>
         <Button variant="secondary" onClick={onCancel}>
           Отмена

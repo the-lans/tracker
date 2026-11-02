@@ -87,7 +87,7 @@ export function PipelinePickerDialog({
           <DialogTitle>Выбрать пайплайн</DialogTitle>
         </DialogHeader>
         <Select value={pipelineId} onValueChange={selectPipeline}>
-          <SelectTrigger>
+          <SelectTrigger aria-label="Пайплайн">
             <SelectValue placeholder="Выберите пайплайн" />
           </SelectTrigger>
           <SelectContent>

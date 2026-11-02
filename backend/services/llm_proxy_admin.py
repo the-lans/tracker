@@ -131,15 +131,15 @@ async def _credential(cliproxy: CliproxyManagementClient, name: str) -> Credenti
 
 
 async def refresh_credential(cliproxy: CliproxyManagementClient, name: str) -> None:
-    await _credential(cliproxy, name)
+    credential = await _credential(cliproxy, name)
     await cliproxy.refresh_credential(name)
-    logger.info("cliproxy_credential_refreshed")
+    logger.info("cliproxy_credential_refreshed", auth_index=credential.auth_index)
 
 
 async def reset_cooldown(cliproxy: CliproxyManagementClient, name: str) -> None:
     credential = await _credential(cliproxy, name)
     await cliproxy.reset_cooldown(credential.auth_index)
-    logger.info("cliproxy_cooldown_reset")
+    logger.info("cliproxy_cooldown_reset", auth_index=credential.auth_index)
 
 
 async def delete_orphan_credential(
@@ -148,9 +148,9 @@ async def delete_orphan_credential(
     name: str,
 ) -> None:
     """Удалить отсюда можно только учётку без аккаунта: аккаунт удаляется на своей странице."""
-    await _credential(cliproxy, name)
+    credential = await _credential(cliproxy, name)
     bound = sa.select(LlmAccount.id).where(LlmAccount.cliproxy_credential == name)
     if await db_session.scalar(bound) is not None:
         raise ConflictError("Учётка привязана к LLM-аккаунту — удалите сам аккаунт")
     await cliproxy.delete_credential(name)
-    logger.info("cliproxy_orphan_credential_deleted")
+    logger.info("cliproxy_orphan_credential_deleted", auth_index=credential.auth_index)

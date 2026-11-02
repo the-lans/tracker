@@ -40,6 +40,21 @@ class ConflictError(AppError):
     code = "conflict"
 
 
+class InvalidTaskCodeError(ValidationError):
+    """
+    Код задачи недопустим как каталог или ветка (раздел 3.1 ТЗ): форма
+    показывает причину под полем кода.
+    """
+
+    code = "invalid_task_code"
+
+
+class TaskCodeTakenError(ConflictError):
+    """Код задачи уже занят другой задачей (раздел 3.1 ТЗ, `tasks.code` unique)."""
+
+    code = "task_code_taken"
+
+
 class PayloadTooLargeError(AppError):
     """Загружаемый файл больше допустимого (раздел 14.3 ТЗ, артефакты задачи)."""
 

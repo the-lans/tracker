@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from services.errors import ValidationError
+from services.errors import InvalidTaskCodeError
 
 MAX_TASK_CODE_LENGTH = 64
 # Пробельные и управляющие символы, разделители пути и символы, запрещённые
@@ -24,19 +24,19 @@ _FORBIDDEN_SUFFIXES = (".", ".lock")
 
 
 def validate_task_code(code: str) -> str:
-    """Возвращает код без изменений или поднимает `ValidationError` с причиной."""
+    """Возвращает код без изменений или поднимает `InvalidTaskCodeError` с причиной."""
     if not code:
-        raise ValidationError("Укажите код задачи")
+        raise InvalidTaskCodeError("Укажите код задачи")
     if len(code) > MAX_TASK_CODE_LENGTH:
-        raise ValidationError(f"Код задачи длиннее {MAX_TASK_CODE_LENGTH} символов")
+        raise InvalidTaskCodeError(f"Код задачи длиннее {MAX_TASK_CODE_LENGTH} символов")
     if _FORBIDDEN_CHARACTERS.search(code):
-        raise ValidationError(
+        raise InvalidTaskCodeError(
             "Код задачи — текст без пробелов и символов / \\ ~ ^ : ? * [",
         )
     if any(sequence in code for sequence in _FORBIDDEN_SEQUENCES):
-        raise ValidationError("Код задачи не может содержать «..» и «@{»")
+        raise InvalidTaskCodeError("Код задачи не может содержать «..» и «@{»")
     if code.startswith(_FORBIDDEN_PREFIXES) or code.endswith(_FORBIDDEN_SUFFIXES):
-        raise ValidationError(
+        raise InvalidTaskCodeError(
             "Код задачи не может начинаться с «-» или «.» и заканчиваться на «.» или «.lock»",
         )
     return code
