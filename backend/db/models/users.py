@@ -12,9 +12,25 @@ from db.base import Base
 from db.models.enums import UserRole
 from db.models.mixins import CreatedAtMixin, UUIDPrimaryKeyMixin, pg_enum
 
+# Раздел 19.7: порог расхода окна лимита, после которого задача уходит на следующий аккаунт.
+DEFAULT_LLM_SWITCH_THRESHOLD_PCT = 93
+MIN_LLM_SWITCH_THRESHOLD_PCT = 1
+MAX_LLM_SWITCH_THRESHOLD_PCT = 100
+_THRESHOLD_RANGE = f"BETWEEN {MIN_LLM_SWITCH_THRESHOLD_PCT} AND {MAX_LLM_SWITCH_THRESHOLD_PCT}"
+
 
 class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     __tablename__ = "users"
+    __table_args__ = (
+        sa.CheckConstraint(
+            f"llm_switch_threshold_5h_pct {_THRESHOLD_RANGE}",
+            name="ck_users_llm_switch_threshold_5h_pct",
+        ),
+        sa.CheckConstraint(
+            f"llm_switch_threshold_week_pct {_THRESHOLD_RANGE}",
+            name="ck_users_llm_switch_threshold_week_pct",
+        ),
+    )
 
     email: Mapped[str] = mapped_column(sa.String, unique=True)
     # Логин SFTP-шлюза (раздел 3.1, решение №18 плана) — не Linux-логин:
@@ -36,6 +52,16 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     # (Bearer); токен — секрет.
     jira_email: Mapped[str | None] = mapped_column(sa.String)
     jira_token_encrypted: Mapped[str | None] = mapped_column(sa.Text)
+    llm_switch_threshold_5h_pct: Mapped[int] = mapped_column(
+        sa.Integer,
+        default=DEFAULT_LLM_SWITCH_THRESHOLD_PCT,
+        server_default=str(DEFAULT_LLM_SWITCH_THRESHOLD_PCT),
+    )
+    llm_switch_threshold_week_pct: Mapped[int] = mapped_column(
+        sa.Integer,
+        default=DEFAULT_LLM_SWITCH_THRESHOLD_PCT,
+        server_default=str(DEFAULT_LLM_SWITCH_THRESHOLD_PCT),
+    )
 
 
 class AllowedEmail(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

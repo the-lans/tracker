@@ -3,10 +3,10 @@
 
 ``auto_accept_plan`` меняется в любой момент до `done`; остальные поля —
 только пока задача в `new`. LLM-аккаунт — только один из аккаунтов автора
-задачи, даже если правит `admin` (раздел 19.2). Сессия Claude Code хранится в
-каталоге конфигурации своего LLM-аккаунта (раздел 19.5), поэтому смена
-аккаунта у задачи, уже имевшей сессию (после «Вернуть в новые»), забывает
-`tasks.session_id` — следующий запуск начнёт новую сессию.
+задачи, даже если правит `admin` (раздел 19.2). Сессия хранится в каталоге
+задачи, а не аккаунта (раздел 6.4), поэтому смена стартового аккаунта у задачи,
+уже имевшей сессию (после «Вернуть в новые»), сессию не забывает: следующий
+запуск продолжит её на выбранном аккаунте (раздел 14.1, 19.7).
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from app_logging.config import get_logger
 from db.models.enums import TaskStatus
 from services.access import ensure_llm_account_of_owner
 from services.errors import ValidationError
-from services.session_context import forget_task_session
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,17 +29,12 @@ _ANYTIME_FIELD = "auto_accept_plan"
 _LLM_ACCOUNT_FIELD = "llm_account_id"
 
 
-def _forget_session_of_other_account(task: Task, changes: dict[str, Any]) -> None:
-    if _LLM_ACCOUNT_FIELD not in changes or task.session_id is None:
+def _restart_on_chosen_account(task: Task, changes: dict[str, Any]) -> None:
+    """Новый стартовый аккаунт — первое обращение запуска уйдёт ему (п. 1 раздела 19.7)."""
+    if _LLM_ACCOUNT_FIELD not in changes or changes[_LLM_ACCOUNT_FIELD] == task.llm_account_id:
         return
-    if changes[_LLM_ACCOUNT_FIELD] == task.llm_account_id:
-        return
-    logger.info(
-        "task_session_forgotten_on_account_change",
-        task_id=str(task.id),
-        previous_session_id=task.session_id,
-    )
-    forget_task_session(task)
+    task.current_llm_account_id = None
+    logger.info("task_start_llm_account_changed", task_id=str(task.id))
 
 
 async def update_task(
@@ -61,7 +55,7 @@ async def update_task(
             changes[_LLM_ACCOUNT_FIELD],
             owner_id=task.created_by,
         )
-    _forget_session_of_other_account(task, changes)
+    _restart_on_chosen_account(task, changes)
 
     for field, value in changes.items():
         setattr(task, field, value)

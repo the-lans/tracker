@@ -1,10 +1,6 @@
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ReorderButton, type MoveDirection } from "@/components/common/actions/ReorderButton";
 import { useUpdateNode } from "@/hooks/useNodes";
 import type { NodeItem } from "@/lib/types";
-
-type MoveDirection = "up" | "down";
-
-const MOVE_LABEL: Record<MoveDirection, string> = { up: "Переместить выше", down: "Переместить ниже" };
 
 /** Кнопка перестановки ноды пайплайна с соседней — выше или ниже. */
 export function NodeReorderButton({
@@ -25,16 +21,5 @@ export function NodeReorderButton({
     updateNeighbor.mutate({ order_index: node.order_index ?? 0 });
   }
 
-  return (
-    <button
-      type="button"
-      disabled={!neighbor}
-      onClick={swap}
-      aria-label={`${MOVE_LABEL[direction]}: ${node.name}`}
-      title={MOVE_LABEL[direction]}
-      className="touch-target flex items-center justify-center text-text-3 hover:text-text disabled:opacity-30"
-    >
-      {direction === "up" ? <ArrowUp className="size-4" /> : <ArrowDown className="size-4" />}
-    </button>
-  );
+  return <ReorderButton name={node.name} direction={direction} disabled={!neighbor} onMove={swap} />;
 }

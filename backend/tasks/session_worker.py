@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from claude_agent_sdk import ClaudeSDKClient, ClaudeSDKError, RateLimitInfo
+from claude_agent_sdk import ClaudeSDKClient, ClaudeSDKError
 from redis.asyncio import Redis
 
 from app_logging.config import bind_task_context, get_logger
@@ -24,19 +24,24 @@ from clients.claude_agent import (
     ClaudeAgentClientProtocol,
     ClaudeCodeSession,
     OfflineAgentClient,
-    RateLimitHandler,
     build_claude_agent_options,
 )
+from clients.cliproxy import open_cliproxy_client
 from db.models.enums import ParentSummaryStatus, RemoteControlStatus, TaskStatus
-from db.models.llm import LlmAccount
 from db.models.mcp import McpServer
 from db.models.repositories import Repository, TemplateMcpServer
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
 from db.session import async_session_factory
+from services.account_router import TaskAccountRouter
 from services.child_rebase import apply_requested_rebases
-from services.claude_config import ensure_history_retention, history_retention_days
+from services.claude_config import (
+    ensure_history_retention,
+    history_retention_days,
+    session_config_dir,
+)
 from services.errors import ConflictError
-from services.llm_accounts import record_rate_limit
+from services.llm_routing import llm_session_token
+from services.maintenance import maintenance_active
 from services.manual_queue import DEFAULT_FREEFORM_TIMEOUT_SECONDS, process_manual_queue_once
 from services.mcp_config import build_mcp_server_config
 from services.output_stream import build_output_publisher
@@ -60,7 +65,7 @@ from services.pipeline_orchestrator import (
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
 from services.redis_connection import redis_connection
-from services.remote_control import record_bridge_status
+from services.remote_control import bridge_unavailable, record_bridge_status
 from services.session_container import SESSION_CLI_PATH, build_session_cli_env
 from services.session_heartbeat import (
     SESSION_OWNER_WAIT_SECONDS,
@@ -99,6 +104,8 @@ if TYPE_CHECKING:
 logger = get_logger("tasks.session_worker")
 
 _CONTINUATION_COUNTDOWN_SECONDS = 1
+# Как часто отложенный на время обновления таск проверяет флаг обслуживания.
+MAINTENANCE_RETRY_SECONDS = 30
 # `failed` — «Перезапустить с текущей ноды» (раздел 14.2).
 _CLAIMABLE_STATUSES = (TaskStatus.QUEUED, TaskStatus.FAILED)
 # Продолжение после `clear_context`: пока сессия передавалась, периодическая
@@ -273,6 +280,9 @@ class _SessionControl:
         if not await consume_bridge_reconnect(self.redis_client, self.task.id):
             return
         await self.db_session.refresh(self.task)
+        if bridge_unavailable(self.task):
+            logger.info("bridge_reconnect_skipped_unavailable", task_id=str(self.task.id))
+            return
         session_id = self.claude_session.session_id or self.task.session_id
         status = RemoteControlStatus.DISCONNECTED
         if not self.has_llm:
@@ -399,7 +409,7 @@ async def _settle_bridge_request(
     """
     requested = await consume_bridge_reconnect(redis_client, task_id)
     task = await db_session.get(Task, task_id, populate_existing=True)
-    if task is None:
+    if task is None or bridge_unavailable(task):
         return
     if requested or task.remote_control_status is RemoteControlStatus.RECONNECTING:
         logger.info("bridge_reconnect_dropped_after_run", task_id=str(task_id))
@@ -411,6 +421,19 @@ async def _disconnect_quietly(session: ClaudeCodeSession) -> None:
         await session.disconnect()
     except Exception:  # noqa: BLE001 — уже обрабатываем исходную ошибку, эта вторична
         logger.exception("session_disconnect_failed")
+
+
+def _defer_until_maintenance_ends(task_id: uuid.UUID, start_after_order_index: int | None) -> None:
+    """
+    Раздел 20.6: во время обновления задача не берётся из очереди — таск
+    откладывается и повторяет попытку, пока флаг обслуживания не снят.
+    """
+    logger.info("task_claim_deferred_by_maintenance", task_id=str(task_id))
+    run_task_session.apply_async(
+        args=[str(task_id)],
+        kwargs={"start_after_order_index": start_after_order_index, "continuation": False},
+        countdown=MAINTENANCE_RETRY_SECONDS,
+    )
 
 
 async def _run_task_session_async(
@@ -439,6 +462,9 @@ async def _run_task_session_in_context(
             logger.warning("task_not_found", task_id=str(task_id))
             return
         async with redis_connection() as redis_client:
+            if not continuation and await maintenance_active(redis_client):
+                _defer_until_maintenance_ends(task_id, start_after_order_index)
+                return
             try:
                 # Раздел 17.4: сначала владение сессией, затем статус — второй
                 # исполнитель той же задачи уходит, ничего не изменив.
@@ -472,12 +498,25 @@ async def _run_owned_session(
         if not continuation:
             # Команда, адресованная прошлому прогону, к этому не относится.
             await clear_task_control(redis_client, task.id)
-        await _run_claimed_task(
-            db_session,
-            task=task,
-            redis_client=redis_client,
-            start_after_order_index=start_after_order_index,
-        )
+        async with (
+            llm_session_token(redis_client, task.id) as session_token,
+            open_cliproxy_client() as cliproxy,
+        ):
+            await _run_claimed_task(
+                db_session,
+                task=task,
+                redis_client=redis_client,
+                lane=_LlmLane(
+                    session_token=session_token,
+                    router=TaskAccountRouter(
+                        db_session=db_session,
+                        redis_client=redis_client,
+                        task=task,
+                        cliproxy=cliproxy,
+                    ),
+                ),
+                start_after_order_index=start_after_order_index,
+            )
     except Exception as exc:
         # Раздел 17.3: любая ошибка сессии переводит задачу в `failed`,
         # а не оставляет её в `in_progress` навсегда.
@@ -487,24 +526,15 @@ async def _run_owned_session(
         await _settle_bridge_request(db_session, task_id=task.id, redis_client=redis_client)
 
 
-async def _claude_config_dir(db_session: AsyncSession, task: Task) -> str:
-    """Раздел 19.5: изолированная конфигурация LLM-аккаунта задачи."""
-    if task.llm_account_id is None:
-        return ""
-    llm_account = await db_session.get(LlmAccount, task.llm_account_id)
-    return llm_account.claude_config_dir if llm_account else ""
+@dataclass(frozen=True, slots=True)
+class _LlmLane:
+    """
+    Путь сессии задачи к модели (раздел 19.7): токен для `llm-gateway` и
+    роутер, выбирающий аккаунт на каждый ход, — на всё время работы воркера.
+    """
 
-
-def _rate_limit_recorder(db_session: AsyncSession, task: Task) -> RateLimitHandler | None:
-    """Раздел 16.2: события лимитов из потока сессии обновляют статус аккаунта задачи."""
-    account_id = task.llm_account_id
-    if account_id is None:
-        return None
-
-    async def record(info: RateLimitInfo) -> None:
-        await record_rate_limit(db_session, account_id=account_id, info=info)
-
-    return record
+    session_token: str
+    router: TaskAccountRouter
 
 
 async def _summarize_parent_in_fork(
@@ -514,6 +544,7 @@ async def _summarize_parent_in_fork(
     child: Task,
     parent: Task,
     repos_root: Path,
+    lane: _LlmLane,
 ) -> None:
     """
     Пересказ в ответвлении сессии свободного родителя: его история не
@@ -524,13 +555,14 @@ async def _summarize_parent_in_fork(
     # После очистки репозиториев родителя его папки может не быть, а resume
     # ищет историю сессии по рабочей директории.
     parent_root.mkdir(parents=True, exist_ok=True)
-    parent_config_dir = await _claude_config_dir(db_session, parent)
+    # История — в директории сессии родителя, а модель — по маршруту дочерней задачи.
+    parent_config_dir = session_config_dir(parent.code)
     options = build_claude_agent_options(
         resume_session_id=parent.session_id,
         cwd=str(parent_root),
         permission_mode=None,
         mcp_servers={},
-        claude_config_dir=parent_config_dir,
+        claude_config_dir=str(parent_config_dir),
         enable_remote_control=False,
         can_use_tool=deny_all_tools,
         fork_session=True,
@@ -539,11 +571,12 @@ async def _summarize_parent_in_fork(
         cli_env=await build_session_cli_env(
             task_id=child.id,
             cwd=parent_root,
-            claude_config_dir=parent_config_dir,
+            config_dir=parent_config_dir,
+            session_token=lane.session_token,
         ),
     )
-    ensure_history_retention(options.env["CLAUDE_CONFIG_DIR"], days=history_retention_days())
-    fork = ClaudeCodeSession(ClaudeSDKClient(options=options))
+    ensure_history_retention(str(parent_config_dir), days=history_retention_days())
+    fork = ClaudeCodeSession(ClaudeSDKClient(options=options), router=lane.router)
     try:
         await fork.connect()
     except ClaudeSDKError:
@@ -573,6 +606,7 @@ async def _obtain_parent_summary(
     task: Task,
     redis_client: Redis,
     repos_root: Path,
+    lane: _LlmLane,
 ) -> TaskParentSummary | None:
     """
     Раздел 3.1 `use_parent_summary`: пересказ родителя до старта своей
@@ -604,6 +638,7 @@ async def _obtain_parent_summary(
         child=task,
         parent=parent,
         repos_root=repos_root,
+        lane=lane,
     )
     return summary
 
@@ -619,7 +654,7 @@ class _SessionClientFactory:
     task: Task
     workspace: Path
     artifacts_dir: Path
-    claude_config_dir: str
+    config_dir: Path
     mcp_servers: dict[str, McpServerConfig]
     can_use_tool: CanUseTool
     cli_env: dict[str, str]
@@ -641,7 +676,7 @@ class _SessionClientFactory:
             cwd=str(self.workspace),
             permission_mode=self.task.current_permission_mode,
             mcp_servers=self.mcp_servers,
-            claude_config_dir=self.claude_config_dir,
+            claude_config_dir=str(self.config_dir),
             enable_remote_control=enable_remote_control,
             can_use_tool=self.can_use_tool,
             add_dirs=[str(self.artifacts_dir)],
@@ -657,27 +692,29 @@ async def _build_client_factory(
     task: Task,
     workspace: Path,
     can_use_tool: CanUseTool,
+    session_token: str,
 ) -> _SessionClientFactory:
-    claude_config_dir = await _claude_config_dir(db_session, task)
+    config_dir = session_config_dir(task.code)
     artifacts_dir = task_artifacts_dir(task.code)
     has_llm = task.llm_account_id is not None
     cli_env = (
         await build_session_cli_env(
             task_id=task.id,
             cwd=workspace,
-            claude_config_dir=claude_config_dir,
+            config_dir=config_dir,
+            session_token=session_token,
             artifacts_dir=artifacts_dir,
         )
         if has_llm
         else {}
     )
     # Раздел 6.4: история сессии нужна, пока существует задача (resume, пересказ).
-    ensure_history_retention(claude_config_dir, days=history_retention_days())
+    ensure_history_retention(str(config_dir), days=history_retention_days())
     return _SessionClientFactory(
         task=task,
         workspace=workspace,
         artifacts_dir=artifacts_dir,
-        claude_config_dir=claude_config_dir,
+        config_dir=config_dir,
         mcp_servers=await _resolve_mcp_servers_for_task(db_session, task),
         can_use_tool=can_use_tool,
         cli_env=cli_env,
@@ -689,6 +726,7 @@ async def _run_claimed_task(
     *,
     task: Task,
     redis_client: Redis,
+    lane: _LlmLane,
     start_after_order_index: int | None,
 ) -> None:
     repos_root = resolve_repos_root()
@@ -701,6 +739,7 @@ async def _run_claimed_task(
             task=task,
             redis_client=redis_client,
             repos_root=repos_root,
+            lane=lane,
         )
         if parent_summary is None:
             logger.info("task_stopped_while_waiting_parent_summary", task_id=str(task.id))
@@ -721,9 +760,12 @@ async def _run_claimed_task(
             session_factory=async_session_factory,
             redis_client=redis_client,
         ),
+        session_token=lane.session_token,
     )
     start_plan = plan_session_start(existing_session_id=task.session_id)
-    enable_remote_control = start_plan.enable_remote_control and make_client.has_llm
+    enable_remote_control = (
+        start_plan.enable_remote_control and make_client.has_llm and not bridge_unavailable(task)
+    )
     session = ClaudeCodeSession(
         make_client(
             resume_session_id=start_plan.resume_session_id,
@@ -731,7 +773,8 @@ async def _run_claimed_task(
         ),
         on_text_delta=build_output_publisher(redis_client, active_node_context),
         on_abort=active_node_context.cancel_decision_wait,
-        on_rate_limit=_rate_limit_recorder(db_session, task),
+        on_rate_limit=lane.router.record_rate_limit,
+        router=lane.router,
     )
     active_node_context.output_length = session.turn_text_length
     active_node_context.user_wait_clock = session.user_wait_clock

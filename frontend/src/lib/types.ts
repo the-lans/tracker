@@ -31,6 +31,8 @@ export const RemoteControlStatus = {
   CONNECTED: "connected",
   DISCONNECTED: "disconnected",
   RECONNECTING: "reconnecting",
+  /** Раздел 6.3: мост через LLM-прокси невозможен. */
+  UNAVAILABLE: "unavailable",
 } as const;
 export type RemoteControlStatus = (typeof RemoteControlStatus)[keyof typeof RemoteControlStatus];
 
@@ -112,11 +114,40 @@ export const AppLogLevel = {
 export type AppLogLevel = (typeof AppLogLevel)[keyof typeof AppLogLevel];
 
 export const LlmAccountStatus = {
+  LOGIN_REQUIRED: "login_required",
   ACTIVE: "active",
   RATE_LIMITED: "rate_limited",
   DISABLED: "disabled",
 } as const;
 export type LlmAccountStatus = (typeof LlmAccountStatus)[keyof typeof LlmAccountStatus];
+
+/** Раздел 19.7: общая шкала уровня рассуждений, от меньшего к большему. */
+export const ReasoningEffort = {
+  LOW: "low",
+  MEDIUM: "medium",
+  HIGH: "high",
+  XHIGH: "xhigh",
+  MAX: "max",
+} as const;
+export type ReasoningEffort = (typeof ReasoningEffort)[keyof typeof ReasoningEffort];
+
+/** Раздел 19.7: почему обращение ушло не на аккаунт прежнего обращения. */
+export const LlmSwitchReason = {
+  START: "start",
+  KEPT: "kept",
+  THRESHOLD_5H: "threshold_5h",
+  THRESHOLD_WEEK: "threshold_week",
+  RATE_LIMITED: "rate_limited",
+  LOGIN_REQUIRED: "login_required",
+  DISABLED: "disabled",
+  UNSUITABLE: "unsuitable",
+  ALL_ABOVE_THRESHOLD: "all_above_threshold",
+} as const;
+export type LlmSwitchReason = (typeof LlmSwitchReason)[keyof typeof LlmSwitchReason];
+
+/** Раздел 19.7: состояние входа OAuth через прокси. */
+export const LlmLoginState = { WAIT: "wait", OK: "ok", ERROR: "error" } as const;
+export type LlmLoginState = (typeof LlmLoginState)[keyof typeof LlmLoginState];
 
 export const EnvVariableScope = { GLOBAL: "global", REPOSITORY: "repository" } as const;
 export type EnvVariableScope = (typeof EnvVariableScope)[keyof typeof EnvVariableScope];
@@ -173,6 +204,14 @@ export interface User {
   /** Раздел 15.6: личный доступ к Jira; токен не возвращается — только признак. */
   jira_email: string | null;
   jira_token_set: boolean;
+  /** Раздел 19.7: пороги переключения LLM-аккаунта по окнам лимита, в процентах. */
+  llm_switch_threshold_5h_pct: number;
+  llm_switch_threshold_week_pct: number;
+}
+
+export interface LlmThresholdsUpdate {
+  five_hour_pct: number;
+  week_pct: number;
 }
 
 /** `jira_token`: `null` — оставить сохранённый, пустая строка — удалить. */
@@ -238,7 +277,10 @@ export interface Task {
   jira_issue_url: string | null;
   status: TaskStatus;
   pipeline_id: string | null;
+  /** Стартовый аккаунт; дальше аккаунт переключается автоматически (раздел 19.7). */
   llm_account_id: string | null;
+  /** Аккаунт, на котором сейчас работает сессия; null — сессия ещё не обращалась к модели. */
+  current_llm_account_id: string | null;
   parent_task_id: string | null;
   use_parent_summary: boolean;
   session_id: string | null;
@@ -317,6 +359,12 @@ export interface NodeLog {
   script_exit_code: number | null;
   /** Почему выполнение не удалось (раздел 15.2): таймаут, сбой сессии. */
   error_message: string | null;
+  /** Раздел 19.7: аккаунт, модель и уровень (на шкале провайдера) обращения к модели. */
+  llm_account_id: string | null;
+  llm_model: string | null;
+  reasoning_effort: ReasoningEffort | null;
+  /** null — аккаунт не сменился по сравнению с прежним обращением. */
+  llm_switch_reason: LlmSwitchReason | null;
   status: NodeLogStatus;
   pending_question: string | null;
   pending_plan_text: string | null;
@@ -433,7 +481,14 @@ export interface TaskOutputDeltaEvent {
   text: string;
 }
 
-export type TaskSocketEvent = TaskStatusEvent | TaskOutputDeltaEvent;
+/** Раздел 19.7: воркер переключил сессию на другой аккаунт. */
+export interface TaskLlmAccountEvent {
+  type: "llm_account";
+  task_id: string;
+  current_llm_account_id: string | null;
+}
+
+export type TaskSocketEvent = TaskStatusEvent | TaskOutputDeltaEvent | TaskLlmAccountEvent;
 
 /** Накопленный потоковый текст по `node_logs.id`. */
 export type TaskOutputStream = Record<string, string>;
@@ -466,6 +521,8 @@ export interface NodeItem {
   is_skipped: boolean;
   is_library_item: boolean;
   llm_output_last_n: number | null;
+  /** Раздел 11.1: null — уровень по умолчанию аккаунта задачи. */
+  reasoning_effort: ReasoningEffort | null;
   is_archived: boolean;
   created_by: string;
 }
@@ -488,6 +545,7 @@ export interface NodeCreateRequest {
   guide_url?: string | null;
   is_skipped?: boolean;
   llm_output_last_n?: number | null;
+  reasoning_effort?: ReasoningEffort | null;
 }
 
 export type NodeUpdateRequest = Partial<NodeCreateRequest> & { is_archived?: boolean };
@@ -546,22 +604,86 @@ export interface TemplatePreviewResponse {
 
 // --- LLM-аккаунты ----------------------------------------------------------
 
+/** Провайдер из реестра трекера (раздел 19.7). */
+export interface LlmProvider {
+  id: string;
+  label: string;
+  /** Опрашивается ли расход окон: без него аккаунт переключается только по лимиту. */
+  reports_usage: boolean;
+  plan_prompt_allowed: boolean;
+}
+
 export interface LlmAccount {
   id: string;
   label: string;
-  claude_config_dir: string;
+  provider: string;
+  /** Есть ли у аккаунта учётка в прокси (вход выполнялся). */
+  signed_in: boolean;
+  default_model: string | null;
+  default_effort: ReasoningEffort;
+  /** Место в порядке переключения (раздел 19.7). */
+  switch_order: number;
   status: LlmAccountStatus;
+  rate_limit_resets_at: string | null;
+  /** Расход окон лимита в процентах — строки Decimal; null — неизвестен. */
+  usage_5h_pct: string | null;
+  usage_week_pct: string | null;
+  usage_5h_resets_at: string | null;
+  usage_week_resets_at: string | null;
+  usage_checked_at: string | null;
   /** Раздел 19.2: владелец аккаунта — тот, кто его завёл. */
   created_by: string;
 }
 
 export interface LlmAccountCreateRequest {
   label: string;
-  claude_config_dir: string;
-  status?: LlmAccountStatus;
+  provider: string;
 }
 
-export type LlmAccountUpdateRequest = Partial<LlmAccountCreateRequest>;
+export interface LlmAccountUpdateRequest {
+  label?: string;
+  default_model?: string;
+  default_effort?: ReasoningEffort;
+  enabled?: boolean;
+}
+
+export interface LlmLoginStart {
+  url: string;
+  state: string;
+  /** Раздел 19.5: после этого времени прокси не примет адрес после входа. */
+  expires_at: string;
+}
+
+export interface LlmLoginStatus {
+  state: LlmLoginState;
+  error: string | null;
+}
+
+// --- LLM-прокси (администрирование, раздел 15.5) ---------------------------
+
+export interface ProxyCredential {
+  name: string;
+  provider: string;
+  disabled: boolean;
+  requires_sign_in: boolean;
+  quota_blocked: boolean;
+  status: string | null;
+  /** null — учётка прокси без аккаунта трекера («без владельца»). */
+  account_id: string | null;
+  account_label: string | null;
+  account_status: LlmAccountStatus | null;
+  owner_email: string | null;
+  usage_5h_pct: string | null;
+  usage_week_pct: string | null;
+}
+
+export interface ProxyState {
+  available: boolean;
+  error: string | null;
+  version: string;
+  latest_version: string | null;
+  credentials: ProxyCredential[];
+}
 
 // --- Переменные окружения --------------------------------------------------
 

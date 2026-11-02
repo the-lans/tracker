@@ -1,0 +1,178 @@
+# Непрерывное развёртывание (раздел 20.7 ТЗ, docs/deployment.md): после
+# зелёного CI на main трекер обновляется на сервере тем же
+# `deploy/install.sh --update`, что и вручную. Сервер принимает по SSH только
+# команды `deploy/ci_deploy.sh`; образы собираются на нём, реестр не нужен.
+name: Deploy
+
+"on":
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Коммит из main (по умолчанию — вершина main)"
+        required: false
+        default: ""
+      force:
+        description: "Не ждать завершения живых сессий"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    # Только успешный CI для push в main; ручной запуск — всегда.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 180
+    env:
+      DEPLOY_ENABLED: ${{ vars.DEPLOY_ENABLED }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_DOMAIN: ${{ vars.DEPLOY_DOMAIN }}
+      DEPLOY_WAIT_IDLE_MINUTES: ${{ vars.DEPLOY_WAIT_IDLE_MINUTES || '60' }}
+      HEALTH_TIMEOUT_SECONDS: "300"
+      HEALTH_POLL_SECONDS: "10"
+    steps:
+      # Переменные окружения `production` недоступны в `if` задания — до
+      # настройки сервера workflow завершается здесь без действий.
+      - name: Check that deployment is enabled
+        id: gate
+        run: |
+          if [ "${DEPLOY_ENABLED}" != "true" ]; then
+            echo "DEPLOY_ENABLED != true — развёртывание выключено" >> "$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Полный SHA коммита из истории main: сервер принимает только его.
+      - name: Resolve commit
+        id: target
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          ref="${RUN_SHA:-${INPUT_REF:-origin/main}}"
+          sha="$(git rev-parse --verify --quiet "${ref}^{commit}")" \
+            || { echo "::error::Коммит ${ref} не найден"; exit 1; }
+          git merge-base --is-ancestor "${sha}" origin/main \
+            || { echo "::error::Коммит ${sha} не входит в историю main"; exit 1; }
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      # Проверка ключа хоста обязательна: known_hosts — из секрета окружения.
+      - name: Configure SSH
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "${SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host tracker-server
+            HostName ${DEPLOY_HOST}
+            Port ${DEPLOY_PORT}
+            User ${DEPLOY_USER}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            ServerAliveInterval 30
+          EOF
+
+      # Код 3 — install.sh отменил обновление до перехода на новый код
+      # (живые сессии не завершились и т. п.): откатывать нечего.
+      - name: Deploy
+        id: deploy
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "${FORCE}" = "true" ]; then
+            flags="--force"
+          else
+            flags="--wait-idle ${DEPLOY_WAIT_IDLE_MINUTES}"
+          fi
+          set +e
+          # SHA и флаги подставляются здесь намеренно: сервер разбирает строку сам.
+          # shellcheck disable=SC2029
+          ssh tracker-server "deploy ${SHA} ${flags}"
+          code=$?
+          set -e
+          if [ "${code}" -eq 3 ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Обновление отменено, сервер не изменён"
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          exit "${code}"
+
+      - name: Verify deployment
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+        run: bash .github/scripts/verify_deployment.sh "${SHA}"
+
+      # Схема БД при откате остаётся новой (раздел 20.6); живые сессии уже
+      # прерваны неудачным обновлением — ждать их не нужно.
+      - name: Roll back
+        id: rollback
+        if: failure() && steps.deploy.outputs.changed == 'true'
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          previous="$(ssh tracker-server previous-ref)"
+          if ! [[ "${previous}" =~ ^[0-9a-f]{40}$ ]] || [ "${previous}" = "${SHA}" ]; then
+            echo "::error::Откатываться не на что: previous_ref = ${previous}"
+            exit 1
+          fi
+          echo "previous=${previous}" >> "$GITHUB_OUTPUT"
+          # shellcheck disable=SC2029
+          ssh tracker-server "deploy ${previous} --force"
+          bash .github/scripts/verify_deployment.sh "${previous}"
+
+      - name: Summary
+        if: always() && steps.gate.outputs.enabled == 'true'
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+          STARTED: ${{ steps.gate.outputs.started }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          VERIFY_OUTCOME: ${{ job.status }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+          ROLLBACK_TO: ${{ steps.rollback.outputs.previous }}
+        run: |
+          {
+            echo "### Развёртывание"
+            echo "- Коммит: \`${SHA:-не определён}\`"
+            echo "- Длительность: $(( $(date +%s) - STARTED )) с"
+            echo "- Обновление: ${DEPLOY_OUTCOME}, итог задания: ${VERIFY_OUTCOME}"
+            if [ "${ROLLBACK_OUTCOME}" != "skipped" ] && [ -n "${ROLLBACK_OUTCOME}" ]; then
+              echo "- Откат на \`${ROLLBACK_TO:-?}\`: ${ROLLBACK_OUTCOME}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

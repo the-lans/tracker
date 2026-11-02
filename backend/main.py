@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import traceback
 import uuid
 from collections.abc import AsyncIterator, Mapping
@@ -16,6 +17,7 @@ from api.auth import router as auth_router
 from api.env_variables import router as env_variables_router
 from api.jira import router as jira_router
 from api.llm_accounts import router as llm_accounts_router
+from api.llm_proxy import router as llm_proxy_router
 from api.mcp_servers import router as mcp_servers_router
 from api.monitoring import monitoring_router
 from api.monitoring import router as app_logs_router
@@ -66,6 +68,7 @@ app.include_router(repositories_router)
 app.include_router(templates_router)
 app.include_router(preview_router)
 app.include_router(llm_accounts_router)
+app.include_router(llm_proxy_router)
 app.include_router(env_variables_router)
 app.include_router(mcp_servers_router)
 app.include_router(pipelines_router)
@@ -183,6 +186,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
+# Раздел 20.7: коммит образа (build-arg GIT_SHA) — по нему развёртывание
+# проверяет, что сервер отвечает новой версией.
+_VERSION_ENV = "GIT_SHA"
+_UNKNOWN_VERSION = "unknown"
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": os.environ.get(_VERSION_ENV) or _UNKNOWN_VERSION}

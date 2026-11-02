@@ -17,6 +17,14 @@ function applyEvent(queryClient: QueryClient, taskId: string, payload: TaskSocke
     }));
     return;
   }
+  if (payload.type === "llm_account") {
+    queryClient.setQueryData<Task | undefined>(["tasks", "detail", taskId], (prev) =>
+      prev ? { ...prev, current_llm_account_id: payload.current_llm_account_id } : prev,
+    );
+    // Раздел 15.2: расход окон и статус нового аккаунта — свежие.
+    void queryClient.invalidateQueries({ queryKey: ["llm-accounts"] });
+    return;
+  }
   queryClient.setQueryData<Task | undefined>(["tasks", "detail", taskId], (prev) =>
     prev ? { ...prev, status: payload.status } : prev,
   );

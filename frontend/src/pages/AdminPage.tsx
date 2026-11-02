@@ -3,6 +3,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UsersPanel } from "@/components/admin/UsersPanel";
 import { SystemSettingsPanel } from "@/components/admin/SystemSettingsPanel";
 import { McpServersPanel } from "@/components/admin/McpServersPanel";
+import { LlmProxyPanel } from "@/components/admin/LlmProxyPanel";
 import { PeriodicTasksPanel } from "@/components/admin/PeriodicTasksPanel";
 import { MonitoringPanel } from "@/components/admin/MonitoringPanel";
 import { PromptLibraryPanel } from "@/components/admin/PromptLibraryPanel";
@@ -18,6 +19,7 @@ export function AdminPage() {
             <TabsTrigger value="users">Пользователи и доступ</TabsTrigger>
             <TabsTrigger value="settings">Системные настройки</TabsTrigger>
             <TabsTrigger value="mcp">MCP-серверы</TabsTrigger>
+            <TabsTrigger value="llm-proxy">LLM-прокси</TabsTrigger>
             <TabsTrigger value="periodic">Периодические задачи</TabsTrigger>
             <TabsTrigger value="monitoring">Мониторинг</TabsTrigger>
             <TabsTrigger value="library">Библиотека промтов</TabsTrigger>
@@ -30,6 +32,9 @@ export function AdminPage() {
           </TabsContent>
           <TabsContent value="mcp">
             <McpServersPanel />
+          </TabsContent>
+          <TabsContent value="llm-proxy">
+            <LlmProxyPanel />
           </TabsContent>
           <TabsContent value="periodic">
             <PeriodicTasksPanel />

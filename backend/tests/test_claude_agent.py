@@ -22,8 +22,12 @@ from clients.claude_agent import (
     OfflineAgentClient,
     build_claude_agent_options,
 )
+from db.models.enums import NodeType, ReasoningEffort
+from services.llm_routing import NoLlmAccountAvailableError
 from tests.fakes import (
+    FAKE_ROUTE,
     FakeClaudeAgentClient,
+    FakeTurnRouter,
     make_assistant_error,
     make_rate_limit_event,
     make_result_message,
@@ -516,3 +520,56 @@ class TestCrashedTurn:
         await session.abort_turn(drain_timeout_seconds=5)
 
         assert replacement.interrupted is False
+
+
+class TestTurnRouter:
+    async def test_route_chosen_before_query(self) -> None:
+        router = FakeTurnRouter()
+        client = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        session = ClaudeCodeSession(client, router=router)
+
+        turn = await session.send_and_collect_text(
+            "go",
+            effort=ReasoningEffort.MAX,
+            node_type=NodeType.PLAN_PROMPT,
+        )
+
+        assert router.routed == [(ReasoningEffort.MAX, NodeType.PLAN_PROMPT)]
+        assert (turn.route, turn.account_transient, router.errors) == (FAKE_ROUTE, None, [])
+
+    @pytest.mark.parametrize("transient", [True, False, None])
+    async def test_error_reported_to_route_account(self, transient: bool | None) -> None:
+        router = FakeTurnRouter(transient=transient)
+        messages: list[Message] = [
+            make_assistant_error("authentication_failed"),
+            make_result_message(is_error=True),
+        ]
+        session = ClaudeCodeSession(
+            FakeClaudeAgentClient(messages_per_query=[messages]),
+            router=router,
+        )
+
+        turn = await session.send_and_collect_text("go")
+
+        assert router.errors == [(FAKE_ROUTE, "authentication_failed")]
+        assert turn.account_transient is transient
+
+    async def test_no_account_turn_not_sent(self) -> None:
+        client = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        session = ClaudeCodeSession(client, router=FakeTurnRouter(available=False))
+
+        with pytest.raises(NoLlmAccountAvailableError):
+            await session.send_and_collect_text("go")
+
+        assert client.queries == []
+        await session.abort_turn()
+        assert client.interrupted is False
+
+    async def test_offline_session_not_routed(self) -> None:
+        router = FakeTurnRouter()
+        session = ClaudeCodeSession(OfflineAgentClient(), router=router)
+
+        with pytest.raises(RuntimeError):
+            await session.send_and_collect_text("go")
+
+        assert router.routed == []

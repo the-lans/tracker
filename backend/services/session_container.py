@@ -9,10 +9,14 @@ stdin/stdout контейнера — `ClaudeSDKClient`, callback разреше
 остаются в воркере.
 
 В контейнер монтируются только каталоги задачи (репозитории, артефакты) и
-каталог LLM-аккаунта — по тем же путям, что в воркере, так что история
-сессии и пути в ответах агента совпадают (`services/docker_mounts.py`).
-Переменные окружения обёртка передаёт по белому списку — секреты воркера в
-контейнер не попадают.
+конфигурационная директория её сессии — по тем же путям, что в воркере, так
+что история сессии и пути в ответах агента совпадают
+(`services/docker_mounts.py`). Переменные окружения обёртка передаёт по
+белому списку — секреты воркера в контейнер не попадают.
+
+К модели CLI обращается только через `llm-gateway` (раздел 19.7): адрес шлюза
+и токен сессии — в `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`, а контейнер
+подключён к сети `llm_sessions`, где кроме контейнеров сессий есть только шлюз.
 """
 
 from __future__ import annotations
@@ -22,9 +26,9 @@ import os
 import uuid
 from pathlib import Path
 
+from services.claude_config import resolve_sessions_root
 from services.docker_mounts import mount_args
 from services.git_ops import AGENT_GIT_IDENTITY
-from services.llm_accounts import accounts_root
 from services.task_artifacts import resolve_user_files_root
 from services.task_workspace import resolve_repos_root
 
@@ -38,6 +42,12 @@ DEFAULT_SESSION_IMAGE = "tracker-session:latest"
 # Postgres, Redis и backend из контейнера недоступны (раздел 19.3).
 SESSION_NETWORK_ENV = "TRACKER_SESSION_NETWORK"
 DEFAULT_SESSION_NETWORK = "bridge"
+# Изолированная сеть `llm_sessions` с шлюзом (docker-compose.yml); пустое
+# значение — без неё (разработка без compose).
+SESSION_LLM_NETWORK_ENV = "TRACKER_SESSION_LLM_NETWORK"
+DEFAULT_SESSION_LLM_NETWORK = "tracker-llm-sessions"
+LLM_GATEWAY_URL_ENV = "LLM_GATEWAY_URL"
+DEFAULT_LLM_GATEWAY_URL = "http://llm-gateway:8320"
 # По метке `purge_orphaned_session_containers` находит контейнеры сессий,
 # пережившие свой воркер (раздел 16.2).
 SESSION_TASK_LABEL = "tracker.task"
@@ -51,15 +61,22 @@ _CPU_LIMIT = "2.0"
 _CONTAINER_HOME = "/tmp"
 
 
+def _network_args() -> list[str]:
+    args = ["--network", os.environ.get(SESSION_NETWORK_ENV, DEFAULT_SESSION_NETWORK)]
+    llm_network = os.environ.get(SESSION_LLM_NETWORK_ENV, DEFAULT_SESSION_LLM_NETWORK)
+    if llm_network:
+        args += ["--network", llm_network]
+    return args
+
+
 def _isolation_args(task_id: uuid.UUID) -> list[str]:
-    """Метка задачи, пользователь воркера, сеть, лимиты и урезанные привилегии."""
+    """Метка задачи, пользователь воркера, сети, лимиты и урезанные привилегии."""
     return [
         "--label",
         f"{SESSION_TASK_LABEL}={task_id}",
         "--user",
         f"{os.getuid()}:{os.getgid()}",
-        "--network",
-        os.environ.get(SESSION_NETWORK_ENV, DEFAULT_SESSION_NETWORK),
+        *_network_args(),
         f"--memory={_MEMORY_LIMIT}",
         f"--cpus={_CPU_LIMIT}",
         "--cap-drop",
@@ -85,14 +102,13 @@ def _git_identity_args() -> list[str]:
 async def _task_mount_args(
     *,
     cwd: Path,
-    claude_config_dir: str,
+    config_dir: Path,
     artifacts_dir: Path | None,
 ) -> list[str]:
     args = await mount_args(cwd, resolve_repos_root())
     if artifacts_dir is not None:
         args += await mount_args(artifacts_dir, resolve_user_files_root())
-    if claude_config_dir:
-        args += await mount_args(Path(claude_config_dir), Path(accounts_root()))
+    args += await mount_args(config_dir, resolve_sessions_root())
     return args
 
 
@@ -100,20 +116,20 @@ async def build_session_cli_env(
     *,
     task_id: uuid.UUID,
     cwd: Path,
-    claude_config_dir: str,
+    config_dir: Path,
+    session_token: str,
     artifacts_dir: Path | None = None,
 ) -> dict[str, str]:
     """
     Окружение обёртки для сессии задачи `task_id` — добавляется к
     `ClaudeAgentOptions.env`. `cwd` — каталог репозиториев задачи,
-    ``claude_config_dir`` — каталог LLM-аккаунта, ``artifacts_dir`` — каталог
+    ``config_dir`` — конфигурационная директория сессии (раздел 6.4),
+    ``session_token`` — токен сессии для шлюза, ``artifacts_dir`` — каталог
     артефактов, если он нужен сессии.
     """
     docker_args = [
         *_isolation_args(task_id),
-        *await _task_mount_args(
-            cwd=cwd, claude_config_dir=claude_config_dir, artifacts_dir=artifacts_dir
-        ),
+        *await _task_mount_args(cwd=cwd, config_dir=config_dir, artifacts_dir=artifacts_dir),
         "-w",
         str(cwd),
     ]
@@ -122,4 +138,8 @@ async def build_session_cli_env(
         "docker_args": docker_args,
         "image": os.environ.get(SESSION_IMAGE_ENV, DEFAULT_SESSION_IMAGE),
     }
-    return {SESSION_DOCKER_SPEC_ENV: json.dumps(spec)}
+    return {
+        SESSION_DOCKER_SPEC_ENV: json.dumps(spec),
+        "ANTHROPIC_BASE_URL": os.environ.get(LLM_GATEWAY_URL_ENV, DEFAULT_LLM_GATEWAY_URL),
+        "ANTHROPIC_AUTH_TOKEN": session_token,
+    }

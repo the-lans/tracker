@@ -1309,10 +1309,7 @@ class TestCleanupRepositories:
 
 
 class TestForgetSession:
-    """
-    Раздел 5: после очистки контекста и смены LLM-аккаунта реплики прежней
-    сессии не попадают в `{{node.llm_output_last_n}}`.
-    """
+    """Раздел 5: после очистки контекста реплики прежней сессии не попадают в `{{node.*}}`."""
 
     async def test_clear_context(
         self,
@@ -1327,24 +1324,38 @@ class TestForgetSession:
         await db_session.refresh(task)
         assert task.context_cleared_at is not None
 
-    async def test_llm_account_change(
+
+class TestStartAccountChange:
+    """
+    Раздел 14.1: сессия хранится в каталоге задачи — смена стартового аккаунта
+    её не забывает, а следующий запуск начинается с выбранного аккаунта.
+    """
+
+    @pytest.mark.parametrize("changed", [True, False])
+    async def test_session_kept(
         self,
         authed_client: AsyncClient,
         db_session: AsyncSession,
+        changed: bool,
     ) -> None:
-        # После «Вернуть в новые» сессия прежнего прогона ещё сохранена.
+        # После «Вернуть в новые» сессия прежнего прогона сохранена.
         task = await _task_in_status(authed_client, db_session, TaskStatus.NEW)
-        account = await make_llm_account(db_session, owner_id=task.created_by)
+        current = await make_llm_account(db_session, owner_id=task.created_by)
+        task.llm_account_id = task.current_llm_account_id = current.id
+        await db_session.flush()
+        chosen = current
+        if changed:
+            chosen = await make_llm_account(db_session, owner_id=task.created_by)
 
         response = await authed_client.patch(
             f"/tasks/{task.id}",
-            json={"llm_account_id": str(account.id)},
+            json={"llm_account_id": str(chosen.id)},
         )
 
         assert response.status_code == 200, response.text
         await db_session.refresh(task)
-        assert task.session_id is None
-        assert task.context_cleared_at is not None
+        assert (task.session_id, task.context_cleared_at) == ("sess-old", None)
+        assert task.current_llm_account_id == (None if changed else current.id)
 
 
 class TestClearContext:
@@ -1581,6 +1592,17 @@ class TestDuplicateTask:
         assert response.status_code == 409
 
 
+async def _set_bridge(
+    db_session: AsyncSession,
+    task_id: uuid.UUID,
+    status: RemoteControlStatus,
+) -> None:
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    task.remote_control_status = status
+    await db_session.flush()
+
+
 class TestRemoteControlReconnect:
     async def test_hands_request_to_worker(
         self,
@@ -1590,6 +1612,7 @@ class TestRemoteControlReconnect:
     ) -> None:
         task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.PAUSED)
         task_id = uuid.UUID(task_body["id"])
+        await _set_bridge(db_session, task_id, RemoteControlStatus.DISCONNECTED)
 
         response = await authed_client.post(f"/tasks/{task_id}/remote-control/reconnect")
 
@@ -1608,6 +1631,21 @@ class TestRemoteControlReconnect:
         status: TaskStatus,
     ) -> None:
         task_body = await _create_task_in_status(authed_client, db_session, status)
+
+        response = await authed_client.post(f"/tasks/{task_body['id']}/remote-control/reconnect")
+
+        assert response.status_code == 409
+        assert await consume_bridge_reconnect(redis_client, uuid.UUID(task_body["id"])) is False
+
+    async def test_unavailable_bridge_refused(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        redis_client: Redis,
+    ) -> None:
+        """Раздел 6.3: новая задача — мост `unavailable`, переподключать нечего."""
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.PAUSED)
+        assert task_body["remote_control_status"] == "unavailable"
 
         response = await authed_client.post(f"/tasks/{task_body['id']}/remote-control/reconnect")
 

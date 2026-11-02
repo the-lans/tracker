@@ -10,7 +10,10 @@ import { TaskWorkspaceTabs, type WorkspaceView } from "@/components/tasks/TaskWo
 import { TaskControlButtons } from "@/components/tasks/TaskControlButtons";
 import { RemoteControlButton } from "@/components/tasks/RemoteControlButton";
 import { RemoteControlNotice } from "@/components/tasks/RemoteControlNotice";
-import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
+import { TaskLlmAccountBadge } from "@/components/tasks/TaskLlmAccountBadge";
+import { bridgeViewOf } from "@/components/tasks/taskStatusMeta";
+import { REMOTE_CONTROL_STATUS_LABEL } from "@/lib/labels";
+import { RemoteControlStatus } from "@/lib/types";
 import { useTask, useTaskNodeLogs } from "@/hooks/useTasks";
 import { useTaskStatusSocket } from "@/hooks/useTaskStatusSocket";
 import { cn } from "@/lib/utils";
@@ -34,8 +37,7 @@ export function TaskPage() {
   // На десктопе правая панель видна всегда; «Обзор» — только мобильная вкладка.
   const workspaceView: WorkspaceView = mobileTab === "logs" ? "logs" : "dialogue";
   const workspaceTabs = <TaskWorkspaceTabs value={workspaceView} onChange={setMobileTab} />;
-  // Мост есть только у живой сессии Claude Code (раздел 6.5, 3.1).
-  const hasBridge = task.llm_account_id !== null && SESSION_ACTIVE_STATUSES.includes(task.status);
+  const bridgeView = bridgeViewOf(task);
 
   return (
     <div className="flex h-full flex-col short:h-auto">
@@ -56,12 +58,18 @@ export function TaskPage() {
           <div className="truncate text-title font-extrabold tracking-tight" title={task.title}>
             {task.title}
           </div>
+          <TaskLlmAccountBadge task={task} />
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <TaskControlButtons task={task} />
-          {hasBridge && <RemoteControlButton task={task} />}
+          {bridgeView === "reconnect" && <RemoteControlButton task={task} />}
         </div>
-        {hasBridge && <RemoteControlNotice />}
+        {bridgeView === "reconnect" && <RemoteControlNotice />}
+        {bridgeView === "unavailable" && (
+          <p className="basis-full text-right text-caption text-text-3">
+            {REMOTE_CONTROL_STATUS_LABEL[RemoteControlStatus.UNAVAILABLE]}
+          </p>
+        )}
       </div>
 
       <TaskMobileTabs value={mobileTab} onChange={setMobileTab} />

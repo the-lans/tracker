@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _SESSION_DOCKERFILE = _BACKEND_DIR.parent / "runners" / "tracker-session" / "Dockerfile"
+_SESSION_TOKEN = "session-token-value"
 _WORKER_SECRETS = {
     "SECRET_ENCRYPTION_KEY": "encryption-key-value",
     "SESSION_SECRET_KEY": "session-key-value",
@@ -60,7 +61,7 @@ class TestSessionCli:
         environ = {
             **_WORKER_SECRETS,
             **_spec_env(uuid.uuid4()),
-            "CLAUDE_CONFIG_DIR": "/data/claude-accounts/a",
+            "CLAUDE_CONFIG_DIR": "/data/claude-sessions/RR-1",
             "ANTHROPIC_BASE_URL": "https://example.com",
             "HTTPS_PROXY": "http://proxy.example.com:3128",
             "PATH": "/usr/bin",
@@ -98,9 +99,16 @@ def _spec_image(spec: dict[str, Any]) -> str:
     return str(spec["image"])
 
 
+def _networks(args: list[str]) -> list[str]:
+    return [args[i + 1] for i, arg in enumerate(args) if arg == "--network"]
+
+
 def _spec_network(spec: dict[str, Any]) -> str:
-    args: list[str] = spec["docker_args"]
-    return args[args.index("--network") + 1]
+    return _networks(spec["docker_args"])[0]
+
+
+def _spec_llm_network(spec: dict[str, Any]) -> str:
+    return _networks(spec["docker_args"])[1]
 
 
 @pytest.fixture
@@ -110,7 +118,7 @@ def session_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("TRACKER_REPOS_ROOT", str(tmp_path / "repos"))
     monkeypatch.setenv("TRACKER_USER_FILES_ROOT", str(tmp_path / "files"))
-    monkeypatch.setenv("CLAUDE_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
+    monkeypatch.setenv("CLAUDE_SESSIONS_ROOT", str(tmp_path / "sessions"))
 
     async def not_in_container(_root: Path) -> None:
         return None
@@ -126,13 +134,13 @@ class TestSessionDockerArgs:
         tmp_path: Path,
         *,
         task_id: uuid.UUID,
-        config_dir: str,
         with_artifacts: bool,
     ) -> list[str]:
         env = await build_session_cli_env(
             task_id=task_id,
             cwd=tmp_path / "repos" / "RR-1",
-            claude_config_dir=config_dir,
+            config_dir=tmp_path / "sessions" / "RR-1",
+            session_token=_SESSION_TOKEN,
             artifacts_dir=tmp_path / "files" / "RR-1" if with_artifacts else None,
         )
         spec = json.loads(env[SESSION_DOCKER_SPEC_ENV])
@@ -141,11 +149,9 @@ class TestSessionDockerArgs:
 
     async def test_mounts_only_task_directories(self, tmp_path: Path) -> None:
         task_id = uuid.uuid4()
-        config_dir = str(tmp_path / "accounts" / "a")
+        config_dir = tmp_path / "sessions" / "RR-1"
 
-        args = await self._docker_args(
-            tmp_path, task_id=task_id, config_dir=config_dir, with_artifacts=True
-        )
+        args = await self._docker_args(tmp_path, task_id=task_id, with_artifacts=True)
 
         mounts = [args[i + 1] for i, arg in enumerate(args) if arg == "-v"]
         assert mounts == [
@@ -154,7 +160,7 @@ class TestSessionDockerArgs:
             f"{config_dir}:{config_dir}:rw",
         ]
         assert f"{SESSION_TASK_LABEL}={task_id}" in args
-        assert args[args.index("--network") + 1] == "bridge"
+        assert _networks(args) == ["bridge", "tracker-llm-sessions"]
         assert args[-2:] == ["-w", f"{tmp_path}/repos/RR-1"]
         assert "--privileged" not in args
         assert not any("docker.sock" in arg for arg in args)
@@ -163,9 +169,7 @@ class TestSessionDockerArgs:
         """
         Раздел 19.3: пользователь воркера, лимиты, без привилегий и capabilities.
         """
-        args = await self._docker_args(
-            tmp_path, task_id=uuid.uuid4(), config_dir="", with_artifacts=False
-        )
+        args = await self._docker_args(tmp_path, task_id=uuid.uuid4(), with_artifacts=False)
 
         assert args[args.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
         assert "--memory=4g" in args
@@ -180,8 +184,9 @@ class TestSessionDockerArgs:
         [
             (session_container.SESSION_IMAGE_ENV, "registry.example.com/session:1", _spec_image),
             (session_container.SESSION_NETWORK_ENV, "tracker-agents", _spec_network),
+            (session_container.SESSION_LLM_NETWORK_ENV, "qa-llm-sessions", _spec_llm_network),
         ],
-        ids=["image", "network"],
+        ids=["image", "network", "llm_network"],
     )
     async def test_overrides_from_env(
         self,
@@ -194,19 +199,59 @@ class TestSessionDockerArgs:
         monkeypatch.setenv(variable, value)
 
         env = await build_session_cli_env(
-            task_id=uuid.uuid4(), cwd=tmp_path / "repos" / "RR-1", claude_config_dir=""
+            task_id=uuid.uuid4(),
+            cwd=tmp_path / "repos" / "RR-1",
+            config_dir=tmp_path / "sessions" / "RR-1",
+            session_token=_SESSION_TOKEN,
         )
 
         assert read(json.loads(env[SESSION_DOCKER_SPEC_ENV])) == value
 
+    async def test_without_llm_network(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(session_container.SESSION_LLM_NETWORK_ENV, "")
+
+        args = await self._docker_args(tmp_path, task_id=uuid.uuid4(), with_artifacts=False)
+
+        assert _networks(args) == ["bridge"]
+
     async def test_parent_fork_without_artifacts(self, tmp_path: Path) -> None:
-        args = await self._docker_args(
-            tmp_path, task_id=uuid.uuid4(), config_dir="", with_artifacts=False
-        )
+        args = await self._docker_args(tmp_path, task_id=uuid.uuid4(), with_artifacts=False)
 
         assert [args[i + 1] for i, arg in enumerate(args) if arg == "-v"] == [
             f"{tmp_path}/repos/RR-1:{tmp_path}/repos/RR-1:rw",
+            f"{tmp_path}/sessions/RR-1:{tmp_path}/sessions/RR-1:rw",
         ]
+
+    @pytest.mark.parametrize(
+        ("gateway_url", "expected"),
+        [(None, "http://llm-gateway:8320"), ("http://qa-gateway:8320", "http://qa-gateway:8320")],
+    )
+    async def test_cli_talks_to_gateway(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        gateway_url: str | None,
+        expected: str,
+    ) -> None:
+        if gateway_url is not None:
+            monkeypatch.setenv(session_container.LLM_GATEWAY_URL_ENV, gateway_url)
+
+        env = await build_session_cli_env(
+            task_id=uuid.uuid4(),
+            cwd=tmp_path / "repos" / "RR-1",
+            config_dir=tmp_path / "sessions" / "RR-1",
+            session_token=_SESSION_TOKEN,
+        )
+
+        assert (env["ANTHROPIC_BASE_URL"], env["ANTHROPIC_AUTH_TOKEN"]) == (
+            expected,
+            _SESSION_TOKEN,
+        )
+        assert _SESSION_TOKEN not in env[SESSION_DOCKER_SPEC_ENV]
 
 
 async def _run_in_session_image(
@@ -221,7 +266,7 @@ async def _run_in_session_image(
     вместо CLI в образе, чтобы заглянуть внутрь контейнера.
     """
     repos_dir = tmp_path / "repos" / "RR-1"
-    config_dir = tmp_path / "accounts" / "a"
+    config_dir = tmp_path / "sessions" / "RR-1"
     artifacts_dir = tmp_path / "files" / "RR-1"
     for directory in (repos_dir, config_dir, artifacts_dir):
         directory.mkdir(parents=True)
@@ -231,7 +276,8 @@ async def _run_in_session_image(
         **await build_session_cli_env(
             task_id=uuid.uuid4(),
             cwd=repos_dir,
-            claude_config_dir=str(config_dir),
+            config_dir=config_dir,
+            session_token=_SESSION_TOKEN,
             artifacts_dir=artifacts_dir,
         ),
         "CLAUDE_CONFIG_DIR": str(config_dir),
@@ -264,7 +310,13 @@ echo "author=$(git log -1 --format='%an <%ae>')"
 """
 
 
-@pytest.mark.usefixtures("session_roots")
+@pytest.fixture
+def without_llm_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Сети `llm_sessions` вне compose нет — контейнер только во внешней сети."""
+    monkeypatch.setenv(session_container.SESSION_LLM_NETWORK_ENV, "")
+
+
+@pytest.mark.usefixtures("session_roots", "without_llm_network")
 class TestSessionImage:
     """
     Образ `tracker-session` запускается обёрткой так, как это делает SDK (раздел 19.3).
@@ -286,7 +338,8 @@ class TestSessionImage:
         assert exit_code == 0, output
         assert not any(value in output for value in _WORKER_SECRETS.values())
         assert not any(f"{name}=" in output for name in _WORKER_SECRETS)
-        assert f"CLAUDE_CONFIG_DIR={tmp_path}/accounts/a" in output
+        assert f"CLAUDE_CONFIG_DIR={tmp_path}/sessions/RR-1" in output
+        assert f"ANTHROPIC_AUTH_TOKEN={_SESSION_TOKEN}" in output
         assert f"uid={os.getuid()}" in output
         assert f"memory={4 * 1024**3}" in output
         assert "docker-sock=present" not in output

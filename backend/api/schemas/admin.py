@@ -35,6 +35,9 @@ class UserResponse(BaseModel):
     # Раздел 15.6: личный доступ к Jira; токен не отдаётся — только признак.
     jira_email: str | None = None
     jira_token_encrypted: str | None = Field(default=None, exclude=True)
+    # Раздел 19.7: пороги переключения LLM-аккаунтов по окнам лимита.
+    llm_switch_threshold_5h_pct: int
+    llm_switch_threshold_week_pct: int
 
     @computed_field  # type: ignore[prop-decorator]
     @property

@@ -41,6 +41,8 @@ class RemoteControlStatus(StrEnum):
     CONNECTED = "connected"
     DISCONNECTED = "disconnected"
     RECONNECTING = "reconnecting"
+    # Раздел 6.3: мост через LLM-прокси невозможен — сессию смотрят в «Диалоге».
+    UNAVAILABLE = "unavailable"
 
 
 class RepositoryRole(StrEnum):
@@ -126,9 +128,40 @@ class AppLogLevel(StrEnum):
 
 
 class LlmAccountStatus(StrEnum):
+    # Вход через прокси не выполнен, истёк или отозван (раздел 19.5).
+    LOGIN_REQUIRED = "login_required"
     ACTIVE = "active"
     RATE_LIMITED = "rate_limited"
     DISABLED = "disabled"
+
+
+class LlmSwitchReason(StrEnum):
+    """
+    Почему ход выполняется этим аккаунтом (раздел 19.7): событие
+    `llm_account_switched` и `node_logs.llm_switch_reason`.
+    """
+
+    START = "start"
+    KEPT = "kept"
+    THRESHOLD_5H = "threshold_5h"
+    THRESHOLD_WEEK = "threshold_week"
+    RATE_LIMITED = "rate_limited"
+    LOGIN_REQUIRED = "login_required"
+    DISABLED = "disabled"
+    # Прежний аккаунт активен, но не годится для хода: нет модели по умолчанию
+    # или провайдер недопустим для ноды `plan_prompt`.
+    UNSUITABLE = "unsuitable"
+    ALL_ABOVE_THRESHOLD = "all_above_threshold"
+
+
+class ReasoningEffort(StrEnum):
+    """Общая шкала уровня рассуждений трекера (раздел 19.7), от меньшего к большему."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
 
 
 class EnvVariableScope(StrEnum):

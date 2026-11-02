@@ -36,6 +36,14 @@ logger = get_logger("remote_control")
 MAX_RECONNECT_ATTEMPTS = 2
 
 
+def bridge_unavailable(task: Task) -> bool:
+    """
+    Раздел 6.3: мост через LLM-прокси невозможен — CLI запускается без флага
+    моста, переподключения и проверки моста нет.
+    """
+    return task.remote_control_status is RemoteControlStatus.UNAVAILABLE
+
+
 @dataclass(frozen=True, slots=True)
 class BridgeCheckDecision:
     should_attempt_reconnect: bool
@@ -101,6 +109,8 @@ async def start_bridge_reconnect(
         raise ConflictError("У задачи нет активной сессии")
     if task.llm_account_id is None:
         raise ConflictError("У задачи без LLM-аккаунта нет сессии Claude Code")
+    if bridge_unavailable(task):
+        raise ConflictError("Просмотр в claude.ai/code недоступен")
     task.remote_control_status = RemoteControlStatus.RECONNECTING
     await db_session.commit()
     await request_bridge_reconnect(redis_client, task.id)
@@ -112,12 +122,12 @@ class SessionLostError(RuntimeError):
 
 async def _attempt_reconnect(db_session: AsyncSession, *, task: Task, redis_client: Redis) -> None:
     """
-    Попытка восстановления: у задачи с LLM-аккаунтом — запрос переподключения
-    моста воркеру и статус `reconnecting`; у задачи без аккаунта моста нет,
-    засчитывается только попытка.
+    Попытка восстановления: у задачи с мостом — запрос переподключения
+    воркеру и статус `reconnecting`; у задачи без LLM-аккаунта или с
+    недоступным мостом засчитывается только попытка.
     """
     task.remote_control_reconnect_attempts += 1
-    has_bridge = task.llm_account_id is not None
+    has_bridge = _has_bridge(task)
     if has_bridge:
         task.remote_control_status = RemoteControlStatus.RECONNECTING
     await db_session.commit()
@@ -128,6 +138,10 @@ async def _attempt_reconnect(db_session: AsyncSession, *, task: Task, redis_clie
         task_id=str(task.id),
         attempt=task.remote_control_reconnect_attempts,
     )
+
+
+def _has_bridge(task: Task) -> bool:
+    return task.llm_account_id is not None and not bridge_unavailable(task)
 
 
 async def _report_bridge_disconnected(db_session: AsyncSession, *, task: Task) -> None:
@@ -175,7 +189,7 @@ async def check_task_bridge(db_session: AsyncSession, *, task: Task, redis_clien
     if decision.should_attempt_reconnect:
         await _attempt_reconnect(db_session, task=task, redis_client=redis_client)
         return
-    if task.llm_account_id is not None:
+    if _has_bridge(task):
         await _report_bridge_disconnected(db_session, task=task)
     await _fail_lost_session(db_session, task=task)
 

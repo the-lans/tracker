@@ -54,10 +54,11 @@ import pytest_asyncio  # noqa: E402
 import redis  # noqa: E402
 import sqlalchemy as sa  # noqa: E402
 from redis.asyncio import Redis  # noqa: E402
-from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine  # noqa: E402
 from sqlalchemy.orm import Session, SessionTransaction  # noqa: E402
 
 from services import maintenance_tasks  # noqa: E402
+from tests.cliproxy_support import FakeCliproxy  # noqa: E402
 from tests.worker_support import WorkerEnv, install_worker_env  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -212,6 +213,41 @@ def run_migrations(postgres_container: None) -> None:
         check=True,
         env={**os.environ},
     )
+
+
+@pytest_asyncio.fixture
+async def scratch_database(run_migrations: None) -> AsyncIterator[str]:
+    """URL пустой временной базы для тестов миграций; удаляется после теста."""
+    base_url = sa.engine.make_url(os.environ["DATABASE_URL"])
+    name = f"migration_{uuid.uuid4().hex[:8]}"
+    admin = create_async_engine(base_url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    async with admin.connect() as connection:
+        await connection.execute(sa.text(f'CREATE DATABASE "{name}"'))
+    try:
+        yield base_url.set(database=name).render_as_string(hide_password=False)
+    finally:
+        async with admin.connect() as connection:
+            await connection.execute(sa.text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        await admin.dispose()
+
+
+@pytest.fixture
+def fake_cliproxy() -> FakeCliproxy:
+    """Фейковый management API LLM-прокси (`tests/cliproxy_support.py`)."""
+    return FakeCliproxy()
+
+
+@pytest.fixture
+def api_cliproxy(fake_cliproxy: FakeCliproxy, redis_client: Redis) -> Iterator[FakeCliproxy]:
+    """API трекера обращается к фейковому прокси вместо `cliproxy`; вход хранится в Redis."""
+    from api.dependencies import get_cliproxy
+    from main import app
+
+    app.dependency_overrides[get_cliproxy] = fake_cliproxy.client
+    try:
+        yield fake_cliproxy
+    finally:
+        app.dependency_overrides.pop(get_cliproxy, None)
 
 
 @pytest_asyncio.fixture

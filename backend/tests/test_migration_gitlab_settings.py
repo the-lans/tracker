@@ -8,48 +8,16 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import uuid
-from collections.abc import AsyncIterator
-from pathlib import Path
 
-import pytest_asyncio
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from services.crypto import decrypt, encrypt
+from tests.migration_support import run_alembic
 
-_BACKEND_DIR = Path(__file__).resolve().parents[1]
 _PREVIOUS_REVISION = "a7c4e2f9b318"
 _REVISION = "b9e1d4f7a2c6"
-
-
-@pytest_asyncio.fixture
-async def scratch_database(run_migrations: None) -> AsyncIterator[str]:
-    """URL пустой временной базы; удаляется после теста."""
-    base_url = sa.engine.make_url(os.environ["DATABASE_URL"])
-    name = f"migration_{uuid.uuid4().hex[:8]}"
-    admin = create_async_engine(base_url.set(database="postgres"), isolation_level="AUTOCOMMIT")
-    async with admin.connect() as connection:
-        await connection.execute(sa.text(f'CREATE DATABASE "{name}"'))
-    try:
-        yield base_url.set(database=name).render_as_string(hide_password=False)
-    finally:
-        async with admin.connect() as connection:
-            await connection.execute(sa.text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
-        await admin.dispose()
-
-
-def _alembic(database_url: str, *args: str) -> None:
-    subprocess.run(
-        [sys.executable, "-m", "alembic", *args],
-        cwd=_BACKEND_DIR,
-        check=True,
-        capture_output=True,
-        env={**os.environ, "DATABASE_URL": database_url},
-    )
 
 
 async def _seed_old_layout(engine: AsyncEngine) -> None:
@@ -71,12 +39,12 @@ async def _seed_old_layout(engine: AsyncEngine) -> None:
 
 class TestGitlabSettingsMigration:
     async def test_moves_values_and_back(self, scratch_database: str) -> None:
-        _alembic(scratch_database, "upgrade", _PREVIOUS_REVISION)
+        run_alembic(scratch_database, "upgrade", _PREVIOUS_REVISION)
         engine = create_async_engine(scratch_database)
         try:
             await _seed_old_layout(engine)
 
-            _alembic(scratch_database, "upgrade", _REVISION)
+            run_alembic(scratch_database, "upgrade", _REVISION)
             async with engine.connect() as connection:
                 settings = (
                     await connection.execute(
@@ -89,7 +57,7 @@ class TestGitlabSettingsMigration:
             assert decrypt(settings.gitlab_token_encrypted) == "glpat-example"
             assert keys == {"API_URL"}
 
-            _alembic(scratch_database, "downgrade", _PREVIOUS_REVISION)
+            run_alembic(scratch_database, "downgrade", _PREVIOUS_REVISION)
             async with engine.connect() as connection:
                 rows = await connection.execute(
                     sa.text("SELECT key, value_encrypted FROM env_variables"),

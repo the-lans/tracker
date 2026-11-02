@@ -1,7 +1,7 @@
 import { screen } from "@testing-library/react";
 import { describe, expect, vi } from "vitest";
 import { NodeForm } from "@/components/nodes/NodeForm";
-import { NodeType, ScriptLanguage, type NodeItem } from "@/lib/types";
+import { NodeType, ReasoningEffort, ScriptLanguage, type NodeItem } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
 import { makeNode } from "@/test/factories";
 import { test } from "@/test/fixtures";
@@ -115,6 +115,7 @@ describe("NodeForm", () => {
         max_retries: null,
         retry_base_delay_seconds: null,
         is_skipped: false,
+        reasoning_effort: null,
       });
       await expect.poll(() => onSaved.mock.calls.length).toBe(1);
     });
@@ -228,6 +229,52 @@ describe("NodeForm", () => {
 
       expect(screen.getByLabelText(label)).toHaveValue(null);
       expect(savedBody(api)).toHaveProperty(field, null);
+    });
+  });
+
+  describe("уровень рассуждений", () => {
+    test.for([
+      { label: "Обычный промт", shown: true },
+      { label: "Слэш-команда", shown: true },
+      { label: "Режим планирования", shown: true },
+      { label: "Скрипт", shown: false },
+      { label: "Очистить контекст", shown: false },
+    ])("«$label» → поле есть: $shown", async ({ label, shown }, { api }) => {
+      const { user } = renderForm(api);
+
+      await chooseType(user, label);
+
+      expect(screen.queryByLabelText("Уровень рассуждений") !== null).toBe(shown);
+    });
+
+    test("выбранный уровень уходит с нодой", async ({ api }) => {
+      const { user } = renderForm(api);
+
+      await user.type(screen.getByLabelText("Название"), "Реализация");
+      await user.click(screen.getByRole("combobox", { name: "Уровень рассуждений" }));
+      await user.click(await screen.findByRole("option", { name: "максимальный" }));
+      await user.click(save());
+
+      expect(savedBody(api)).toMatchObject({ reasoning_effort: ReasoningEffort.MAX });
+    });
+
+    test("«По умолчанию аккаунта» очищает уровень ноды", async ({ api }) => {
+      const { user } = renderForm(api, { node: makeNode({ reasoning_effort: ReasoningEffort.LOW }) });
+
+      await user.click(screen.getByRole("combobox", { name: "Уровень рассуждений" }));
+      await user.click(await screen.findByRole("option", { name: "По умолчанию аккаунта" }));
+      await user.click(save());
+
+      expect(savedBody(api)).toMatchObject({ reasoning_effort: null });
+    });
+
+    test("у скрипта уровень не отправляется", async ({ api }) => {
+      const { user } = renderForm(api, { node: makeNode({ reasoning_effort: ReasoningEffort.LOW }) });
+
+      await chooseType(user, "Скрипт");
+      await user.click(save());
+
+      expect(savedBody(api)).toMatchObject({ reasoning_effort: null });
     });
   });
 });

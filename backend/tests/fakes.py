@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -20,6 +21,9 @@ from claude_agent_sdk import (
     TextBlock,
 )
 from claude_agent_sdk.types import AssistantMessageError, RateLimitStatus
+
+from db.models.enums import NodeType, ReasoningEffort
+from services.llm_routing import NoLlmAccountAvailableError, TurnRoute
 
 if TYPE_CHECKING:
     import pytest
@@ -171,3 +175,47 @@ def patch_plan_mode_signals(
         yield SimpleNamespace(wait=wait)
 
     monkeypatch.setattr("services.plan_mode.subscribe_task_signal", signals)
+
+
+FAKE_ROUTE = TurnRoute(
+    account_id=uuid.UUID("00000000-0000-4000-8000-000000000001"),
+    prefix="acc-000000000001",
+    model="claude-opus-5-5",
+    effort=ReasoningEffort.HIGH,
+    provider_effort=ReasoningEffort.HIGH,
+)
+
+
+class FakeTurnRouter:
+    """
+    Двойник `TurnRouter` (`services/account_router.py`): всегда один маршрут;
+    ``available=False`` — у автора нет ни одного `active` аккаунта.
+    """
+
+    def __init__(
+        self,
+        route: TurnRoute = FAKE_ROUTE,
+        *,
+        transient: bool | None = None,
+        available: bool = True,
+    ) -> None:
+        self.route_value = route
+        self.transient = transient
+        self.available = available
+        self.routed: list[tuple[ReasoningEffort | None, NodeType | None]] = []
+        self.errors: list[tuple[TurnRoute, str | None]] = []
+
+    async def route(
+        self,
+        *,
+        effort: ReasoningEffort | None,
+        node_type: NodeType | None,
+    ) -> TurnRoute:
+        self.routed.append((effort, node_type))
+        if not self.available:
+            raise NoLlmAccountAvailableError
+        return self.route_value
+
+    async def report_error(self, route: TurnRoute, assistant_error: str | None) -> bool | None:
+        self.errors.append((route, assistant_error))
+        return self.transient

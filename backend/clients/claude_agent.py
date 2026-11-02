@@ -40,6 +40,9 @@ if TYPE_CHECKING:
     from claude_agent_sdk.types import CanUseTool, McpServerConfig, Message
     from claude_agent_sdk.types import PermissionMode as SdkPermissionMode
 
+    from db.models.enums import NodeType, ReasoningEffort
+    from services.llm_routing import TurnRoute
+
 logger = get_logger("claude_agent")
 
 REMOTE_CONTROL_EXTRA_ARG = "remote-control"
@@ -76,6 +79,22 @@ class ClaudeAgentClientProtocol(Protocol):
     def receive_response(self) -> AsyncIterator[Message]: ...
     def interrupt(self) -> Awaitable[None]: ...
     def set_permission_mode(self, mode: SdkPermissionMode) -> Awaitable[None]: ...
+
+
+class TurnRouter(Protocol):
+    """
+    Аккаунт хода (раздел 19.7, `services/account_router.py`): маршрут
+    выбирается перед каждым ходом, ошибка хода сообщается аккаунту маршрута.
+    """
+
+    async def route(
+        self,
+        *,
+        effort: ReasoningEffort | None,
+        node_type: NodeType | None,
+    ) -> TurnRoute: ...
+
+    async def report_error(self, route: TurnRoute, assistant_error: str | None) -> bool | None: ...
 
 
 class LlmAccountMissingError(RuntimeError):
@@ -131,9 +150,9 @@ def build_claude_agent_options(
     ``enable_remote_control`` обязан быть `True` ТОЛЬКО при первом
     `connect()` задачи (раздел 6.1/6.3, решение №1 плана реализации) —
     после установления моста повторная передача флага при resume не
-    требуется. ``claude_config_dir`` — изолированная директория выбранного
-    LLM-аккаунта (раздел 19.5), не пересекающаяся с директориями других
-    аккаунтов.
+    требуется. ``claude_config_dir`` — конфигурационная директория сессии
+    задачи (раздел 6.4): входов в ней нет, к модели CLI обращается через
+    `llm-gateway` с токеном сессии из ``cli_env`` (раздел 19.7).
 
     Частичные сообщения включены всегда: ответ показывается в ленте по мере
     генерации (раздел 15.2). ``fork_session`` вместе с ``resume_session_id``
@@ -226,7 +245,7 @@ class SessionTurnResult:
     в том числе тип ошибки последнего `AssistantMessage` хода.
     """
 
-    __slots__ = ("assistant_error", "result", "text")
+    __slots__ = ("account_transient", "assistant_error", "result", "route", "text")
 
     def __init__(
         self,
@@ -234,10 +253,16 @@ class SessionTurnResult:
         text: str,
         result: ResultMessage,
         assistant_error: str | None = None,
+        route: TurnRoute | None = None,
+        account_transient: bool | None = None,
     ) -> None:
         self.text = text
         self.result = result
         self.assistant_error = assistant_error
+        # Каким аккаунтом выполнен ход и временна ли его ошибка с учётом других
+        # аккаунтов автора (раздел 17.3); None — ошибка не про аккаунт.
+        self.route = route
+        self.account_transient = account_transient
 
     @property
     def is_error(self) -> bool:
@@ -291,11 +316,16 @@ class ClaudeCodeSession:
         on_text_delta: TextDeltaHandler | None = None,
         on_abort: AbortHandler | None = None,
         on_rate_limit: RateLimitHandler | None = None,
+        router: TurnRouter | None = None,
     ) -> None:
         self._client = client
         self._on_text_delta = on_text_delta
         self._on_abort = on_abort
         self._on_rate_limit = on_rate_limit
+        self._router = router
+        # Маршрут последнего хода — и прерванного (таймаут, остановка): им ход
+        # выполнялся, он попадает в `node_logs` (раздел 19.7).
+        self.turn_route: TurnRoute | None = None
         self._lock = asyncio.Lock()
         self._session_id: str | None = None
         # Ход начат (`query()` отправлен), а его `ResultMessage` ещё не
@@ -417,14 +447,24 @@ class ClaudeCodeSession:
             await self._client.set_permission_mode(mode)
             logger.info("session_permission_mode_changed", mode=mode)
 
-    async def send_and_collect_text(self, prompt: str) -> SessionTurnResult:
+    async def send_and_collect_text(
+        self,
+        prompt: str,
+        *,
+        effort: ReasoningEffort | None = None,
+        node_type: NodeType | None = None,
+    ) -> SessionTurnResult:
         """Отправляет промт, дожидается ответа целиком, возвращает итог одним объектом.
 
         Раздел 6.2: единственная точка обращения к сессии — под мьютексом
         от отправки до получения `ResultMessage`, чтобы никакой другой
         вызов (ручной промт, следующая нода) не начался параллельно.
+        Аккаунт хода (раздел 19.7) выбирается под тем же мьютексом до
+        отправки и внутри хода не меняется; ``effort`` — уровень рассуждений
+        ноды (None — аккаунта), ``node_type`` — тип ноды для выбора аккаунта.
         """
         async with self._lock:
+            route = await self._route(effort=effort, node_type=node_type)
             logger.info("session_query_started", prompt_length=len(prompt))
             self._turn_open = True
             try:
@@ -464,11 +504,28 @@ class ClaudeCodeSession:
                 assistant_error=assistant_error,
                 session_id=result.session_id,
             )
+            account_transient = None
+            if result.is_error and route is not None and self._router is not None:
+                account_transient = await self._router.report_error(route, assistant_error)
             return SessionTurnResult(
                 text=_join_text_blocks(text_parts),
                 result=result,
                 assistant_error=assistant_error,
+                route=route,
+                account_transient=account_transient,
             )
+
+    async def _route(
+        self,
+        *,
+        effort: ReasoningEffort | None,
+        node_type: NodeType | None,
+    ) -> TurnRoute | None:
+        self.turn_route = None
+        if self._router is None or not self._runs_cli:
+            return None
+        self.turn_route = await self._router.route(effort=effort, node_type=node_type)
+        return self.turn_route
 
     async def _forward_text_delta(self, message: StreamEvent) -> None:
         if self._on_text_delta is None:

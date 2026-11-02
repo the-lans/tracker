@@ -41,6 +41,24 @@ services:
           cpus: "0.5"
           memory: 1G
 
+  # Раздел 19.7: весь трафик моделей идёт через прокси и шлюз — поток
+  # ответов, а не вычисления; лимиты — с запасом под одновременные сессии.
+  cliproxy:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  llm-gateway:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+
   beat:
     restart: always
     deploy:

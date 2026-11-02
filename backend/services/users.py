@@ -36,6 +36,21 @@ async def set_ssh_public_key(db_session: AsyncSession, *, user: User, public_key
     return user
 
 
+async def set_llm_switch_thresholds(
+    db_session: AsyncSession,
+    *,
+    user: User,
+    five_hour_pct: int,
+    week_pct: int,
+) -> User:
+    """Раздел 19.7: пороги переключения аккаунта действуют со следующего обращения к модели."""
+    user.llm_switch_threshold_5h_pct = five_hour_pct
+    user.llm_switch_threshold_week_pct = week_pct
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+
 async def clear_ssh_public_key(db_session: AsyncSession, *, user: User) -> User:
     user.ssh_public_key = None
     user.ssh_key_last_used_at = None

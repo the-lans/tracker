@@ -3,15 +3,22 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { DialogFooter } from "@/components/ui/dialog";
-import { useCreateLlmAccount, useUpdateLlmAccount } from "@/hooks/useLlmAccounts";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ReasoningEffortSelect } from "@/components/llmAccounts/ReasoningEffortSelect";
+import {
+  useCreateLlmAccount,
+  useLlmAccountModels,
+  useLlmProviders,
+  useUpdateLlmAccount,
+} from "@/hooks/useLlmAccounts";
 import { errorMessage } from "@/lib/errors";
-import { LlmAccountStatus, type LlmAccount, type LlmAccountUpdateRequest } from "@/lib/types";
+import type { LlmAccount, LlmAccountUpdateRequest, ReasoningEffort } from "@/lib/types";
 
 /**
- * Создание и редактирование LLM-аккаунта. Вручную аккаунт только включают
- * и отключают: «упёрся в лимит» ставит и снимает система (раздел 16.2).
+ * Раздел 15.1: новый аккаунт — пометка и провайдер (вход — следующим шагом,
+ * кнопкой «Войти»); после входа — модель из списка учётки и уровень
+ * рассуждений по умолчанию. Провайдер после создания не меняется.
  */
 export function LlmAccountForm({
   account,
@@ -24,24 +31,24 @@ export function LlmAccountForm({
 }) {
   const createAccount = useCreateLlmAccount();
   const updateAccount = useUpdateLlmAccount(account?.id ?? "");
+  const { data: providers } = useLlmProviders();
+  const { data: models } = useLlmAccountModels(account?.id ?? "", Boolean(account?.signed_in));
   const [label, setLabel] = useState(account?.label ?? "");
-  const [configDir, setConfigDir] = useState(account?.claude_config_dir ?? "");
-  const wasEnabled = account?.status !== LlmAccountStatus.DISABLED;
-  const [enabled, setEnabled] = useState(wasEnabled);
+  const [provider, setProvider] = useState(account?.provider ?? "");
+  const [model, setModel] = useState(account?.default_model ?? "");
+  const [effort, setEffort] = useState<ReasoningEffort | null>(account?.default_effort ?? null);
 
   function handleSave() {
     const onError = (error: unknown) =>
       toast.error(errorMessage(error, "Не удалось сохранить аккаунт"));
-    if (account) {
-      const body: LlmAccountUpdateRequest = { label, claude_config_dir: configDir };
-      // Статус отправляется только при переключении — иначе «упёрся в лимит» сбросился бы в «активен».
-      if (enabled !== wasEnabled) {
-        body.status = enabled ? LlmAccountStatus.ACTIVE : LlmAccountStatus.DISABLED;
-      }
-      updateAccount.mutate(body, { onSuccess: onSaved, onError });
-    } else {
-      createAccount.mutate({ label, claude_config_dir: configDir }, { onSuccess: onSaved, onError });
+    if (!account) {
+      createAccount.mutate({ label, provider }, { onSuccess: onSaved, onError });
+      return;
     }
+    const body: LlmAccountUpdateRequest = { label };
+    if (model && model !== account.default_model) body.default_model = model;
+    if (effort && effort !== account.default_effort) body.default_effort = effort;
+    updateAccount.mutate(body, { onSuccess: onSaved, onError });
   }
 
   const isPending = createAccount.isPending || updateAccount.isPending;
@@ -50,33 +57,57 @@ export function LlmAccountForm({
     <>
       <div className="flex flex-col gap-3">
         <div>
-          <Label htmlFor="llm-label">Название</Label>
+          <Label htmlFor="llm-label">Пометка</Label>
           <Input id="llm-label" value={label} onChange={(e) => setLabel(e.target.value)} />
         </div>
-        <div>
-          <Label htmlFor="llm-dir">Каталог конфигурации Claude</Label>
-          <Input
-            id="llm-dir"
-            placeholder="/data/claude-accounts/my-account"
-            value={configDir}
-            onChange={(e) => setConfigDir(e.target.value)}
-          />
-          <p className="mt-1 text-meta text-text-3">
-            Каталог внутри <code className="font-mono">/data/claude-accounts</code>, не
-            пересекается с каталогами других аккаунтов. Сохраните аккаунт и попросите
-            администратора выполнить в этом каталоге вход в Claude
-            {" "}(<code className="font-mono">claude auth login</code>).
-          </p>
-        </div>
+        {!account && (
+          <div>
+            <Label htmlFor="llm-provider">Провайдер</Label>
+            <Select value={provider} onValueChange={setProvider}>
+              <SelectTrigger id="llm-provider">
+                <SelectValue placeholder="Выберите провайдера" />
+              </SelectTrigger>
+              <SelectContent>
+                {(providers ?? []).map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="mt-1 text-meta text-text-3">
+              После создания нажмите «Войти»: вход выполняется у провайдера в браузере.
+            </p>
+          </div>
+        )}
         {account && (
-          <div className="flex items-center justify-between gap-3 rounded-md border border-border p-3">
-            <div>
-              <div className="text-body font-bold">Аккаунт включён</div>
-              <div className="text-meta text-text-3">
-                Отключённый вручную аккаунт система сама не включает — только вы
-              </div>
-            </div>
-            <Switch aria-label="Аккаунт включён" checked={enabled} onCheckedChange={setEnabled} />
+          <div>
+            <Label htmlFor="llm-model">Модель по умолчанию</Label>
+            {account.signed_in ? (
+              <Select value={model} onValueChange={setModel}>
+                <SelectTrigger id="llm-model">
+                  <SelectValue placeholder="Выберите модель" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(models ?? []).map((item) => (
+                    <SelectItem key={item} value={item}>
+                      {item}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="text-meta text-text-3">Список моделей появится после входа в аккаунт.</p>
+            )}
+          </div>
+        )}
+        {account && (
+          <div>
+            <Label htmlFor="llm-effort">Уровень рассуждений по умолчанию</Label>
+            <ReasoningEffortSelect id="llm-effort" value={effort} onChange={setEffort} />
+            <p className="mt-1 text-meta text-text-3">
+              Для обращений без уровня ноды: свободный промт, нода без уровня, пересказ родителя.
+            </p>
           </div>
         )}
       </div>
@@ -84,7 +115,7 @@ export function LlmAccountForm({
         <Button variant="secondary" onClick={onCancel}>
           Отмена
         </Button>
-        <Button onClick={handleSave} disabled={!label || !configDir || isPending}>
+        <Button onClick={handleSave} disabled={!label || (!account && !provider) || isPending}>
           {account ? "Сохранить" : "Создать"}
         </Button>
       </DialogFooter>

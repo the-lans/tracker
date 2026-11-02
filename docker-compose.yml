@@ -28,10 +28,86 @@ services:
       timeout: 5s
       retries: 10
 
+  # Раздел 19.7, 20.3: LLM-прокси CLIProxyAPI. Конфигурацию с ключами из
+  # .env раскладывает в его volume одноразовый cliproxy-init при каждом старте.
+  cliproxy-init:
+    image: alpine:3.22
+    restart: "no"
+    command: ["sh", "/opt/cliproxy/init.sh"]
+    environment:
+      CLIPROXY_API_KEY: ${CLIPROXY_API_KEY}
+      CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY}
+    volumes:
+      - ./deploy/cliproxy:/opt/cliproxy:ro
+      - cliproxy_data:/data
+
+  # Собирается из репозитория прокси на закреплённом теге (его Dockerfile);
+  # порты наружу не публикуются — доступ только из сети стека.
+  cliproxy:
+    build:
+      context: https://github.com/router-for-me/CLIProxyAPI.git#${CLIPROXY_VERSION}
+    image: tracker-cliproxy:${CLIPROXY_VERSION}
+    restart: unless-stopped
+    command: ["./CLIProxyAPI", "-config", "/data/config.yaml"]
+    environment:
+      TZ: UTC
+    volumes:
+      # Токены OAuth учёток — только здесь (раздел 19.4).
+      - cliproxy_data:/data
+    depends_on:
+      cliproxy-init:
+        condition: service_completed_successfully
+    healthcheck:
+      # В образе нет curl/wget: проверка, что порт принимает соединения.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8317"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  # Раздел 19.7: шлюз между контейнерами сессий и прокси — по токену сессии
+  # подставляет учётку, модель и уровень маршрута задачи. Тот же образ, что
+  # backend, своя команда, без миграций и docker.sock.
+  llm-gateway:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "llm_gateway"]
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CLIPROXY_URL: http://cliproxy:8317
+      CLIPROXY_API_KEY: ${CLIPROXY_API_KEY}
+      LLM_GATEWAY_PORT: "8320"
+    networks:
+      - default
+      - llm_sessions
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      redis:
+        condition: service_healthy
+      cliproxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8320/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     restart: unless-stopped
     environment: &backend_env
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -49,9 +125,19 @@ services:
       # "tracker/repos" от текущей рабочей директории процесса, никак не
       # связанный с примонтированным /data/repos.
       TRACKER_REPOS_ROOT: /data/repos
-      # Раздел 19.5: каталоги конфигурации LLM-аккаунтов (claude auth login)
-      # — только внутри этого корня, volume claude_accounts ниже.
+      # Раздел 6.4: конфигурационные каталоги сессий задач с историей
+      # диалогов — volume claude_sessions ниже.
+      CLAUDE_SESSIONS_ROOT: /data/claude-sessions
+      # Каталоги прежних LLM-аккаунтов: из них install.sh --update переносит
+      # историю сессий задач (scripts/migrate_claude_sessions.py).
       CLAUDE_ACCOUNTS_ROOT: /data/claude-accounts
+      # Раздел 19.7: management API LLM-прокси (вход в аккаунты, расход окон).
+      CLIPROXY_MANAGEMENT_URL: http://cliproxy:8317
+      CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY}
+      # Раздел 19.3, 19.7: контейнер сессии подключается к изолированной сети,
+      # где кроме него есть только llm-gateway.
+      TRACKER_SESSION_LLM_NETWORK: ${COMPOSE_PROJECT_NAME:-tracker}-llm-sessions
+      LLM_GATEWAY_URL: http://llm-gateway:8320
       # Раздел 14.3: артефакты задач — volume user_files ниже.
       TRACKER_USER_FILES_ROOT: /data/user-files
       ARTIFACT_MAX_UPLOAD_MB: ${ARTIFACT_MAX_UPLOAD_MB:-100}
@@ -74,6 +160,7 @@ services:
       # Через backend `install.sh --restore` распаковывает архивы всех volume.
       - log_archive:/data/log-archive
       - claude_accounts:/data/claude-accounts
+      - claude_sessions:/data/claude-sessions
       # Раздел 15.1: отпечаток ключа SFTP-шлюза для профиля.
       - sftp_host_keys:/data/sftp-host-keys:ro
       # Раздел 20.5: доступ Celery worker/backend к Docker-демону хоста для запуска
@@ -83,6 +170,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      cliproxy:
         condition: service_healthy
     ports:
       - "8000:8000"
@@ -103,7 +192,7 @@ services:
     environment: *backend_env
     volumes:
       - task_repos:/data/repos
-      - claude_accounts:/data/claude-accounts
+      - claude_sessions:/data/claude-sessions
       - user_files:/data/user-files
       - log_archive:/data/log-archive
       - /var/run/docker.sock:/var/run/docker.sock
@@ -116,6 +205,8 @@ services:
       # backend/docker-entrypoint.sh) — worker не должен упереться в
       # ещё-не-созданную схему БД при холодном старте стека.
       backend:
+        condition: service_healthy
+      llm-gateway:
         condition: service_healthy
 
   # Раздел 6.1, 20.3: сессии задач — своя очередь `sessions`. Сессия занимает
@@ -242,8 +333,13 @@ volumes:
   # и пользовательские файлы задач — именованные Docker-volumes, раздельный жизненный цикл.
   task_repos:
   user_files:
-  # Раздел 6.4, 19.5: входы в Claude и история сессий LLM-аккаунтов.
+  # Каталоги прежних LLM-аккаунтов (вход в CLI): источник переноса истории
+  # сессий в claude_sessions; новых данных сюда не пишется.
   claude_accounts:
+  # Раздел 6.4: конфигурационные каталоги сессий задач с историей диалогов.
+  claude_sessions:
+  # Раздел 19.4, 20.4: конфигурация LLM-прокси и его учётки с токенами OAuth.
+  cliproxy_data:
   # Раздел 20.4: ключ хоста SFTP-шлюза — отпечаток сервера не меняется при переносе.
   sftp_host_keys:
   # Раздел 16.2: сжатые JSONL-архивы истории `node_logs`, переносятся вместе
@@ -252,3 +348,11 @@ volumes:
   caddy_data:
   caddy_config:
   postgres_backups:
+
+networks:
+  # Раздел 19.3, 19.7: сеть контейнеров сессий — без выхода к сервисам
+  # стека, в ней только llm-gateway. Имя фиксировано: воркер подключает к
+  # ней контейнер сессии по имени (TRACKER_SESSION_LLM_NETWORK).
+  llm_sessions:
+    name: ${COMPOSE_PROJECT_NAME:-tracker}-llm-sessions
+    internal: true

@@ -2,20 +2,15 @@ import { Link } from "react-router-dom";
 import { Card, CardTitle } from "@/components/ui/card";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { useActiveSessions } from "@/hooks/useTasks";
-import { RemoteControlStatus, type Task } from "@/lib/types";
+import { REMOTE_CONTROL_STATUS_LABEL } from "@/lib/labels";
+import type { Task } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
-
-const BRIDGE_LABEL: Record<RemoteControlStatus, string> = {
-  [RemoteControlStatus.CONNECTED]: "мост подключён",
-  [RemoteControlStatus.RECONNECTING]: "мост переподключается",
-  [RemoteControlStatus.DISCONNECTED]: "мост отключён",
-};
 
 /** У задачи без LLM-аккаунта нет моста `/remote-control` (раздел 3.1). */
 function bridgeLabel(task: Task): string {
   if (task.llm_account_id === null) return "без моста — нет LLM-аккаунта";
-  return BRIDGE_LABEL[task.remote_control_status];
+  return REMOTE_CONTROL_STATUS_LABEL[task.remote_control_status];
 }
 
 /** Раздел 15.1: активные сессии Claude Code задач пользователя со статусом моста. */

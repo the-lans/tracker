@@ -20,7 +20,7 @@ from app_logging.config import get_logger
 from db.models.enums import AppLogLevel, TaskStatus
 from db.models.logs import AppLog
 from db.models.tasks import Task
-from services.errors import ConflictError, ValidationError
+from services.errors import ConflictError, ServiceUnavailableError, ValidationError
 from services.notifications import NotificationEvent, notify_task_event
 from services.task_launch import ensure_task_launchable
 from services.task_status import transition_task_status
@@ -76,6 +76,11 @@ async def run_scheduled_autostart_check(
             )
             result.started_task_ids.append(task.id)
             logger.info("task_autostarted", task_id=str(task.id))
+        except ServiceUnavailableError:
+            # Раздел 20.6: идёт обновление — задачи остаются `new` и
+            # запускаются первой проверкой после него, без уведомления о сбое.
+            logger.info("task_autostart_deferred_by_maintenance", task_id=str(task.id))
+            break
         except (ValidationError, ConflictError) as exc:
             result.failed_task_ids.append(task.id)
             logger.error("task_autostart_failed", task_id=str(task.id), error=str(exc))

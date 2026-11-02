@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { NodeLogEntry } from "@/components/tasks/NodeLogEntry";
 import { Composer } from "@/components/tasks/Composer";
 import { Button } from "@/components/ui/button";
+import { useLlmAccounts } from "@/hooks/useLlmAccounts";
 import { useTaskOutputStream } from "@/hooks/useTaskStatusSocket";
 import { useTaskLibraryPrompts, useTaskNodes } from "@/hooks/useTasks";
 import { cn } from "@/lib/utils";
@@ -52,6 +53,8 @@ export function TaskChatFeed({
     ...(libraryPrompts ?? []).map((prompt): [string, NodeType] => [prompt.node_id, prompt.node_type]),
     ...(taskNodes ?? []).map((node): [string, NodeType] => [node.node_id, node.node_type]),
   ]);
+  const { data: llmAccounts } = useLlmAccounts();
+  const accountLabels = new Map((llmAccounts ?? []).map((account) => [account.id, account.label]));
   const feedRef = useRef<HTMLDivElement>(null);
   const previousLength = useRef(0);
 
@@ -97,6 +100,7 @@ export function TaskChatFeed({
             title={log.node_id ? nodeNames.get(log.node_id) : undefined}
             streamedText={outputStream[log.id]}
             isAgentTurn={isAgentTurn(log, nodeTypes)}
+            accountLabel={log.llm_account_id ? accountLabels.get(log.llm_account_id) : undefined}
           />
         ))}
       </div>

@@ -87,6 +87,15 @@ export function formatInterval(seconds: number): string {
   return `каждые ${seconds} с`;
 }
 
+const SECONDS_PER_MINUTE = 60;
+
+/** Обратный отсчёт «минуты:секунды»: 245 → «4:05». */
+export function formatCountdown(seconds: number): string {
+  const minutes = Math.floor(seconds / SECONDS_PER_MINUTE);
+  const rest = String(seconds % SECONDS_PER_MINUTE).padStart(2, "0");
+  return `${minutes}:${rest}`;
+}
+
 const FILE_SIZE_UNITS = ["Б", "КБ", "МБ", "ГБ"] as const;
 const FILE_SIZE_STEP = 1024;
 /** Ниже этого значения размер показывается с одной цифрой после запятой: «3,4 МБ». */

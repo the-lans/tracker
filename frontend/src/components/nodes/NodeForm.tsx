@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DialogFooter } from "@/components/ui/dialog";
+import { ReasoningEffortSelect } from "@/components/llmAccounts/ReasoningEffortSelect";
 import { NodeExecutionFields } from "@/components/nodes/NodeExecutionFields";
 import { PromptTemplateField } from "@/components/nodes/PromptTemplateField";
 import { ScriptFields } from "@/components/nodes/ScriptFields";
@@ -17,12 +18,24 @@ import { SlashCommandField } from "@/components/nodes/SlashCommandField";
 import type { NodeExecutionValues } from "@/components/nodes/nodeForm.types";
 import { useCreateNode, useUpdateNode } from "@/hooks/useNodes";
 import { toastError } from "@/lib/errors";
-import { NodeType, ScriptLanguage, type NodeItem, type TemplatePreviewRequest } from "@/lib/types";
+import {
+  NodeType,
+  ScriptLanguage,
+  type NodeItem,
+  type ReasoningEffort,
+  type TemplatePreviewRequest,
+} from "@/lib/types";
 import { NODE_TYPE_LABEL } from "@/lib/labels";
 
 const PIPELINE_ONLY_TYPES = Object.values(NodeType);
 const LIBRARY_ALLOWED_TYPES = [NodeType.PLAIN_PROMPT, NodeType.SLASH_COMMAND, NodeType.SCRIPT];
 const PROMPT_TYPES: readonly NodeType[] = [NodeType.PLAIN_PROMPT, NodeType.PLAN_PROMPT];
+/** Раздел 11.1: уровень рассуждений — у нод, которые выполняет модель. */
+const EFFORT_TYPES: readonly NodeType[] = [
+  NodeType.PLAIN_PROMPT,
+  NodeType.SLASH_COMMAND,
+  NodeType.PLAN_PROMPT,
+];
 
 /** Раздел 15.4: общая форма для ноды пайплайна и промта библиотеки —
  * различие в наборе доступных полей, не в отдельных компонентах. */
@@ -56,6 +69,7 @@ export function NodeForm({
   );
   const [scriptContent, setScriptContent] = useState(node?.script_content ?? "");
   const [guideUrl, setGuideUrl] = useState(node?.guide_url ?? "");
+  const [effort, setEffort] = useState<ReasoningEffort | null>(node?.reasoning_effort ?? null);
   const [execution, setExecution] = useState<NodeExecutionValues>({
     timeoutSeconds: node?.timeout_seconds ?? null,
     maxRetries: node?.max_retries ?? null,
@@ -94,6 +108,7 @@ export function NodeForm({
       max_retries: isPipeline ? execution.maxRetries : undefined,
       retry_base_delay_seconds: isPipeline ? execution.retryBaseDelaySeconds : undefined,
       is_skipped: isPipeline ? execution.isSkipped : false,
+      reasoning_effort: EFFORT_TYPES.includes(nodeType) ? effort : null,
     };
     const callbacks = { onSuccess: onSaved, onError: toastError("Не удалось сохранить ноду") };
     if (node) {
@@ -170,6 +185,17 @@ export function NodeForm({
         <Label htmlFor="node-guide">Гайд (URL Confluence)</Label>
         <Input id="node-guide" value={guideUrl} onChange={(e) => setGuideUrl(e.target.value)} />
       </div>
+
+      {EFFORT_TYPES.includes(nodeType) && (
+        <div>
+          <Label htmlFor="node-effort">Уровень рассуждений</Label>
+          <ReasoningEffortSelect id="node-effort" value={effort} onChange={setEffort} allowDefault />
+          <p className="mt-1 text-meta text-text-3">
+            Применяется к модели того аккаунта, на котором нода выполнится, и переводится на шкалу
+            его провайдера.
+          </p>
+        </div>
+      )}
 
       <NodeExecutionFields
         values={execution}

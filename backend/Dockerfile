@@ -26,6 +26,9 @@ RUN pip install --no-cache-dir ./backend
 RUN ln -s "$(python -c 'import claude_agent_sdk, pathlib; print(pathlib.Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude")')" /usr/local/bin/claude
 
 COPY backend/ backend/
+# Раздел 20.7: коммит образа отдаёт `/health` — проверка развёртывания.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
 COPY alembic/ alembic/
 COPY scripts/ scripts/
 # Обёртка `cli_path` SDK: запускает CLI в контейнере сессии (раздел 19.3).

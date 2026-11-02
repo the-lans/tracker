@@ -29,6 +29,9 @@ dev = [
     "pytest-cov==7.1.0",
     "ruff==0.17.1",
     "mypy==2.4.0",
+    # Тесты конфигурации стека читают docker-compose.yml.
+    "pyyaml==6.0.3",
+    "types-PyYAML==6.0.12.20260906",
 ]
 
 [build-system]

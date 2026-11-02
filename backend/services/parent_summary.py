@@ -37,6 +37,7 @@ from db.models.enums import (
 from db.models.logs import NodeLog
 from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task, TaskParentSummary
+from services.node_runs import record_turn_route
 from services.nodes.dispatch import execute_llm_node_with_timeout
 from services.task_signal import publish_task_signal, wait_for_task_signal
 from services.task_status import SESSION_ACTIVE_STATUSES
@@ -239,6 +240,7 @@ async def _run_summary_turn(
     node_log.finished_at = datetime.now(UTC)
     node_log.llm_output_text = outcome.llm_output_text
     node_log.error_message = outcome.error_message
+    record_turn_route(node_log, outcome.route)
     succeeded = outcome.success and bool(outcome.llm_output_text)
     node_log.status = NodeLogStatus.SUCCESS if succeeded else NodeLogStatus.FAILED
     await db_session.commit()
@@ -359,6 +361,7 @@ async def deliver_parent_summary(
         )
         node_log.llm_output_text = outcome.llm_output_text
         node_log.error_message = outcome.error_message
+        record_turn_route(node_log, outcome.route)
         node_log.status = NodeLogStatus.SUCCESS if outcome.success else NodeLogStatus.FAILED
     else:
         reason = summary.unavailable_reason or REASON_NO_SESSION

@@ -1,5 +1,10 @@
 """
-Срок хранения истории сессий Claude Code (раздел 6.4 ТЗ).
+Конфигурационная директория сессии задачи и срок хранения её истории
+(раздел 6.4 ТЗ).
+
+История сессии хранится в `<CLAUDE_SESSIONS_ROOT>/<код задачи>/` — у задачи,
+а не у LLM-аккаунта: входов в ней нет (они в LLM-прокси), поэтому смена
+аккаунта продолжает ту же сессию.
 
 CLI сам удаляет старые истории сессий (`cleanupPeriodDays` в
 `settings.json` конфигурационной директории). Задачи трекера не удаляются,
@@ -16,15 +21,30 @@ import tempfile
 from pathlib import Path
 
 from app_logging.config import get_logger
+from services.task_codes import validate_task_code
 
 logger = get_logger("claude_config")
 
 _SETTINGS_FILE = "settings.json"
 _CLEANUP_PERIOD_KEY = "cleanupPeriodDays"
 _RETENTION_ENV_VAR = "CLAUDE_SESSION_RETENTION_DAYS"
+_SESSIONS_ROOT_ENV_VAR = "CLAUDE_SESSIONS_ROOT"
+# Volume `claude_sessions` (раздел 20.3).
+DEFAULT_SESSIONS_ROOT = "/data/claude-sessions"
 # Задачи в системе не удаляются — по умолчанию сто лет.
 DEFAULT_HISTORY_RETENTION_DAYS = 36500
 _JSON_INDENT = 2
+
+
+def resolve_sessions_root() -> Path:
+    return Path(os.environ.get(_SESSIONS_ROOT_ENV_VAR, DEFAULT_SESSIONS_ROOT))
+
+
+def session_config_dir(task_code: str) -> Path:
+    """`CLAUDE_CONFIG_DIR` сессии задачи; создаётся при первом обращении."""
+    directory = resolve_sessions_root() / validate_task_code(task_code)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
 
 
 def history_retention_days() -> int:

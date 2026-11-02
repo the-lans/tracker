@@ -28,6 +28,7 @@ from services.access import (
     owner_filter,
 )
 from services.errors import NotFoundError, UnauthorizedError
+from services.llm_accounts import account_prefix
 from tests.factories import make_llm_account, make_user
 
 Getter = Callable[..., Awaitable[Any]]
@@ -56,8 +57,12 @@ def _make_record(
             created_by=owner_id,
         )
     if kind == "llm_account":
+        account_id = uuid.uuid4()
         return LlmAccount(
+            id=account_id,
             label="main",
+            cliproxy_prefix=account_prefix(account_id),
+            switch_order=1,
             claude_config_dir=f"/home/svc/{uuid.uuid4().hex}",
             created_by=owner_id,
         )

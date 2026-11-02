@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
     from clients.claude_agent import ClaudeCodeSession
     from db.models.logs import NodeLog
+    from services.llm_routing import TurnRoute
     from services.nodes.dispatch import NodeExecutionOutcome
 
 
@@ -32,6 +33,19 @@ async def start_node_log(db_session: AsyncSession, node_log: NodeLog) -> NodeLog
     db_session.add(node_log)
     await db_session.commit()
     return node_log
+
+
+def record_turn_route(node_log: NodeLog, route: TurnRoute | None) -> None:
+    """
+    Аккаунт, модель и уровень (после перевода провайдеру), которыми выполнен
+    ход, и причина смены аккаунта, если он сменился.
+    """
+    if route is None:
+        return
+    node_log.llm_account_id = route.account_id
+    node_log.llm_model = route.model
+    node_log.reasoning_effort = route.provider_effort
+    node_log.llm_switch_reason = route.switch_reason
 
 
 def mark_node_log_stopped(
@@ -48,6 +62,7 @@ def mark_node_log_stopped(
     node_log.status = NodeLogStatus.STOPPED
     if node_type is not NodeType.SCRIPT:
         node_log.llm_output_text = claude_session.take_partial_turn_text()
+        record_turn_route(node_log, claude_session.turn_route)
 
 
 def apply_node_outcome(
@@ -67,3 +82,4 @@ def apply_node_outcome(
     node_log.script_exit_code = outcome.script_exit_code
     node_log.error_message = None if succeeded else outcome.error_message
     node_log.status = NodeLogStatus.SUCCESS if succeeded else NodeLogStatus.FAILED
+    record_turn_route(node_log, outcome.route)

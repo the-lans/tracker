@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from api.schemas.common import MaxRetries, RetryBaseDelaySeconds, TimeoutSeconds
 from db.models.enums import (
     NodeType,
+    ReasoningEffort,
     ScriptLanguage,
 )
 
@@ -56,6 +57,8 @@ class NodeCreateRequest(BaseModel):
     guide_url: str | None = None
     is_skipped: bool = False
     llm_output_last_n: int | None = None
+    # Раздел 3.1: None — уровень по умолчанию аккаунта, на котором нода выполняется.
+    reasoning_effort: ReasoningEffort | None = None
 
 
 class NodeUpdateRequest(BaseModel):
@@ -74,6 +77,8 @@ class NodeUpdateRequest(BaseModel):
     is_skipped: bool | None = None
     is_archived: bool | None = None
     llm_output_last_n: int | None = None
+    # Явный `null` возвращает уровень по умолчанию аккаунта.
+    reasoning_effort: ReasoningEffort | None = None
 
 
 class NodeResponse(BaseModel):
@@ -97,6 +102,7 @@ class NodeResponse(BaseModel):
     is_skipped: bool
     is_library_item: bool
     llm_output_last_n: int | None
+    reasoning_effort: ReasoningEffort | None
     is_archived: bool
     created_by: uuid.UUID
 

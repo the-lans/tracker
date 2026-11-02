@@ -6,6 +6,7 @@ import { useLlmAccounts } from "@/hooks/useLlmAccounts";
 import { useAuth } from "@/hooks/useAuth";
 import type { TaskFormValues } from "@/components/tasks/taskForm.types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { LlmAccountStatus } from "@/lib/types";
 
 const WHITESPACE_RE = /\s/;
 
@@ -20,7 +21,11 @@ export function TaskFormFields({
   const { user } = useAuth();
   const { data: allLlmAccounts } = useLlmAccounts();
   // Раздел 19.2: у задачи — только аккаунт её автора; `admin` видит и чужие.
-  const llmAccounts = allLlmAccounts?.filter((account) => account.created_by === user?.id);
+  const ownAccounts = allLlmAccounts?.filter((account) => account.created_by === user?.id);
+  // Раздел 15.2: стартовый — из `active` по порядку переключения; уже выбранный не пропадает.
+  const llmAccounts = ownAccounts?.filter(
+    (account) => account.status === LlmAccountStatus.ACTIVE || account.id === value.llmAccountId,
+  );
   // Раздел 3.1: код задачи — текст без пробелов (из него строится ветка).
   const codeInvalid = WHITESPACE_RE.test(value.code);
 
@@ -94,13 +99,22 @@ export function TaskFormFields({
             ))}
           </SelectContent>
         </Select>
-        {llmAccounts && llmAccounts.length === 0 && (
+        {ownAccounts && ownAccounts.length === 0 && (
           <EmptyState
             compact
             title="LLM-аккаунтов пока нет"
-            hint="Без аккаунта Claude можно запускать только скрипты. Добавьте свой аккаунт в разделе «LLM-аккаунты» кнопкой «+ Аккаунт»."
+            hint="Без аккаунта можно запускать только скрипты. Добавьте свой аккаунт в разделе «LLM-аккаунты» кнопкой «+ Аккаунт»."
           />
         )}
+        {ownAccounts && ownAccounts.length > 0 && llmAccounts?.length === 0 && (
+          <div className="mt-1 text-meta text-warning-text">
+            Нет активных аккаунтов: войдите в аккаунт или включите его в разделе «LLM-аккаунты».
+          </div>
+        )}
+        <div className="mt-1 text-meta text-text-3">
+          С этого аккаунта задача начнёт работу; дальше аккаунт переключается автоматически по
+          порогам из профиля.
+        </div>
       </div>
       <div>
         <Label>Репозитории</Label>

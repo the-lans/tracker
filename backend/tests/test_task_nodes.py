@@ -11,7 +11,14 @@ from typing import TYPE_CHECKING
 import pytest
 import sqlalchemy as sa
 
-from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType, TaskStatus, UserRole
+from db.models.enums import (
+    NodeLogStatus,
+    NodeLogTriggerType,
+    NodeType,
+    ReasoningEffort,
+    TaskStatus,
+    UserRole,
+)
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
@@ -555,6 +562,9 @@ class TestCustomNodesLifecycle:
             task_node_id=custom.id,
             pause_after=True,
         )
+        custom_node = await db_session.get(Node, custom.node_id)
+        assert custom_node is not None
+        custom_node.reasoning_effort = ReasoningEffort.LOW
         source.status = TaskStatus.DONE
         await db_session.commit()
 
@@ -573,6 +583,7 @@ class TestCustomNodesLifecycle:
         copied_node = await db_session.get(Node, views[1].node_id)
         assert copied_node is not None
         assert (copied_node.task_id, copied_node.prompt_template) == (copy.id, "Задай вопросы")
+        assert copied_node.reasoning_effort is ReasoningEffort.LOW
         source_ids = await db_session.scalars(
             sa.select(TaskNode.node_id).where(TaskNode.task_id == source.id),
         )
