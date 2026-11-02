@@ -69,15 +69,15 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | react-dom | 19.3.1* |
 | Vite | 8.3.5 |
 | @vitejs/plugin-react | 6.1.1* |
-| TanStack Query | 5.104.5 |
-| shadcn (CLI) | 4.22.1 |
-| Tailwind CSS / PostCSS / Autoprefixer | 4.3.3 / 8.5.31 / 10.6.1* (требуются shadcn/ui) |
+| TanStack Query | 5.105.0 |
+| shadcn (CLI) | 4.23.0 |
+| Tailwind CSS / PostCSS / Autoprefixer | 4.3.3 / 8.5.32 / 10.6.2* (требуются shadcn/ui) |
 | TypeScript | 6.0.3 |
-| ESLint / typescript-eslint | 10.13.0 / 8.72.0 |
+| ESLint / typescript-eslint | 10.13.0 / 8.72.1 |
 | Vitest / jsdom | 5.0.5* / 30.1.3* |
 | Testing Library (react / dom / jest-dom / user-event) | 16.3.3* / 10.4.2* / 7.0.1* / 14.6.8* |
 
-TypeScript закреплён на 6.0.3, а не на новом мажоре 7.x: `typescript-eslint@8.72.0`
+TypeScript закреплён на 6.0.3, а не на новом мажоре 7.x: `typescript-eslint@8.72.1`
 пока требует `typescript < 6.1.0` (проверено `npm view typescript-eslint
 peerDependencies`) — апгрейд до TS 7 ждёт апгрейда этой цепочки, иначе
 `npm ls` покажет конфликт. `@vitejs/plugin-react` закреплён на 6.1.1:
