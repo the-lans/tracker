@@ -1,0 +1,90 @@
+{
+  "phase": "limited1",
+  "duration_s": 261.43884801864624,
+  "samples": 258,
+  "max": {
+    "working_MiB": 1494.0390625,
+    "current_MiB": 1514.7265625,
+    "anon_MiB": 1405.83203125,
+    "swap_MiB": 0.0,
+    "cpu_cores": 2.0452658566509907,
+    "agents": 3,
+    "group_current_MiB": 1516.4765625,
+    "group_swap_MiB": 0.0
+  },
+  "mean": {
+    "working_MiB": 1357.2794331395348,
+    "current_MiB": 1377.0390473594962,
+    "anon_MiB": 1271.7119973352712,
+    "swap_MiB": 0.0,
+    "cpu_cores": 0.38983530577207326,
+    "agents": 2.6511627906976742,
+    "group_current_MiB": 1381.63671875,
+    "group_swap_MiB": 0.0
+  },
+  "tasks": {
+    "RR-QA-65": "done",
+    "RR-QA-64": "done",
+    "RR-QA-63": "done"
+  },
+  "ui": {
+    "static": {
+      "requests": 150,
+      "errors": 0,
+      "p95_ms": 37.15,
+      "max_ms": 671.85
+    },
+    "api": {
+      "requests": 500,
+      "errors": 0,
+      "p95_ms": 32.21,
+      "max_ms": 1022.51
+    }
+  },
+  "websocket": {
+    "messages": 1268,
+    "output_delta": 1260,
+    "errors": 0
+  },
+  "oom_events": [],
+  "nonzero_exit_events": [],
+  "group_limit_MiB": 1536.0,
+  "group_swap_limit_MiB": 4096.0,
+  "group_events_start": {
+    "low": 0,
+    "high": 0,
+    "max": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0
+  },
+  "group_events_end": {
+    "low": 0,
+    "high": 0,
+    "max": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0
+  },
+  "llm_models": [
+    "gpt-6.1-sol"
+  ],
+  "llm_turn_count": 9,
+  "script_test_results": [
+    {
+      "task": "RR-QA-65",
+      "exit_code": 0,
+      "output": "test_add (test_calc.TestCalc.test_add) ... ok\ntest_divide (test_calc.TestCalc.test_divide) ... ok\ntest_divide_by_zero (test_calc.TestCalc.test_divide_by_zero) ... ok\ntest_divide_fractional_result (test_calc.TestCalc.test_divide_fractional_result) ... ok\ntest_divide_negative_operands (test_calc.TestCalc.test_divide_negative_operands) ... ok\ntest_divide_zero_numerator (test_calc.TestCalc.test_divide_zero_numerator) ... ok\ntest_multiply (test_calc.TestCalc.test_multiply) ... ok\ntest_subtract (test_calc.TestCalc.test_subtract) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.000s\n\nOK\n\n"
+    },
+    {
+      "task": "RR-QA-64",
+      "exit_code": 0,
+      "output": "test_add (test_calc.TestCalc.test_add) ... ok\ntest_divide (test_calc.TestCalc.test_divide) ... ok\ntest_divide_by_zero (test_calc.TestCalc.test_divide_by_zero) ... ok\ntest_multiply (test_calc.TestCalc.test_multiply) ... ok\ntest_subtract (test_calc.TestCalc.test_subtract) ... ok\n\n----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n\n"
+    },
+    {
+      "task": "RR-QA-63",
+      "exit_code": 0,
+      "output": "test_add (test_calc.TestCalc.test_add) ... ok\ntest_divide (test_calc.TestCalc.test_divide) ... ok\ntest_divide_by_zero (test_calc.TestCalc.test_divide_by_zero) ... ok\ntest_divide_fractional_result (test_calc.TestCalc.test_divide_fractional_result) ... ok\ntest_divide_negative_operands (test_calc.TestCalc.test_divide_negative_operands) ... ok\ntest_divide_zero_numerator (test_calc.TestCalc.test_divide_zero_numerator) ... ok\ntest_multiply (test_calc.TestCalc.test_multiply) ... ok\ntest_subtract (test_calc.TestCalc.test_subtract) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.000s\n\nOK\n\n"
+    }
+  ]
+}

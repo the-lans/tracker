@@ -134,6 +134,14 @@ backup — резервные копии PostgreSQL по расписанию
 
 ## 🚀 Установка на сервер
 
+Для установки с помощью агента используйте `$tracker-deploy` в Codex или
+`/tracker-deploy` в Claude Code, указав домен и доступ к серверу. Навыки лежат
+в [.agents/skills/tracker-deploy](.agents/skills/tracker-deploy/SKILL.md) и
+[.claude/skills/tracker-deploy](.claude/skills/tracker-deploy/SKILL.md).
+Общий [пошаговый сценарий](docs/deployment.md) охватывает AlmaLinux/Rocky Linux,
+Ubuntu/Debian, DNS, Google OAuth, HTTPS и GitHub Actions. Агент выполняет
+доступные ему шаги сам и проводит пользователя через необходимые ручные действия.
+
 ### Что понадобится
 
 - 🖥 Сервер на Linux с доступом в интернет. [Docker Engine](https://docs.docker.com/engine/install/) 26 или новее — если Docker нет, скрипт поставит его сам.
@@ -152,7 +160,7 @@ sudo bash install.sh
 
 Скрипт задаст пять вопросов: домен, email для TLS-сертификата, Client ID и Client Secret Google, email администратора. Остальное он сделает сам:
 
-1. Проверит и при необходимости установит Docker.
+1. Установит недостающие git, curl, OpenSSL и Docker. На AlmaLinux/Rocky Linux Docker устанавливается из RPM-репозитория.
 2. Склонирует репозиторий в `/opt/tracker` (каталог меняется переменной `INSTALL_DIR`).
 3. Создаст `.env` и сгенерирует все пароли и ключи.
 4. Соберёт образы backend, frontend, раннеров и `tracker-session`.
@@ -164,13 +172,7 @@ sudo bash install.sh
 
 1. 🔓 **Войдите** на `https://<ваш домен>` через Google. Первый пользователь становится администратором.
 2. 🧱 **Откройте порт SFTP** в файрволе (по умолчанию 2222), если нужен доступ к файлам задач.
-3. 🤖 **Подключите Claude.** Пользователь заводит LLM-аккаунт с каталогом внутри `/data/claude-accounts`, а администратор входит в Claude в этом каталоге:
-
-   ```bash
-   cd /opt/tracker
-   docker compose exec -e CLAUDE_CONFIG_DIR=/data/claude-accounts/<каталог> worker claude auth login
-   docker compose exec -e CLAUDE_CONFIG_DIR=/data/claude-accounts/<каталог> worker claude auth status
-   ```
+3. 🤖 **Подключите LLM-аккаунт.** В интерфейсе откройте «LLM-аккаунты», добавьте аккаунт Claude или Codex и нажмите «Войти». Завершите OAuth-вход по ссылке из диалога.
 
 4. ⚙️ **Настройте интеграции** в «Администрирование → Системные настройки»: адрес и [токен GitLab](https://docs.gitlab.com/user/profile/personal_access_tokens/) — для статусов merge request, адрес Jira — для импорта задач. Личный [API-токен Jira](https://id.atlassian.com/manage-profile/security/api-tokens) каждый пользователь указывает в своём профиле.
 

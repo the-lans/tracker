@@ -1,0 +1,90 @@
+{
+  "phase": "swap1",
+  "duration_s": 100.71741724014282,
+  "samples": 99,
+  "max": {
+    "working_MiB": 1020.8046875,
+    "current_MiB": 1022.16796875,
+    "anon_MiB": 962.0390625,
+    "swap_MiB": 437.07421875,
+    "cpu_cores": 2.063755803339743,
+    "agents": 3,
+    "group_current_MiB": 1024.0,
+    "group_swap_MiB": 437.07421875
+  },
+  "mean": {
+    "working_MiB": 933.3420928030303,
+    "current_MiB": 937.3787878787879,
+    "anon_MiB": 872.5998263888889,
+    "swap_MiB": 407.37038352272725,
+    "cpu_cores": 0.29086683335026275,
+    "agents": 2.2626262626262625,
+    "group_current_MiB": 940.2948232323232,
+    "group_swap_MiB": 407.41603535353534
+  },
+  "tasks": {
+    "RR-QA-65": "failed",
+    "RR-QA-64": "failed",
+    "RR-QA-63": "failed"
+  },
+  "ui": {
+    "static": {
+      "requests": 60,
+      "errors": 0,
+      "p95_ms": 51.62,
+      "max_ms": 94.85
+    },
+    "api": {
+      "requests": 200,
+      "errors": 0,
+      "p95_ms": 31.92,
+      "max_ms": 94.93
+    }
+  },
+  "websocket": {
+    "messages": 9,
+    "output_delta": 0,
+    "errors": 0
+  },
+  "oom_events": [],
+  "nonzero_exit_events": [
+    {
+      "action": "die",
+      "name": "tracker-session-0d296f5b-6ce5-460c-ac5f-06e69c962ebc-4dc92c483743",
+      "exitCode": "1"
+    },
+    {
+      "action": "die",
+      "name": "tracker-session-57fc6508-7e9e-4993-916f-6e3bac05d694-96ae2119ebef",
+      "exitCode": "1"
+    },
+    {
+      "action": "die",
+      "name": "tracker-session-f4da7189-ce4d-4169-bbca-cb75feefc7e6-9f7cfd1bd231",
+      "exitCode": "1"
+    }
+  ],
+  "group_limit_MiB": 1024.0,
+  "group_swap_limit_MiB": 4096.0,
+  "group_events_start": {
+    "low": 0,
+    "high": 0,
+    "max": 651,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0
+  },
+  "group_events_end": {
+    "low": 0,
+    "high": 0,
+    "max": 2906,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0
+  },
+  "llm_models": [
+    "gpt-6.1-sol"
+  ],
+  "llm_turn_count": 3,
+  "script_test_results": []
+}

@@ -1,0 +1,72 @@
+{
+  "phase": "baseline2",
+  "duration_s": 221.5036768913269,
+  "samples": 220,
+  "max": {
+    "working_MiB": 1687.37109375,
+    "current_MiB": 1770.57421875,
+    "anon_MiB": 1561.2578125,
+    "swap_MiB": 0.57421875,
+    "cpu_cores": 1.606018442955524,
+    "agents": 3,
+    "group_current_MiB": 0.0,
+    "group_swap_MiB": 0.0
+  },
+  "mean": {
+    "working_MiB": 1476.7237748579546,
+    "current_MiB": 1552.7320134943182,
+    "anon_MiB": 1356.4347301136363,
+    "swap_MiB": 0.57421875,
+    "cpu_cores": 0.3751146741006165,
+    "agents": 2.8954545454545455,
+    "group_current_MiB": 0.0,
+    "group_swap_MiB": 0.0
+  },
+  "tasks": {
+    "RR-QA-65": "done",
+    "RR-QA-64": "done",
+    "RR-QA-63": "done"
+  },
+  "ui": {
+    "static": {
+      "requests": 129,
+      "errors": 0,
+      "p95_ms": 34.03,
+      "max_ms": 71.5
+    },
+    "api": {
+      "requests": 430,
+      "errors": 0,
+      "p95_ms": 23.97,
+      "max_ms": 71.36
+    }
+  },
+  "websocket": {
+    "messages": 0,
+    "output_delta": 0,
+    "errors": 0
+  },
+  "oom_events": [],
+  "nonzero_exit_events": [],
+  "llm_models": [
+    "gpt-6.1-sol"
+  ],
+  "llm_turn_count": 9,
+  "script_test_results": [
+    {
+      "task": "RR-QA-65",
+      "exit_code": 0,
+      "output": "test_add (test_calc.TestCalc.test_add) ... ok\ntest_divide (test_calc.TestCalc.test_divide) ... ok\ntest_divide_by_zero (test_calc.TestCalc.test_divide_by_zero) ... ok\ntest_divide_fractional_result (test_calc.TestCalc.test_divide_fractional_result) ... ok\ntest_divide_negative_operand (test_calc.TestCalc.test_divide_negative_operand) ... ok\ntest_divide_zero_numerator (test_calc.TestCalc.test_divide_zero_numerator) ... ok\ntest_multiply (test_calc.TestCalc.test_multiply) ... ok\ntest_subtract (test_calc.TestCalc.test_subtract) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.000s\n\nOK\n\n"
+    },
+    {
+      "task": "RR-QA-64",
+      "exit_code": 0,
+      "output": "test_add (test_calc.TestCalc.test_add) ... ok\ntest_divide (test_calc.TestCalc.test_divide) ... ok\ntest_divide_by_zero (test_calc.TestCalc.test_divide_by_zero) ... ok\ntest_multiply (test_calc.TestCalc.test_multiply) ... ok\ntest_subtract (test_calc.TestCalc.test_subtract) ... ok\n\n----------------------------------------------------------------------\nRan 5 tests in 0.000s\n\nOK\n\n"
+    },
+    {
+      "task": "RR-QA-63",
+      "exit_code": 0,
+      "output": "test_add (test_calc.TestCalc.test_add) ... ok\ntest_divide (test_calc.TestCalc.test_divide) ... ok\ntest_divide_by_zero (test_calc.TestCalc.test_divide_by_zero) ... ok\ntest_multiply (test_calc.TestCalc.test_multiply) ... ok\ntest_subtract (test_calc.TestCalc.test_subtract) ... ok\n\n----------------------------------------------------------------------\nRan 5 tests in 0.001s\n\nOK\n\n"
+    }
+  ]
+}
