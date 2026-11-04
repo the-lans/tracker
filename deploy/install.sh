@@ -21,6 +21,7 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/tracker}"
 ENV_FILE="${INSTALL_DIR}/.env"
 ENV_EXAMPLE="${INSTALL_DIR}/.env.example"
 DOCKER_INSTALL_SCRIPT_URL="https://get.docker.com"
+OS_RELEASE_FILE="${OS_RELEASE_FILE:-/etc/os-release}"
 # Раздел 20.2 п. 1: script-ноды монтируют подпуть volume (`volume-subpath`,
 # services/nodes/script.py) — он появился в Docker Engine 26.
 MIN_DOCKER_ENGINE_MAJOR=26
@@ -152,6 +153,34 @@ as_root() {
   fi
 }
 
+step_install_host_dependencies() {
+  local tool missing=""
+  for tool in git curl openssl; do
+    command -v "${tool}" >/dev/null 2>&1 || missing="${missing} ${tool}"
+  done
+  [ -n "${missing}" ] || return 0
+  log "Установка системных зависимостей:${missing}"
+  if command -v apt-get >/dev/null 2>&1; then
+    as_root apt-get update
+    as_root apt-get install -y git curl openssl ca-certificates
+  elif command -v dnf >/dev/null 2>&1; then
+    as_root dnf install -y git curl openssl ca-certificates
+  else
+    die "установите git, curl, openssl и ca-certificates перед запуском"
+  fi
+  for tool in git curl openssl; do
+    command -v "${tool}" >/dev/null 2>&1 || die "после установки не найдена команда ${tool}"
+  done
+}
+
+_install_docker_rpm() {
+  as_root dnf install -y dnf-plugins-core
+  as_root dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+  as_root dnf install -y docker-ce docker-ce-cli containerd.io \
+    docker-buildx-plugin docker-compose-plugin
+  as_root systemctl enable --now docker
+}
+
 _install_compose_plugin() {
   if command -v apt-get >/dev/null 2>&1; then
     as_root apt-get update
@@ -169,14 +198,20 @@ _install_compose_plugin() {
 step_install_docker() {
   log "Шаг 1/11: проверка Docker и Docker Compose plugin"
   if ! command -v docker >/dev/null 2>&1; then
-    # Официальный скрипт Docker ставит Engine вместе с плагином Compose
-    # для поддерживаемых дистрибутивов.
-    log "Docker не найден — установка через ${DOCKER_INSTALL_SCRIPT_URL}"
-    local installer
-    installer="$(mktemp)"
-    curl -fsSL "${DOCKER_INSTALL_SCRIPT_URL}" -o "${installer}"
-    as_root sh "${installer}"
-    rm -f "${installer}"
+    local distro
+    distro="$(if [ -r "${OS_RELEASE_FILE}" ]; then . "${OS_RELEASE_FILE}"; fi; printf '%s' "${ID:-}")"
+    case "${distro}" in
+      almalinux|rocky) _install_docker_rpm ;;
+      *)
+        # get.docker.com не распознаёт AlmaLinux и Rocky Linux.
+        log "Docker не найден — установка через ${DOCKER_INSTALL_SCRIPT_URL}"
+        local installer
+        installer="$(mktemp)"
+        curl -fsSL "${DOCKER_INSTALL_SCRIPT_URL}" -o "${installer}"
+        as_root sh "${installer}"
+        rm -f "${installer}"
+        ;;
+    esac
   fi
   if ! docker compose version >/dev/null 2>&1; then
     log "Docker Compose plugin не найден — установка пакета docker-compose-plugin"
@@ -213,6 +248,7 @@ step_clone_repo() {
 # .env.example — sed только заполняет пустое значение, не добавляет строку).
 _set_env_value() {
   local key="$1" value="$2"
+  [ -n "${value}" ] || die "пустое значение ${key} — запись в .env отменена"
   # '|' как разделитель sed — секреты могут содержать '/' (base64).
   sed -i.bak "s|^${key}=.*|${key}=${value}|" "${ENV_FILE}"
   rm -f "${ENV_FILE}.bak"
@@ -278,7 +314,8 @@ step_generate_env() {
     log "${ENV_FILE} уже существует, пропуск генерации"
     return
   fi
-  cp "${ENV_EXAMPLE}" "${ENV_FILE}"
+  (umask 077; cp "${ENV_EXAMPLE}" "${ENV_FILE}")
+  chmod 600 "${ENV_FILE}"
 
   _set_env_value SECRET_ENCRYPTION_KEY "$(openssl rand -hex 32)"
   _set_env_value SESSION_SECRET_KEY "$(openssl rand -hex 32)"
@@ -344,8 +381,22 @@ step_prompt_critical_values() {
   _set_env_value VAPID_CLAIMS_EMAIL "${acme_email}"
 }
 
+step_validate_env() {
+  local key value
+  for key in DOMAIN ACME_EMAIL GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET \
+    SECRET_ENCRYPTION_KEY SESSION_SECRET_KEY POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB \
+    REDIS_PASSWORD SFTP_DB_PASSWORD CLIPROXY_API_KEY CLIPROXY_MANAGEMENT_KEY \
+    VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY VAPID_CLAIMS_EMAIL; do
+    value="$(_env_file_value "${key}" "${ENV_FILE}")"
+    case "${value}" in
+      ''|'""'|"''") die "в ${ENV_FILE} не задан ${key} — сборка и запуск отменены" ;;
+    esac
+  done
+}
+
 # Шаг 5: сборка Docker-образов
 step_build_images() {
+  step_validate_env
   log "Шаг 5/11: сборка образов сервисов стека (в том числе LLM-прокси), раннеров script-нод и сессии"
   # Все сервисы с build: у worker, beat, sftp и llm-gateway свои образы из
   # Dockerfile backend — сборка одного backend оставила бы их на старом коде.
@@ -626,6 +677,7 @@ main() {
   if [ -n "${UPDATE_MODE}" ]; then
     validate_update
   fi
+  step_install_host_dependencies
   step_install_docker
   if [ -n "${UPDATE_MODE}" ]; then
     run_update

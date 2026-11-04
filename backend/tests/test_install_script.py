@@ -113,6 +113,10 @@ exec "$@"
 _APT_STUB = """#!/bin/sh
 echo "apt-get $*" >> "$STUB_LOG"
 rm -f "$STUB_DIR/no-compose"
+if [ ! -x "$STUB_DIR/openssl" ]; then
+  cp "$STUB_DIR/openssl.real" "$STUB_DIR/openssl"
+  chmod +x "$STUB_DIR/openssl"
+fi
 """
 
 
@@ -135,6 +139,10 @@ def stubs(tmp_path: Path) -> Path:
     _write_executable(stub_dir / "curl", _CURL_STUB)
     _write_executable(stub_dir / "sudo", _SUDO_STUB)
     _write_executable(stub_dir / "apt-get", _APT_STUB)
+    _write_executable(
+        stub_dir / "openssl.real", f'#!/bin/sh\nexec {shutil.which("openssl")} "$@"\n'
+    )
+    (stub_dir / "os-release").write_text("ID=ubuntu\n")
     return stub_dir
 
 
@@ -159,6 +167,7 @@ def _run_bash(
         "STUB_DIR": str(stubs),
         "STUB_LOG": str(stubs / "calls.log"),
         "WAIT_IDLE_POLL_SECONDS": "0",
+        "OS_RELEASE_FILE": str(stubs / "os-release"),
     }
     return subprocess.run(
         [str(stubs / "bash"), "-c", script, "install.sh", *args],
@@ -204,7 +213,14 @@ def _make_restore_dir(tmp_path: Path, *, skip: str | None = None) -> Path:
     restore_dir = tmp_path / "transfer"
     restore_dir.mkdir()
     files: dict[str, Callable[[Path], object]] = {
-        ".env": lambda path: path.write_text("SECRET_ENCRYPTION_KEY=старый-ключ\n"),
+        ".env": lambda path: path.write_text(
+            _installed_env(
+                SECRET_ENCRYPTION_KEY="старый-ключ",
+                SFTP_DB_PASSWORD="",
+                CLIPROXY_API_KEY="",
+                CLIPROXY_MANAGEMENT_KEY="",
+            ),
+        ),
         "tracker-20261001T000000Z.sql.gz": lambda path: path.write_bytes(
             gzip.compress(b"-- old dump\n"),
         ),
@@ -228,6 +244,18 @@ def _make_restore_dir(tmp_path: Path, *, skip: str | None = None) -> Path:
             with tarfile.open(restore_dir / archive, "w:gz"):
                 pass
     return restore_dir
+
+
+def _installed_env(**overrides: str) -> str:
+    example = (_INSTALL_SCRIPT.parents[1] / ".env.example").read_text()
+    values = {
+        key: value or "test-value"
+        for line in example.splitlines()
+        if line and not line.startswith("#") and "=" in line
+        for key, value in [line.split("=", 1)]
+    }
+    values.update(overrides)
+    return "".join(f"{key}={value}\n" for key, value in values.items())
 
 
 class TestScriptSyntax:
@@ -376,8 +404,13 @@ class TestUpdate:
     @pytest.fixture(autouse=True)
     def installed(self, install_dir: Path) -> None:
         (install_dir / ".env").write_text(
-            "SECRET_ENCRYPTION_KEY=ключ\nSFTP_DB_PASSWORD=пароль\n"
-            f"REDIS_PASSWORD={_REDIS_PASSWORD}\nCLIPROXY_VERSION=v1.0.0\nGIT_SHA={_PREVIOUS_SHA}\n",
+            _installed_env(
+                REDIS_PASSWORD=_REDIS_PASSWORD,
+                CLIPROXY_VERSION="v1.0.0",
+                CLIPROXY_API_KEY="",
+                CLIPROXY_MANAGEMENT_KEY="",
+                GIT_SHA=_PREVIOUS_SHA,
+            ),
         )
 
     def test_steps_in_order(self, stubs: Path, install_dir: Path) -> None:
@@ -622,3 +655,87 @@ class TestSeedData:
         result = self._run(stubs, install_dir)
 
         assert result.returncode != 0
+
+
+class TestHostDependencies:
+    def test_installs_missing_openssl(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "openssl").unlink()
+        result = _run_bash(
+            f'source "{_INSTALL_SCRIPT}" && step_install_host_dependencies',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "apt-get install -y git curl openssl ca-certificates" in _calls(stubs)
+        assert os.access(stubs / "openssl", os.X_OK)
+
+    @pytest.mark.parametrize("distro", ["almalinux", "rocky"])
+    def test_rpm_docker_install(self, stubs: Path, install_dir: Path, distro: str) -> None:
+        (stubs / "docker").unlink()
+        (stubs / "os-release").write_text(f"ID={distro}\n")
+        _write_executable(
+            stubs / "dnf",
+            '#!/bin/sh\necho "dnf $*" >> "$STUB_LOG"\n'
+            'case "$*" in *docker-ce-cli*) cp "$STUB_DIR/docker.real" "$STUB_DIR/docker"; '
+            'chmod +x "$STUB_DIR/docker";; esac\n',
+        )
+        _write_executable(stubs / "systemctl", _LOGGING_STUB.format(name="systemctl"))
+        result = _run_bash(
+            f'source "{_INSTALL_SCRIPT}" && step_install_docker',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        calls = _calls(stubs)
+        _assert_in_order(
+            calls,
+            [
+                "dnf install -y dnf-plugins-core",
+                "dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo",
+                "dnf install -y docker-ce docker-ce-cli containerd.io",
+                "systemctl enable --now docker",
+            ],
+        )
+        assert not any("get.docker.com" in call for call in calls)
+
+
+class TestInvalidEnv:
+    @pytest.mark.parametrize(
+        "key", ["POSTGRES_PASSWORD", "GOOGLE_OAUTH_CLIENT_ID", "SESSION_SECRET_KEY"]
+    )
+    @pytest.mark.parametrize("value", ["", '""', "''"])
+    def test_stops_before_build(
+        self,
+        stubs: Path,
+        install_dir: Path,
+        key: str,
+        value: str,
+    ) -> None:
+        (install_dir / ".env").write_text(_installed_env(**{key: value}))
+        result = _run_bash(
+            f'source "{_INSTALL_SCRIPT}" && step_build_images',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+        assert result.returncode != 0
+        assert key in result.stdout
+        assert "test-value" not in result.stdout + result.stderr
+        assert _calls(stubs) == []
+
+    def test_failed_generator_does_not_write_empty_secret(
+        self,
+        stubs: Path,
+        install_dir: Path,
+    ) -> None:
+        (install_dir / ".env.example").write_text("SECRET_ENCRYPTION_KEY=\n")
+        (stubs / "openssl").unlink()
+        _write_executable(stubs / "openssl", "#!/bin/sh\nexit 1\n")
+        result = _run_bash(
+            f'source "{_INSTALL_SCRIPT}" && step_generate_env',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+        assert result.returncode != 0
+        assert "SECRET_ENCRYPTION_KEY" in result.stdout
+        assert not any("docker run" in call for call in _calls(stubs))
+        assert (install_dir / ".env").stat().st_mode & 0o777 == 0o600
