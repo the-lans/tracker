@@ -22,7 +22,6 @@ from db.models.enums import (
 )
 from db.models.repositories import Repository, Template
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
-from services.crypto import encrypt
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
 from services.task_cleanup import cleanup_task_repositories
@@ -39,7 +38,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 _GIT_AUTHOR_ARGS = ["-c", "user.email=test@example.com", "-c", "user.name=Test"]
-_UNUSED_DEPLOY_KEY = "не используется файловым transport'ом"
 
 
 def _run(*args: str, cwd: Path) -> str:
@@ -75,7 +73,6 @@ async def _attach_repository(
     repository = Repository(
         name=name,
         git_url=str(origin),
-        deploy_key_encrypted=encrypt(_UNUSED_DEPLOY_KEY),
         default_template_id=template.id if template else None,
     )
     db_session.add(repository)

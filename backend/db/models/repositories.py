@@ -6,10 +6,20 @@ import uuid
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.base import Base
 from db.models.mixins import JsonValue, UUIDPrimaryKeyMixin
+
+
+class GitCredential(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "git_credentials"
+
+    name: Mapped[str] = mapped_column(sa.String)
+    kind: Mapped[str] = mapped_column(sa.String)
+    host: Mapped[str] = mapped_column(sa.String)
+    username: Mapped[str] = mapped_column(sa.String, default="oauth2")
+    secret_encrypted: Mapped[str] = mapped_column(sa.Text)
 
 
 class Repository(UUIDPrimaryKeyMixin, Base):
@@ -18,7 +28,8 @@ class Repository(UUIDPrimaryKeyMixin, Base):
     name: Mapped[str] = mapped_column(sa.String)
     git_url: Mapped[str] = mapped_column(sa.String)
     default_template_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("templates.id"))
-    deploy_key_encrypted: Mapped[str] = mapped_column(sa.Text)
+    git_credential_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("git_credentials.id"))
+    git_credential: Mapped[GitCredential | None] = relationship(lazy="selectin")
 
 
 class Template(UUIDPrimaryKeyMixin, Base):

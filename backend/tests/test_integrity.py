@@ -187,7 +187,6 @@ async def test_ensure_repository_deletable_depends_on_task_terminality(
     repository = Repository(
         name="repo",
         git_url="git@example.com:x.git",
-        deploy_key_encrypted="enc",
     )
     db_session.add(repository)
     await db_session.flush()
@@ -224,7 +223,6 @@ class TestEnsureTemplateDeletable:
             Repository(
                 name="repo",
                 git_url="git@example.com:x.git",
-                deploy_key_encrypted="enc",
                 default_template_id=template.id,
             ),
         )

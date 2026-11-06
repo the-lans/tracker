@@ -11,17 +11,21 @@ from pydantic import BaseModel, ConfigDict
 
 
 class RepositoryCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     git_url: str
     default_template_id: uuid.UUID | None = None
-    deploy_key: str
+    git_credential_id: uuid.UUID | None = None
 
 
 class RepositoryUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     git_url: str | None = None
     default_template_id: uuid.UUID | None = None
-    deploy_key: str | None = None
+    git_credential_id: uuid.UUID | None = None
 
 
 class RepositoryResponse(BaseModel):
@@ -31,6 +35,7 @@ class RepositoryResponse(BaseModel):
     name: str
     git_url: str
     default_template_id: uuid.UUID | None
+    git_credential_id: uuid.UUID | None
 
 
 class TemplateCreateRequest(BaseModel):

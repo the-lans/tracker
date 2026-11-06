@@ -32,14 +32,11 @@ from services.git_ops import (
 from tests.factories import build_repository
 from tests.git_support import GIT_AUTHOR_ARGS, init_bare_origin, run
 
-_UNUSED_DEPLOY_KEY_PLACEHOLDER = "не используется файловым transport'ом, но должен расшифровываться"
-
 
 def _make_repository(*, git_url: str) -> Repository:
     return build_repository(
         name="demo-repo",
         git_url=git_url,
-        deploy_key=_UNUSED_DEPLOY_KEY_PLACEHOLDER,
     )
 
 

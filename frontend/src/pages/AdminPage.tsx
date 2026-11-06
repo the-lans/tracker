@@ -1,3 +1,4 @@
+import { GitCredentialsPanel } from "@/components/admin/GitCredentialsPanel";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UsersPanel } from "@/components/admin/UsersPanel";
@@ -18,6 +19,7 @@ export function AdminPage() {
           <TabsList className="mb-4 flex-wrap">
             <TabsTrigger value="users">Пользователи и доступ</TabsTrigger>
             <TabsTrigger value="settings">Системные настройки</TabsTrigger>
+            <TabsTrigger value="git-access">Учётные данные Git</TabsTrigger>
             <TabsTrigger value="mcp">MCP-серверы</TabsTrigger>
             <TabsTrigger value="llm-proxy">LLM-прокси</TabsTrigger>
             <TabsTrigger value="periodic">Периодические задачи</TabsTrigger>
@@ -30,6 +32,7 @@ export function AdminPage() {
           <TabsContent value="settings">
             <SystemSettingsPanel />
           </TabsContent>
+          <TabsContent value="git-access"><GitCredentialsPanel /></TabsContent>
           <TabsContent value="mcp">
             <McpServersPanel />
           </TabsContent>

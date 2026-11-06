@@ -154,7 +154,6 @@ async def _attach_repository_variable(
     repository = Repository(
         name=repository_name,
         git_url=f"git@example.com:{repository_name}.git",
-        deploy_key_encrypted=encrypt("k"),
     )
     session.add(repository)
     await session.flush()

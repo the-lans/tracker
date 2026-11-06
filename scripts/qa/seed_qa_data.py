@@ -28,10 +28,11 @@ from db.models.enums import EnvVariableScope, NodeType, ScriptLanguage, UserRole
 from db.models.env_vars import EnvVariable  # noqa: E402
 from db.models.llm import LlmAccount  # noqa: E402
 from db.models.pipelines import Node, Pipeline  # noqa: E402
-from db.models.repositories import Repository  # noqa: E402
+from db.models.repositories import GitCredential, Repository  # noqa: E402
 from db.models.users import AllowedEmail, User  # noqa: E402
 from db.session import async_session_factory  # noqa: E402
 from services.crypto import encrypt  # noqa: E402
+from services.git_credentials import git_host, validate_secret  # noqa: E402
 from services.llm_accounts import create_account  # noqa: E402
 from services.pipeline_validation import validate_node_shape, validate_pipeline_templates  # noqa: E402
 from services.repository_validation import validate_git_url, validate_repository_name  # noqa: E402
@@ -47,6 +48,7 @@ logger = get_logger("seed_qa_data")
 PIPELINE_DIR = Path(__file__).resolve().parent / "pipeline"
 REPOSITORY_NAME = "qa-calc"
 GIT_URL = "ssh://git@qa-git/srv/git/qa/qa-calc.git"
+GIT_CREDENTIAL_NAME = "QA: qa-git"
 MOCKS_URL = "http://qa-mocks:8090"
 GITLAB_TOKEN = "qa-token"  # noqa: S105 — мок принимает любой токен
 LLM_ACCOUNT_LABEL = "QA"
@@ -171,11 +173,28 @@ async def _repository(db_session: AsyncSession, deploy_key: str) -> None:
     exists = sa.select(Repository.id).where(Repository.name == REPOSITORY_NAME)
     if await db_session.scalar(exists) is not None:
         return
+    host, _https = git_host(GIT_URL)
+    credential = await db_session.scalar(
+        sa.select(GitCredential).where(
+            GitCredential.name == GIT_CREDENTIAL_NAME,
+            GitCredential.host == host,
+            GitCredential.kind == "ssh_key",
+        ),
+    )
+    if credential is None:
+        validate_secret("ssh_key", deploy_key)
+        credential = GitCredential(
+            name=GIT_CREDENTIAL_NAME,
+            kind="ssh_key",
+            host=host,
+            username="git",
+            secret_encrypted=encrypt(deploy_key),
+        )
     db_session.add(
         Repository(
             name=validate_repository_name(REPOSITORY_NAME),
             git_url=validate_git_url(GIT_URL),
-            deploy_key_encrypted=encrypt(deploy_key),
+            git_credential=credential,
         ),
     )
     logger.info("qa_repository_created", name=REPOSITORY_NAME)

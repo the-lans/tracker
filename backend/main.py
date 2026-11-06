@@ -15,6 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.auth import router as auth_router
 from api.env_variables import router as env_variables_router
+from api.git_credentials import router as git_credentials_router
 from api.jira import router as jira_router
 from api.llm_accounts import router as llm_accounts_router
 from api.llm_proxy import router as llm_proxy_router
@@ -65,6 +66,7 @@ app = FastAPI(title="Tracker API", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(tasks_router)
 app.include_router(repositories_router)
+app.include_router(git_credentials_router)
 app.include_router(templates_router)
 app.include_router(preview_router)
 app.include_router(llm_accounts_router)
