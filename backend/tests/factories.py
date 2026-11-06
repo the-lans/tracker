@@ -14,7 +14,6 @@ from db.models.pipelines import Pipeline
 from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
-from services.crypto import encrypt
 from services.llm_accounts import account_prefix, next_switch_order
 
 # Сгенерированы `ssh-keygen` только для тестов; отпечатки — вывод `ssh-keygen -lf`.
@@ -126,14 +125,12 @@ def build_repository(
     *,
     name: str = "backend",
     git_url: str = "git@example.com:x.git",
-    deploy_key: str = "k",
 ) -> Repository:
     """Репозиторий без записи в БД (для git-тестов без сессии)."""
     return Repository(
         id=uuid.uuid4(),
         name=name,
         git_url=git_url,
-        deploy_key_encrypted=encrypt(deploy_key),
     )
 
 

@@ -17,7 +17,7 @@ from db.models.repositories import Repository
 from db.models.users import User
 from db.session import get_session
 from services.access import get_or_404, get_template_for_user
-from services.crypto import encrypt
+from services.git_credentials import resolve_credential
 from services.integrity import (
     commit_or_conflict,
     ensure_repository_deletable,
@@ -45,12 +45,13 @@ async def create_repository(
 ) -> Repository:
     if body.default_template_id is not None:
         await get_template_for_user(db_session, body.default_template_id, user=current_user)
+    await resolve_credential(db_session, body.git_credential_id, body.git_url)
     repository = Repository(
         id=uuid.uuid4(),
         name=validate_repository_name(body.name),
         git_url=validate_git_url(body.git_url),
         default_template_id=body.default_template_id,
-        deploy_key_encrypted=encrypt(body.deploy_key),
+        git_credential_id=body.git_credential_id,
     )
     db_session.add(repository)
     await db_session.commit()
@@ -98,8 +99,13 @@ async def update_repository(
         if body.default_template_id is not None:
             await get_template_for_user(db_session, body.default_template_id, user=current_user)
         repository.default_template_id = body.default_template_id
-    if body.deploy_key is not None:
-        repository.deploy_key_encrypted = encrypt(body.deploy_key)
+    credential_id = (
+        body.git_credential_id
+        if "git_credential_id" in body.model_fields_set
+        else repository.git_credential_id
+    )
+    await resolve_credential(db_session, credential_id, repository.git_url)
+    repository.git_credential_id = credential_id
     await db_session.commit()
     await db_session.refresh(repository)
     return repository

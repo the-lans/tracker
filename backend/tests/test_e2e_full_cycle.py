@@ -117,7 +117,6 @@ async def _make_repository(db_session: AsyncSession, origin: Path) -> Repository
     return await make_repository(
         db_session,
         git_url=str(origin),
-        deploy_key="не используется файловым transport'ом",
     )
 
 

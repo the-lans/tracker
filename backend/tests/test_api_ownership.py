@@ -15,7 +15,6 @@ from db.models.enums import NodeType, TaskStatus
 from db.models.pipelines import Node, Pipeline
 from db.models.repositories import Repository, Template
 from db.models.tasks import Task
-from services.crypto import encrypt
 from tests.factories import make_task, make_user
 
 if TYPE_CHECKING:
@@ -459,8 +458,7 @@ class TestRepositoryDefaultTemplate:
             "/repositories",
             json={
                 "name": f"repo-{uuid.uuid4().hex[:6]}",
-                "git_url": "git@gitlab.example.com:team/repo.git",
-                "deploy_key": "ключ",
+                "git_url": "https://gitlab.example.com/team/repo.git",
                 "default_template_id": str(template_id) if template_id else None,
             },
         )
@@ -506,9 +504,8 @@ class TestRepositoryDefaultTemplate:
         foreign = await _template(db_session, other.id)
         repository = Repository(
             name=f"repo-{uuid.uuid4().hex[:6]}",
-            git_url="git@gitlab.example.com:team/repo.git",
+            git_url="https://gitlab.example.com/team/repo.git",
             default_template_id=foreign.id,
-            deploy_key_encrypted=encrypt("ключ"),
         )
         db_session.add(repository)
         await db_session.flush()

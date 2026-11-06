@@ -17,27 +17,6 @@ if TYPE_CHECKING:
     from httpx import AsyncClient
 
 
-async def test_create_repository_encrypts_deploy_key(
-    authed_client: AsyncClient,
-    db_session: AsyncSession,
-) -> None:
-    response = await authed_client.post(
-        "/repositories",
-        json={
-            "name": "tracker",
-            "git_url": "git@example.com:org/tracker.git",
-            "deploy_key": "SECRET-KEY",
-        },
-    )
-
-    assert response.status_code == 201
-    body = response.json()
-    assert "deploy_key" not in body
-    repository = await db_session.get(Repository, uuid.UUID(body["id"]))
-    assert repository is not None
-    assert repository.deploy_key_encrypted != "SECRET-KEY"
-
-
 async def test_delete_repository_bound_to_active_task_is_rejected(
     authed_client: AsyncClient,
     db_session: AsyncSession,
@@ -47,7 +26,6 @@ async def test_delete_repository_bound_to_active_task_is_rejected(
         id=uuid.uuid4(),
         name="repo",
         git_url="git@example.com:org/repo.git",
-        deploy_key_encrypted="enc",
     )
     db_session.add(repository)
     task = Task(
@@ -90,7 +68,6 @@ async def test_delete_repository_bound_to_terminal_task_still_blocked_by_history
         id=uuid.uuid4(),
         name="repo-done",
         git_url="git@example.com:org/repo-done.git",
-        deploy_key_encrypted="enc",
     )
     db_session.add(repository)
     task = Task(

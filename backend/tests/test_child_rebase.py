@@ -18,7 +18,6 @@ from db.models.enums import MergeStatus, RepositoryRole, TaskStatus
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from services.child_rebase import apply_requested_rebases
-from services.crypto import encrypt
 from services.task_workspace import build_branch_name, prepare_task_workspace
 from tests.factories import make_user
 from tests.git_support import commit_file, init_bare_origin, push_base_update, run
@@ -47,7 +46,7 @@ async def _child_task(
         created_by=user.id,
         status=status,
     )
-    repository = Repository(name="backend", git_url=str(origin), deploy_key_encrypted=encrypt("k"))
+    repository = Repository(name="backend", git_url=str(origin))
     db_session.add_all([task, repository])
     await db_session.flush()
     task_repository = TaskRepository(

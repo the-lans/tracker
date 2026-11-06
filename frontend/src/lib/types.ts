@@ -556,6 +556,7 @@ export type NodeUpdateRequest = Partial<NodeCreateRequest> & { is_archived?: boo
 // --- Репозитории / шаблоны -----------------------------------------------
 
 export interface Repository {
+  git_credential_id?: string | null;
   id: string;
   name: string;
   git_url: string;
@@ -566,7 +567,7 @@ export interface RepositoryCreateRequest {
   name: string;
   git_url: string;
   default_template_id?: string | null;
-  deploy_key: string;
+  git_credential_id?: string | null;
 }
 
 export type RepositoryUpdateRequest = Partial<RepositoryCreateRequest>;

@@ -5,10 +5,10 @@
 директория репозиториев текущей задачи", сетевая изоляция относится к
 скрипт-нодам, раздел 11.4).
 
-Deploy-ключ репозитория хранится в БД зашифрованным (`services/crypto`) и
-никогда не попадает на диск постоянно — на время каждой git-операции он
+Учётные данные Git хранятся в БД зашифрованными (`services/crypto`) и
+не попадают на диск постоянно — на время каждой git-операции секрет
 пишется во временный файл с правами 0600 и передаётся `git` через
-переменную окружения ``GIT_SSH_COMMAND``, удаляется сразу после операции.
+``GIT_SSH_COMMAND`` или HTTPS askpass и удаляется сразу после операции.
 
 Рабочую директорию меняют агент и script-ноды, поэтому git воркера не
 исполняет ничего из репозитория (раздел 19.3, решение №22 плана): хуки и
@@ -21,6 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
+import signal
+import sys
 import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -28,10 +31,11 @@ from pathlib import Path
 
 from app_logging.config import get_logger
 from db.models.enums import RepositoryRole
-from db.models.repositories import Repository
+from db.models.repositories import GitCredential, Repository
 from db.models.tasks import TaskRepository
 from services.crypto import decrypt
-from services.errors import ExternalServiceError
+from services.errors import ExternalServiceError, ValidationError
+from services.git_credentials import git_host
 from services.task_codes import validate_task_code
 
 logger = get_logger("git_ops")
@@ -39,6 +43,8 @@ logger = get_logger("git_ops")
 _HEAD_REF_PREFIX = "refs/heads/"
 
 _KEY_FILE_MODE = 0o600
+_HELPER_FILE_MODE = 0o700
+_GIT_CHECK_TIMEOUT_SECONDS = 30
 
 GIT_IDENTITY_NAME = "AI Tracker"
 GIT_IDENTITY_EMAIL = "tracker@localhost"
@@ -108,24 +114,75 @@ class RebaseConflictError(Exception):
         self.conflicting_files = conflicting_files
 
 
+def _credential_environment() -> dict[str, str]:
+    env = {**_DEFAULT_GIT_IDENTITY, **os.environ, **_ISOLATED_GIT_ENV}
+    # Запрещаем унаследованные механизмы авторизации и интерактивные запросы.
+    for key in list(env):
+        if key.startswith(("GIT_CONFIG_", "GIT_TRACE")) or key in (
+            "GIT_ASKPASS",
+            "SSH_ASKPASS",
+            "GIT_SSH_COMMAND",
+            "GIT_CURL_VERBOSE",
+        ):
+            env.pop(key)
+    env.update(_ISOLATED_GIT_ENV)
+    env.update(
+        GIT_CONFIG_COUNT="2",
+        GIT_CONFIG_KEY_0="credential.helper",
+        GIT_CONFIG_VALUE_0="",
+        GIT_CONFIG_KEY_1="http.followRedirects",
+        GIT_CONFIG_VALUE_1="false",
+    )
+    return env
+
+
+def _write_askpass(secret_path: Path, credential: GitCredential) -> Path:
+    # Секрет не попадает ни в argv/env, ни в URL. Askpass проверяет
+    # назначение запроса, включая имя хоста, перед чтением секрета.
+    helper = secret_path.parent / "askpass"
+    helper.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys, urllib.parse\n"
+        "prompt = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+        "parts = prompt.split(chr(39))\n"
+        "u = urllib.parse.urlsplit(parts[1]) if len(parts) == 3 else None\n"
+        f"host = {credential.host!r}\n"
+        "if not u or u.scheme != 'https' or u.hostname != host: sys.exit(1)\n"
+        f"username = {credential.username!r}\n"
+        f"secret_file = {str(secret_path)!r}\n"
+        "if prompt.startswith('Username'): print(username)\n"
+        "elif prompt.startswith('Password'): print(pathlib.Path(secret_file).read_text())\n"
+        "else: sys.exit(1)\n"
+    )
+    helper.chmod(_HELPER_FILE_MODE)
+    return helper
+
+
 @asynccontextmanager
 async def _deploy_key_env(repository: Repository) -> AsyncIterator[dict[str, str]]:
-    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".key") as key_file:
-        key_file.write(decrypt(repository.deploy_key_encrypted))
-        key_path = Path(key_file.name)
-    key_path.chmod(_KEY_FILE_MODE)
-    try:
-        # Окружение процесса наследуется (PATH, HOME), а не заменяется целиком.
-        yield {
-            **_DEFAULT_GIT_IDENTITY,
-            **os.environ,
-            **_ISOLATED_GIT_ENV,
-            "GIT_SSH_COMMAND": (
-                f"ssh -i {key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-            ),
-        }
-    finally:
-        key_path.unlink(missing_ok=True)
+    env = _credential_environment()
+    credential = repository.git_credential
+    if credential is None:
+        yield env
+        return
+    host, https = git_host(repository.git_url)
+    if host != credential.host or (credential.kind == "https_token") != https:
+        raise ExternalServiceError("Учётные данные не соответствуют Git URL", is_transient=False)
+    secret = decrypt(credential.secret_encrypted)
+    with tempfile.TemporaryDirectory(prefix="tracker-git-") as directory:
+        root = Path(directory)
+        secret_path = root / "secret"
+        secret_path.touch(mode=_KEY_FILE_MODE)
+        secret_path.write_text(secret)
+        if credential.kind == "https_token":
+            helper = _write_askpass(secret_path, credential)
+            env.update(GIT_ASKPASS=str(helper), LC_ALL="C")
+        else:
+            env["GIT_SSH_COMMAND"] = (
+                f"ssh -i {shlex.quote(str(secret_path))} -o IdentitiesOnly=yes "
+                "-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+            )
+        yield env
 
 
 async def _run_git(
@@ -142,12 +199,22 @@ async def _run_git(
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
-    stdout, stderr = await process.communicate()
+    try:
+        stdout, stderr = await process.communicate()
+    except BaseException:
+        if process.returncode is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        await process.wait()
+        raise
     returncode = process.returncode if process.returncode is not None else -1
     if check and returncode != 0:
         raise ExternalServiceError(
-            f"git {' '.join(args)} завершился с кодом {returncode}: {stderr.decode().strip()}",
+            f"Git-операция {args[0] if args else 'unknown'} завершилась с кодом {returncode}",
             is_transient=False,
         )
     return returncode, stdout.decode(), stderr.decode()
@@ -415,3 +482,22 @@ async def is_rebased_onto_base(
             check=False,
         )
     return returncode == 0
+
+
+async def check_git_access(repository: Repository) -> None:
+    try:
+        with tempfile.TemporaryDirectory(prefix="tracker-git-check-") as directory:
+            async with _deploy_key_env(repository) as env:
+                async with asyncio.timeout(_GIT_CHECK_TIMEOUT_SECONDS):
+                    code, _stdout, _stderr = await _run_git(
+                        "ls-remote",
+                        repository.git_url,
+                        "HEAD",
+                        cwd=Path(directory),
+                        env=env,
+                        check=False,
+                    )
+    except (TimeoutError, OSError) as exc:
+        raise ValidationError("Проверка Git не завершилась: проверьте адрес и доступ") from exc
+    if code != 0:
+        raise ValidationError("Git отказал в доступе: проверьте URL, ключ или токен")

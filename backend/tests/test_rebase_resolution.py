@@ -24,7 +24,6 @@ from db.models.logs import NodeLog
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
-from services.crypto import encrypt
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
 from services.task_workspace import build_branch_name, prepare_task_workspace
 from tests.fakes import FakeClaudeAgentClient, make_result_message
@@ -59,7 +58,6 @@ async def _make_task_with_conflicting_branch(
     repository = Repository(
         name="backend",
         git_url=str(origin),
-        deploy_key_encrypted=encrypt("не используется"),
     )
     db_session.add_all([task, repository])
     await db_session.flush()

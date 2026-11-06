@@ -1,3 +1,4 @@
+import { useGitCredentials } from "@/hooks/useGitCredentials";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -32,7 +33,8 @@ export function RepositoryForm({
   const updateRepository = useUpdateRepository(repository?.id ?? "");
   const [name, setName] = useState(repository?.name ?? "");
   const [gitUrl, setGitUrl] = useState(repository?.git_url ?? "");
-  const [deployKey, setDeployKey] = useState("");
+  const [credentialId, setCredentialId] = useState(repository?.git_credential_id ?? "none");
+  const { data: credentials } = useGitCredentials();
   const [templateId, setTemplateId] = useState(repository?.default_template_id ?? NO_TEMPLATE);
   const { data: templates } = useTemplates();
   const currentTemplateId = repository?.default_template_id ?? null;
@@ -46,19 +48,18 @@ export function RepositoryForm({
       toast.error(errorMessage(error, "Не удалось сохранить репозиторий"));
     const defaultTemplateId = templateId === NO_TEMPLATE ? null : templateId;
     if (repository) {
-      // Ключ хранится зашифрованным и не отдаётся API: пустое поле — оставить прежний.
       updateRepository.mutate(
         {
           name,
           git_url: gitUrl,
           default_template_id: defaultTemplateId,
-          ...(deployKey ? { deploy_key: deployKey } : {}),
+          git_credential_id: credentialId === "none" ? null : credentialId,
         },
         { onSuccess: onSaved, onError },
       );
     } else {
       createRepository.mutate(
-        { name, git_url: gitUrl, deploy_key: deployKey, default_template_id: defaultTemplateId },
+        { name, git_url: gitUrl, git_credential_id: credentialId === "none" ? null : credentialId, default_template_id: defaultTemplateId },
         { onSuccess: onSaved, onError },
       );
     }
@@ -102,17 +103,15 @@ export function RepositoryForm({
           </Select>
         </div>
         <div>
-          <Label htmlFor="repo-key">
-            {repository
-              ? "Новый deploy-ключ (оставьте пустым, чтобы не менять)"
-              : "Deploy-ключ (приватный, SSH)"}
-          </Label>
-          <Input
-            id="repo-key"
-            type="password"
-            value={deployKey}
-            onChange={(e) => setDeployKey(e.target.value)}
-          />
+          <Label htmlFor="repo-credential">Учётные данные Git</Label>
+          <Select value={credentialId} onValueChange={setCredentialId}>
+            <SelectTrigger id="repo-credential"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Без авторизации (публичный HTTPS)</SelectItem>
+              {(credentials ?? []).map((c) => <SelectItem key={c.id} value={c.id}>{c.name} · {c.host}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <p className="text-small text-text-3">Доступы добавляются в администрировании → «Учётные данные Git».</p>
         </div>
       </div>
       <DialogFooter>
@@ -121,7 +120,7 @@ export function RepositoryForm({
         </Button>
         <Button
           onClick={handleSave}
-          disabled={!name || !gitUrl || (!repository && !deployKey) || isPending}
+          disabled={!name || !gitUrl || isPending}
         >
           {repository ? "Сохранить" : "Создать"}
         </Button>

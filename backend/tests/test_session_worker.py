@@ -121,7 +121,6 @@ async def _make_task(
             db_session,
             name=_REPOSITORY_NAME,
             git_url=str(origin),
-            deploy_key="не используется",
         )
         db_session.add(
             TaskRepository(

@@ -15,7 +15,6 @@ import pytest
 from db.models.enums import RepositoryRole
 from db.models.repositories import Repository
 from db.models.tasks import TaskRepository
-from services.crypto import encrypt
 from services.errors import ExternalServiceError, ValidationError
 from services.git_ops import clone_task_repository
 from services.repository_validation import (
@@ -96,7 +95,6 @@ class TestCloneTreatsUrlAsArgument:
             id=uuid.uuid4(),
             name="../RR-00001/A",
             git_url=f"--upload-pack=touch {marker}; git-upload-pack",
-            deploy_key_encrypted=encrypt("key"),
         )
         task_repository = TaskRepository(
             task_id=uuid.uuid4(),
@@ -128,8 +126,7 @@ class TestRepositoryApi:
             "/repositories",
             json={
                 "name": "../RR-1/backend",
-                "git_url": "git@gitlab.example.com:group/backend.git",
-                "deploy_key": "k",
+                "git_url": "https://gitlab.example.com/group/backend.git",
             },
         )
         assert response.status_code == 422
@@ -139,8 +136,7 @@ class TestRepositoryApi:
             "/repositories",
             json={
                 "name": "backend",
-                "git_url": "git@gitlab.example.com:group/backend.git",
-                "deploy_key": "k",
+                "git_url": "https://gitlab.example.com/group/backend.git",
             },
         )
         response = await authed_client.post(
@@ -165,8 +161,7 @@ class TestRepositoryApi:
             "/repositories",
             json={
                 "name": "backend",
-                "git_url": "git@gitlab.example.com:group/backend.git",
-                "deploy_key": "k",
+                "git_url": "https://gitlab.example.com/group/backend.git",
             },
         )
         repository_id = created.json()["id"]
@@ -188,6 +183,6 @@ class TestRepositoryApi:
         assert renamed.status_code == 409
         same_name = await authed_client.patch(
             f"/repositories/{repository_id}",
-            json={"name": "backend", "git_url": "git@gitlab.example.com:group/other.git"},
+            json={"name": "backend", "git_url": "https://gitlab.example.com/group/other.git"},
         )
         assert same_name.status_code == 200
