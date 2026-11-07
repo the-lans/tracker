@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,20 +44,28 @@ function CredentialForm({ credential, onSaved }: { credential?: GitCredential; o
         <Input id="git-access-user" value={username} onChange={(e) => setUsername(e.target.value)} />
         <p className="text-small text-text-3">Для персонального токена GitLab: oauth2.</p></div>}
       <div><Label htmlFor="git-access-secret">{kind === "ssh_key" ? "Приватный SSH-ключ без пароля" : "Токен"}</Label>
+        <div className="relative">
         {kind === "ssh_key" && showSecret ?
-          <textarea id="git-access-secret" className="w-full rounded-md border border-border bg-surface p-2 font-mono text-small"
+          <textarea id="git-access-secret" className="w-full rounded-md border border-border bg-surface p-2 pr-12 font-mono text-small"
             rows={6} value={secret} autoComplete="off" spellCheck={false}
             placeholder={credential ? "Оставьте пустым, чтобы сохранить прежний ключ" : ""}
             onChange={(e) => setSecret(e.target.value)} /> :
-          <Input id="git-access-secret" type={showSecret ? "text" : "password"} value={secret}
+          <Input id="git-access-secret" className="pr-12" type={showSecret ? "text" : "password"} value={secret}
             autoComplete="new-password" placeholder={credential ? "Оставьте пустым, чтобы сохранить прежний секрет" : ""}
             onPaste={kind === "ssh_key" ? (e) => {
               e.preventDefault();
               setSecret(e.clipboardData.getData("text"));
             } : undefined}
             onChange={(e) => setSecret(e.target.value)} />}
-        <Button type="button" variant="secondary" onClick={() => setShowSecret(!showSecret)}
-          aria-pressed={showSecret}>{showSecret ? "Скрыть секрет" : "Показать секрет"}</Button>
+        <Button type="button" variant="ghost" size="icon"
+          className="absolute right-0 top-0"
+          onClick={() => setShowSecret(!showSecret)}
+          aria-label={showSecret ? "Скрыть секрет" : "Показать секрет"}
+          title={showSecret ? "Скрыть секрет" : "Показать секрет"}
+          aria-controls="git-access-secret" aria-pressed={showSecret}>
+          {showSecret ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+        </Button>
+        </div>
         <p className="text-small text-text-3">Секрет хранится зашифрованным и не отображается после сохранения.</p></div>
     </div>
     {credential && <div className="my-3 flex flex-col gap-2">

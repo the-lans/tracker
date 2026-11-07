@@ -28,14 +28,17 @@ from db.models.pipelines import Node
 from db.models.users import User
 from db.session import get_session
 from services.access import get_node_for_user, get_pipeline_for_user, owner_filter
-from services.errors import NotFoundError
+from services.command_arguments import normalize_slash_name
+from services.errors import ConflictError, NotFoundError
 from services.integrity import count_library_prompt_usage, ensure_node_deletable
+from services.library_commands import validate_command_node
 from services.pipeline_validation import validate_node_shape, validate_pipeline_templates
 from services.system_settings import resolve_node_execution_defaults
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
 EXECUTION_FIELDS = ("timeout_seconds", "max_retries", "retry_base_delay_seconds")
+
 
 async def _get_node_or_404(db_session: AsyncSession, node_id: uuid.UUID, user: User) -> Node:
     """
@@ -72,8 +75,15 @@ async def _validate_and_flush(
 ) -> None:
     """Проверка ноды и — для ноды пайплайна — всего пайплайна в новом составе."""
     validate_node_shape(node, check_description=check_description)
+    validate_command_node(node)
     db_session.add(node)
-    await db_session.flush()
+    try:
+        await db_session.flush()
+    except sa.exc.IntegrityError as exc:
+        await db_session.rollback()
+        if "uq_nodes_owner_slash_name" in str(exc):
+            raise ConflictError("Это имя команды уже занято в вашей библиотеке") from exc
+        raise
     if node.pipeline_id is not None:
         await validate_pipeline_templates(db_session, node.pipeline_id)
 
@@ -95,12 +105,13 @@ async def _apply_execution_values(
         value: int | None = getattr(body if field in passed else node, field)
         return value
 
-    defaults = await resolve_node_execution_defaults(
-        db_session,
-        timeout_seconds=requested("timeout_seconds"),
-        max_retries=requested("max_retries"),
-        retry_base_delay_seconds=requested("retry_base_delay_seconds"),
-    )
+    with db_session.no_autoflush:
+        defaults = await resolve_node_execution_defaults(
+            db_session,
+            timeout_seconds=requested("timeout_seconds"),
+            max_retries=requested("max_retries"),
+            retry_base_delay_seconds=requested("retry_base_delay_seconds"),
+        )
     node.timeout_seconds = defaults.timeout_seconds
     node.max_retries = defaults.max_retries
     node.retry_base_delay_seconds = defaults.retry_base_delay_seconds
@@ -124,6 +135,8 @@ async def create_node(
         pipeline_id=body.pipeline_id,
         order_index=body.order_index,
         name=body.name,
+        slash_name=normalize_slash_name(body.slash_name),
+        argument_hint=body.argument_hint,
         description=body.description,
         node_type=body.node_type,
         prompt_template=body.prompt_template,
@@ -194,6 +207,13 @@ async def update_node(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Node:
     node = await _get_node_or_404(db_session, node_id, current_user)
+    await db_session.refresh(node, with_for_update=True)
+    await _apply_execution_values(db_session, node, body)
+    node.revision += 1
+    if "slash_name" in body.model_fields_set:
+        node.slash_name = normalize_slash_name(body.slash_name)
+    if "argument_hint" in body.model_fields_set:
+        node.argument_hint = body.argument_hint
     if body.order_index is not None:
         node.order_index = body.order_index
     if body.name is not None:
@@ -210,7 +230,6 @@ async def update_node(
         node.script_content = body.script_content
     if body.docker_image is not None:
         node.docker_image = body.docker_image
-    await _apply_execution_values(db_session, node, body)
     if body.guide_url is not None:
         node.guide_url = body.guide_url
     if body.is_skipped is not None:
@@ -241,6 +260,7 @@ async def delete_node(
     """Правило 9 CLAUDE.md/раздел 3.2: системный промт, привязанный хотя бы
     к одной задаче, нельзя удалить — только заархивировать."""
     node = await _get_node_or_404(db_session, node_id, current_user)
+    await db_session.refresh(node, with_for_update=True)
     await ensure_node_deletable(db_session, node)
     pipeline_id = node.pipeline_id
     await db_session.delete(node)

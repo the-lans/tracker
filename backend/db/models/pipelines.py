@@ -37,6 +37,18 @@ class Node(UUIDPrimaryKeyMixin, Base):
 
     __tablename__ = "nodes"
     __table_args__ = (
+        sa.Index(
+            "uq_nodes_owner_slash_name",
+            "created_by",
+            "slash_name",
+            unique=True,
+            postgresql_where=sa.text("slash_name IS NOT NULL"),
+        ),
+        sa.CheckConstraint(
+            "slash_name IS NULL OR (is_library_item AND node_type IN ('plain_prompt', 'script') "
+            "AND slash_name ~ '^[a-z][a-z0-9_-]{0,63}$')",
+            name="ck_nodes_slash_name",
+        ),
         sa.CheckConstraint(
             "(is_library_item AND pipeline_id IS NULL AND task_id IS NULL) "
             "OR (NOT is_library_item AND num_nonnulls(pipeline_id, task_id) = 1)",
@@ -44,6 +56,9 @@ class Node(UUIDPrimaryKeyMixin, Base):
         ),
     )
 
+    slash_name: Mapped[str | None] = mapped_column(sa.String(64))
+    argument_hint: Mapped[str | None] = mapped_column(sa.String(200))
+    revision: Mapped[int] = mapped_column(sa.Integer, default=1, server_default="1")
     pipeline_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("pipelines.id"))
     # Раздел 13.1: своя нода, вставленная в снимок `task_nodes` только этой задачи.
     task_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("tasks.id"), index=True)
@@ -88,9 +103,7 @@ class TaskNode(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     """Снимок ноды пайплайна для конкретной задачи (3.1): нода — не больше одного раза."""
 
     __tablename__ = "task_nodes"
-    __table_args__ = (
-        sa.Index("uq_task_nodes_task_id_node_id", "task_id", "node_id", unique=True),
-    )
+    __table_args__ = (sa.Index("uq_task_nodes_task_id_node_id", "task_id", "node_id", unique=True),)
 
     task_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("tasks.id"))
     node_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("nodes.id"))

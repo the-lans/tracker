@@ -268,6 +268,7 @@ async def execute_script_node(
     repos_path: Path,
     runner_image: str | None = None,
     env: Mapping[str, str] | None = None,
+    arguments: tuple[str, ...] = (),
 ) -> NodeExecutionOutcome:
     """
     Выполняет `script` в изолированном Docker-контейнере (раздел 11.4, 19.3).
@@ -296,6 +297,7 @@ async def execute_script_node(
             SCRIPT_ARTIFACTS_PATH_ENV: str(artifacts_path),
         },
         artifacts_path=artifacts_path,
+        arguments=arguments,
     )
     success = result.exit_code == 0 and not result.timed_out
     error_message = None
@@ -385,6 +387,7 @@ async def execute_node(
     node_log_id: uuid.UUID | None = None,
     runner_image: str | None = None,
     script_env: Mapping[str, str] | None = None,
+    script_args: tuple[str, ...] = (),
 ) -> NodeExecutionOutcome:
     """Единая точка диспетчеризации по `node_type` (раздел 11.1: "тип ноды
     определяет способ выполнения, но не создаёт отдельную сущность").
@@ -403,6 +406,7 @@ async def execute_node(
             repos_path=repos_path,
             runner_image=runner_image,
             env=script_env,
+            arguments=script_args,
         )
     if prompt is None:
         message = f"Для ноды типа {node.node_type} не передан prompt"

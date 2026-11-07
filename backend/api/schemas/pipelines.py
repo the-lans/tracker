@@ -14,6 +14,7 @@ from db.models.enums import (
     ReasoningEffort,
     ScriptLanguage,
 )
+from services.command_arguments import MAX_ARGUMENT_HINT_LENGTH, MAX_COMMAND_INPUT_NAME_LENGTH
 
 
 class PipelineCreateRequest(BaseModel):
@@ -42,6 +43,8 @@ class NodeCreateRequest(BaseModel):
 
     pipeline_id: uuid.UUID | None = None
     order_index: int | None = None
+    slash_name: str | None = Field(default=None, max_length=MAX_COMMAND_INPUT_NAME_LENGTH)
+    argument_hint: str | None = Field(default=None, max_length=MAX_ARGUMENT_HINT_LENGTH)
     name: str
     description: str | None = None
     node_type: NodeType
@@ -63,6 +66,8 @@ class NodeCreateRequest(BaseModel):
 
 class NodeUpdateRequest(BaseModel):
     order_index: int | None = None
+    slash_name: str | None = Field(default=None, max_length=MAX_COMMAND_INPUT_NAME_LENGTH)
+    argument_hint: str | None = Field(default=None, max_length=MAX_ARGUMENT_HINT_LENGTH)
     name: str | None = None
     description: str | None = None
     prompt_template: str | None = None
@@ -87,6 +92,9 @@ class NodeResponse(BaseModel):
     id: uuid.UUID
     pipeline_id: uuid.UUID | None
     order_index: int | None
+    slash_name: str | None = Field(default=None, max_length=MAX_COMMAND_INPUT_NAME_LENGTH)
+    argument_hint: str | None = Field(default=None, max_length=MAX_ARGUMENT_HINT_LENGTH)
+    revision: int = 1
     name: str
     description: str | None
     node_type: NodeType

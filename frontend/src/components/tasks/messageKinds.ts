@@ -74,6 +74,7 @@ const AGENT_NODE_TYPES: ReadonlySet<NodeType> = new Set([
  * Без ноды — свободный промт, пересказ или разрешение конфликта ребейза.
  */
 export function isAgentTurn(log: NodeLog, nodeTypes: ReadonlyMap<string, NodeType>): boolean {
+  if (log.command_name) return log.rendered_prompt !== null;
   if (log.node_id === null) return true;
   const nodeType = nodeTypes.get(log.node_id);
   return nodeType !== undefined && AGENT_NODE_TYPES.has(nodeType);

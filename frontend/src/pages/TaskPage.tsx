@@ -91,6 +91,7 @@ export function TaskPage() {
               taskId={task.id}
               taskStatus={task.status}
               hasLlmAccount={task.llm_account_id !== null}
+              manualRequestsClosed={task.manual_requests_closed ?? false}
               nodeLogs={nodeLogs ?? []}
               header={workspaceTabs}
             />

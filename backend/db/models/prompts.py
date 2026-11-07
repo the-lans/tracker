@@ -41,6 +41,23 @@ class TaskManualRequestQueue(UUIDPrimaryKeyMixin, Base):
 
     __tablename__ = "task_manual_request_queue"
     __table_args__ = (
+        sa.Index(
+            "uq_manual_command_client",
+            "task_id",
+            "requested_by",
+            "client_request_id",
+            unique=True,
+            postgresql_where=sa.text("client_request_id IS NOT NULL"),
+        ),
+        sa.CheckConstraint(
+            "(command_name IS NULL AND command_revision IS NULL "
+            "AND command_snapshot_encrypted IS NULL "
+            "AND client_request_id IS NULL) OR (command_name IS NOT NULL "
+            "AND command_revision IS NOT NULL "
+            "AND command_snapshot_encrypted IS NOT NULL AND client_request_id IS NOT NULL "
+            "AND request_type = 'library_prompt')",
+            name="ck_manual_command_snapshot",
+        ),
         sa.CheckConstraint(
             "(request_type = 'library_prompt' "
             "AND node_id IS NOT NULL AND raw_prompt_text IS NULL) "
@@ -50,6 +67,10 @@ class TaskManualRequestQueue(UUIDPrimaryKeyMixin, Base):
         ),
     )
 
+    command_name: Mapped[str | None] = mapped_column(sa.String(64))
+    command_revision: Mapped[int | None] = mapped_column(sa.Integer)
+    command_snapshot_encrypted: Mapped[str | None] = mapped_column(sa.Text)
+    client_request_id: Mapped[uuid.UUID | None] = mapped_column(sa.UUID)
     task_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("tasks.id"))
     request_type: Mapped[ManualRequestType] = mapped_column(
         pg_enum(ManualRequestType, name="manual_request_type"),

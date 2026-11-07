@@ -268,6 +268,7 @@ export interface AllowedEmail {
 // --- Задачи ----------------------------------------------------------------
 
 export interface Task {
+  manual_requests_closed?: boolean;
   id: string;
   code: string;
   title: string;
@@ -346,6 +347,8 @@ export interface PendingOption {
 }
 
 export interface NodeLog {
+  command_name?: string | null;
+  command_revision?: number | null;
   id: string;
   node_id: string | null;
   trigger_type: NodeLogTriggerType;
@@ -380,6 +383,8 @@ export interface DecisionRequest {
 }
 
 export interface ManualRequest {
+  command_name?: string | null;
+  command_revision?: number | null;
   id: string;
   request_type: ManualRequestType;
   node_id: string | null;
@@ -506,6 +511,9 @@ export interface Pipeline {
 }
 
 export interface NodeItem {
+  slash_name?: string | null;
+  argument_hint?: string | null;
+  revision?: number;
   id: string;
   pipeline_id: string | null;
   order_index: number | null;
@@ -531,6 +539,8 @@ export interface NodeItem {
 }
 
 export interface NodeCreateRequest {
+  slash_name?: string | null;
+  argument_hint?: string | null;
   pipeline_id?: string | null;
   order_index?: number | null;
   name: string;
