@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  duplicateTemplatePaths,
   readTemplateFile,
   TEMPLATE_FILE_MAX_BYTES,
   TEMPLATE_FILE_NOT_TEXT,
@@ -27,5 +28,16 @@ describe("readTemplateFile", () => {
     { title: "символ NUL", parts: ["text\u0000more"], error: TEMPLATE_FILE_NOT_TEXT },
   ])("отклоняет: $title", async ({ parts, error }) => {
     expect(await readTemplateFile(fileOf(parts))).toEqual({ ok: false, error });
+  });
+});
+
+describe("duplicateTemplatePaths", () => {
+  test.for([
+    { title: "разные пути", paths: ["CLAUDE.md", ".claude/settings.json"], duplicates: [] },
+    { title: "одинаковые пути", paths: ["CLAUDE.md", "AGENTS.md", "CLAUDE.md"], duplicates: ["CLAUDE.md"] },
+    { title: "пробелы по краям не различают пути", paths: ["CLAUDE.md", " CLAUDE.md "], duplicates: ["CLAUDE.md"] },
+    { title: "пустые пути не считаются", paths: ["", "  ", ""], duplicates: [] },
+  ])("$title", ({ paths, duplicates }) => {
+    expect([...duplicateTemplatePaths(paths)]).toEqual(duplicates);
   });
 });

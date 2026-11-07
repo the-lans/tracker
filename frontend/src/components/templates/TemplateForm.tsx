@@ -10,6 +10,7 @@ import { DialogFooter } from "@/components/ui/dialog";
 import { useCreateTemplate, useUpdateTemplate } from "@/hooks/useTemplates";
 import { useMcpServers } from "@/hooks/useMcpServers";
 import { errorMessage } from "@/lib/errors";
+import { duplicatePathMessage, duplicateTemplatePaths } from "@/lib/templateFiles";
 import type { Template } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { TemplateFileField } from "@/components/templates/TemplateFileField";
@@ -51,9 +52,13 @@ export function TemplateForm({
     setFiles((prev) => prev.map((file, i) => (i === index ? { ...file, ...patch } : file)));
   }
 
+  const duplicatePaths = duplicateTemplatePaths(files.map((file) => file.path));
+
   function handleSave() {
     const filesRecord = Object.fromEntries(
-      files.filter((file) => file.path.trim()).map((file) => [file.path, file.content]),
+      files
+        .map((file) => [file.path.trim(), file.content])
+        .filter(([path]) => path),
     );
     const onError = (error: unknown) =>
       toast.error(errorMessage(error, "Не удалось сохранить шаблон"));
@@ -89,6 +94,9 @@ export function TemplateForm({
               <TemplateFileField
                 key={file.key}
                 row={file}
+                pathError={
+                  duplicatePaths.has(file.path.trim()) ? duplicatePathMessage(file.path.trim()) : null
+                }
                 onChange={(patch) => updateFile(index, patch)}
                 onRemove={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
               />
@@ -136,7 +144,7 @@ export function TemplateForm({
         <Button variant="secondary" onClick={onCancel}>
           Отмена
         </Button>
-        <Button onClick={handleSave} disabled={!name || isPending}>
+        <Button onClick={handleSave} disabled={!name || isPending || duplicatePaths.size > 0}>
           {template ? "Сохранить" : "Создать"}
         </Button>
       </DialogFooter>

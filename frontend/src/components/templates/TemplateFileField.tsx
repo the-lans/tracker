@@ -21,15 +21,19 @@ function sourceCaption(row: TemplateFileRow): string {
 /** Строка файла шаблона: путь и содержимое — текстом или из файла с диска (раздел 15.1). */
 export function TemplateFileField({
   row,
+  pathError,
   onChange,
   onRemove,
 }: {
   row: TemplateFileRow;
+  /** Ошибка пути, найденная формой по всем строкам (например, путь повторяется). */
+  pathError: string | null;
   onChange: (patch: Partial<TemplateFileRow>) => void;
   onRemove: () => void;
 }) {
   const id = useId();
   const errorId = `${id}-error`;
+  const pathErrorId = `${id}-path-error`;
   const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const pathLabel = row.path || "без пути";
@@ -63,6 +67,8 @@ export function TemplateFileField({
         <Input
           aria-label="Путь файла"
           placeholder=".claude/settings.json"
+          aria-invalid={pathError !== null}
+          aria-describedby={pathError ? pathErrorId : undefined}
           value={row.path}
           onChange={(e) => onChange({ path: e.target.value })}
         />
@@ -89,6 +95,11 @@ export function TemplateFileField({
           <Trash2 className="size-4" />
         </button>
       </div>
+      {pathError && (
+        <div id={pathErrorId} role="alert" className="text-meta font-semibold text-danger-text">
+          {pathError}
+        </div>
+      )}
       {row.fromFile ? (
         <div className="flex flex-wrap items-center gap-2">
           <Button

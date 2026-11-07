@@ -19,6 +19,25 @@ export type TemplateFileReadResult =
   | { ok: true; content: string; name: string; size: number }
   | { ok: false; error: string };
 
+export function duplicatePathMessage(path: string): string {
+  return `Путь ${path} уже есть в шаблоне`;
+}
+
+/**
+ * Пути, которые встречаются в шаблоне больше одного раза (без пробелов по
+ * краям, пустые не считаются): файлы шаблона — словарь по пути, при
+ * сохранении второй такой файл молча заменил бы первый.
+ */
+export function duplicateTemplatePaths(paths: string[]): Set<string> {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const path of paths.map((value) => value.trim()).filter(Boolean)) {
+    if (seen.has(path)) duplicates.add(path);
+    seen.add(path);
+  }
+  return duplicates;
+}
+
 export async function readTemplateFile(file: File): Promise<TemplateFileReadResult> {
   if (file.size > TEMPLATE_FILE_MAX_BYTES) {
     return { ok: false, error: TEMPLATE_FILE_TOO_LARGE };

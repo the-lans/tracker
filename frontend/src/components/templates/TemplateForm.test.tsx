@@ -2,6 +2,7 @@ import { screen } from "@testing-library/react";
 import { describe, expect, vi } from "vitest";
 import { TemplateForm } from "@/components/templates/TemplateForm";
 import {
+  duplicatePathMessage,
   TEMPLATE_FILE_MAX_BYTES,
   TEMPLATE_FILE_NOT_TEXT,
   TEMPLATE_FILE_TOO_LARGE,
@@ -107,6 +108,50 @@ describe("TemplateForm", () => {
       await user.click(screen.getByRole("button", { name: "Из файла" }));
 
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("одинаковые пути", () => {
+    test("файл с диска с именем занятого пути — ошибка, сохранить нельзя", async ({ api }) => {
+      const { user } = renderForm(api, makeTemplate({ files: { "CLAUDE.md": RULES } }));
+
+      await user.click(screen.getByRole("button", { name: "Файл" }));
+      await user.click(screen.getAllByRole("button", { name: "Из файла" })[1]);
+      await user.upload(screen.getByLabelText("Файл для без пути"), new File(["# Другие правила"], "CLAUDE.md"));
+
+      const [first, second] = screen.getAllByLabelText("Путь файла");
+      for (const path of [first, second]) {
+        expect(path).toHaveAttribute("aria-invalid", "true");
+        expect(path).toHaveAccessibleDescription(duplicatePathMessage("CLAUDE.md"));
+      }
+      expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+    });
+
+    test("после правки пути ошибка пропадает, пути уходят без пробелов", async ({ api }) => {
+      const { user } = renderForm(api, makeTemplate({ files: { "CLAUDE.md": RULES } }));
+      await user.click(screen.getByRole("button", { name: "Файл" }));
+      const second = screen.getAllByLabelText("Путь файла")[1];
+      await user.type(second, " CLAUDE.md ");
+      expect(second).toHaveAccessibleDescription(duplicatePathMessage("CLAUDE.md"));
+      expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+
+      await user.clear(second);
+      await user.type(second, " AGENTS.md ");
+      await user.click(screen.getByRole("button", { name: "Сохранить" }));
+
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      await vi.waitFor(() => expect(savedFiles(api)).toEqual({ "CLAUDE.md": RULES, "AGENTS.md": "" }));
+    });
+
+    test("удаление повторяющейся строки снимает запрет сохранения", async ({ api }) => {
+      const { user } = renderForm(api, makeTemplate({ files: { "CLAUDE.md": RULES } }));
+      await user.click(screen.getByRole("button", { name: "Файл" }));
+      await user.type(screen.getAllByLabelText("Путь файла")[1], "CLAUDE.md");
+
+      await user.click(screen.getAllByRole("button", { name: "Убрать файл CLAUDE.md" })[1]);
+
+      expect(screen.getByLabelText("Путь файла")).toHaveAttribute("aria-invalid", "false");
+      expect(screen.getByRole("button", { name: "Сохранить" })).toBeEnabled();
     });
   });
 
