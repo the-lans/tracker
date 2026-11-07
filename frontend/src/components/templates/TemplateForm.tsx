@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
-import { Input, Textarea } from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DialogFooter } from "@/components/ui/dialog";
@@ -12,13 +12,17 @@ import { useMcpServers } from "@/hooks/useMcpServers";
 import { errorMessage } from "@/lib/errors";
 import type { Template } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { TemplateFileField } from "@/components/templates/TemplateFileField";
+import type { TemplateFileRow } from "@/components/templates/templateForm.types";
 
-interface FileRow {
-  path: string;
-  content: string;
+let nextRowKey = 0;
+
+function fileRow(path: string, content: string): TemplateFileRow {
+  nextRowKey += 1;
+  return { key: nextRowKey, path, content, fromFile: false };
 }
 
-const NEW_TEMPLATE_FILES: FileRow[] = [{ path: "CLAUDE.md", content: "" }];
+const NEW_TEMPLATE_FILE_PATH = "CLAUDE.md";
 
 /** Создание и редактирование шаблона: файлы и MCP-серверы. */
 export function TemplateForm({
@@ -36,14 +40,14 @@ export function TemplateForm({
   const updateTemplate = useUpdateTemplate(template?.id ?? "");
 
   const [name, setName] = useState(template?.name ?? "");
-  const [files, setFiles] = useState<FileRow[]>(
+  const [files, setFiles] = useState<TemplateFileRow[]>(() =>
     template
-      ? Object.entries(template.files).map(([path, content]) => ({ path, content }))
-      : NEW_TEMPLATE_FILES,
+      ? Object.entries(template.files).map(([path, content]) => fileRow(path, content))
+      : [fileRow(NEW_TEMPLATE_FILE_PATH, "")],
   );
   const [mcpServerIds, setMcpServerIds] = useState<string[]>(template?.mcp_server_ids ?? []);
 
-  function updateFile(index: number, patch: Partial<FileRow>) {
+  function updateFile(index: number, patch: Partial<TemplateFileRow>) {
     setFiles((prev) => prev.map((file, i) => (i === index ? { ...file, ...patch } : file)));
   }
 
@@ -78,42 +82,23 @@ export function TemplateForm({
               <EmptyState
                 compact
                 title="Файлов в шаблоне нет"
-                hint="Нажмите «+ Файл» и укажите путь (например, CLAUDE.md) и содержимое — файл попадёт в репозиторий задачи."
+                hint="Нажмите «+ Файл» и укажите путь (например, CLAUDE.md) и содержимое — текстом или из файла с диска. Файл попадёт в рабочий каталог задачи, рядом с репозиториями."
               />
             )}
             {files.map((file, index) => (
-              <div key={index} className="flex flex-col gap-1 rounded-md border border-border p-2">
-                <div className="flex items-center gap-2">
-                  <Input
-                    aria-label="Путь файла"
-                    placeholder=".claude/settings.json"
-                    value={file.path}
-                    onChange={(e) => updateFile(index, { path: e.target.value })}
-                  />
-                  <button
-                    type="button"
-                    aria-label={`Убрать файл ${file.path || "без пути"}`}
-                    onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
-                    className="touch-target flex items-center justify-center text-text-3 hover:text-danger"
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
-                </div>
-                <Textarea
-                  rows={3}
-                  aria-label="Содержимое файла"
-                  placeholder="Содержимое файла"
-                  value={file.content}
-                  onChange={(e) => updateFile(index, { content: e.target.value })}
-                />
-              </div>
+              <TemplateFileField
+                key={file.key}
+                row={file}
+                onChange={(patch) => updateFile(index, patch)}
+                onRemove={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
+              />
             ))}
           </div>
           <Button
             size="sm"
             variant="secondary"
             className="mt-2"
-            onClick={() => setFiles((prev) => [...prev, { path: "", content: "" }])}
+            onClick={() => setFiles((prev) => [...prev, fileRow("", "")])}
           >
             <Plus className="size-4" /> Файл
           </Button>

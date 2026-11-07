@@ -20,6 +20,7 @@ import {
   type Task,
   type TaskLibraryPromptItem,
   type TaskNodeItem,
+  type Template,
   type User,
 } from "@/lib/types";
 
@@ -210,6 +211,17 @@ export function makeLlmProvider(overrides: Partial<LlmProvider> = {}): LlmProvid
     label: "Claude (Anthropic)",
     reports_usage: true,
     plan_prompt_allowed: true,
+    ...overrides,
+  };
+}
+
+export function makeTemplate(overrides: Partial<Template> = {}): Template {
+  return {
+    id: "tpl1",
+    name: "Python-сервис",
+    files: { "CLAUDE.md": "# Правила проекта" },
+    mcp_server_ids: [],
+    created_by: "u1",
     ...overrides,
   };
 }
