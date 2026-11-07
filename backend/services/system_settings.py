@@ -101,16 +101,27 @@ async def resolve_node_execution_defaults(
     retry_base_delay_seconds: int | None,
 ) -> NodeExecutionDefaults:
     """Значения новой ноды: заданные явно остаются, пустые — из настроек."""
-    settings = await get_system_settings(db_session)
-    return NodeExecutionDefaults(
-        timeout_seconds=(
-            timeout_seconds if timeout_seconds is not None else settings.default_timeout_seconds
+    settings = await db_session.get(SystemSettings, SYSTEM_SETTINGS_ROW_ID)
+    defaults = NodeExecutionDefaults(
+        timeout_seconds=settings.default_timeout_seconds
+        if settings
+        else DEFAULT_NODE_TIMEOUT_SECONDS,
+        max_retries=settings.default_max_retries if settings else DEFAULT_NODE_MAX_RETRIES,
+        retry_base_delay_seconds=(
+            settings.default_retry_base_delay_seconds
+            if settings
+            else DEFAULT_NODE_RETRY_BASE_DELAY_SECONDS
         ),
-        max_retries=max_retries if max_retries is not None else settings.default_max_retries,
+    )
+    return NodeExecutionDefaults(
+        timeout_seconds=timeout_seconds
+        if timeout_seconds is not None
+        else defaults.timeout_seconds,
+        max_retries=max_retries if max_retries is not None else defaults.max_retries,
         retry_base_delay_seconds=(
             retry_base_delay_seconds
             if retry_base_delay_seconds is not None
-            else settings.default_retry_base_delay_seconds
+            else defaults.retry_base_delay_seconds
         ),
     )
 
@@ -121,7 +132,9 @@ async def resolve_runner_image(db_session: AsyncSession, node: Node) -> str | No
         return None
     if node.docker_image:
         return node.docker_image
-    settings = await get_system_settings(db_session)
+    settings = await db_session.get(SystemSettings, SYSTEM_SETTINGS_ROW_ID)
+    if settings is None:
+        return DEFAULT_RUNNER_IMAGES[node.script_language]
     return default_runner_image(settings, node.script_language)
 
 

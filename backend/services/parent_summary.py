@@ -94,7 +94,6 @@ async def deny_all_tools(
     return PermissionResultDeny(message=f"Пересказ выполняется без инструментов ({tool_name})")
 
 
-
 def _mark_unavailable(summary: TaskParentSummary, reason: str) -> None:
     summary.status = ParentSummaryStatus.UNAVAILABLE
     summary.unavailable_reason = reason
@@ -125,11 +124,16 @@ async def get_or_request_parent_summary(
         child_task_id=child.id,
         status=ParentSummaryStatus.PENDING,
     )
+    parent = await db_session.scalar(
+        sa.select(Task)
+        .where(Task.id == child.parent_task_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     db_session.add(summary)
-    parent = await db_session.get(Task, child.parent_task_id)
     if parent is None:
         _mark_unavailable(summary, REASON_PARENT_MISSING)
-    elif parent.status in SESSION_ACTIVE_STATUSES:
+    elif parent.status in SESSION_ACTIVE_STATUSES and not parent.manual_requests_closed:
         request = TaskManualRequestQueue(
             task_id=parent.id,
             request_type=ManualRequestType.PARENT_SUMMARY,
@@ -199,13 +203,25 @@ async def wait_for_parent_summary(
     """
     while True:
         await db_session.refresh(summary)
-        if summary.status is not ParentSummaryStatus.PENDING or summary.manual_request_id is None:
+        if summary.status is not ParentSummaryStatus.PENDING:
+            return True
+        if await is_stop_requested():
+            return False
+        if summary.manual_request_id is None:
+            parent = await db_session.get(Task, summary.parent_task_id, populate_existing=True)
+            if (
+                parent is not None
+                and parent.manual_requests_closed
+                and parent.status in SESSION_ACTIVE_STATUSES
+            ):
+                await wait_for_task_signal(
+                    redis_client, summary.parent_task_id, timeout=_WAIT_POLL_SECONDS
+                )
+                continue
             return True
         await _release_stuck_request(db_session, summary)
         if summary.manual_request_id is None:
             return True
-        if await is_stop_requested():
-            return False
         await wait_for_task_signal(redis_client, summary.child_task_id, timeout=_WAIT_POLL_SECONDS)
 
 

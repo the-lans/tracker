@@ -27,6 +27,8 @@ class NodeLog(UUIDPrimaryKeyMixin, Base):
 
     __tablename__ = "node_logs"
 
+    command_name: Mapped[str | None] = mapped_column(sa.String(64))
+    command_revision: Mapped[int | None] = mapped_column(sa.Integer)
     task_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("tasks.id"))
     # NULL — запись соответствует свободному промту без сохранения в библиотеку.
     node_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("nodes.id"))

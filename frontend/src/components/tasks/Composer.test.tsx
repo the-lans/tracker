@@ -14,9 +14,10 @@ const OPEN_COMPOSER = "Свободный промт — задать вопро
 function renderComposer({
   status = TaskStatus.IN_PROGRESS,
   hasLlmAccount = true,
-}: { status?: TaskStatus; hasLlmAccount?: boolean } = {}) {
+  manualRequestsClosed = false,
+}: { status?: TaskStatus; hasLlmAccount?: boolean; manualRequestsClosed?: boolean } = {}) {
   return renderWithProviders(
-    <Composer taskId="t1" taskStatus={status} hasLlmAccount={hasLlmAccount} />,
+    <Composer taskId="t1" taskStatus={status} hasLlmAccount={hasLlmAccount} manualRequestsClosed={manualRequestsClosed} />,
   );
 }
 
@@ -28,6 +29,21 @@ async function openComposer() {
 
 describe("Composer", () => {
   describe("доступность", () => {
+    test("финализация закрывает новый ввод, сохраняя управление принятыми вызовами", async ({ api }) => {
+      api.respond("GET /tasks/t1/manual-queue", [makeManualRequest({command_name: "review"})]);
+      const { user } = renderComposer({manualRequestsClosed: true});
+      expect(screen.getByText("Задача завершается — приём новых промтов и команд закрыт")).toBeInTheDocument();
+      expect(screen.queryByRole("button", {name: OPEN_COMPOSER})).not.toBeInTheDocument();
+      await user.click(await screen.findByRole("button", {name: "Отменить /review"}));
+      expect(api.mutations()[0].path).toBe("/tasks/t1/manual-queue/mq1/stop");
+    });
+
+    test("завершённая задача не отображается как завершающаяся", () => {
+      renderComposer({status: TaskStatus.DONE, manualRequestsClosed: true});
+      expect(screen.queryByText("Задача завершается — приём новых промтов и команд закрыт")).not.toBeInTheDocument();
+      expect(screen.getByText("Свободный промт доступен, пока сессия задачи активна")).toBeInTheDocument();
+    });
+
     test.for([
       TaskStatus.IN_PROGRESS,
       TaskStatus.PAUSED,
@@ -50,17 +66,20 @@ describe("Composer", () => {
       },
     );
 
-    test.for([TaskStatus.IN_PROGRESS, TaskStatus.NEW])(
-      "%s без LLM-аккаунта: промт выполнить некому",
-      (status) => {
-        renderComposer({ status, hasLlmAccount: false });
+    test("без LLM-аккаунта в активной задаче доступны команды-скрипты", async () => {
+      const { user } = renderComposer({ hasLlmAccount: false });
+      await user.click(screen.getByRole("button", { name: OPEN_COMPOSER }));
+      expect(screen.getByText("Без LLM-аккаунта доступны только команды-скрипты.")).toBeInTheDocument();
+      await user.type(screen.getByRole("textbox"), "Обычный текст");
+      expect(screen.getByRole("button", { name: "Отправить" })).toBeDisabled();
+    });
 
-        expect(
-          screen.getByText("У задачи нет LLM-аккаунта — свободный промт выполнить некому"),
-        ).toBeInTheDocument();
-        expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-      },
-    );
+    test("без LLM-аккаунта новая задача не принимает запросы", () => {
+      renderComposer({ status: TaskStatus.NEW, hasLlmAccount: false });
+      expect(screen.getByText("У задачи нет LLM-аккаунта — свободный промт выполнить некому")).toBeInTheDocument();
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    });
+
   });
 
   describe("отправка", () => {
@@ -161,5 +180,79 @@ describe("Composer", () => {
 
       expect(screen.queryByText(/В очереди/)).not.toBeInTheDocument();
     });
+  });
+});
+
+
+describe("Команды библиотеки в чате", () => {
+  test("поиск и выбор команды клавиатурой, передача аргументов", async ({ api }) => {
+    api.respond("GET /tasks/t1/commands", [{
+      id: "n1", name: "Ревью", slash_name: "review", argument_hint: "[сервис]",
+      description: "Проверить изменения", node_type: "plain_prompt", revision: 3,
+    }]);
+    const { user, field } = await openComposer();
+    await user.type(field, "/rev");
+    await screen.findByRole("option", { name: /review/ });
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(field).toHaveValue("/review ");
+    await user.type(field, 'shop-service "проверить возвраты"');
+    await user.click(screen.getByRole("button", { name: "Отправить" }));
+    expect(api.mutations()).toEqual([{
+      method: "POST", path: "/tasks/t1/commands/run", body: {
+        invocation: '/review shop-service "проверить возвраты"',
+        client_request_id: expect.any(String),
+      },
+    }]);
+  });
+
+  test("предпросмотр использует командный endpoint", async ({ api }) => {
+    api.respond("POST /tasks/t1/commands/preview", { rendered_text: "Проверь API" });
+    const { user, field } = await openComposer();
+    await user.type(field, "/review API");
+    await user.click(screen.getByRole("button", { name: "Предпросмотр подстановки" }));
+    await screen.findByText("Проверь API");
+    expect(api.mutations()[0]).toEqual({method: "POST", path: "/tasks/t1/commands/preview", body: {invocation: "/review API"}});
+  });
+
+  test("неизвестная команда не отправляется агенту автоматически", async ({ api }) => {
+    api.respond("POST /tasks/t1/commands/run", {error: {status: 404, message: "Команда не найдена"}});
+    const { user, field } = await openComposer();
+    await user.type(field, "/unknown text");
+    await user.click(screen.getByRole("button", { name: "Отправить" }));
+    const direct = await screen.findByRole("button", { name: "Отправить напрямую агенту" });
+    expect(api.mutations()).toHaveLength(1);
+    await user.click(direct);
+    expect(api.mutations()[1]).toEqual({method: "POST", path: FREEFORM_PATH, body: {raw_prompt_text: "/unknown text"}});
+  });
+
+  test.for(["/plugin:review", "/compact Focus on the user's changes"])(
+    "нативный вызов %s можно отправить буквально после проверки библиотеки", async (invocation, { api }) => {
+      api.respond("POST /tasks/t1/commands/run", {error: {status: 404, message: "Команда не найдена"}});
+      const { user, field } = await openComposer();
+      await user.type(field, invocation);
+      await user.click(screen.getByRole("button", {name: "Отправить"}));
+      await user.click(await screen.findByRole("button", {name: "Отправить напрямую агенту"}));
+      expect(api.mutations()[1]).toEqual({method: "POST", path: FREEFORM_PATH, body: {raw_prompt_text: invocation}});
+    },
+  );
+
+  test("повтор запроса сохраняет идентификатор вызова", async ({ api }) => {
+    api.respond("POST /tasks/t1/commands/run", {error: {status: 503, message: "Повторите запрос"}});
+    const { user, field } = await openComposer();
+    await user.type(field, "/review API");
+    await user.click(screen.getByRole("button", { name: "Отправить" }));
+    await expect.poll(() => screen.getByRole("button", { name: "Отправить" }).hasAttribute("disabled")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Отправить" }));
+    expect(api.mutations()).toHaveLength(2);
+    expect(api.mutations()[0].body).toEqual(api.mutations()[1].body);
+  });
+
+  test("ожидающий вызов можно отменить из чата", async ({ api }) => {
+    api.respond("GET /tasks/t1/manual-queue", [makeManualRequest({
+      command_name: "review", command_revision: 2, request_type: ManualRequestType.LIBRARY_PROMPT,
+    })]);
+    const { user } = renderComposer();
+    await user.click(await screen.findByRole("button", {name: "Отменить /review"}));
+    expect(api.mutations()[0].path).toBe("/tasks/t1/manual-queue/mq1/stop");
   });
 });

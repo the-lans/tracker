@@ -85,6 +85,7 @@ async def run_script_node(
     timeout_seconds: int,
     env: Mapping[str, str] | None = None,
     artifacts_path: Path | None = None,
+    arguments: tuple[str, ...] = (),
 ) -> ScriptExecutionResult:
     """Запускает скрипт в одноразовом (``--rm``) контейнере без сети.
 
@@ -108,6 +109,7 @@ async def run_script_node(
                 timeout_seconds=timeout_seconds,
                 task_mounts=task_mounts,
                 env=env or {},
+                arguments=arguments,
             ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -156,6 +158,7 @@ def _docker_run_args(
     timeout_seconds: int,
     task_mounts: list[str],
     env: Mapping[str, str],
+    arguments: tuple[str, ...] = (),
 ) -> list[str]:
     """
     Правило 4: без сети и привилегий, с лимитами и меткой дедлайна для уборки.
@@ -178,6 +181,7 @@ def _docker_run_args(
         str(repos_path),
         image,
         str(script_path),
+        *arguments,
     ]
 
 

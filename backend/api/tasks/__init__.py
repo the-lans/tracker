@@ -6,10 +6,10 @@
 
 from fastapi import APIRouter
 
-from api.tasks import artifacts, crud, env_variables, lifecycle, manual, nodes
+from api.tasks import artifacts, commands, crud, env_variables, lifecycle, manual, nodes
 
 router = APIRouter()
-for module in (crud, lifecycle, nodes, manual, env_variables, artifacts):
+for module in (crud, lifecycle, nodes, manual, commands, env_variables, artifacts):
     router.include_router(module.router)
 
 __all__ = ["router"]

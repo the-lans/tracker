@@ -42,6 +42,7 @@ from services.claude_config import (
 from services.errors import ConflictError
 from services.llm_routing import llm_session_token
 from services.maintenance import maintenance_active
+from services.manual_admission import close_manual_requests, ensure_manual_requests_drained
 from services.manual_queue import DEFAULT_FREEFORM_TIMEOUT_SECONDS, process_manual_queue_once
 from services.mcp_config import build_mcp_server_config
 from services.output_stream import build_output_publisher
@@ -171,6 +172,7 @@ async def _claim_task(db_session: AsyncSession, task: Task, *, continuation: boo
             task_id=task.id,
             from_status=task.status,
             to_status=TaskStatus.IN_PROGRESS,
+            extra_values={"manual_requests_closed": False},
         )
     except ConflictError:
         logger.info("task_already_claimed", task_id=str(task.id))
@@ -881,6 +883,7 @@ async def _run_connected_session(
         resume_status=TaskStatus.IN_PROGRESS,
     )
     if rebase_resolved:
+        await close_manual_requests(db_session, task.id)
         await control.process_manual_queue()
     return outcome, rebase_resolved
 
@@ -902,6 +905,8 @@ async def _settle_pipeline_run(
             failed_order_index=await first_unfinished_order_index(db_session, task.id),
         )
     elif outcome.completed:
+        await close_manual_requests(db_session, task.id)
+        await ensure_manual_requests_drained(db_session, task.id)
         await push_task_workspace(
             db_session,
             task=task,

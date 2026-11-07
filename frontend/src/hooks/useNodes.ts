@@ -25,6 +25,7 @@ export function useCreateNode() {
     mutationFn: (body: NodeCreateRequest) => api.post<NodeItem>("/nodes", body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: nodeKeys.all });
+      void queryClient.invalidateQueries({ queryKey: ["task-commands"] });
       // Ноды пайплайна раздаются отдельным эндпоинтом (`usePipelineNodes`) —
       // мутация здесь должна протухнуть и его кэш тоже.
       void queryClient.invalidateQueries({ queryKey: ["pipelines"] });
@@ -38,6 +39,7 @@ export function useUpdateNode(nodeId: string) {
     mutationFn: (body: NodeUpdateRequest) => api.patch<NodeItem>(`/nodes/${nodeId}`, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: nodeKeys.all });
+      void queryClient.invalidateQueries({ queryKey: ["task-commands"] });
       void queryClient.invalidateQueries({ queryKey: ["pipelines"] });
     },
   });
@@ -49,6 +51,7 @@ export function useDeleteNode() {
     mutationFn: (nodeId: string) => api.delete(`/nodes/${nodeId}`),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: nodeKeys.all });
+      void queryClient.invalidateQueries({ queryKey: ["task-commands"] });
       void queryClient.invalidateQueries({ queryKey: ["pipelines"] });
     },
   });

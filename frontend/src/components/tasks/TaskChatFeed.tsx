@@ -31,12 +31,14 @@ export function TaskChatFeed({
   taskId,
   taskStatus,
   hasLlmAccount,
+  manualRequestsClosed = false,
   nodeLogs,
   header,
 }: {
   taskId: string;
   taskStatus: TaskStatus;
   hasLlmAccount: boolean;
+  manualRequestsClosed?: boolean;
   nodeLogs: NodeLog[];
   header: ReactNode;
 }) {
@@ -97,7 +99,7 @@ export function TaskChatFeed({
             key={log.id}
             taskId={taskId}
             log={log}
-            title={log.node_id ? nodeNames.get(log.node_id) : undefined}
+            title={log.command_name ? `/${log.command_name} · версия ${log.command_revision}` : log.node_id ? nodeNames.get(log.node_id) : undefined}
             streamedText={outputStream[log.id]}
             isAgentTurn={isAgentTurn(log, nodeTypes)}
             accountLabel={log.llm_account_id ? accountLabels.get(log.llm_account_id) : undefined}
@@ -105,7 +107,7 @@ export function TaskChatFeed({
         ))}
       </div>
 
-      <Composer taskId={taskId} taskStatus={taskStatus} hasLlmAccount={hasLlmAccount} />
+      <Composer taskId={taskId} taskStatus={taskStatus} hasLlmAccount={hasLlmAccount} manualRequestsClosed={manualRequestsClosed} />
     </div>
   );
 }

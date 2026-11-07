@@ -170,6 +170,7 @@ async def list_library_prompts_of_task(
         .where(
             TaskManualRequestQueue.task_id == task_id,
             TaskManualRequestQueue.node_id.is_not(None),
+            TaskManualRequestQueue.command_name.is_(None),
             TaskManualRequestQueue.status.in_(ACTIVE_REQUEST_STATUSES),
         )
         .order_by(TaskManualRequestQueue.requested_at)
