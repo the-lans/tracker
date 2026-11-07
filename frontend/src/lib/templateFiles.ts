@@ -3,6 +3,8 @@
  * сохраняется копия текста файла, а не ссылка на него.
  */
 
+import type { TemplateFileReadResult } from "@/lib/templateFiles.types";
+
 const BYTES_PER_MB = 1024 * 1024;
 export const TEMPLATE_FILE_MAX_MB = 1;
 export const TEMPLATE_FILE_MAX_BYTES = TEMPLATE_FILE_MAX_MB * BYTES_PER_MB;
@@ -14,10 +16,6 @@ export const TEMPLATE_FILE_READ_FAILED = "Не удалось прочитать
 // Postgres jsonb не хранит U+0000 — сохранение такого текста упало бы на backend;
 // заодно это верный признак двоичного файла.
 const NUL_CHAR = "\u0000";
-
-export type TemplateFileReadResult =
-  | { ok: true; content: string; name: string; size: number }
-  | { ok: false; error: string };
 
 export function duplicatePathMessage(path: string): string {
   return `Путь ${path} уже есть в шаблоне`;
