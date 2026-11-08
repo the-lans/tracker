@@ -36,6 +36,9 @@ class SystemSettings(Base):
     default_timeout_seconds: Mapped[int] = mapped_column(sa.Integer)
     default_max_retries: Mapped[int] = mapped_column(sa.Integer)
     default_retry_base_delay_seconds: Mapped[int] = mapped_column(sa.Integer)
+    # Не используются: образ script-ноды без `docker_image` — стандартный
+    # (`services/nodes/script.py::DEFAULT_RUNNER_IMAGES`). Столбцы остаются в
+    # БД до следующего релиза (ТЗ 20.6): ими пользуется предыдущая версия.
     default_runner_image_python: Mapped[str] = mapped_column(sa.String)
     default_runner_image_bash: Mapped[str] = mapped_column(sa.String)
     # `gitlab_url`, `gitlab_token_encrypted` остаются в БД до следующего релиза

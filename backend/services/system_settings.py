@@ -68,6 +68,7 @@ async def get_system_settings(db_session: AsyncSession) -> SystemSettings:
         default_timeout_seconds=DEFAULT_NODE_TIMEOUT_SECONDS,
         default_max_retries=DEFAULT_NODE_MAX_RETRIES,
         default_retry_base_delay_seconds=DEFAULT_NODE_RETRY_BASE_DELAY_SECONDS,
+        # Устаревшие столбцы NOT NULL: заполняются для предыдущей версии при откате.
         default_runner_image_python=DEFAULT_RUNNER_IMAGES[ScriptLanguage.PYTHON],
         default_runner_image_bash=DEFAULT_RUNNER_IMAGES[ScriptLanguage.BASH],
     )
