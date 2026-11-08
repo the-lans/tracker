@@ -39,6 +39,8 @@ from db.models.tasks import Task
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_library_prompt_attachable
+from services.library_commands import load_snapshot, render_command
+from services.manual_admission import ensure_manual_requests_open, lock_manual_task
 from services.node_runs import apply_node_outcome, mark_node_log_stopped, start_node_log
 from services.nodes.dispatch import (
     execute_llm_node_with_timeout,
@@ -152,6 +154,8 @@ async def enqueue_library_prompt_run(
     node: Node,
     requested_by: uuid.UUID,
 ) -> TaskManualRequestQueue:
+    task = await lock_manual_task(db_session, task_library_prompt.task_id)
+    ensure_manual_requests_open(task)
     if node.node_type in LIBRARY_FORBIDDEN_NODE_TYPES:
         raise ValidationError(f"Тип ноды {node.node_type} недопустим для библиотеки промтов")
     if requires_llm_account(node):
@@ -182,8 +186,10 @@ async def enqueue_freeform_prompt_run(
 ) -> TaskManualRequestQueue:
     # Раздел 8.2: "{{node.*}}" недоступны свободному полю ввода — проверяется
     # здесь же, до постановки в очередь, а не только на предпросмотре.
+    task = await lock_manual_task(db_session, task_id)
     validate_template_variables(raw_prompt_text, scope=RenderScope.FREEFORM)
     await _ensure_task_has_llm_account(db_session, task_id)
+    ensure_manual_requests_open(task)
     request = _add_queued_request(
         db_session,
         task_id=task_id,
@@ -235,6 +241,7 @@ async def _settle_cancelled_library_prompt(
         .where(
             TaskManualRequestQueue.task_id == task_id,
             TaskManualRequestQueue.node_id == node_id,
+            TaskManualRequestQueue.command_name.is_(None),
             TaskManualRequestQueue.status.in_(_ACTIVE_REQUEST_STATUSES),
         )
         .limit(1),
@@ -257,16 +264,26 @@ async def cancel_manual_request(
     request: TaskManualRequestQueue,
 ) -> None:
     """Раздел 7.3: "Пользователь может отменить ещё не обработанный запрос"."""
-    if request.status is not ManualRequestStatus.QUEUED:
-        raise ConflictError("Запрос уже обрабатывается или завершён — отмена недоступна")
-    request.status = ManualRequestStatus.CANCELLED
-    request.processed_at = datetime.now(UTC)
-    await db_session.flush()
-    await _settle_cancelled_library_prompt(
-        db_session,
-        task_id=request.task_id,
-        node_id=request.node_id,
+    cancelled = await db_session.scalar(
+        sa.update(TaskManualRequestQueue)
+        .where(
+            TaskManualRequestQueue.id == request.id,
+            TaskManualRequestQueue.status == ManualRequestStatus.QUEUED,
+        )
+        .values(status=ManualRequestStatus.CANCELLED, processed_at=datetime.now(UTC))
+        .returning(TaskManualRequestQueue.id)
+        .execution_options(synchronize_session=False)
     )
+    if cancelled is None:
+        await db_session.refresh(request)
+        raise ConflictError("Запрос уже обрабатывается или завершён — отмена недоступна")
+    await db_session.refresh(request)
+    if request.command_name is None:
+        await _settle_cancelled_library_prompt(
+            db_session,
+            task_id=request.task_id,
+            node_id=request.node_id,
+        )
     await db_session.commit()
 
 
@@ -339,7 +356,8 @@ async def _run_library_prompt(
     active_node_context: ActiveNodeContext | None,
 ) -> None:
     assert request.node_id is not None
-    node = await db_session.get(Node, request.node_id)
+    snapshot = load_snapshot(request) if request.command_snapshot_encrypted else None
+    node = snapshot.to_node(request) if snapshot else await db_session.get(Node, request.node_id)
     if node is None:
         message = f"Нода библиотечного промта {request.node_id} не найдена"
         raise ValueError(message)
@@ -348,13 +366,20 @@ async def _run_library_prompt(
         TaskLibraryPrompt.task_id == task.id,
         TaskLibraryPrompt.node_id == node.id,
     )
-    task_library_prompt = await db_session.scalar(task_library_prompt_stmt)
+    task_library_prompt = None if snapshot else await db_session.scalar(task_library_prompt_stmt)
     if task_library_prompt is not None:
         task_library_prompt.last_run_status = LibraryPromptRunStatus.RUNNING
 
     # `{{node.*}}` в промтах библиотеки недоступны (раздел 5.1): у них нет
     # «предыдущей ноды».
-    prompt = await resolve_node_prompt_or_none(db_session, node=node, task=task)
+    prompt = (
+        await render_command(db_session, task=task, request=request, snapshot=snapshot)
+        if snapshot
+        else await resolve_node_prompt_or_none(db_session, node=node, task=task)
+    )
+    script_env = await resolve_script_env_or_none(db_session, node=node, task=task)
+    if snapshot and node.node_type is NodeType.SCRIPT:
+        script_env = {**(script_env or {}), "TRACKER_COMMAND_ARGUMENTS": snapshot.raw_arguments}
     node_log = await start_node_log(
         db_session,
         NodeLog(
@@ -363,6 +388,8 @@ async def _run_library_prompt(
             trigger_type=NodeLogTriggerType.LIBRARY_MANUAL,
             triggered_by=request.requested_by,
             rendered_prompt=logged_prompt(node, prompt),
+            command_name=request.command_name,
+            command_revision=request.command_revision,
         ),
     )
     _activate_context(active_node_context, node_log=node_log, task=task)
@@ -375,7 +402,8 @@ async def _run_library_prompt(
             repos_path=repos_path,
             timeout_seconds=node.timeout_seconds,
             runner_image=await resolve_runner_image(db_session, node),
-            script_env=await resolve_script_env_or_none(db_session, node=node, task=task),
+            script_env=script_env,
+            script_args=tuple(snapshot.arguments) if snapshot else (),
         ),
         request=request,
         node_type=node.node_type,
@@ -480,9 +508,21 @@ async def _process_single_request(
     repos_path: Path,
     redis_client: Redis,
     active_node_context: ActiveNodeContext | None,
-) -> None:
-    request.status = ManualRequestStatus.PROCESSING
+) -> bool:
+    claimed = await db_session.scalar(
+        sa.update(TaskManualRequestQueue)
+        .where(
+            TaskManualRequestQueue.id == request.id,
+            TaskManualRequestQueue.status == ManualRequestStatus.QUEUED,
+        )
+        .values(status=ManualRequestStatus.PROCESSING)
+        .returning(TaskManualRequestQueue.id)
+        .execution_options(synchronize_session=False)
+    )
     await db_session.commit()
+    await db_session.refresh(request)
+    if claimed is None:
+        return False
 
     if request.request_type is ManualRequestType.PARENT_SUMMARY:
         # Короткий ход без кнопки ■ (её нет у служебного запроса): «Остановить»
@@ -520,6 +560,7 @@ async def _process_single_request(
     request.status = ManualRequestStatus.DONE
     request.processed_at = datetime.now(UTC)
     await db_session.commit()
+    return True
 
 
 # Верхняя граница на длительность обработки ОДНОГО запроса очереди — с
@@ -574,7 +615,7 @@ async def process_manual_queue_once(
                 operation=MANUAL_QUEUE_LOCK_OPERATION,
                 ttl_seconds=_MANUAL_QUEUE_LOCK_TTL_SECONDS,
             ):
-                await _process_single_request(
+                executed = await _process_single_request(
                     db_session,
                     task=task,
                     request=request,
@@ -586,7 +627,7 @@ async def process_manual_queue_once(
         except LockNotAcquiredError:
             logger.info("manual_queue_processing_already_in_progress", task_id=str(task.id))
             return processed
-        processed += 1
+        processed += int(executed)
 
 
 # Раздел 16.2: сколько запрос может ждать в очереди задачи без живой сессии.

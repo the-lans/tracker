@@ -178,10 +178,15 @@ async def ensure_template_deletable(session: AsyncSession, template_id: uuid.UUI
 
 
 async def count_library_prompt_usage(db_session: AsyncSession) -> list[tuple[uuid.UUID, int]]:
-    """Раздел 15.5: число задач, к которым привязан каждый промт библиотеки."""
-    stmt = (
-        sa.select(TaskLibraryPrompt.node_id, sa.func.count(sa.distinct(TaskLibraryPrompt.task_id)))
-        .group_by(TaskLibraryPrompt.node_id)
+    """Число уникальных задач с привязкой промта или вызовом его команды."""
+    stmt = sa.text(
+        "SELECT nodes.id, count(DISTINCT tasks.id) FROM nodes JOIN tasks ON ("
+        "EXISTS (SELECT 1 FROM task_library_prompts WHERE task_library_prompts.node_id = nodes.id "
+        "AND task_library_prompts.task_id = tasks.id) OR "
+        "EXISTS (SELECT 1 FROM task_manual_request_queue "
+        "WHERE task_manual_request_queue.node_id = nodes.id "
+        "AND task_manual_request_queue.task_id = tasks.id "
+        "AND task_manual_request_queue.command_name IS NOT NULL)) GROUP BY nodes.id"
     )
     return [(node_id, int(count)) for node_id, count in (await db_session.execute(stmt)).all()]
 

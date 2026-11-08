@@ -91,6 +91,7 @@ class TaskRepositoryResponse(BaseModel):
 class TaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    manual_requests_closed: bool = False
     id: uuid.UUID
     code: str
     title: str
@@ -140,6 +141,8 @@ class PipelineDependentsRequest(BaseModel):
 class NodeLogResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    command_name: str | None = None
+    command_revision: int | None = None
     id: uuid.UUID
     node_id: uuid.UUID | None
     trigger_type: NodeLogTriggerType
@@ -206,6 +209,8 @@ class TaskLibraryPromptListItem(TaskLibraryPromptResponse):
 class ManualRequestResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    command_name: str | None = None
+    command_revision: int | None = None
     id: uuid.UUID
     request_type: ManualRequestType
     node_id: uuid.UUID | None

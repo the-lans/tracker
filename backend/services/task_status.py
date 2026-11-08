@@ -404,6 +404,7 @@ async def reset_task_to_new(db_session: AsyncSession, *, task_id: uuid.UUID) -> 
             "last_failed_order_index": None,
             "auto_start_enabled": False,
             "reset_at": datetime.now(UTC),
+            "manual_requests_closed": False,
             "current_llm_account_id": None,
         },
     )

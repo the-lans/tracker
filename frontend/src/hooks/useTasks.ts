@@ -43,7 +43,7 @@ function taskRefetchInterval(task: Task | undefined): number | false {
   return false;
 }
 
-const taskKeys = {
+export const taskKeys = {
   all: ["tasks"] as const,
   list: (statusFilter?: string) => ["tasks", "list", statusFilter ?? "all"] as const,
   detail: (id: string) => ["tasks", "detail", id] as const,

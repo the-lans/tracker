@@ -73,7 +73,7 @@ export function LibraryPage() {
             <Card key={node.id} className="flex items-center gap-3">
               <NodeTypeIcon type={node.node_type} className="size-4 shrink-0 text-text-2" />
               <button className="min-h-11 min-w-0 flex-1 text-left" onClick={() => setDialogNode(node)}>
-                <div className="truncate font-bold" title={node.name}>{node.name}</div>
+                <div className="truncate font-bold" title={node.name}>{node.name}{node.slash_name && <span className="ml-2 text-small text-text-3">/{node.slash_name}</span>}</div>
                 <div className="truncate text-small text-text-3" title={node.description ?? undefined}>{node.description}</div>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-caption font-bold uppercase text-text-3">

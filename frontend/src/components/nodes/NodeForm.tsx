@@ -60,6 +60,8 @@ export function NodeForm({
   const updateNode = useUpdateNode(node?.id ?? "");
 
   const [name, setName] = useState(node?.name ?? "");
+  const [slashName, setSlashName] = useState(node?.slash_name ?? "");
+  const [argumentHint, setArgumentHint] = useState(node?.argument_hint ?? "");
   const [description, setDescription] = useState(node?.description ?? "");
   const [nodeType, setNodeType] = useState<NodeType>(node?.node_type ?? NodeType.PLAIN_PROMPT);
   const [promptTemplate, setPromptTemplate] = useState(node?.prompt_template ?? "");
@@ -99,6 +101,10 @@ export function NodeForm({
       name,
       description: description || null,
       node_type: nodeType,
+      ...(!isPipeline && (nodeType === NodeType.PLAIN_PROMPT || nodeType === NodeType.SCRIPT) && (slashName.trim() || node?.slash_name) ? {
+        slash_name: slashName.trim() || null,
+        argument_hint: slashName.trim() ? argumentHint.trim() || null : null,
+      } : {}),
       prompt_template: PROMPT_TYPES.includes(nodeType) ? promptTemplate : null,
       command_invocation: nodeType === NodeType.SLASH_COMMAND ? commandInvocation : null,
       script_language: nodeType === NodeType.SCRIPT ? scriptLanguage : null,
@@ -126,6 +132,21 @@ export function NodeForm({
         <Label htmlFor="node-name">Название</Label>
         <Input id="node-name" value={name} onChange={(e) => setName(e.target.value)} />
       </div>
+      {!isPipeline && (nodeType === NodeType.PLAIN_PROMPT || nodeType === NodeType.SCRIPT) && <>
+        <div><Label htmlFor="node-slash-name">Slash-команда (необязательно)</Label>
+          <Input id="node-slash-name" placeholder="/review" maxLength={65}
+            value={slashName} onChange={(event) => setSlashName(event.target.value)} />
+          <p className="text-small text-text-3">Доступна во всех ваших задачах. Имеет приоритет над одноимённой командой агента.</p>
+        </div>
+        <div><Label htmlFor="node-argument-hint">Подсказка аргументов</Label>
+          <Input id="node-argument-hint" placeholder="[сервис] [что проверить]" maxLength={200}
+            value={argumentHint} disabled={!slashName.trim()}
+            onChange={(event) => setArgumentHint(event.target.value)} />
+          <p className="text-small text-text-3">{nodeType === NodeType.SCRIPT
+            ? "Bash: $1, $2 и \"$@\"; Python: sys.argv[1:]. Полный текст: TRACKER_COMMAND_ARGUMENTS."
+            : "В промте: $ARGUMENTS — весь текст; $0 или $ARGUMENTS[0] — первый аргумент, $1 — второй."}</p>
+        </div>
+      </>}
       <div>
         <Label htmlFor="node-description">
           Описание{mode === "library" ? " (обязательно)" : ""}
