@@ -6,7 +6,8 @@
 
 - Jira: `GET /rest/api/2/issue/{key}` и скачивание вложения (раздел 15.6);
 - GitLab: `GET /api/v4/projects/{path}/merge_requests?source_branch=…`
-  (`sync_gitlab_merge_status`, раздел 16.2).
+  (`sync_gitlab_merge_status`, раздел 16.2) и `GET /api/v4/projects/{path}`
+  (проверка доступа к API в «Учётные данные Git»).
 
 Служебные эндпоинты для тестировщика:
 
@@ -42,6 +43,7 @@ MERGE_REQUEST_STATES = frozenset({"opened", "merged", "closed"})
 
 _JIRA_ISSUE_PATH = re.compile(r"^/rest/api/2/issue/(?P<key>[^/]+)$")
 _JIRA_ATTACHMENT_PATH = re.compile(r"^/secure/attachment/\d+/(?P<name>[^/]+)$")
+_GITLAB_PROJECT_PATH = re.compile(r"^/api/v4/projects/(?P<project>[^/]+)$")
 _GITLAB_MR_PATH = re.compile(r"^/api/v4/projects/(?P<project>[^/]+)/merge_requests$")
 _AUTH_HEADERS = ("Authorization", "PRIVATE-TOKEN")
 
@@ -127,6 +129,8 @@ class MockHandler(BaseHTTPRequestHandler):
             self._get_jira_issue(unquote(match["key"]))
         elif match := _JIRA_ATTACHMENT_PATH.match(url.path):
             self._get_jira_attachment(unquote(match["name"]))
+        elif match := _GITLAB_PROJECT_PATH.match(url.path):
+            self._send_json({"id": 1, "path_with_namespace": unquote(match["project"])})
         elif _GITLAB_MR_PATH.match(url.path):
             self._get_merge_requests(parse_qs(url.query).get("source_branch", [""])[0])
         else:
