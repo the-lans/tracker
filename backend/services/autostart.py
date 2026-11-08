@@ -43,6 +43,8 @@ async def find_tasks_due_for_autostart(db_session: AsyncSession, *, now: datetim
         Task.auto_start_enabled == True,  # noqa: E712 — sa.Boolean-колонка, не Python bool
         Task.scheduled_start_at.is_not(None),
         Task.scheduled_start_at <= now,
+        # Раздел 14.4: идёт чат в «Уточняется» — задача встанет в очередь после него.
+        Task.chat_active == sa.false(),
     )
     return list((await db_session.execute(stmt)).scalars().all())
 

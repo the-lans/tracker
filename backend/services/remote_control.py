@@ -23,6 +23,7 @@ from db.models.tasks import Task
 from services.errors import ConflictError
 from services.maintenance_tasks import find_tasks_requiring_remote_control_check
 from services.notifications import NotificationEvent, notify_task_event
+from services.refining_chat import recover_lost_chat
 from services.session_heartbeat import is_session_alive
 from services.task_control import request_bridge_reconnect
 from services.task_status import SESSION_ACTIVE_STATUSES, fail_task_after_error
@@ -203,6 +204,19 @@ async def check_session_bridges(db_session: AsyncSession, *, redis_client: Redis
     task_ids = [task.id for task in await find_tasks_requiring_remote_control_check(db_session)]
     for task_id in task_ids:
         task = await db_session.get(Task, task_id, populate_existing=True)
-        if task is not None and task.status in SESSION_ACTIVE_STATUSES:
-            with bind_task_context(task_id):
+        if task is None:
+            continue
+        with bind_task_context(task_id):
+            if task.chat_active:
+                await check_task_chat(db_session, task=task, redis_client=redis_client)
+            elif task.status in SESSION_ACTIVE_STATUSES:
                 await check_task_bridge(db_session, task=task, redis_client=redis_client)
+
+
+async def check_task_chat(db_session: AsyncSession, *, task: Task, redis_client: Redis) -> None:
+    """
+    Раздел 14.4: чат «Уточняется» моста не открывает. Пульса нет — воркер
+    погиб посреди ответа: запрос закрывается, задача остаётся в `refining`.
+    """
+    if not await is_session_alive(redis_client, task.id):
+        await recover_lost_chat(db_session, task_id=task.id)

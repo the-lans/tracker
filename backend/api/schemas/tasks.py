@@ -121,6 +121,8 @@ class TaskResponse(BaseModel):
     ready_at: datetime | None
     occupies_slot: bool
     launched_manually: bool
+    # Раздел 14.4: воркер ведёт чат в `refining` — ввод ждёт окончания ответа.
+    chat_active: bool = False
     # Раздел 14.4: место в очереди автора (с 1) у задачи в `ready`/`night_worker`.
     queue_position: int | None = None
     created_by: uuid.UUID

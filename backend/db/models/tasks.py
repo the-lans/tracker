@@ -124,6 +124,13 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     queued_from_status: Mapped[TaskStatus | None] = mapped_column(
         pg_enum(TaskStatus, name="task_status"),
     )
+    # Раздел 14.4: воркер ведёт чат задачи в «Уточняется» (в том числе пока
+    # агент ждёт ответа) — по нему сбой воркера возвращает задачу в `refining`.
+    chat_active: Mapped[bool] = mapped_column(
+        sa.Boolean,
+        default=False,
+        server_default=sa.false(),
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"))
 
 

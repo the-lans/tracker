@@ -58,7 +58,7 @@ class TestTaskQueueMigration:
                     await connection.execute(
                         sa.text(
                             "SELECT queue_priority, ready_at, occupies_slot, launched_manually, "
-                            "queued_from_status FROM tasks",
+                            "queued_from_status, chat_active FROM tasks",
                         ),
                     )
                 ).one()
@@ -79,7 +79,7 @@ class TestTaskQueueMigration:
             )
         finally:
             await engine.dispose()
-        assert tuple(task) == (100, None, False, False, None)
+        assert tuple(task) == (100, None, False, False, None, False)
         assert limit == 3
         assert set(_NEW_STATUSES) <= labels
         assert "03:15" in str(column_default)
@@ -135,6 +135,7 @@ class TestTaskQueueMigration:
             "occupies_slot",
             "launched_manually",
             "queued_from_status",
+            "chat_active",
             "max_parallel_tasks",
             "night_window_start",
             "night_window_end",

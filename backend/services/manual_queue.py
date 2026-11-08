@@ -663,7 +663,11 @@ async def expire_stale_manual_queue_requests(
             TaskManualRequestQueue.status == ManualRequestStatus.QUEUED,
             TaskManualRequestQueue.requested_at < older_than,
             TaskManualRequestQueue.task_id.in_(
-                sa.select(Task.id).where(Task.status.not_in(_TASK_STATUSES_WITH_LIVE_SESSION)),
+                sa.select(Task.id).where(
+                    Task.status.not_in(_TASK_STATUSES_WITH_LIVE_SESSION),
+                    # Чат в «Уточняется» обработает свою очередь сам (раздел 14.4).
+                    Task.chat_active == sa.false(),
+                ),
             ),
         )
         .values(status=ManualRequestStatus.CANCELLED, processed_at=datetime.now(UTC))

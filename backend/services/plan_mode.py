@@ -362,8 +362,11 @@ async def _wait_for_resolution(
         logger.info("decision_wait_woken", node_log_id=str(node_log_id))
 
 
-# Из этих статусов задача уходит в ожидание решения и в них же возвращается.
-_DECISION_RESUMABLE_STATUSES = frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED})
+# Из этих статусов задача уходит в ожидание решения и в них же возвращается;
+# `refining` — чат с агентом до запуска (раздел 14.4).
+_DECISION_RESUMABLE_STATUSES = frozenset(
+    {TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REFINING},
+)
 
 
 async def resumable_decision_status(

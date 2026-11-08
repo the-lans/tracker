@@ -66,6 +66,12 @@ from services.pipeline_orchestrator import (
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
 from services.redis_connection import redis_connection
+from services.refining_chat import (
+    chat_has_pending_requests,
+    finish_chat,
+    settle_chat_after_error,
+    start_chat,
+)
 from services.remote_control import bridge_unavailable, record_bridge_status
 from services.session_container import SESSION_CLI_PATH, build_session_cli_env
 from services.session_heartbeat import (
@@ -140,16 +146,20 @@ def run_task_session(
     task_id: str,
     start_after_order_index: int | None = None,
     continuation: bool = False,
+    chat_only: bool = False,
 ) -> None:
     """``start_after_order_index`` — ноды с ``order_index`` не больше него
     не выполняются (продолжение после `clear_context`, перезапуск после
     `failed`). ``continuation`` — задача уже в `in_progress`: предыдущий
-    таск передал сессию этому после `clear_context` (раздел 11.5)."""
+    таск передал сессию этому после `clear_context` (раздел 11.5).
+    ``chat_only`` — чат в «Уточняется» (раздел 14.4): только ручные запросы,
+    без пайплайна и без смены статуса."""
     run_with_fresh_pool(
         _run_task_session_async(
             uuid.UUID(task_id),
             start_after_order_index=start_after_order_index,
             continuation=continuation,
+            chat_only=chat_only,
         ),
     )
 
@@ -425,7 +435,12 @@ async def _disconnect_quietly(session: ClaudeCodeSession) -> None:
         logger.exception("session_disconnect_failed")
 
 
-def _defer_until_maintenance_ends(task_id: uuid.UUID, start_after_order_index: int | None) -> None:
+def _defer_until_maintenance_ends(
+    task_id: uuid.UUID,
+    start_after_order_index: int | None,
+    *,
+    chat_only: bool = False,
+) -> None:
     """
     Раздел 20.6: во время обновления задача не берётся из очереди — таск
     откладывается и повторяет попытку, пока флаг обслуживания не снят.
@@ -433,7 +448,11 @@ def _defer_until_maintenance_ends(task_id: uuid.UUID, start_after_order_index: i
     logger.info("task_claim_deferred_by_maintenance", task_id=str(task_id))
     run_task_session.apply_async(
         args=[str(task_id)],
-        kwargs={"start_after_order_index": start_after_order_index, "continuation": False},
+        kwargs={
+            "start_after_order_index": start_after_order_index,
+            "continuation": False,
+            "chat_only": chat_only,
+        },
         countdown=MAINTENANCE_RETRY_SECONDS,
     )
 
@@ -443,13 +462,135 @@ async def _run_task_session_async(
     *,
     start_after_order_index: int | None,
     continuation: bool,
+    chat_only: bool = False,
 ) -> None:
     with bind_task_context(task_id):
+        if chat_only:
+            await _run_chat_in_context(task_id)
+            return
         await _run_task_session_in_context(
             task_id,
             start_after_order_index=start_after_order_index,
             continuation=continuation,
         )
+
+
+async def _run_chat_in_context(task_id: uuid.UUID) -> None:
+    """
+    Раздел 14.4: воркер берёт сессию задачи в `refining`, выполняет очередь
+    ручных запросов и отпускает процесс. Сообщение, пришедшее, когда воркер
+    уже выходил, получает новый проход — после снятия пульса. После сбоя
+    прохода нет: оставшиеся запросы заберёт чат следующего сообщения, иначе
+    их отменит `expire_stale_manual_queue_requests`, а не цикл падений.
+    """
+    async with async_session_factory() as db_session, redis_connection() as redis_client:
+        if await maintenance_active(redis_client):
+            _defer_until_maintenance_ends(task_id, None, chat_only=True)
+            return
+        try:
+            async with keep_session_heartbeat(
+                redis_client,
+                task_id,
+                acquire_timeout=SESSION_OWNER_WAIT_SECONDS,
+            ):
+                task = await start_chat(db_session, task_id=task_id)
+                if task is None:
+                    return
+                succeeded = await _run_owned_chat(db_session, task=task, redis_client=redis_client)
+        except SessionAlreadyOwnedError:
+            # Сессию держит другой воркер — он и заберёт новое сообщение.
+            logger.info("task_session_already_owned", task_id=str(task_id))
+            return
+        if succeeded and await chat_has_pending_requests(db_session, task_id=task_id):
+            logger.info("refining_chat_followup_scheduled", task_id=str(task_id))
+            run_task_session.delay(str(task_id), chat_only=True)
+
+
+async def _run_owned_chat(db_session: AsyncSession, *, task: Task, redis_client: Redis) -> bool:
+    """`False` — проход чата прервался ошибкой."""
+    try:
+        async with (
+            llm_session_token(redis_client, task.id) as session_token,
+            open_cliproxy_client() as cliproxy,
+        ):
+            await _run_chat(
+                db_session,
+                task=task,
+                redis_client=redis_client,
+                lane=_LlmLane(
+                    session_token=session_token,
+                    router=TaskAccountRouter(
+                        db_session=db_session,
+                        redis_client=redis_client,
+                        task=task,
+                        cliproxy=cliproxy,
+                    ),
+                ),
+            )
+    except Exception as exc:
+        # Раздел 14.4: сбой чата закрывает запрос с ошибкой, задача остаётся
+        # в `refining` — в `failed` она не переходит.
+        logger.exception("refining_chat_failed", task_id=str(task.id))
+        await settle_chat_after_error(db_session, task_id=task.id, error=exc)
+        return False
+    finally:
+        await finish_chat(db_session, task_id=task.id)
+    return True
+
+
+async def _run_chat(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    redis_client: Redis,
+    lane: _LlmLane,
+) -> None:
+    """Мост удалённого управления в чате не поднимается — сессия живёт один проход."""
+    workspace = await prepare_task_workspace(
+        db_session,
+        task=task,
+        repos_root=resolve_repos_root(),
+    )
+    active_node_context = ActiveNodeContext()
+    make_client = await _build_client_factory(
+        db_session,
+        task=task,
+        workspace=workspace,
+        can_use_tool=build_can_use_tool_callback(
+            context=active_node_context,
+            session_factory=async_session_factory,
+            redis_client=redis_client,
+        ),
+        session_token=lane.session_token,
+    )
+    start_plan = plan_session_start(existing_session_id=task.session_id)
+    session = ClaudeCodeSession(
+        make_client(resume_session_id=start_plan.resume_session_id, enable_remote_control=False),
+        on_text_delta=build_output_publisher(redis_client, active_node_context),
+        on_abort=active_node_context.cancel_decision_wait,
+        on_rate_limit=lane.router.record_rate_limit,
+        router=lane.router,
+    )
+    active_node_context.output_length = session.turn_text_length
+    active_node_context.user_wait_clock = session.user_wait_clock
+    await session.connect()
+    try:
+        await process_manual_queue_once(
+            db_session,
+            task=task,
+            claude_session=session,
+            repos_path=workspace,
+            redis_client=redis_client,
+            active_node_context=active_node_context,
+        )
+    finally:
+        # Раздел 14.4: «Выполнить» продолжит ту же сессию — и после сбоя хода.
+        if session.session_id is not None and session.session_id != task.session_id:
+            await db_session.execute(
+                sa.update(Task).where(Task.id == task.id).values(session_id=session.session_id),
+            )
+            await db_session.commit()
+        await _disconnect_quietly(session)
 
 
 async def _run_task_session_in_context(

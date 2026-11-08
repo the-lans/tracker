@@ -156,5 +156,6 @@ class TestWorker:
 
         await db_session.refresh(task)
         assert task.status is TaskStatus.QUEUED
-        expected = [([str(task.id)], {"start_after_order_index": None, "continuation": False})]
+        kwargs = {"start_after_order_index": None, "continuation": False, "chat_only": False}
+        expected = [([str(task.id)], kwargs)]
         assert env.enqueued == (expected if deferred else [])

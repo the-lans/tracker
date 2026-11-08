@@ -69,7 +69,7 @@ PRE_LAUNCH_STATUSES = frozenset(
 # Раздел 14.4: очередь пользователя — задачи, которые запустит воркер очереди.
 QUEUE_STATUSES = frozenset({TaskStatus.READY, TaskStatus.NIGHT_WORKER})
 # Раздел 14.4: чат с агентом в «Уточняется» уходит в ожидание решения и возвращается.
-_REFINING_DECISIONS = frozenset({TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW})
+REFINING_DECISION_STATUSES = frozenset({TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW})
 
 
 def _pre_launch_targets(status: TaskStatus) -> frozenset[TaskStatus]:
@@ -79,7 +79,7 @@ def _pre_launch_targets(status: TaskStatus) -> frozenset[TaskStatus]:
 
 ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     **{status: _pre_launch_targets(status) for status in PRE_LAUNCH_STATUSES},
-    TaskStatus.REFINING: _pre_launch_targets(TaskStatus.REFINING) | _REFINING_DECISIONS,
+    TaskStatus.REFINING: _pre_launch_targets(TaskStatus.REFINING) | REFINING_DECISION_STATUSES,
     # `queued -> статус до запуска` — «Отменить постановку» (раздел 14.2).
     TaskStatus.QUEUED: frozenset({TaskStatus.IN_PROGRESS}) | PRE_LAUNCH_STATUSES,
     TaskStatus.IN_PROGRESS: frozenset(
@@ -281,6 +281,8 @@ SESSION_ACTIVE_STATUSES = frozenset(
         TaskStatus.REBASE_CONFLICT,
     },
 )
+# Раздел 8.2, 14.4: ручные запросы принимаются у активной сессии и в чате «Уточняется».
+MANUAL_REQUEST_STATUSES = SESSION_ACTIVE_STATUSES | {TaskStatus.REFINING}
 # Статусы, из которых `failed` достижим напрямую (раздел 14.1).
 FAILABLE_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT)
 
@@ -367,10 +369,26 @@ async def fail_task_after_error(
     error: BaseException,
 ) -> None:
     """
-    Раздел 17.3: падение Celery-задачи сессии не оставляет `running`.
+    Раздел 17.3: падение Celery-задачи сессии не оставляет `running` —
+    записи хода закрываются (`close_turn_after_error`), задача переводится
+    в `failed` с точкой перезапуска (раздел 17.5).
+    """
+    await close_turn_after_error(db_session, task_id=task_id, error=error)
+    await fail_task_from_current_status(
+        db_session,
+        task_id=task_id,
+        failed_order_index=await first_unfinished_order_index(db_session, task_id),
+    )
 
-    Незавершённые записи `node_logs` закрываются как `failed`, задача
-    переводится в `failed` с точкой перезапуска (раздел 17.5), ошибка
+
+async def close_turn_after_error(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    error: BaseException,
+) -> None:
+    """
+    Незавершённые записи `node_logs` закрываются как `failed`, ошибка
     пишется в `app_logs`. Ручной запрос, на котором упала сессия, тоже
     закрывается: очередь берёт только `queued`, и `processing`-запрос
     (а с ним «выполняется» у промта библиотеки) иначе завис бы навсегда.
@@ -412,12 +430,6 @@ async def fail_task_after_error(
         ),
     )
     await db_session.commit()
-
-    await fail_task_from_current_status(
-        db_session,
-        task_id=task_id,
-        failed_order_index=await first_unfinished_order_index(db_session, task_id),
-    )
 
 
 # Раздел 14.2 «Вернуть в новые»: только у задачи без живой сессии.

@@ -22,6 +22,7 @@ from services.access import get_pipeline_for_user
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_pipeline_attachable
 from services.redis_connection import redis_connection
+from services.refining_chat import CHAT_BUSY_MESSAGE
 from services.remote_control import start_bridge_reconnect
 from services.session_context import clear_task_session_context
 from services.task_cleanup import cleanup_task_repositories
@@ -80,6 +81,8 @@ async def start_task(
     task = await get_task_or_404(db_session, task_id, current_user)
     if task.status not in PRE_LAUNCH_STATUSES:
         raise ConflictError("Выполнить можно только задачу, которая ещё не запущена")
+    if task.chat_active:
+        raise ConflictError(CHAT_BUSY_MESSAGE)
     await ensure_task_launchable(db_session, task)
     updated = await transition_task_status(
         db_session,

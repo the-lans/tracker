@@ -22,6 +22,7 @@ from app_logging.config import get_logger
 from db.models.enums import TaskStatus
 from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
+from services.refining_chat import CHAT_BUSY_MESSAGE
 from services.session_heartbeat import is_session_alive
 from services.task_status import (
     PRE_LAUNCH_STATUSES,
@@ -205,8 +206,10 @@ async def change_task_status_manually(
         return await reset_task_run(db_session, task_id=task.id, to_status=to_status)
     if task.status not in PRE_LAUNCH_STATUSES:
         raise ConflictError("Статус задачи в работе меняет только система")
-    if task.status is TaskStatus.REFINING and await is_session_alive(redis_client, task.id):
-        raise ConflictError("Дождитесь окончания ответа агента")
+    if task.status is TaskStatus.REFINING and (
+        task.chat_active or await is_session_alive(redis_client, task.id)
+    ):
+        raise ConflictError(CHAT_BUSY_MESSAGE)
     updated = await transition_task_status(
         db_session,
         task_id=task.id,

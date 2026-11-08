@@ -1,13 +1,14 @@
 """
 API очереди задач (разделы 14.1, 14.2, 14.4, 15.5 ТЗ): ручная смена статуса,
 отмена постановки, приоритет и слот, место в очереди, сводка слотов, лимит
-пользователя, ночное окно и расписание ночного воркера.
+пользователя, ночное окно, расписание ночного воркера и чат в «Уточняется».
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -17,7 +18,8 @@ from db.models.enums import PeriodicScheduleType, TaskStatus
 from db.models.periodic import PeriodicTask
 from db.models.tasks import Task
 from services.periodic_tasks import NIGHT_DISPATCH_TASK
-from tests.factories import make_pipeline, make_task
+from services.refining_chat import CHAT_BUSY_MESSAGE
+from tests.factories import make_llm_account, make_pipeline, make_task
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -360,3 +362,123 @@ class TestNightWindow:
 
         assert response.status_code == 422
         assert "ночного окна" in response.json()["error"]["message"]
+
+
+@pytest.fixture
+def chat_wakes(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
+    """Как запрос будит сессию: новый проход чата или сигнал живому воркеру."""
+    calls: list[tuple[str, Any]] = []
+
+    def delay(task_id: str, **kwargs: Any) -> None:
+        calls.append(("delay", kwargs))
+
+    async def signal(task_id: uuid.UUID) -> None:
+        calls.append(("signal", None))
+
+    monkeypatch.setattr("api.tasks.common.run_task_session", SimpleNamespace(delay=delay))
+    monkeypatch.setattr("api.tasks.common.publish_signal", signal)
+    return calls
+
+
+class TestRefiningChat:
+    async def _chat_task(
+        self,
+        db_session: AsyncSession,
+        owner: User,
+        status: TaskStatus = TaskStatus.REFINING,
+        **fields: Any,
+    ) -> Task:
+        account = await make_llm_account(db_session, owner_id=owner.id)
+        return await _task(db_session, owner, status, llm_account_id=account.id, **fields)
+
+    @pytest.mark.parametrize(
+        ("chat_active", "expected"),
+        [
+            pytest.param(False, [("delay", {"chat_only": True})], id="новый проход"),
+            pytest.param(True, [("signal", None)], id="чат уже идёт"),
+        ],
+    )
+    async def test_freeform_wakes_chat(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        chat_wakes: list[tuple[str, Any]],
+        chat_active: bool,
+        expected: list[tuple[str, Any]],
+    ) -> None:
+        task = await self._chat_task(db_session, current_user, chat_active=chat_active)
+
+        response = await authed_client.post(
+            f"/tasks/{task.id}/freeform",
+            json={"raw_prompt_text": "Что уточнить?"},
+        )
+
+        assert response.status_code == 201, response.text
+        assert chat_wakes == expected
+        task_body = (await authed_client.get(f"/tasks/{task.id}")).json()
+        assert task_body["chat_active"] is chat_active
+
+    async def test_other_pre_launch_rejected(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        chat_wakes: list[tuple[str, Any]],
+    ) -> None:
+        task = await self._chat_task(db_session, current_user, TaskStatus.DEFINED)
+
+        response = await authed_client.post(
+            f"/tasks/{task.id}/freeform",
+            json={"raw_prompt_text": "Что уточнить?"},
+        )
+
+        assert response.status_code == 409
+        assert chat_wakes == []
+
+    async def test_llm_account_required(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        chat_wakes: list[tuple[str, Any]],
+    ) -> None:
+        task = await _task(db_session, current_user, TaskStatus.REFINING)
+
+        response = await authed_client.post(
+            f"/tasks/{task.id}/freeform",
+            json={"raw_prompt_text": "Что уточнить?"},
+        )
+
+        assert response.status_code == 422
+        assert chat_wakes == []
+
+    async def test_status_change_waits_for_answer(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        wakes: list[None],
+    ) -> None:
+        task = await self._chat_task(db_session, current_user, chat_active=True)
+
+        response = await authed_client.post(
+            f"/tasks/{task.id}/status",
+            json={"to_status": TaskStatus.DEFINED.value},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["message"] == CHAT_BUSY_MESSAGE
+
+    async def test_start_waits_for_answer(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        task = await self._chat_task(db_session, current_user, chat_active=True)
+
+        response = await authed_client.post(f"/tasks/{task.id}/start")
+
+        assert response.status_code == 409
+        assert response.json()["error"]["message"] == CHAT_BUSY_MESSAGE

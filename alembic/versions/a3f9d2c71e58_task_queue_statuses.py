@@ -39,6 +39,9 @@ def upgrade() -> None:
         "launched_manually boolean NOT NULL DEFAULT false"
     )
     op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS queued_from_status task_status")
+    op.execute(
+        "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS chat_active boolean NOT NULL DEFAULT false"
+    )
     op.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS ck_tasks_queue_priority")
     op.execute(
         "ALTER TABLE tasks ADD CONSTRAINT ck_tasks_queue_priority "
@@ -76,6 +79,7 @@ def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS ix_tasks_queue")
     op.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS ck_tasks_queue_priority")
     for column in (
+        "chat_active",
         "queued_from_status",
         "launched_manually",
         "occupies_slot",
