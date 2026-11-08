@@ -18,8 +18,6 @@ class SystemSettingsBody(BaseModel):
     default_timeout_seconds: TimeoutSeconds
     default_max_retries: MaxRetries
     default_retry_base_delay_seconds: RetryBaseDelaySeconds
-    default_runner_image_python: str = Field(min_length=1)
-    default_runner_image_bash: str = Field(min_length=1)
     # Раздел 14.4: ночное окно по московскому времени.
     night_window_start: time
     night_window_end: time

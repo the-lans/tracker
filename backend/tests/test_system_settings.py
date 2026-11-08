@@ -15,7 +15,6 @@ from db.models.settings import SystemSettings
 from services.system_settings import (
     DEFAULT_NODE_TIMEOUT_SECONDS,
     SystemSettingsValues,
-    default_runner_image,
     get_system_settings,
     resolve_node_execution_defaults,
     resolve_runner_image,
@@ -30,8 +29,6 @@ _CUSTOM_SETTINGS = SystemSettingsValues(
     default_timeout_seconds=60,
     default_max_retries=1,
     default_retry_base_delay_seconds=0,
-    default_runner_image_python="py:1",
-    default_runner_image_bash="sh:1",
     night_window_start=time(3, 15),
     night_window_end=time(7, 0),
 )
@@ -63,21 +60,6 @@ class TestSystemSettingsService:
 
         assert settings.default_timeout_seconds == DEFAULT_NODE_TIMEOUT_SECONDS
         assert settings.default_runner_image_python == "tracker-runner-python:latest"
-
-    @pytest.mark.parametrize(
-        ("language", "expected"),
-        [(ScriptLanguage.PYTHON, "py:1"), (ScriptLanguage.BASH, "sh:1")],
-    )
-    async def test_runner_image_by_language(
-        self,
-        db_session: AsyncSession,
-        language: ScriptLanguage,
-        expected: str,
-    ) -> None:
-        settings = await update_system_settings(db_session, values=_CUSTOM_SETTINGS)
-
-        assert default_runner_image(settings, language) == expected
-
 
 class TestNodeExecutionDefaults:
     async def test_empty_values_from_settings(self, db_session: AsyncSession) -> None:
@@ -112,8 +94,8 @@ class TestResolveRunnerImage:
         ("node", "expected"),
         [
             # Язык сменили после создания — образ берётся по текущему языку.
-            (_node(language=ScriptLanguage.BASH), "sh:1"),
-            (_node(language=ScriptLanguage.PYTHON), "py:1"),
+            (_node(language=ScriptLanguage.BASH), "tracker-runner-bash:latest"),
+            (_node(language=ScriptLanguage.PYTHON), "tracker-runner-python:latest"),
             (_node(docker_image="custom:2"), "custom:2"),
             (_node(node_type=NodeType.PLAIN_PROMPT, language=None), None),
         ],
@@ -125,6 +107,9 @@ class TestResolveRunnerImage:
         node: Node,
         expected: str | None,
     ) -> None:
-        await update_system_settings(db_session, values=_CUSTOM_SETTINGS)
-
+        settings = await update_system_settings(db_session, values=_CUSTOM_SETTINGS)
+        # Прежние значения БД не влияют на выбор стандартного раннера.
+        settings.default_runner_image_python = "legacy-python:unused"
+        settings.default_runner_image_bash = "legacy-bash:unused"
+        await db_session.flush()
         assert await resolve_runner_image(db_session, node) == expected

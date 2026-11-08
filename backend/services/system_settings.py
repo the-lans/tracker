@@ -1,11 +1,11 @@
 """
 «Системные настройки» админки (раздел 15.5 ТЗ): значения по умолчанию для
-новых нод — таймаут, политика retry и Docker-образ раннера script-ноды.
+новых нод — таймаут и политика retry.
 
 Таймаут и retry подставляются в момент создания ноды (раздел 15.5: «для
 новых нод»), поэтому их изменение не трогает уже созданные ноды. Образ
 раннера в ноду не записывается: если у script-ноды он не задан явно, образ
-берётся из настроек при каждом запуске по её текущему языку — так смена
+берётся из стандартных образов в коде по её текущему языку — так смена
 языка в редакторе не оставляет ноду в чужом раннере.
 
 Здесь же — ночное окно воркера очереди (раздел 14.4): его начало задаёт и
@@ -46,8 +46,6 @@ class SystemSettingsValues:
     default_timeout_seconds: int
     default_max_retries: int
     default_retry_base_delay_seconds: int
-    default_runner_image_python: str
-    default_runner_image_bash: str
     # Раздел 14.4: ночное окно по московскому времени, общее для всех.
     night_window_start: time
     night_window_end: time
@@ -95,17 +93,10 @@ async def update_system_settings(
     settings.default_timeout_seconds = values.default_timeout_seconds
     settings.default_max_retries = values.default_max_retries
     settings.default_retry_base_delay_seconds = values.default_retry_base_delay_seconds
-    settings.default_runner_image_python = values.default_runner_image_python
-    settings.default_runner_image_bash = values.default_runner_image_bash
     await db_session.commit()
     logger.info("system_settings_updated")
     return settings
 
-
-def default_runner_image(settings: SystemSettings, language: ScriptLanguage) -> str:
-    if language is ScriptLanguage.PYTHON:
-        return settings.default_runner_image_python
-    return settings.default_runner_image_bash
 
 
 async def resolve_node_execution_defaults(
@@ -147,10 +138,7 @@ async def resolve_runner_image(db_session: AsyncSession, node: Node) -> str | No
         return None
     if node.docker_image:
         return node.docker_image
-    settings = await db_session.get(SystemSettings, SYSTEM_SETTINGS_ROW_ID)
-    if settings is None:
-        return DEFAULT_RUNNER_IMAGES[node.script_language]
-    return default_runner_image(settings, node.script_language)
+    return DEFAULT_RUNNER_IMAGES[node.script_language]
 
 
 async def get_jira_url(db_session: AsyncSession) -> str | None:

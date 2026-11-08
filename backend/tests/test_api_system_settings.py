@@ -17,8 +17,6 @@ _SETTINGS = {
     "default_timeout_seconds": 900,
     "default_max_retries": 2,
     "default_retry_base_delay_seconds": 10,
-    "default_runner_image_python": "registry.local/runner-python:2",
-    "default_runner_image_bash": "registry.local/runner-bash:2",
     "night_window_start": "02:30:00",
     "night_window_end": "06:45:00",
 }
@@ -29,7 +27,8 @@ class TestSystemSettings:
         initial = await admin_client.get("/system-settings")
         assert initial.status_code == 200
         assert initial.json()["default_timeout_seconds"] == 600
-        assert initial.json()["default_runner_image_bash"] == "tracker-runner-bash:latest"
+        assert "default_runner_image_python" not in initial.json()
+        assert "default_runner_image_bash" not in initial.json()
 
         updated = await admin_client.put("/system-settings", json=_SETTINGS)
 
@@ -42,7 +41,6 @@ class TestSystemSettings:
             ("default_timeout_seconds", 0),
             ("default_max_retries", 11),
             ("default_retry_base_delay_seconds", -1),
-            ("default_runner_image_python", ""),
         ],
     )
     async def test_rejects_out_of_range(
