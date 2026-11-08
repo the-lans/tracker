@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 
 import httpx
 import pytest
@@ -19,11 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from clients.gitlab import GitlabClient
 from db.models.enums import AppLogLevel, MergeStatus, RepositoryRole, TaskStatus
 from db.models.logs import AppLog
-from db.models.repositories import Repository
+from db.models.repositories import GitCredential, Repository
 from db.models.tasks import Task, TaskRepository
 from services import gitlab_sync as gitlab_sync_module
+from services.crypto import encrypt
+from services.git_credentials import GitlabApiAccess
 from services.gitlab_sync import (
-    ACCESS_DENIED_KEY,
+    access_denied_key,
     find_merged_parents_with_children,
     permanent_failure_key,
     request_child_rebases_on_parent_merge,
@@ -31,7 +34,7 @@ from services.gitlab_sync import (
     sync_task_repository_merge_status,
 )
 from services.notifications import NotificationEvent
-from tests.factories import build_repository, make_task, make_user
+from tests.factories import build_git_credential, build_repository, make_task, make_user
 
 
 def _make_repository(*, git_url: str = "git@gitlab.example.com:g/p.git") -> Repository:
@@ -217,15 +220,41 @@ class TestRequestChildRebases:
 class TestSyncFailures:
     """Раздел 17.3: временный сбой не прерывает цикл, постоянный — уведомление без повторов."""
 
+    @pytest.fixture
+    async def credential(self, db_session: AsyncSession) -> GitCredential:
+        return await self._credential(db_session, name="Основной", token="main")
+
+    @staticmethod
+    async def _credential(
+        db_session: AsyncSession,
+        *,
+        name: str,
+        token: str = "api",
+        **overrides: object,
+    ) -> GitCredential:
+        values: dict[str, object] = {
+            "name": name,
+            "kind": "ssh_key",
+            "host": "gitlab.example.com",
+            "gitlab_api_enabled": True,
+            "gitlab_api_token_encrypted": encrypt(token),
+        }
+        row = build_git_credential(**(values | overrides))
+        db_session.add(row)
+        await db_session.flush()
+        return row
+
     async def _row(
         self,
         db_session: AsyncSession,
         *,
         branch: str,
+        credential: GitCredential | None,
     ) -> tuple[TaskRepository, Repository, Task]:
         user = await make_user(db_session)
         task = await _make_task(db_session, created_by=user.id)
         repository = _make_repository(git_url=f"git@gitlab.example.com:g/{branch}.git")
+        repository.git_credential = credential
         db_session.add(repository)
         await db_session.flush()
         task_repository = TaskRepository(
@@ -240,8 +269,12 @@ class TestSyncFailures:
         await db_session.flush()
         return task_repository, repository, task
 
-    def _client(self, status_by_project: dict[str, int]) -> tuple[GitlabClient, list[str]]:
+    @staticmethod
+    def _client_for(
+        status_by_project: dict[str, int],
+    ) -> tuple[Callable[[GitlabApiAccess], GitlabClient], list[str], list[GitlabApiAccess]]:
         requested: list[str] = []
+        accesses: list[GitlabApiAccess] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             project = next(name for name in status_by_project if name in str(request.url))
@@ -251,12 +284,15 @@ class TestSyncFailures:
                 return httpx.Response(status, json=[{"state": "merged"}])
             return httpx.Response(status, text="ошибка")
 
-        client = GitlabClient(
-            base_url="https://gitlab.example.com",
-            token="secret",
-            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        )
-        return client, requested
+        def client_for(access: GitlabApiAccess) -> GitlabClient:
+            accesses.append(access)
+            return GitlabClient(
+                base_url=access.base_url,
+                token=access.token,
+                http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+            )
+
+        return client_for, requested, accesses
 
     @pytest.fixture
     def pushes(self, monkeypatch: pytest.MonkeyPatch) -> list[tuple[NotificationEvent, uuid.UUID]]:
@@ -278,16 +314,17 @@ class TestSyncFailures:
         self,
         db_session: AsyncSession,
         redis_client: Redis,
+        credential: GitCredential,
         pushes: list[tuple[NotificationEvent, uuid.UUID]],
     ) -> None:
-        broken = await self._row(db_session, branch="broken")
-        healthy = await self._row(db_session, branch="healthy")
-        client, _requested = self._client({"broken": 503, "healthy": 200})
+        broken = await self._row(db_session, branch="broken", credential=credential)
+        healthy = await self._row(db_session, branch="healthy", credential=credential)
+        client_for, _requested, _ = self._client_for({"broken": 503, "healthy": 200})
 
         await sync_merge_statuses(
             db_session,
             rows=[broken, healthy],
-            gitlab_client=client,
+            client_for=client_for,
             redis_client=redis_client,
         )
 
@@ -300,16 +337,17 @@ class TestSyncFailures:
         self,
         db_session: AsyncSession,
         redis_client: Redis,
+        credential: GitCredential,
         pushes: list[tuple[NotificationEvent, uuid.UUID]],
     ) -> None:
-        row = await self._row(db_session, branch="gone")
-        client, requested = self._client({"gone": 404})
+        row = await self._row(db_session, branch="gone", credential=credential)
+        client_for, requested, _ = self._client_for({"gone": 404})
 
         for _ in range(2):
             await sync_merge_statuses(
                 db_session,
                 rows=[row],
-                gitlab_client=client,
+                client_for=client_for,
                 redis_client=redis_client,
             )
 
@@ -329,64 +367,133 @@ class TestSyncFailures:
         self,
         db_session: AsyncSession,
         redis_client: Redis,
+        credential: GitCredential,
         pushes: list[tuple[NotificationEvent, uuid.UUID]],
     ) -> None:
-        row = await self._row(db_session, branch="fixed")
-        failing, _ = self._client({"fixed": 410})
+        row = await self._row(db_session, branch="fixed", credential=credential)
+        failing, _, _ = self._client_for({"fixed": 410})
         await sync_merge_statuses(
             db_session,
             rows=[row],
-            gitlab_client=failing,
+            client_for=failing,
             redis_client=redis_client,
         )
         await redis_client.delete(permanent_failure_key(row[0].id))
-        working, requested = self._client({"fixed": 200})
+        working, requested, _ = self._client_for({"fixed": 200})
 
         await sync_merge_statuses(
             db_session,
             rows=[row],
-            gitlab_client=working,
+            client_for=working,
             redis_client=redis_client,
         )
 
         assert requested == ["fixed"]
         assert row[0].merge_status is MergeStatus.MERGED
 
-    async def test_rejected_token(
+    async def test_rejected_token_pauses_only_its_credential(
         self,
         db_session: AsyncSession,
         redis_client: Redis,
+        credential: GitCredential,
         pushes: list[tuple[NotificationEvent, uuid.UUID]],
     ) -> None:
-        """Токен один на систему: администратору — одна запись, авторам — ничего."""
-        await redis_client.delete(ACCESS_DENIED_KEY)
-        first = await self._row(db_session, branch="first")
-        second = await self._row(db_session, branch="second")
-        client, requested = self._client({"first": 401, "second": 401})
+        """Отказ токена: администратору — одна запись, авторам — ничего, другие доступы работают."""
+        other = await self._credential(db_session, name="Партнёр", token="partner")
+        first = await self._row(db_session, branch="first", credential=credential)
+        second = await self._row(db_session, branch="second", credential=credential)
+        healthy = await self._row(db_session, branch="healthy", credential=other)
+        client_for, requested, _ = self._client_for({"first": 401, "second": 401, "healthy": 200})
         try:
             for _ in range(2):
                 await sync_merge_statuses(
                     db_session,
-                    rows=[first, second],
-                    gitlab_client=client,
+                    rows=[first, second, healthy],
+                    client_for=client_for,
                     redis_client=redis_client,
                 )
 
-            assert requested == ["first"]
+            assert sorted(requested) == ["first", "healthy", "healthy"]
+            assert healthy[0].merge_status is MergeStatus.MERGED
             assert pushes == []
-            assert await redis_client.exists(ACCESS_DENIED_KEY)
+            assert await redis_client.exists(access_denied_key(credential.id))
+            assert not await redis_client.exists(access_denied_key(other.id))
             assert not await redis_client.exists(permanent_failure_key(first[0].id))
             logs = (
                 await db_session.execute(
                     sa.select(AppLog).where(
                         AppLog.source == "periodic.sync_gitlab_merge_status",
-                        AppLog.message.contains("токен GitLab"),
+                        AppLog.message.contains("токен GitLab API"),
                     ),
                 )
             ).scalars().all()
-            assert len(logs) == 1
+            assert [log.context for log in logs] == [{"git_credential_id": str(credential.id)}]
+            assert "«Основной»" in logs[0].message
         finally:
-            await redis_client.delete(ACCESS_DENIED_KEY)
+            await redis_client.delete(access_denied_key(credential.id))
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            pytest.param(None, id="без учётных данных"),
+            pytest.param({"gitlab_api_enabled": False}, id="API выключен"),
+        ],
+    )
+    async def test_skips_without_api(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        overrides: dict[str, object] | None,
+    ) -> None:
+        credential = (
+            None
+            if overrides is None
+            else await self._credential(db_session, name="Без API", token="off", **overrides)
+        )
+        row = await self._row(db_session, branch="skipped", credential=credential)
+        client_for, requested, accesses = self._client_for({"skipped": 200})
+
+        await sync_merge_statuses(
+            db_session,
+            rows=[row],
+            client_for=client_for,
+            redis_client=redis_client,
+        )
+
+        assert requested == [] and accesses == []
+        assert row[0].merge_status is MergeStatus.PUSHED
+
+    async def test_client_per_credential(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        credential: GitCredential,
+    ) -> None:
+        other = await self._credential(
+            db_session,
+            name="Свой адрес",
+            token="custom",
+            gitlab_api_url="https://gitlab.example.com:8443/gl",
+        )
+        rows = [
+            await self._row(db_session, branch="a", credential=credential),
+            await self._row(db_session, branch="b", credential=other),
+            await self._row(db_session, branch="c", credential=credential),
+        ]
+        client_for, _, accesses = self._client_for({"a": 200, "b": 200, "c": 200})
+
+        await sync_merge_statuses(
+            db_session,
+            rows=rows,
+            client_for=client_for,
+            redis_client=redis_client,
+        )
+
+        assert sorted(accesses, key=lambda access: access.token) == [
+            GitlabApiAccess("https://gitlab.example.com:8443/gl", "custom"),
+            GitlabApiAccess("https://gitlab.example.com", "main"),
+        ]
+        assert all(row[0].merge_status is MergeStatus.MERGED for row in rows)
 
 
 class TestFindMergedParentsWithChildren:

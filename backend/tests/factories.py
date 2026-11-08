@@ -11,9 +11,10 @@ from db.models.enums import LlmAccountStatus, NodeLogStatus, NodeLogTriggerType,
 from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.pipelines import Pipeline
-from db.models.repositories import Repository
+from db.models.repositories import GitCredential, Repository
 from db.models.tasks import Task
 from db.models.users import User
+from services.crypto import encrypt
 from services.llm_accounts import account_prefix, next_switch_order
 
 # Сгенерированы `ssh-keygen` только для тестов; отпечатки — вывод `ssh-keygen -lf`.
@@ -119,6 +120,20 @@ async def make_pipeline(db_session: AsyncSession, *, created_by: uuid.UUID) -> P
     db_session.add(pipeline)
     await db_session.flush()
     return pipeline
+
+
+def build_git_credential(**overrides: Any) -> GitCredential:
+    """HTTPS-доступ к `git.example.com` без записи в БД; поля меняются через `overrides`."""
+    values: dict[str, Any] = {
+        "id": uuid.uuid4(),
+        "name": "GitLab",
+        "kind": "https_token",
+        "host": "git.example.com",
+        "username": "oauth2",
+        "secret_encrypted": encrypt("secret-token"),
+        "gitlab_api_enabled": False,
+    }
+    return GitCredential(**(values | overrides))
 
 
 def build_repository(

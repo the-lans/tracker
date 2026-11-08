@@ -119,3 +119,14 @@ class TestStatusClassification:
             await client.get_latest_merge_request_state(project_path="g/p", source_branch="x")
 
         assert exc_info.value.is_transient is False
+
+
+class TestGetProject:
+    async def test_encoded_path(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.raw_path == b"/api/v4/projects/group%2Fproject"
+            return httpx.Response(200, json={"id": 7})
+
+        client = _client_with_handler(httpx.MockTransport(handler))
+
+        assert await client.get_project("group/project") == {"id": 7}

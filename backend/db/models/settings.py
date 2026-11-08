@@ -33,6 +33,6 @@ class SystemSettings(Base):
     default_retry_base_delay_seconds: Mapped[int] = mapped_column(sa.Integer)
     default_runner_image_python: Mapped[str] = mapped_column(sa.String)
     default_runner_image_bash: Mapped[str] = mapped_column(sa.String)
-    gitlab_url: Mapped[str | None] = mapped_column(sa.String)
-    gitlab_token_encrypted: Mapped[str | None] = mapped_column(sa.Text)
+    # `gitlab_url`, `gitlab_token_encrypted` остаются в БД до следующего релиза
+    # (ТЗ 20.6), но не используются: доступ к GitLab API — в `git_credentials`.
     jira_url: Mapped[str | None] = mapped_column(sa.String)

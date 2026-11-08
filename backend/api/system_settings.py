@@ -52,8 +52,6 @@ async def replace_system_settings(
 
 def _integrations(settings: SystemSettings) -> IntegrationsResponse:
     return IntegrationsResponse(
-        gitlab_url=settings.gitlab_url,
-        gitlab_token_set=settings.gitlab_token_encrypted is not None,
         jira_url=settings.jira_url,
     )
 
@@ -74,8 +72,6 @@ async def replace_integrations(
 ) -> IntegrationsResponse:
     settings = await update_integrations(
         db_session,
-        gitlab_url=body.gitlab_url,
-        gitlab_token=body.gitlab_token,
         jira_url=body.jira_url,
     )
     return _integrations(settings)
