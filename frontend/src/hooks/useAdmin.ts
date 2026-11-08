@@ -147,7 +147,7 @@ export function useUpdateSystemSettings() {
 
 const INTEGRATIONS_KEY = ["admin", "integrations"] as const;
 
-/** Раздел 15.5, 15.6: адрес и токен GitLab, адрес Jira — только администратору. */
+/** Раздел 15.5, 15.6: адрес Jira — только администратору. */
 export function useIntegrations() {
   return useQuery({
     queryKey: INTEGRATIONS_KEY,
