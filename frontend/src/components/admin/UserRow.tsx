@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SftpLoginEditor } from "@/components/admin/SftpLoginEditor";
+import { UserTaskLimitEditor } from "@/components/admin/UserTaskLimitEditor";
 import { SshKeyLine } from "@/components/admin/SshKeyLine";
 import { useUpdateUser } from "@/hooks/useAdmin";
 import { toastError } from "@/lib/errors";
@@ -28,6 +29,7 @@ export function UserRow({ user }: { user: User }) {
           {new Date(user.created_at).toLocaleDateString("ru-RU")}
         </div>
         <SftpLoginEditor user={user} />
+        <UserTaskLimitEditor user={user} />
         <SshKeyLine user={user} />
       </div>
       <Select

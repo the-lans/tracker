@@ -10,12 +10,19 @@ import { useTaskLibraryPrompts, useTaskNodes } from "@/hooks/useTasks";
 import { cn } from "@/lib/utils";
 import { isAgentTurn } from "@/components/tasks/messageKinds";
 import { TaskStatus, type NodeLog, type NodeType } from "@/lib/types";
+import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
 /** Пустая лента: что сделать, чтобы здесь появилась история. */
-const EMPTY_FEED: Record<"new" | "queued" | "other", { title: string; hint: string }> = {
+type EmptyFeedKind = "new" | "refining" | "queued" | "other";
+
+const EMPTY_FEED: Record<EmptyFeedKind, { title: string; hint: string }> = {
   new: {
     title: "Задача ещё не запускалась",
     hint: "Выберите пайплайн на вкладке «Обзор» и нажмите «Запустить» в шапке задачи. Здесь появятся промты, ответы агента и вывод скриптов.",
+  },
+  refining: {
+    title: "Обсудите задачу с агентом",
+    hint: "Задайте вопрос в поле ниже — агент ответит в сессии задачи, пайплайн не запустится. «Запустить» потом продолжит ту же сессию.",
   },
   queued: {
     title: "Задача в очереди на запуск",
@@ -26,6 +33,12 @@ const EMPTY_FEED: Record<"new" | "queued" | "other", { title: string; hint: stri
     hint: "Здесь появятся промты, ответы агента и вывод скриптов. Свободный промт можно отправить в поле ниже.",
   },
 };
+
+function emptyFeedKind(status: TaskStatus): EmptyFeedKind {
+  if (status === TaskStatus.REFINING) return "refining";
+  if (isPreLaunch(status)) return "new";
+  return status === TaskStatus.QUEUED ? "queued" : "other";
+}
 
 export function TaskChatFeed({
   taskId,
@@ -91,7 +104,7 @@ export function TaskChatFeed({
         {nodeLogs.length === 0 && (
           <EmptyState
             icon={MessagesSquare}
-            {...EMPTY_FEED[taskStatus === TaskStatus.NEW || taskStatus === TaskStatus.QUEUED ? taskStatus : "other"]}
+            {...EMPTY_FEED[emptyFeedKind(taskStatus)]}
           />
         )}
         {nodeLogs.map((log) => (

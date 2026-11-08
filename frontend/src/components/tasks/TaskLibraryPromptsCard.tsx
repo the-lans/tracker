@@ -23,6 +23,7 @@ import { formatDateTime } from "@/lib/utils";
 import {
   LibraryPromptRunStatus,
   NodeType,
+  TaskStatus,
   type NodeItem,
   type Task,
   type TaskLibraryPromptItem,
@@ -57,10 +58,15 @@ export function TaskLibraryPromptsCard({
   const runLibraryPrompt = useRunLibraryPrompt(task.id);
   const stopManualRequest = useStopManualRequest(task.id);
   const sessionActive = SESSION_ACTIVE_STATUSES.includes(task.status);
+  const refining = task.status === TaskStatus.REFINING;
 
-  /** Раздел 3.1: без LLM-аккаунта у задачи нет сессии Claude — доступны только скрипты. */
+  /**
+   * Раздел 3.1: без LLM-аккаунта у задачи нет сессии Claude — доступны только
+   * скрипты; чат «Уточняется» (раздел 14.4) ведёт только агент.
+   */
   function runBlockReason(prompt: TaskLibraryPromptItem): string | null {
-    if (!sessionActive) return "Сессия задачи не активна";
+    if (refining && task.llm_account_id === null) return "Чат с агентом ведёт LLM — выберите LLM-аккаунт";
+    if (!sessionActive && !refining) return "Сессия задачи не активна";
     if (task.llm_account_id === null && prompt.node_type !== NodeType.SCRIPT) {
       return "У задачи нет LLM-аккаунта — доступны только скрипты";
     }

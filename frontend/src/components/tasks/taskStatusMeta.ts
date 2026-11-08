@@ -9,6 +9,10 @@ interface StatusMeta {
 
 export const TASK_STATUS_META: Record<TaskStatus, StatusMeta> = {
   [TaskStatus.NEW]: { label: "Новая", tone: "neutral", borderVar: "var(--border)" },
+  [TaskStatus.REFINING]: { label: "Уточняется", tone: "info", borderVar: "var(--info)" },
+  [TaskStatus.DEFINED]: { label: "Сформулирована", tone: "neutral", borderVar: "var(--border)" },
+  [TaskStatus.READY]: { label: "Готова к реализации", tone: "accent", borderVar: "var(--accent)" },
+  [TaskStatus.NIGHT_WORKER]: { label: "Ночной воркер", tone: "accent", borderVar: "var(--accent)" },
   [TaskStatus.QUEUED]: { label: "В очереди", tone: "info", borderVar: "var(--info)" },
   [TaskStatus.IN_PROGRESS]: { label: "В работе", tone: "accent", borderVar: "var(--accent)" },
   [TaskStatus.PAUSED]: { label: "На паузе", tone: "warning", borderVar: "var(--warning)" },
@@ -44,6 +48,9 @@ export const SESSION_ACTIVE_STATUSES: TaskStatus[] = [
 export type BridgeView = "hidden" | "reconnect" | "unavailable";
 
 export function bridgeViewOf(task: Task): BridgeView {
-  if (task.llm_account_id === null || !SESSION_ACTIVE_STATUSES.includes(task.status)) return "hidden";
+  // Раздел 14.4: чат «Уточняется» моста не поднимает и в ожидании ответа.
+  if (task.llm_account_id === null || task.chat_active || !SESSION_ACTIVE_STATUSES.includes(task.status)) {
+    return "hidden";
+  }
   return task.remote_control_status === RemoteControlStatus.UNAVAILABLE ? "unavailable" : "reconnect";
 }

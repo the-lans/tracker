@@ -15,6 +15,7 @@ const tasksByStatus: Task[] = Object.values(TaskStatus).map((status, index) =>
 function renderDashboard(api: MockedApi, tasks: Task[] = tasksByStatus) {
   api.respond("GET /tasks", tasks);
   api.respond("GET /tasks/awaiting-count", { count: 0 });
+  api.respond("GET /tasks/queue-summary", { max_parallel_tasks: 3, occupied: 2, ready: 4, night_worker: 1 });
   return renderWithProviders(<DashboardPage />);
 }
 
@@ -28,13 +29,22 @@ describe("DashboardPage", () => {
     test("счётчики считают каждую группу статусов", async ({ api }) => {
       renderDashboard(api);
 
-      expect(await screen.findByRole("button", { name: "Все · 9" })).toBeInTheDocument();
-      for (const name of ["В работе · 2", "Ждут решения · 2", "Завершено · 1", "Ошибки · 2"]) {
+      expect(await screen.findByRole("button", { name: "Все · 13" })).toBeInTheDocument();
+      for (const name of [
+        "До запуска · 5",
+        "В очереди · 2",
+        "В работе · 2",
+        "Ждут решения · 2",
+        "Завершено · 1",
+        "Ошибки · 2",
+      ]) {
         expect(screen.getByRole("button", { name })).toBeInTheDocument();
       }
     });
 
     test.for([
+      { filter: "До запуска", codes: ["RR-new", "RR-refining", "RR-defined", "RR-ready", "RR-night_worker"] },
+      { filter: "В очереди", codes: ["RR-ready", "RR-night_worker"] },
       { filter: "В работе", codes: ["RR-in_progress", "RR-paused"] },
       { filter: "Ждут решения", codes: ["RR-plan_review", "RR-awaiting_input"] },
       { filter: "Завершено", codes: ["RR-done"] },
@@ -97,6 +107,12 @@ describe("DashboardPage", () => {
 
       expect(screen.getByText("Задачи не найдены")).toBeInTheDocument();
     });
+  });
+
+  test("слоты и очередь пользователя — над списком", async ({ api }) => {
+    renderDashboard(api);
+
+    expect(await screen.findByText("Слоты: 2 из 3 · в очереди 4 · ночью 1")).toBeInTheDocument();
   });
 
   test("без задач — подсказка, как создать первую", async ({ api }) => {

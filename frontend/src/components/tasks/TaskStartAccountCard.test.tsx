@@ -68,7 +68,7 @@ describe("TaskStartAccountCard", () => {
 
       await vi.waitFor(() => expect(trigger()).toHaveTextContent("Claude — основной"));
       expect(trigger()).toBeDisabled();
-      expect(screen.getByText(/Сменить можно после «Вернуть в новые»/)).toBeInTheDocument();
+      expect(screen.getByText(/Сменить можно, вернув задачу в статус до запуска/)).toBeInTheDocument();
     },
   );
 });

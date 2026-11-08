@@ -56,7 +56,7 @@ describe("Composer", () => {
       expect(screen.getByRole("button", { name: OPEN_COMPOSER })).toBeInTheDocument();
     });
 
-    test.for([TaskStatus.NEW, TaskStatus.QUEUED, TaskStatus.FAILED, TaskStatus.DONE])(
+    test.for([TaskStatus.QUEUED, TaskStatus.FAILED, TaskStatus.DONE])(
       "%s: сессия не активна — поле закрыто с пояснением",
       (status) => {
         renderComposer({ status });
@@ -74,9 +74,38 @@ describe("Composer", () => {
       expect(screen.getByRole("button", { name: "Отправить" })).toBeDisabled();
     });
 
-    test("без LLM-аккаунта новая задача не принимает запросы", () => {
-      renderComposer({ status: TaskStatus.NEW, hasLlmAccount: false });
+    test("без LLM-аккаунта упавшая задача не принимает запросы", () => {
+      renderComposer({ status: TaskStatus.FAILED, hasLlmAccount: false });
       expect(screen.getByText("У задачи нет LLM-аккаунта — свободный промт выполнить некому")).toBeInTheDocument();
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    });
+
+    test.for([TaskStatus.NEW, TaskStatus.DEFINED, TaskStatus.READY, TaskStatus.NIGHT_WORKER])(
+      "%s: чат — только в «Уточняется»",
+      (status) => {
+        renderComposer({ status });
+
+        expect(screen.getByText("Переведите задачу в «Уточняется», чтобы обсудить её с агентом")).toBeInTheDocument();
+        expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+      },
+    );
+
+    test("refining: сообщение агенту уходит свободным промтом", async ({ api }) => {
+      const { user } = renderComposer({ status: TaskStatus.REFINING });
+
+      await user.click(screen.getByRole("button", { name: "Сообщение агенту — обсудить задачу до запуска" }));
+      await user.type(screen.getByRole("textbox"), "Что уточнить?");
+      await user.click(screen.getByRole("button", { name: "Отправить" }));
+
+      expect(api.mutations()).toEqual([
+        { method: "POST", path: FREEFORM_PATH, body: { raw_prompt_text: "Что уточнить?" } },
+      ]);
+    });
+
+    test("refining без LLM-аккаунта: чат вести некому", () => {
+      renderComposer({ status: TaskStatus.REFINING, hasLlmAccount: false });
+
+      expect(screen.getByText("Чат с агентом ведёт LLM — выберите стартовый LLM-аккаунт задачи")).toBeInTheDocument();
       expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     });
 

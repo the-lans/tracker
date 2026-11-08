@@ -8,6 +8,13 @@ export type UserRole = (typeof UserRole)[keyof typeof UserRole];
 
 export const TaskStatus = {
   NEW: "new",
+  /** Раздел 14.4: до запуска — обсуждение с агентом в чате. */
+  REFINING: "refining",
+  DEFINED: "defined",
+  /** Раздел 14.4: очередь дневного воркера. */
+  READY: "ready",
+  /** Раздел 14.4: очередь ночного воркера — только в ночном окне. */
+  NIGHT_WORKER: "night_worker",
   QUEUED: "queued",
   IN_PROGRESS: "in_progress",
   PAUSED: "paused",
@@ -207,6 +214,8 @@ export interface User {
   /** Раздел 19.7: пороги переключения LLM-аккаунта по окнам лимита, в процентах. */
   llm_switch_threshold_5h_pct: number;
   llm_switch_threshold_week_pct: number;
+  /** Раздел 14.4: лимит параллельных задач, задаёт администратор (1–50). */
+  max_parallel_tasks: number;
 }
 
 export interface LlmThresholdsUpdate {
@@ -256,6 +265,7 @@ export interface UserUpdateRequest {
   role?: UserRole | null;
   is_active?: boolean | null;
   os_username?: string | null;
+  max_parallel_tasks?: number | null;
 }
 
 export interface AllowedEmail {
@@ -292,9 +302,28 @@ export interface Task {
   auto_start_enabled: boolean;
   last_failed_order_index: number | null;
   repo_cleaned_at: string | null;
+  /** Раздел 14.4: больше — раньше в очереди автора. */
+  queue_priority: number;
+  /** Когда задача встала в `ready`/`night_worker`. */
+  ready_at: string | null;
+  /** «Занимать слот параллельного запуска задач» — для ручного запуска и чата. */
+  occupies_slot: boolean;
+  launched_manually: boolean;
+  /** Воркер ведёт чат в `refining`: ввод и смена статуса ждут конца ответа. */
+  chat_active: boolean;
+  /** Место (с 1) в очереди автора у задачи в `ready`/`night_worker`. */
+  queue_position: number | null;
   created_by: string;
   created_at: string;
   updated_at: string;
+}
+
+/** Раздел 15.1: слоты пользователя над списком задач дашборда. */
+export interface QueueSummary {
+  max_parallel_tasks: number;
+  occupied: number;
+  ready: number;
+  night_worker: number;
 }
 
 export interface TaskRepositoryAttach {
@@ -320,7 +349,10 @@ export interface TaskCreateRequest extends TaskDuplicateRequest {
   jira_issue_key?: string | null;
 }
 
-/** PATCH /tasks/{id}: auto_accept_plan — до `done`, остальное — только в `new`. */
+/**
+ * PATCH /tasks/{id}: auto_accept_plan — до `done`, приоритет и слот — всегда,
+ * остальное — только в статусах до запуска.
+ */
 export interface TaskUpdateRequest {
   title?: string;
   description?: string;
@@ -329,6 +361,9 @@ export interface TaskUpdateRequest {
   auto_start_enabled?: boolean;
   scheduled_start_at?: string | null;
   auto_accept_plan?: boolean;
+  /** Раздел 14.4: приоритет и галочка слота меняются в любом статусе. */
+  queue_priority?: number;
+  occupies_slot?: boolean;
 }
 
 export interface TaskRepository {
@@ -812,8 +847,9 @@ export interface SystemSettings {
   default_timeout_seconds: number;
   default_max_retries: number;
   default_retry_base_delay_seconds: number;
-  default_runner_image_python: string;
-  default_runner_image_bash: string;
+  /** Раздел 14.4: ночное окно по МСК, «ЧЧ:ММ:СС». */
+  night_window_start: string;
+  night_window_end: string;
 }
 
 /**

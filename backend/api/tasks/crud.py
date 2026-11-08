@@ -140,8 +140,10 @@ async def update_task(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
-    """Раздел 12.1, 15.2: автозапуск и поля задачи — пока задача `new`;
-    ``auto_accept_plan`` — в любой момент до `done`."""
+    """
+    Раздел 12.1, 15.2: автозапуск и поля задачи — в статусах до запуска;
+    ``auto_accept_plan`` — до `done`, приоритет и слот — всегда (раздел 14.4).
+    """
     task = await get_task_or_404(db_session, task_id, current_user)
     return await update_task_fields(
         db_session,

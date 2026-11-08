@@ -26,16 +26,17 @@ import {
   type TaskNodeUpdateRequest,
 } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
 /** Раздел 13.2, 15.2: пояснение к блокировке чекбоксов нод. */
 function nodesHint(status: TaskStatus): string {
-  if (status === TaskStatus.NEW)
+  if (isPreLaunch(status))
     return "Снимите галочку, чтобы пропустить ноду в этой задаче, или вставьте свой промт кнопкой «+ Промт»";
   if (status === TaskStatus.FAILED) {
-    return "Пройденные и упавшая ноды уже выполнены — менять можно только ноды после точки сбоя. Чтобы сменить пайплайн, верните задачу в новые";
+    return "Пройденные и упавшая ноды уже выполнены — менять можно только ноды после точки сбоя. Чтобы сменить пайплайн, переведите задачу в статус до запуска";
   }
   if (status === TaskStatus.DONE) {
-    return "Задача завершена — чтобы сменить пайплайн и запустить заново, верните её в новые";
+    return "Задача завершена — чтобы сменить пайплайн и запустить заново, переведите её в статус до запуска";
   }
   return "Состав нод заблокирован — задача уже запущена";
 }
@@ -119,7 +120,7 @@ export function TaskNodesCard({
       <Card>
         <CardTitle>
           <span>Ноды пайплайна</span>
-          {task.status === TaskStatus.NEW ? (
+          {isPreLaunch(task.status) ? (
             <Button size="sm" variant="secondary" onClick={onChangePipeline}>
               Сменить пайплайн
             </Button>

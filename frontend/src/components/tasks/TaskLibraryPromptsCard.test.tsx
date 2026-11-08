@@ -17,6 +17,7 @@ import { renderWithProviders } from "@/test/renderWithProviders";
 const PROMPTS_PATH = "/tasks/t1/library-prompts";
 const NO_SESSION = "Сессия задачи не активна";
 const NO_LLM_ACCOUNT = "У задачи нет LLM-аккаунта — доступны только скрипты";
+const CHAT_NEEDS_LLM = "Чат с агентом ведёт LLM — выберите LLM-аккаунт";
 
 const libraryNodes: NodeItem[] = [
   makeNode({ id: "l1", pipeline_id: null, name: "Ревью безопасности", is_library_item: true }),
@@ -48,7 +49,11 @@ describe("TaskLibraryPromptsCard", () => {
       { status: TaskStatus.IN_PROGRESS, llm: null, type: NodeType.SCRIPT, reason: null },
       { status: TaskStatus.IN_PROGRESS, llm: null, type: NodeType.PLAIN_PROMPT, reason: NO_LLM_ACCOUNT },
       { status: TaskStatus.IN_PROGRESS, llm: null, type: NodeType.SLASH_COMMAND, reason: NO_LLM_ACCOUNT },
+      { status: TaskStatus.REFINING, llm: "acc1", type: NodeType.PLAIN_PROMPT, reason: null },
+      { status: TaskStatus.REFINING, llm: "acc1", type: NodeType.SCRIPT, reason: null },
+      { status: TaskStatus.REFINING, llm: null, type: NodeType.SCRIPT, reason: CHAT_NEEDS_LLM },
       { status: TaskStatus.NEW, llm: "acc1", type: NodeType.PLAIN_PROMPT, reason: NO_SESSION },
+      { status: TaskStatus.DEFINED, llm: "acc1", type: NodeType.PLAIN_PROMPT, reason: NO_SESSION },
       { status: TaskStatus.QUEUED, llm: "acc1", type: NodeType.SCRIPT, reason: NO_SESSION },
       { status: TaskStatus.FAILED, llm: "acc1", type: NodeType.PLAIN_PROMPT, reason: NO_SESSION },
       { status: TaskStatus.DONE, llm: null, type: NodeType.SCRIPT, reason: NO_SESSION },

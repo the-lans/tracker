@@ -2,11 +2,12 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useLlmAccounts } from "@/hooks/useLlmAccounts";
 import { startAccountOptions } from "@/lib/llmAccounts";
-import { TaskStatus, type Task, type TaskUpdateRequest } from "@/lib/types";
+import type { Task, TaskUpdateRequest } from "@/lib/types";
+import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
 /**
- * Раздел 15.2: стартовый LLM-аккаунт задачи. Меняется до запуска (`new`);
- * после запуска — через «Вернуть в новые», аккаунт работы задачи выбирает воркер.
+ * Раздел 15.2: стартовый LLM-аккаунт задачи. Меняется до запуска; после
+ * запуска — после возврата в статус до запуска, аккаунт работы задачи выбирает воркер.
  */
 export function TaskStartAccountCard({
   task,
@@ -19,7 +20,7 @@ export function TaskStartAccountCard({
 }) {
   const { data: accounts } = useLlmAccounts();
   const options = accounts && startAccountOptions(accounts, task.created_by, task.llm_account_id);
-  const editable = task.status === TaskStatus.NEW;
+  const editable = isPreLaunch(task.status);
 
   return (
     <Card>
@@ -48,7 +49,7 @@ export function TaskStartAccountCard({
       <div className="mt-1 text-meta text-text-3">
         {editable
           ? "С этого аккаунта задача начнёт работу; дальше аккаунт переключается автоматически по порогам из профиля."
-          : "Сменить можно после «Вернуть в новые» — новый прогон начнётся с выбранного аккаунта."}
+          : "Сменить можно, вернув задачу в статус до запуска, — новый прогон начнётся с выбранного аккаунта."}
       </div>
     </Card>
   );

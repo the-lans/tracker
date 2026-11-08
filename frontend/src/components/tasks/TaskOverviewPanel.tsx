@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useUpdateTask } from "@/hooks/useTasks";
 import { useNodes } from "@/hooks/useNodes";
 import { toastError } from "@/lib/errors";
-import { TaskStatus, type NodeLog, type Task, type TaskUpdateRequest } from "@/lib/types";
+import type { NodeLog, Task, TaskUpdateRequest } from "@/lib/types";
 import { AutoAcceptPlanCard } from "@/components/tasks/AutoAcceptPlanCard";
 import { AutoStartCard } from "@/components/tasks/AutoStartCard";
 import { AutoStartSummaryCard } from "@/components/tasks/AutoStartSummaryCard";
@@ -13,8 +13,10 @@ import { TaskDescriptionCard } from "@/components/tasks/TaskDescriptionCard";
 import { TaskEnvVariablesCard } from "@/components/tasks/TaskEnvVariablesCard";
 import { TaskLibraryPromptsCard } from "@/components/tasks/TaskLibraryPromptsCard";
 import { TaskPipelineCard } from "@/components/tasks/TaskPipelineCard";
+import { TaskQueueCard } from "@/components/tasks/TaskQueueCard";
 import { TaskRepositoriesCard } from "@/components/tasks/TaskRepositoriesCard";
 import { TaskStartAccountCard } from "@/components/tasks/TaskStartAccountCard";
+import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
 export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: NodeLog[] }) {
   const updateTask = useUpdateTask(task.id);
@@ -55,10 +57,11 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
 
       {task.parent_task_id && <ParentTaskCard task={task} />}
 
-      {task.status === TaskStatus.NEW ? (
+      {isPreLaunch(task.status) ? (
         <>
           {/* До запуска — порядок настройки: окружение, расписание, пайплайн. */}
           {environment}
+          <TaskQueueCard task={task} pending={updateTask.isPending} onUpdate={update} />
           <AutoStartCard task={task} pending={updateTask.isPending} onUpdate={update} />
           {execution}
         </>
@@ -67,6 +70,7 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
           {/* После запуска — сначала то, чем управляют во время работы. */}
           {execution}
           {environment}
+          <TaskQueueCard task={task} pending={updateTask.isPending} onUpdate={update} />
           <AutoStartSummaryCard task={task} />
         </>
       )}

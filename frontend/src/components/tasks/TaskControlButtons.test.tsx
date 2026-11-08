@@ -14,7 +14,6 @@ const Button = {
   RESUME: "Продолжить",
   STOP: "Остановить",
   RESTART: "Перезапустить с текущей ноды",
-  RESET: "Вернуть в новые",
   CLEAR_CONTEXT: "Очистить контекст",
   CLEANUP: "Очистить репозитории",
   DUPLICATE: "Дублировать",
@@ -34,6 +33,10 @@ describe("TaskControlButtons", () => {
   describe("набор кнопок по статусу", () => {
     test.for([
       { status: TaskStatus.NEW, expected: [Button.START] },
+      { status: TaskStatus.REFINING, expected: [Button.START] },
+      { status: TaskStatus.DEFINED, expected: [Button.START] },
+      { status: TaskStatus.READY, expected: [Button.START] },
+      { status: TaskStatus.NIGHT_WORKER, expected: [Button.START] },
       { status: TaskStatus.QUEUED, expected: [Button.CANCEL] },
       { status: TaskStatus.IN_PROGRESS, expected: [Button.PAUSE, Button.STOP] },
       { status: TaskStatus.PAUSED, expected: [Button.RESUME, Button.STOP] },
@@ -42,17 +45,20 @@ describe("TaskControlButtons", () => {
       { status: TaskStatus.REBASE_CONFLICT, expected: [] },
       {
         status: TaskStatus.FAILED,
-        expected: [Button.RESTART, Button.RESET, Button.CLEAR_CONTEXT, Button.CLEANUP],
+        expected: [Button.RESTART, Button.CLEAR_CONTEXT, Button.CLEANUP],
       },
-      { status: TaskStatus.DONE, expected: [Button.RESET, Button.CLEANUP, Button.DUPLICATE] },
+      { status: TaskStatus.DONE, expected: [Button.CLEANUP, Button.DUPLICATE] },
     ])("$status", ({ status, expected }) => {
       renderButtons({ status });
 
       expect(visibleButtons()).toEqual(expected);
     });
 
-    test("«Запустить» неактивна, пока не выбран пайплайн", () => {
-      renderButtons({ status: TaskStatus.NEW, pipeline_id: null });
+    test.for([
+      { pipeline_id: null, chat_active: false },
+      { pipeline_id: "p1", chat_active: true },
+    ])("«Запустить» неактивна: пайплайн $pipeline_id, чат $chat_active", (fields) => {
+      renderButtons({ status: TaskStatus.REFINING, ...fields });
 
       expect(screen.getByRole("button", { name: Button.START })).toBeDisabled();
     });
@@ -90,8 +96,6 @@ describe("TaskControlButtons", () => {
     const CONFIRMED_ACTIONS = [
       { status: TaskStatus.IN_PROGRESS, button: Button.STOP, confirm: "Остановить", action: "stop" },
       { status: TaskStatus.PAUSED, button: Button.STOP, confirm: "Остановить", action: "stop" },
-      { status: TaskStatus.FAILED, button: Button.RESET, confirm: "Вернуть в новые", action: "reset" },
-      { status: TaskStatus.DONE, button: Button.RESET, confirm: "Вернуть в новые", action: "reset" },
       {
         status: TaskStatus.FAILED,
         button: Button.CLEAR_CONTEXT,
