@@ -16,6 +16,7 @@ import threading
 import types
 import uuid
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock
 
 import asyncssh
@@ -29,26 +30,25 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 import services.git_ops as git_ops
 from api.git_credentials import CredentialInput, update_credential
+from clients.gitlab import GitlabAccessDeniedError, GitlabClient
 from db.base import Base
 from db.models.repositories import GitCredential, Repository
 from db.models.users import User
 from services.crypto import decrypt, encrypt
 from services.errors import ConflictError, ValidationError
-from services.git_credentials import git_host, resolve_credential
+from services.git_credentials import (
+    GitlabApiAccess,
+    git_host,
+    gitlab_api_access,
+    resolve_credential,
+)
 from services.git_ops import _deploy_key_env, _run_git
+from tests.factories import build_git_credential
 from tests.git_support import init_bare_origin
 
 
-def credential(**overrides: str) -> GitCredential:
-    return GitCredential(
-        id=uuid.uuid4(),
-        name="GitLab",
-        kind="https_token",
-        host="git.example.com",
-        username="oauth2",
-        secret_encrypted=encrypt("secret-token"),
-        **overrides,
-    )
+def credential(**overrides: Any) -> GitCredential:
+    return build_git_credential(**overrides)
 
 
 class TestCredentialAPI:
@@ -169,7 +169,8 @@ class TestCredentialAPI:
         endpoint = f"/git-credentials/{row.id}/check"
         body = {"git_url": "https://git.example.com/team/repo.git"}
         response = await admin_client.post(endpoint, json=body)
-        assert response.status_code == 200 and response.json() == {"read_access": True}
+        assert response.status_code == 200
+        assert response.json() == {"read_access": True, "gitlab_api": "disabled"}
         assert run.call_args.args[:1] == ("ls-remote",)
         assert not Path(run.call_args.kwargs["env"]["GIT_ASKPASS"]).exists()
         run.return_value = (128, "", "server echoed secret-token")
@@ -235,6 +236,176 @@ class TestCredentialAPI:
                 },
             )
         ).status_code == 403
+
+
+def _ssh_key() -> str:
+    return asyncssh.generate_private_key("ssh-ed25519").export_private_key().decode()
+
+
+class TestGitlabApiAccess:
+    @pytest.mark.parametrize(
+        ("overrides", "expected"),
+        [
+            pytest.param(
+                {"gitlab_api_enabled": True},
+                GitlabApiAccess("https://git.example.com", "secret-token"),
+                id="https: тот же токен",
+            ),
+            pytest.param(
+                {"gitlab_api_enabled": True, "gitlab_api_token_encrypted": encrypt("api")},
+                GitlabApiAccess("https://git.example.com", "api"),
+                id="https: свой токен",
+            ),
+            pytest.param(
+                {
+                    "kind": "ssh_key",
+                    "gitlab_api_enabled": True,
+                    "gitlab_api_token_encrypted": encrypt("api"),
+                    "gitlab_api_url": "https://git.example.com:8443/gitlab",
+                },
+                GitlabApiAccess("https://git.example.com:8443/gitlab", "api"),
+                id="ssh: свой токен и адрес",
+            ),
+            pytest.param(
+                {"kind": "ssh_key", "gitlab_api_enabled": True},
+                None,
+                id="ssh без токена",
+            ),
+            pytest.param({"gitlab_api_token_encrypted": encrypt("api")}, None, id="выключено"),
+        ],
+    )
+    def test_access(self, overrides: dict[str, Any], expected: GitlabApiAccess | None) -> None:
+        assert gitlab_api_access(credential(**overrides)) == expected
+
+    def test_without_credential(self) -> None:
+        assert gitlab_api_access(None) is None
+
+
+class TestGitlabApiFields:
+    _URL = "https://git.example.com/team/repo.git"
+
+    @staticmethod
+    def _body(**overrides: Any) -> dict[str, Any]:
+        return {"name": "GitLab", "kind": "https_token", "host": "git.example.com"} | overrides
+
+    @pytest.mark.parametrize(
+        ("overrides", "status"),
+        [
+            pytest.param({"secret": "token", "gitlab_api_enabled": True}, 201, id="https"),
+            pytest.param(
+                {"kind": "ssh_key", "gitlab_api_enabled": True},
+                422,
+                id="ssh без токена API",
+            ),
+            pytest.param(
+                {"kind": "ssh_key", "gitlab_api_enabled": True, "gitlab_api_token": "api"},
+                201,
+                id="ssh с токеном API",
+            ),
+            pytest.param(
+                {"secret": "token", "gitlab_api_url": "gitlab.example.com"},
+                422,
+                id="адрес без схемы",
+            ),
+        ],
+    )
+    async def test_create(
+        self,
+        admin_client: AsyncClient,
+        overrides: dict[str, Any],
+        status: int,
+    ) -> None:
+        if overrides.get("kind") == "ssh_key":
+            overrides = {"secret": _ssh_key()} | overrides
+        response = await admin_client.post("/git-credentials", json=self._body(**overrides))
+        assert response.status_code == status
+        if status == 201:
+            assert "gitlab_api_token" not in response.json()
+            assert response.json()["gitlab_api_token_set"] is ("gitlab_api_token" in overrides)
+
+    async def test_token_kept_and_removed(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        row = credential(gitlab_api_token_encrypted=encrypt("api-token"))
+        db_session.add(row)
+        await db_session.flush()
+        endpoint = f"/git-credentials/{row.id}"
+        body = self._body(gitlab_api_enabled=True, gitlab_api_url="https://git.example.com/gl/")
+
+        kept = await admin_client.put(endpoint, json=body)
+        assert kept.status_code == 200 and "api-token" not in kept.text
+        assert kept.json() | {"id": None} == {
+            "id": None,
+            "name": "GitLab",
+            "kind": "https_token",
+            "host": "git.example.com",
+            "username": "oauth2",
+            "gitlab_api_enabled": True,
+            "gitlab_api_url": "https://git.example.com/gl",
+            "gitlab_api_token_set": True,
+        }
+        removed = await admin_client.put(endpoint, json=body | {"gitlab_api_token": ""})
+        assert removed.json()["gitlab_api_token_set"] is False
+        await db_session.refresh(row)
+        assert row.gitlab_api_token_encrypted is None
+
+    async def test_switch_to_ssh_needs_token(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        row = credential(gitlab_api_enabled=True)
+        db_session.add(row)
+        await db_session.flush()
+        body = self._body(kind="ssh_key", secret=_ssh_key(), gitlab_api_enabled=True)
+
+        response = await admin_client.put(f"/git-credentials/{row.id}", json=body)
+
+        assert response.status_code == 422
+        assert "токен GitLab API" in response.text
+        await db_session.refresh(row)
+        assert row.kind == "https_token"
+
+    @pytest.mark.parametrize(
+        ("enabled", "outcome", "expected"),
+        [
+            pytest.param(False, None, "disabled", id="выключено"),
+            pytest.param(True, None, "ok", id="ok"),
+            pytest.param(
+                True,
+                GitlabAccessDeniedError("GitLab отклонил токен API (403)"),
+                "GitLab отклонил токен API (403)",
+                id="токен отклонён",
+            ),
+        ],
+    )
+    async def test_check(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        enabled: bool,
+        outcome: Exception | None,
+        expected: str,
+    ) -> None:
+        row = credential(gitlab_api_enabled=enabled)
+        db_session.add(row)
+        await db_session.flush()
+        monkeypatch.setattr(git_ops, "_run_git", AsyncMock(return_value=(0, "refs", "")))
+        get_project = AsyncMock(side_effect=outcome, return_value={})
+        monkeypatch.setattr(GitlabClient, "get_project", get_project)
+
+        response = await admin_client.post(
+            f"/git-credentials/{row.id}/check",
+            json={"git_url": self._URL},
+        )
+
+        assert response.json() == {"read_access": True, "gitlab_api": expected}
+        assert get_project.await_count == int(enabled)
+        if enabled:
+            get_project.assert_awaited_with("team/repo")
 
 
 class TestGitAuthentication:

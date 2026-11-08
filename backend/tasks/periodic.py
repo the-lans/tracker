@@ -40,7 +40,6 @@ from services.manual_queue import STALE_QUEUED_REQUEST_AGE, expire_stale_manual_
 from services.periodic_tasks import mark_periodic_task_running, record_periodic_task_run
 from services.redis_connection import redis_connection
 from services.remote_control import check_session_bridges
-from services.system_settings import get_gitlab_credentials
 from services.task_dispatcher import dispatch_queued_tasks
 from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import DISPATCH_READY_TASKS, celery_app, wake_task_dispatcher
@@ -193,10 +192,6 @@ def detect_awaiting_input_timeout() -> None:
 @celery_app.task(name="sync_gitlab_merge_status")
 def sync_gitlab_merge_status() -> None:
     async def body(db_session: AsyncSession) -> None:
-        credentials = await get_gitlab_credentials(db_session)
-        if credentials is None:
-            logger.warning("gitlab_credentials_not_configured")
-            return
         stmt = (
             sa.select(TaskRepository, Repository, Task)
             .join(Repository, Repository.id == TaskRepository.repository_id)
@@ -215,9 +210,9 @@ def sync_gitlab_merge_status() -> None:
             await gitlab_sync.sync_merge_statuses(
                 db_session,
                 rows=rows,
-                gitlab_client=GitlabClient(
-                    base_url=credentials.url,
-                    token=credentials.token,
+                client_for=lambda access: GitlabClient(
+                    base_url=access.base_url,
+                    token=access.token,
                     http_client=http_client,
                 ),
                 redis_client=redis_client,

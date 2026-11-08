@@ -817,21 +817,14 @@ export interface SystemSettings {
 }
 
 /**
- * Раздел 15.5, 15.6: интеграции — GitLab (токен API не возвращается, только
- * признак) и адрес Jira для импорта задач.
+ * Раздел 15.5, 15.6: адрес Jira для импорта задач. Доступ к GitLab API —
+ * в учётных данных Git.
  */
 export interface Integrations {
-  gitlab_url: string | null;
-  gitlab_token_set: boolean;
   jira_url: string | null;
 }
 
-/** `gitlab_token`: `null` — оставить сохранённый, пустая строка — удалить. */
-export interface IntegrationsUpdate {
-  gitlab_url: string | null;
-  gitlab_token: string | null;
-  jira_url: string | null;
-}
+export type IntegrationsUpdate = Integrations;
 
 /** Раздел 15.5: в скольких задачах используется промт библиотеки. */
 export interface LibraryUsage {

@@ -219,16 +219,24 @@ async def _env_variables(db_session: AsyncSession) -> None:
         logger.info("qa_env_variable_created", key=key)
 
 
+async def _gitlab_api(db_session: AsyncSession) -> None:
+    """Статус MR — из мока GitLab; свой токен API администратора не заменяется."""
+    credential = await db_session.scalar(
+        sa.select(GitCredential).where(GitCredential.name == GIT_CREDENTIAL_NAME),
+    )
+    if credential is None or credential.gitlab_api_token_encrypted is not None:
+        return
+    credential.gitlab_api_enabled = True
+    credential.gitlab_api_token_encrypted = encrypt(GITLAB_TOKEN)
+    credential.gitlab_api_url = MOCKS_URL
+    logger.info("qa_gitlab_api_enabled", credential=GIT_CREDENTIAL_NAME)
+
+
 async def _integrations(db_session: AsyncSession) -> None:
     settings = await get_system_settings(db_session)
-    if settings.jira_url and settings.gitlab_url:
+    if settings.jira_url:
         return
-    await update_integrations(
-        db_session,
-        gitlab_url=settings.gitlab_url or MOCKS_URL,
-        gitlab_token=None if settings.gitlab_token_encrypted else GITLAB_TOKEN,
-        jira_url=settings.jira_url or MOCKS_URL,
-    )
+    await update_integrations(db_session, jira_url=MOCKS_URL)
 
 
 async def _node(
@@ -296,6 +304,8 @@ async def _seed(*, admin_email: str, deploy_key: str) -> None:
         owner = await _admin(db_session, admin_email)
         await _llm_account(db_session, owner=owner)
         await _repository(db_session, deploy_key)
+        await db_session.flush()
+        await _gitlab_api(db_session)
         await _env_variables(db_session)
         await _library(db_session, owner)
         await _pipeline(db_session, owner)

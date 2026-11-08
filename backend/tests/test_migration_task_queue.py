@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from tests.migration_support import run_alembic
 
-_PREVIOUS_REVISION = "e6b8c20d1749"
+_PREVIOUS_REVISION = "f2c7a9d4e815"
 _REVISION = "a3f9d2c71e58"
 _NEW_STATUSES = ("refining", "defined", "ready", "night_worker")
 

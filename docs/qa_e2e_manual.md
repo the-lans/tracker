@@ -83,7 +83,7 @@ compose (`QA_NETWORK`, порт мока на хосте — `QA_MOCKS_PORT`).
 | Адрес репозитория | `ssh://git@qa-git/srv/git/qa/qa-calc.git`, базовая ветка `main` |
 | Deploy key | `.qa/deploy_key` (приватный ключ) |
 | Jira URL | `http://qa-mocks:8090` |
-| GitLab URL и токен | `http://qa-mocks:8090`, токен `qa-token` (мок принимает любой) |
+| GitLab API | в учётных данных `QA: qa-git`: адрес `http://qa-mocks:8090`, токен `qa-token` (мок принимает любой) |
 
 Репозиторий `qa-calc` (заготовка — `scripts/qa/seed/qa-calc`): `calc.py` с
 `add`/`subtract`/`multiply`, тесты на `unittest` (`python3 -m unittest -v`),
@@ -116,8 +116,9 @@ git clone -b feature/RR-QA-1 .qa/qa-calc.git .qa/check && (cd .qa/check && pytho
 | Раздел | Запись | Зачем |
 |---|---|---|
 | LLM-аккаунты | «QA», провайдер Claude (Anthropic), без входа — вход в шаге 6 раздела 1.1 | Сессия задачи |
+| Учётные данные Git | «QA: qa-git» — deploy key, статус MR через GitLab API мока | Клон, push, E2E-23, E2E-29 |
 | Репозитории | `qa-calc` — адрес и deploy key из раздела 1.2 | Клон, ветка задачи, push |
-| Системные настройки | Jira URL, GitLab URL и токен — мок | E2E-18, E2E-23, E2E-29 |
+| Системные настройки | Jira URL — мок | E2E-18 |
 | Переменные окружения | `QA_GREETING` = `Привет из QA` (глобальная) | Рендер `{{env.*}}` |
 | Переменные окружения | `QA_TOKEN` = `qa-secret-123`, секрет | Маскирование в предпросмотре и логах |
 | Библиотека промтов | «Ревью изменений» — `plain_prompt`: «Сделай ревью изменений в ветке {{task.code}}: перечисли риски и пропущенные тесты» | Ручной запуск из библиотеки |

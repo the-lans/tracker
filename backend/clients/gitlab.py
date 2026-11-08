@@ -1,9 +1,10 @@
-"""Обёртка над GitLab REST API v4 (раздел 16.2 ТЗ).
+"""
+Обёртка над GitLab REST API v4 (раздел 16.2 ТЗ).
 
-Токен GitLab API — один общий на систему, хранится в системных настройках
-(`services/system_settings.get_gitlab_credentials`, решение №19 плана), а
-не в `repositories` или `env_variables`: этот клиент принимает уже готовый
-токен, ответственность за его выбор — у вызывающего кода.
+Адрес и токен GitLab API задаются в учётных данных Git репозитория
+(`services/git_credentials.gitlab_api_access`), а не в `repositories` или
+`env_variables`: этот клиент принимает уже готовый токен, ответственность за
+его выбор — у вызывающего кода.
 """
 
 from __future__ import annotations
@@ -24,8 +25,7 @@ _API_BASE_PATH = "/api/v4"
 class GitlabAccessDeniedError(ExternalServiceError):
     """
     GitLab отклонил токен (401/403): неверный или просроченный токен — сбой
-    настройки всей интеграции (токен один на систему, решение №19 плана), и
-    повтор по другим репозиториям бесполезен.
+    учётных данных Git, и повтор по другим их репозиториям бесполезен.
     """
 
     def __init__(self, message: str) -> None:
@@ -44,6 +44,10 @@ def project_path_from_git_url(git_url: str) -> str:
         return path
     _, _, path = cleaned.partition(":")
     return path
+
+
+def _encode_path(project_path: str) -> str:
+    return project_path.replace("/", "%2F")
 
 
 class GitlabClient:
@@ -75,6 +79,11 @@ class GitlabClient:
             raise ExternalServiceError(message, is_transient=False)
         return response.json()
 
+    async def get_project(self, project_path: str) -> dict[str, Any]:
+        """Проект по пути `group/project`: проверка, что токен видит репозиторий."""
+        project: dict[str, Any] = await self._get(f"/projects/{_encode_path(project_path)}")
+        return project
+
     async def get_latest_merge_request_state(
         self,
         *,
@@ -82,9 +91,8 @@ class GitlabClient:
         source_branch: str,
     ) -> str | None:
         """Состояние (`opened`/`closed`/`merged`) самого свежего MR для ветки, либо `None`."""
-        encoded_path = project_path.replace("/", "%2F")
         merge_requests = await self._get(
-            f"/projects/{encoded_path}/merge_requests",
+            f"/projects/{_encode_path(project_path)}/merge_requests",
             params={"source_branch": source_branch, "order_by": "updated_at", "sort": "desc"},
         )
         if not merge_requests:

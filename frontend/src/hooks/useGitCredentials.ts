@@ -1,15 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
+import type { GitCredential, GitCredentialInput } from "@/components/admin/gitCredentials.types";
 
-export interface GitCredential {
-  id: string;
-  name: string;
-  kind: "https_token" | "ssh_key";
-  host: string;
-  username: string;
-}
-export type GitCredentialInput = Omit<GitCredential, "id"> & { secret?: string };
+export type { GitCredential, GitCredentialInput } from "@/components/admin/gitCredentials.types";
 const KEY = ["git-credentials"] as const;
 export function useGitCredentials() {
   return useQuery({ queryKey: KEY, queryFn: () => api.get<GitCredential[]>("/git-credentials") });

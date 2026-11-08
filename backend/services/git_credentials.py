@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 import asyncssh
@@ -13,10 +14,13 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.repositories import GitCredential
+from services.crypto import decrypt
 from services.errors import NotFoundError, ValidationError
 from services.repository_validation import validate_git_url
 
 MAX_TCP_PORT = 65535
+HTTPS_TOKEN_KIND = "https_token"
+SSH_KEY_KIND = "ssh_key"
 _INVALID_CREDENTIAL_CHARACTERS = ("\n", "\r", "\x00")
 
 
@@ -60,7 +64,7 @@ async def resolve_credential(
     credential = await lock_credential(session, credential_id)
     if credential.host != host:
         raise ValidationError("Хост репозитория не соответствует учётным данным Git")
-    if (credential.kind == "https_token") != https:
+    if (credential.kind == HTTPS_TOKEN_KIND) != https:
         raise ValidationError("Протокол Git URL не соответствует типу учётных данных")
     return credential
 
@@ -78,7 +82,7 @@ async def lock_credential(session: AsyncSession, credential_id: uuid.UUID) -> Gi
 
 
 def validate_secret(kind: str, secret: str) -> None:
-    if kind == "ssh_key":
+    if kind == SSH_KEY_KIND:
         try:
             asyncssh.import_private_key(secret)
         except (ValueError, asyncssh.KeyImportError) as exc:
@@ -90,3 +94,36 @@ def validate_secret(kind: str, secret: str) -> None:
 def validate_username(username: str) -> None:
     if any(character in username for character in _INVALID_CREDENTIAL_CHARACTERS):
         raise ValidationError("Недопустимый логин")
+
+
+@dataclass(frozen=True, slots=True)
+class GitlabApiAccess:
+    """Адрес и токен GitLab API учётных данных Git (раздел 3.1, 16.2)."""
+
+    base_url: str
+    token: str
+
+
+def gitlab_api_access(credential: GitCredential | None) -> GitlabApiAccess | None:
+    """
+    `None` — у репозитория нет учётных данных или опрос API выключен. Без
+    своего токена API у HTTPS-доступа используется сам токен Git.
+    """
+    if credential is None or not credential.gitlab_api_enabled:
+        return None
+    if credential.gitlab_api_token_encrypted:
+        token = decrypt(credential.gitlab_api_token_encrypted)
+    elif credential.kind == HTTPS_TOKEN_KIND:
+        token = decrypt(credential.secret_encrypted)
+    else:
+        return None
+    return GitlabApiAccess(
+        base_url=credential.gitlab_api_url or f"https://{credential.host}",
+        token=token,
+    )
+
+
+def validate_gitlab_api(*, kind: str, enabled: bool, has_token: bool) -> None:
+    """У SSH-ключа нет токена для API: при включённом опросе нужен свой."""
+    if enabled and kind == SSH_KEY_KIND and not has_token:
+        raise ValidationError("Для SSH-ключа укажите токен GitLab API")

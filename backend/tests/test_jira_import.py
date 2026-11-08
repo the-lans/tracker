@@ -109,7 +109,7 @@ async def _connect(
     server: str | None = _JIRA_URL,
 ) -> None:
     """Администратор задал адрес Jira, пользователь сохранил личный токен."""
-    await update_integrations(db_session, gitlab_url=None, gitlab_token=None, jira_url=server)
+    await update_integrations(db_session, jira_url=server)
     response = await authed_client.put(
         "/profile/jira",
         json={"jira_email": email, "jira_token": "jira-token"},
