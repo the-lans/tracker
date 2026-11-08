@@ -5,7 +5,8 @@ import { makeUser } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
-const field = () => screen.getByRole("spinbutton", { name: "Параллельных задач:" });
+const USER = makeUser({ id: "u2", max_parallel_tasks: 3 });
+const field = () => screen.getByRole("spinbutton", { name: `Параллельных задач ${USER.email}` });
 
 describe("UserTaskLimitEditor", () => {
   test.for([
@@ -17,7 +18,7 @@ describe("UserTaskLimitEditor", () => {
     { input: "3{Enter}", body: null },
     { input: "7{Escape}", body: null },
   ])("«$input» → $body", async ({ input, body }, { api }) => {
-    const { user } = renderWithProviders(<UserTaskLimitEditor user={makeUser({ id: "u2", max_parallel_tasks: 3 })} />);
+    const { user } = renderWithProviders(<UserTaskLimitEditor user={USER} />);
 
     await user.clear(field());
     await user.type(field(), input);

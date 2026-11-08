@@ -38,6 +38,7 @@ from services.task_duplication import duplicate_task
 from services.task_editing import update_task as update_task_fields
 from services.task_queue import queue_positions, queue_summary
 from services.task_workspace import load_task_repositories
+from tasks.celery_app import wake_task_dispatcher
 from tasks.jira_attachments import copy_jira_attachments_to_task
 
 router = APIRouter(prefix=TASKS_PREFIX, tags=TASKS_TAGS)
@@ -145,11 +146,16 @@ async def update_task(
     ``auto_accept_plan`` — до `done`, приоритет и слот — всегда (раздел 14.4).
     """
     task = await get_task_or_404(db_session, task_id, current_user)
-    return await update_task_fields(
+    slot_released = task.occupies_slot and body.occupies_slot is False
+    updated = await update_task_fields(
         db_session,
         task=task,
         changes=body.model_dump(exclude_unset=True),
     )
+    if slot_released:
+        # Раздел 14.4: освободившийся слот — задачи очереди запускаются сразу.
+        wake_task_dispatcher()
+    return updated
 
 
 @router.get("/{task_id}/repositories", response_model=list[TaskRepositoryResponse])

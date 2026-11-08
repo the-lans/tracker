@@ -130,14 +130,17 @@ class TestWorker:
         [(False, True), (True, False)],
         ids=["claim", "continuation"],
     )
+    @pytest.mark.parametrize("queued_only", [False, True])
     async def test_queued_not_claimed(
         self,
+        *,
         db_session: AsyncSession,
         redis_client: Redis,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         continuation: bool,
         deferred: bool,
+        queued_only: bool,
     ) -> None:
         env = install_worker_env(
             db_session=db_session,
@@ -152,10 +155,13 @@ class TestWorker:
             task.id,
             start_after_order_index=None,
             continuation=continuation,
+            queued_only=queued_only,
         )
 
         await db_session.refresh(task)
         assert task.status is TaskStatus.QUEUED
         kwargs = {"start_after_order_index": None, "continuation": False, "chat_only": False}
+        if queued_only:
+            kwargs["queued_only"] = True
         expected = [([str(task.id)], kwargs)]
         assert env.enqueued == (expected if deferred else [])

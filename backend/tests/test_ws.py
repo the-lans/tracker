@@ -145,6 +145,7 @@ class TestStreamTaskEvents:
             TaskState(TaskStatus.IN_PROGRESS),
             TaskState(TaskStatus.IN_PROGRESS, current_llm_account_id=account_id),
             TaskState(TaskStatus.PLAN_REVIEW, current_llm_account_id=account_id),
+            TaskState(TaskStatus.REFINING, current_llm_account_id=account_id, chat_active=True),
         ]
         sent: list[dict[str, Any]] = []
         received_status = asyncio.Event()
@@ -182,6 +183,8 @@ class TestStreamTaskEvents:
                 "current_llm_account_id": str(account_id),
             },
             {"type": "status", "task_id": str(task_id), "status": "plan_review"},
+            {"type": "status", "task_id": str(task_id), "status": "refining"},
+            {"type": "chat", "task_id": str(task_id), "chat_active": True},
         ]
 
 

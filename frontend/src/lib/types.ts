@@ -531,7 +531,18 @@ export interface TaskLlmAccountEvent {
   current_llm_account_id: string | null;
 }
 
-export type TaskSocketEvent = TaskStatusEvent | TaskOutputDeltaEvent | TaskLlmAccountEvent;
+/** Раздел 14.4: воркер начал или закончил чат в «Уточняется» — статус не меняется. */
+export interface TaskChatEvent {
+  type: "chat";
+  task_id: string;
+  chat_active: boolean;
+}
+
+export type TaskSocketEvent =
+  | TaskStatusEvent
+  | TaskOutputDeltaEvent
+  | TaskLlmAccountEvent
+  | TaskChatEvent;
 
 /** Накопленный потоковый текст по `node_logs.id`. */
 export type TaskOutputStream = Record<string, string>;

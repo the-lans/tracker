@@ -1,13 +1,15 @@
-"""Воркер очереди: дневной и ночной проход (раздел 14.4, 16.2 ТЗ)."""
+"""
+Воркер очереди: дневной и ночной проход (раздел 14.4, 16.2 ТЗ).
+"""
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, time, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
 import sqlalchemy as sa
+from kombu.exceptions import OperationalError
 
 import services.task_dispatcher as dispatcher_module
 from db.models.enums import AppLogLevel, TaskStatus
@@ -69,7 +71,9 @@ async def _queued(
     priority: int = 100,
     minutes_ago: int = 10,
 ) -> Task:
-    """Задача очереди, готовая к запуску: пайплайн есть, LLM-нод нет."""
+    """
+    Задача очереди, готовая к запуску: пайплайн есть, LLM-нод нет.
+    """
     pipeline = await make_pipeline(db_session, created_by=user.id)
     return await make_task(
         db_session,
@@ -86,9 +90,8 @@ async def _dispatch(
     redis_client: Redis,
     *,
     now: datetime = _DAY,
-    night: bool = False,
 ) -> dispatcher_module.DispatchResult:
-    return await dispatch_queued_tasks(db_session, redis_client, now=now, night=night)
+    return await dispatch_queued_tasks(db_session, redis_client, now=now)
 
 
 async def _status(db_session: AsyncSession, task: Task) -> TaskStatus:
@@ -126,6 +129,7 @@ class TestLimit:
     )
     async def test_occupied(
         self,
+        *,
         db_session: AsyncSession,
         redis_client: Redis,
         busy_status: TaskStatus,
@@ -217,24 +221,19 @@ class TestSessionProcesses:
 
 class TestNightWindow:
     @pytest.mark.parametrize(
-        ("now", "night", "launched"),
-        [
-            pytest.param(_DAY, False, False, id="днём дневной"),
-            pytest.param(_NIGHT, False, True, id="ночью дневной"),
-            pytest.param(_DAY, True, True, id="ночной воркер"),
-        ],
+        ("now", "launched"),
+        [pytest.param(_DAY, False, id="днём"), pytest.param(_NIGHT, True, id="ночью")],
     )
     async def test_night_worker(
         self,
         db_session: AsyncSession,
         redis_client: Redis,
         now: datetime,
-        night: bool,
         launched: bool,
     ) -> None:
         task = await _queued(db_session, await _user(db_session), status=TaskStatus.NIGHT_WORKER)
 
-        result = await _dispatch(db_session, redis_client, now=now, night=night)
+        result = await _dispatch(db_session, redis_client, now=now)
 
         assert (task.id in result.launched_task_ids) is launched
 
@@ -262,7 +261,7 @@ class TestNightWindow:
         await _queued(db_session, user, minutes_ago=5)
         night = await _queued(db_session, user, status=TaskStatus.NIGHT_WORKER, minutes_ago=50)
 
-        result = await _dispatch(db_session, redis_client, night=True)
+        result = await _dispatch(db_session, redis_client, now=_NIGHT)
 
         assert result.launched_task_ids == [night.id]
 
@@ -300,8 +299,10 @@ class TestLaunchFailure:
         assert (result.launched_task_ids, result.failed_task_ids) == ([good.id], [broken.id])
         assert await _status(db_session, broken) is TaskStatus.READY
         logs = (
-            await db_session.execute(sa.select(AppLog).where(AppLog.task_id == broken.id))
-        ).scalars().all()
+            (await db_session.execute(sa.select(AppLog).where(AppLog.task_id == broken.id)))
+            .scalars()
+            .all()
+        )
         assert [(log.level, log.source) for log in logs] == [
             (AppLogLevel.ERROR, "task_dispatcher"),
         ]
@@ -320,8 +321,10 @@ class TestLaunchFailure:
         await _dispatch(db_session, redis_client)
 
         logs = (
-            await db_session.execute(sa.select(AppLog).where(AppLog.task_id == broken.id))
-        ).scalars().all()
+            (await db_session.execute(sa.select(AppLog).where(AppLog.task_id == broken.id)))
+            .scalars()
+            .all()
+        )
         assert (len(logs), notifications) == (1, [NotificationEvent.QUEUE_LAUNCH_FAILED])
 
 
@@ -383,33 +386,114 @@ class TestAutostart:
 
 
 class TestCeleryTasks:
-    @pytest.mark.parametrize(
-        ("task_name", "night"),
-        [("dispatch_ready_tasks", False), ("dispatch_night_tasks", True)],
-    )
+    @pytest.mark.parametrize("task_name", ["dispatch_ready_tasks", "dispatch_night_tasks"])
     async def test_enqueue_sessions(
         self,
         db_session: AsyncSession,
         monkeypatch: pytest.MonkeyPatch,
         task_name: str,
-        night: bool,
     ) -> None:
-        launched_id = uuid.uuid4()
-        calls: list[bool] = []
+        task = await _queued(db_session, await _user(db_session))
+        task.status = TaskStatus.QUEUED
+        task.queued_from_status = TaskStatus.READY
+        await db_session.commit()
+        launched_id = task.id
+        calls: list[datetime] = []
         bodies: list[object] = []
-        enqueued: list[str] = []
+        enqueued: list[tuple[str, bool]] = []
 
-        async def dispatch(*_args: object, night: bool, **_kwargs: object) -> object:
-            calls.append(night)
+        async def dispatch(*_args: object, now: datetime) -> object:
+            calls.append(now)
             return dispatcher_module.DispatchResult(launched_task_ids=[launched_id])
 
         monkeypatch.setattr(periodic, "dispatch_queued_tasks", dispatch)
         monkeypatch.setattr(periodic, "_run_periodic", lambda _name, body: bodies.append(body))
-        monkeypatch.setattr(run_task_session, "delay", enqueued.append)
+        monkeypatch.setattr(
+            run_task_session,
+            "delay",
+            lambda task_id, *, queued_only: enqueued.append((task_id, queued_only)),
+        )
 
         getattr(periodic, task_name)()
         [body] = bodies
         await body(db_session)  # type: ignore[operator]
 
-        assert (calls, enqueued) == ([night], [str(launched_id)])
+        assert (len(calls), enqueued) == (1, [(str(launched_id), True)])
 
+
+class TestDeliveryRecovery:
+    async def test_partial_dispatch_delivers_committed_tasks(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user = await _user(db_session)
+        good = await _queued(db_session, user, priority=200)
+        broken = await _queued(db_session, user, priority=100)
+        good_id, broken_id = good.id, broken.id
+        await db_session.commit()
+        original = ensure_task_launchable
+
+        async def interrupted(db: AsyncSession, task: Task) -> None:
+            if task.id == broken_id:
+                raise RuntimeError("сбой прохода после commit первой задачи")
+            await original(db, task)
+
+        enqueued: list[str] = []
+        monkeypatch.setattr(dispatcher_module, "ensure_task_launchable", interrupted)
+        monkeypatch.setattr(
+            run_task_session, "delay", lambda task_id, **_: enqueued.append(task_id)
+        )
+
+        with pytest.raises(RuntimeError, match="сбой прохода"):
+            await periodic._dispatch(db_session)
+
+        assert enqueued == [str(good_id)]
+        await db_session.refresh(good)
+        assert good.status is TaskStatus.QUEUED
+
+    async def test_broker_failure_retried_next_pass(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user = await _user(db_session)
+        tasks = [await _queued(db_session, user) for _ in range(2)]
+        ids = {str(task.id) for task in tasks}
+        attempts: list[str] = []
+
+        def unavailable(task_id: str, **_kwargs: object) -> None:
+            attempts.append(task_id)
+            raise OperationalError("брокер недоступен")
+
+        monkeypatch.setattr(run_task_session, "delay", unavailable)
+        with pytest.raises(OperationalError):
+            await periodic._dispatch(db_session)
+        assert set(attempts) == ids
+
+        delivered: list[str] = []
+        monkeypatch.setattr(
+            run_task_session, "delay", lambda task_id, **_: delivered.append(task_id)
+        )
+        await periodic._dispatch(db_session)
+        assert set(delivered) == ids
+
+    async def test_manual_restart_not_recovered_as_new_launch(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user = await _user(db_session)
+        await make_task(
+            db_session,
+            created_by=user.id,
+            status=TaskStatus.QUEUED,
+            launched_manually=True,
+            last_failed_order_index=2,
+        )
+        delivered: list[str] = []
+        monkeypatch.setattr(
+            run_task_session, "delay", lambda task_id, **_: delivered.append(task_id)
+        )
+        await periodic._dispatch(db_session)
+        assert delivered == []

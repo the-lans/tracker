@@ -26,6 +26,8 @@ from services.manual_admission import ensure_manual_requests_open
 from services.manual_queue import enqueue_freeform_prompt_run, expire_stale_manual_queue_requests
 from services.remote_control import check_session_bridges
 from services.session_heartbeat import is_session_alive, keep_session_heartbeat
+from services.task_control import TaskControlCommand, read_task_control, request_task_control
+from services.task_status import reset_task_run
 from tasks import session_worker
 from tests.factories import make_llm_account, make_pipeline, make_task, make_user
 from tests.fakes import FakeClaudeAgentClient, make_result_message, patch_plan_mode_signals
@@ -370,7 +372,9 @@ class TestLostChat:
         assert (task.status, task.chat_active) == expected
 
     async def test_lost_during_answer(self, db_session: AsyncSession, redis_client: Redis) -> None:
-        """Ответ агента без вопроса: задача в `refining`, а не в статусе сессии."""
+        """
+        Ответ агента без вопроса: задача в `refining`, а не в статусе сессии.
+        """
         task = await _refining_task(db_session)
         await _enqueue(db_session, task, "вопрос")
         await db_session.execute(
@@ -431,7 +435,9 @@ class TestChatBlocksBackgroundJobs:
 
 
 class TestAdmission:
-    """Скрипт из библиотеки LLM не нужен, но чат «Уточняется» ведёт только агент."""
+    """
+    Скрипт из библиотеки LLM не нужен, но чат «Уточняется» ведёт только агент.
+    """
 
     @pytest.mark.parametrize(
         ("status", "with_llm", "error"),
@@ -451,3 +457,68 @@ class TestAdmission:
         else:
             with pytest.raises(error):
                 ensure_manual_requests_open(task)
+
+
+async def test_chat_after_stopped_run_clears_old_command(
+    db_session: AsyncSession,
+    worker_env: WorkerEnv,
+    redis_client: Redis,
+    followups: list[tuple[Any, ...]],
+) -> None:
+    task = await _refining_task(db_session, status=TaskStatus.FAILED)
+    await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+    await reset_task_run(db_session, task_id=task.id, to_status=TaskStatus.REFINING)
+    await _enqueue(db_session, task, "Объясни причину остановки")
+    worker_env.client = FakeClaudeAgentClient(messages_per_query=_answers(1))
+
+    await _run_chat(task)
+
+    assert worker_env.client.queries == ["Объясни причину остановки"]
+    assert await _request_statuses(db_session, task) == [ManualRequestStatus.DONE]
+    assert await read_task_control(redis_client, task.id) is None
+    assert followups == []
+
+
+@pytest.mark.parametrize("status", [TaskStatus.FAILED, TaskStatus.IN_PROGRESS, TaskStatus.DEFINED])
+async def test_repeated_queue_delivery_never_restarts_finished_attempt(
+    db_session: AsyncSession,
+    worker_env: WorkerEnv,
+    status: TaskStatus,
+) -> None:
+    task = await _refining_task(db_session, status=status)
+    await session_worker._run_task_session_async(
+        task.id,
+        start_after_order_index=None,
+        continuation=False,
+        queued_only=True,
+    )
+    await db_session.refresh(task)
+    assert task.status is status
+    assert worker_env.options == []
+
+
+async def test_new_stop_during_chat_does_not_schedule_followup(
+    db_session: AsyncSession,
+    worker_env: WorkerEnv,
+    redis_client: Redis,
+    followups: list[tuple[Any, ...]],
+) -> None:
+    task = await _refining_task(db_session)
+    await _enqueue(db_session, task, "Первое сообщение")
+    await _enqueue(db_session, task, "Второе сообщение")
+
+    async def stop_during_answer() -> None:
+        await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+
+    worker_env.client = FakeClaudeAgentClient(
+        messages_per_query=_answers(1),
+        on_query=stop_during_answer,
+    )
+    await _run_chat(task)
+
+    assert worker_env.client.queries == ["Первое сообщение"]
+    assert await _request_statuses(db_session, task) == [
+        ManualRequestStatus.DONE,
+        ManualRequestStatus.QUEUED,
+    ]
+    assert followups == []

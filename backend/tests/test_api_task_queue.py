@@ -38,7 +38,7 @@ _SETTINGS = {
 def wakes(monkeypatch: pytest.MonkeyPatch) -> list[None]:
     """Пробуждения воркера очереди из API — без брокера Celery."""
     calls: list[None] = []
-    for module in ("api.tasks.lifecycle", "api.users"):
+    for module in ("api.tasks.lifecycle", "api.tasks.crud", "api.users"):
         monkeypatch.setattr(f"{module}.wake_task_dispatcher", lambda: calls.append(None))
     return calls
 
@@ -72,6 +72,7 @@ class TestStatusChange:
     )
     async def test_changed(
         self,
+        *,
         authed_client: AsyncClient,
         db_session: AsyncSession,
         current_user: User,
@@ -100,6 +101,7 @@ class TestStatusChange:
     )
     async def test_rejected(
         self,
+        *,
         authed_client: AsyncClient,
         db_session: AsyncSession,
         current_user: User,
@@ -147,6 +149,7 @@ class TestCancel:
     )
     async def test_target(
         self,
+        *,
         authed_client: AsyncClient,
         db_session: AsyncSession,
         current_user: User,
@@ -186,6 +189,34 @@ class TestRunControlFields:
 
         assert response.status_code == 200, response.text
         assert (response.json()["queue_priority"], response.json()["occupies_slot"]) == (250, True)
+
+    @pytest.mark.parametrize(
+        ("before", "after", "woken"),
+        [(True, False, True), (False, False, False), (False, True, False), (True, True, False)],
+    )
+    async def test_released_slot_wakes_dispatcher(
+        self,
+        *,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        wakes: list[None],
+        before: bool,
+        after: bool,
+        woken: bool,
+    ) -> None:
+        task = await _task(
+            db_session,
+            current_user,
+            TaskStatus.IN_PROGRESS,
+            launched_manually=True,
+            occupies_slot=before,
+        )
+
+        response = await authed_client.patch(f"/tasks/{task.id}", json={"occupies_slot": after})
+
+        assert response.status_code == 200, response.text
+        assert bool(wakes) is woken
 
     @pytest.mark.parametrize("priority", [0, 1_000_001])
     async def test_priority_range(
@@ -364,7 +395,9 @@ class TestNightWindow:
 
 @pytest.fixture
 def chat_wakes(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
-    """Как запрос будит сессию: новый проход чата или сигнал живому воркеру."""
+    """
+    Как запрос будит сессию: новый проход чата или сигнал живому воркеру.
+    """
     calls: list[tuple[str, Any]] = []
 
     def delay(task_id: str, **kwargs: Any) -> None:
@@ -398,6 +431,7 @@ class TestRefiningChat:
     )
     async def test_freeform_wakes_chat(
         self,
+        *,
         authed_client: AsyncClient,
         db_session: AsyncSession,
         current_user: User,

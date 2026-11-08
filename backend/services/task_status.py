@@ -244,6 +244,12 @@ async def transition_task_status(
         .values(**values)
         .returning(Task)
     )
+    # Начало чата меняет флаг, но оставляет статус refining. Проверка флага
+    # в том же UPDATE исключает гонку с start_chat после чтения задачи.
+    if from_status is TaskStatus.REFINING and to_status in PRE_LAUNCH_STATUSES | {
+        TaskStatus.QUEUED
+    }:
+        stmt = stmt.where(Task.chat_active == sa.false())
     result = await db_session.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:

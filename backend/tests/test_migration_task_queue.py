@@ -24,8 +24,7 @@ async def _seed_task(engine: AsyncEngine) -> uuid.UUID:
     async with engine.begin() as connection:
         await connection.execute(
             sa.text(
-                "INSERT INTO users (id, email, role, is_active) "
-                "VALUES (:id, :email, 'user', true)",
+                "INSERT INTO users (id, email, role, is_active) VALUES (:id, :email, 'user', true)",
             ),
             {"id": user_id, "email": f"{user_id}@example.com"},
         )
@@ -77,9 +76,15 @@ class TestTaskQueueMigration:
                 "SELECT column_default FROM information_schema.columns "
                 "WHERE table_name = 'system_settings' AND column_name = 'night_window_start'",
             )
+            launched_default = await _scalar(
+                engine,
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_name = 'tasks' AND column_name = 'launched_manually'",
+            )
         finally:
             await engine.dispose()
-        assert tuple(task) == (100, None, False, False, None, False)
+        assert tuple(task) == (100, None, False, True, None, False)
+        assert launched_default == "false"
         assert limit == 3
         assert set(_NEW_STATUSES) <= labels
         assert "03:15" in str(column_default)

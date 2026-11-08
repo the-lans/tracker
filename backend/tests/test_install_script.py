@@ -10,19 +10,26 @@ from __future__ import annotations
 
 import gzip
 import os
+import re
 import shutil
 import subprocess
 import tarfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+import sqlalchemy as sa
 
 from db.models.enums import TaskStatus
 from services.maintenance import MAINTENANCE_KEY
 from services.periodic_tasks import NIGHT_DISPATCH_TASK
 from services.task_status import SESSION_ACTIVE_STATUSES
 from tasks.celery_app import DISPATCH_READY_TASKS
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
 
 _INSTALL_SCRIPT = Path(__file__).resolve().parents[2] / "deploy" / "install.sh"
 # Системные утилиты, которые нужны скрипту и заглушкам. PATH теста состоит
@@ -814,3 +821,35 @@ class TestInvalidEnv:
         assert "SECRET_ENCRYPTION_KEY" in result.stdout
         assert not any("docker run" in call for call in _calls(stubs))
         assert (install_dir / ".env").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["с чатом", "прежняя схема"])
+async def test_deploy_live_count_supports_chat_and_legacy_schema(
+    db_session: AsyncSession,
+    legacy: bool,
+) -> None:
+    source = _INSTALL_SCRIPT.read_text()
+    statuses = re.search(r'^LIVE_SESSION_STATUSES="(.*)"', source, re.MULTILINE)
+    function = source.split("_live_session_count() {", 1)[1].split("\n}", 1)[0]
+    query = re.search(r'local query="(.*)"', function)
+    assert statuses is not None and query is not None
+    sql = query[1].replace("${LIVE_SESSION_STATUSES}", statuses[1])
+    sql = sql.replace("tasks", "deploy_live_count_test")
+    chat_column = "" if legacy else ", chat_active boolean NOT NULL DEFAULT false"
+    await db_session.execute(
+        sa.text(
+            f"CREATE TEMP TABLE deploy_live_count_test (status text{chat_column}) ON COMMIT DROP",
+        )
+    )
+    if legacy:
+        values = "('new'), ('in_progress')"
+        columns = "status"
+    else:
+        values = "('refining', true), ('refining', false), ('new', false)"
+        columns = "status, chat_active"
+    await db_session.execute(
+        sa.text(
+            f"INSERT INTO deploy_live_count_test ({columns}) VALUES {values}",
+        )
+    )
+    assert await db_session.scalar(sa.text(sql)) == 1

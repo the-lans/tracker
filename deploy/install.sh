@@ -602,7 +602,8 @@ _clear_maintenance_flag() {
 }
 
 _live_session_count() {
-  local query="SELECT count(*) FROM tasks WHERE status IN (${LIVE_SESSION_STATUSES})"
+  # to_jsonb сохраняет совместимость с версией БД до добавления chat_active.
+  local query="SELECT count(*) FROM tasks WHERE status IN (${LIVE_SESSION_STATUSES}) OR to_jsonb(tasks)->>'chat_active' = 'true'"
   ( cd "${INSTALL_DIR}" \
     && docker compose exec -T postgres \
       sh -c 'psql -tA -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "${query}" )

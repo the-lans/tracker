@@ -42,6 +42,7 @@ logger = get_logger("task_queue")
 
 # Раздел 3.1 `system_settings.night_window_*`: ночное окно задаётся по Москве.
 NIGHT_WINDOW_TIMEZONE = ZoneInfo("Europe/Moscow")
+_NIGHT_WINDOW_REFERENCE_DATE = date(2000, 1, 1)
 
 # Статусы, в которых задача занимает слот, если её запустил воркер очереди
 # или у неё стоит галочка `occupies_slot`. `failed` слот не освобождает:
@@ -62,7 +63,9 @@ QUEUE_ORDER = (Task.queue_priority.desc(), Task.ready_at.asc(), Task.id.asc())
 
 
 def slot_clause() -> sa.ColumnElement[bool]:
-    """Задача в работе занимает слот автора (без чата в `refining`)."""
+    """
+    Задача в работе занимает слот автора (без чата в `refining`).
+    """
     return sa.and_(
         Task.status.in_(SLOT_STATUSES),
         sa.or_(Task.launched_manually == sa.false(), Task.occupies_slot == sa.true()),
@@ -74,7 +77,9 @@ async def _refining_chats_with_slot(
     redis_client: Redis,
     user_ids: Iterable[uuid.UUID],
 ) -> dict[uuid.UUID, int]:
-    """Чаты в `refining` с галочкой `occupies_slot`, у которых жива сессия."""
+    """
+    Чаты в `refining` с галочкой `occupies_slot`, у которых жива сессия.
+    """
     rows = await db_session.execute(
         sa.select(Task.id, Task.created_by).where(
             Task.created_by.in_(list(user_ids)),
@@ -94,7 +99,9 @@ async def occupied_slots(
     redis_client: Redis,
     user_ids: Iterable[uuid.UUID],
 ) -> dict[uuid.UUID, int]:
-    """Занятые слоты по пользователям; пользователи без занятых — не в словаре."""
+    """
+    Занятые слоты по пользователям; пользователи без занятых — не в словаре.
+    """
     ids = list(user_ids)
     rows = await db_session.execute(
         sa.select(Task.created_by, sa.func.count())
@@ -111,7 +118,9 @@ async def queue_positions(
     db_session: AsyncSession,
     task_ids: Iterable[uuid.UUID],
 ) -> dict[uuid.UUID, int]:
-    """Место (с 1) задач в очереди их авторов; задачи вне очереди — не в словаре."""
+    """
+    Место (с 1) задач в очереди их авторов; задачи вне очереди — не в словаре.
+    """
     ids = list(task_ids)
     if not ids:
         return {}
@@ -174,9 +183,11 @@ def night_window_active(now: datetime, *, start: time, end: time) -> bool:
 
 
 def night_window_cron(start: time) -> str:
-    """Crontab по UTC (расписание Beat — `timezone="UTC"`) для начала ночного окна."""
+    """
+    Crontab по UTC (расписание Beat — `timezone="UTC"`) для начала ночного окна.
+    """
     # Московское время без перехода на летнее: сдвиг одинаков в любой день.
-    local = datetime.combine(date(2000, 1, 1), start, tzinfo=NIGHT_WINDOW_TIMEZONE)
+    local = datetime.combine(_NIGHT_WINDOW_REFERENCE_DATE, start, tzinfo=NIGHT_WINDOW_TIMEZONE)
     utc = local.astimezone(UTC)
     return f"{utc.minute} {utc.hour} * * *"
 

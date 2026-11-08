@@ -11,6 +11,7 @@ from db.models.tasks import Task
 from services.autostart import find_tasks_due_for_autostart, run_scheduled_autostart_check
 from services.errors import ConflictError, ValidationError
 from services.notifications import NotificationEvent
+from services.refining_chat import start_chat
 from tasks import periodic
 from tests.factories import make_pipeline, make_task, make_user
 
@@ -201,3 +202,28 @@ class TestRepositoryEnvConflict:
         assert events == [NotificationEvent.AUTOSTART_FAILED]
         await db_session.refresh(task)
         assert task.status is TaskStatus.NEW
+
+
+async def test_chat_started_after_selection_defers_autostart(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = await _make_task(
+        db_session,
+        status=TaskStatus.REFINING,
+        scheduled_start_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+
+    async def chat_begins(db: AsyncSession, candidate: Task) -> None:
+        assert await start_chat(db, task_id=candidate.id) is not None
+
+    monkeypatch.setattr(autostart_module, "ensure_task_launchable", chat_begins)
+    result = await run_scheduled_autostart_check(db_session, now=datetime.now(UTC))
+
+    await db_session.refresh(task)
+    assert (task.status, task.chat_active, task.auto_start_enabled) == (
+        TaskStatus.REFINING,
+        True,
+        True,
+    )
+    assert result.queued_task_ids == result.failed_task_ids == []

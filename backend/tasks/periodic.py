@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import sqlalchemy as sa
+from kombu.exceptions import OperationalError
 
 from app_logging.app_logs import write_app_log
 from app_logging.config import get_logger
@@ -36,11 +37,12 @@ from services import gitlab_sync, maintenance_tasks, users
 from services.autostart import run_scheduled_autostart_check
 from services.llm_account_checks import check_llm_accounts
 from services.log_rotation import resolve_archive_root, rotate_node_logs
+from services.maintenance import maintenance_active
 from services.manual_queue import STALE_QUEUED_REQUEST_AGE, expire_stale_manual_queue_requests
 from services.periodic_tasks import mark_periodic_task_running, record_periodic_task_run
 from services.redis_connection import redis_connection
 from services.remote_control import check_session_bridges
-from services.task_dispatcher import dispatch_queued_tasks
+from services.task_dispatcher import dispatch_queued_tasks, pending_queue_session_ids
 from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import DISPATCH_READY_TASKS, celery_app, wake_task_dispatcher
 from tasks.session_worker import run_task_session
@@ -107,37 +109,46 @@ def check_scheduled_tasks_for_autostart() -> None:
     _run_periodic("check_scheduled_tasks_for_autostart", body)
 
 
-async def _dispatch(db_session: AsyncSession, *, night: bool) -> None:
+async def _dispatch(db_session: AsyncSession) -> None:
     async with redis_connection() as redis_client:
-        result = await dispatch_queued_tasks(
-            db_session,
-            redis_client,
-            now=datetime.now(UTC),
-            night=night,
-        )
-    # Переход в `queued` уже зафиксирован — таск сессии ставится после него.
-    for task_id in result.launched_task_ids:
-        run_task_session.delay(str(task_id))
+        try:
+            await dispatch_queued_tasks(db_session, redis_client, now=datetime.now(UTC))
+        except Exception:
+            # После ошибки запроса сессия может быть в прерванной транзакции.
+            await db_session.rollback()
+            raise
+        finally:
+            # Переходы уже закоммичены по одному. Даже при сбое посередине
+            # доставляем их; после сбоя брокера повторит следующий проход.
+            if not await maintenance_active(redis_client):
+                await _deliver_queued_sessions(db_session)
+
+
+async def _deliver_queued_sessions(db_session: AsyncSession) -> None:
+    failure: OperationalError | None = None
+    for task_id in await pending_queue_session_ids(db_session):
+        try:
+            run_task_session.delay(str(task_id), queued_only=True)
+        except OperationalError as exc:
+            logger.exception("queue_session_delivery_failed", task_id=str(task_id))
+            failure = exc
+    if failure is not None:
+        raise failure
 
 
 @celery_app.task(name=DISPATCH_READY_TASKS)
 def dispatch_ready_tasks() -> None:
     """Раздел 14.4: дневной воркер — задачи очереди в свободные слоты."""
-
-    async def body(db_session: AsyncSession) -> None:
-        await _dispatch(db_session, night=False)
-
-    _run_periodic(DISPATCH_READY_TASKS, body)
+    _run_periodic(DISPATCH_READY_TASKS, _dispatch)
 
 
 @celery_app.task(name="dispatch_night_tasks")
 def dispatch_night_tasks() -> None:
-    """Раздел 14.4: ночной воркер — в начале ночного окна берёт и `night_worker`."""
-
-    async def body(db_session: AsyncSession) -> None:
-        await _dispatch(db_session, night=True)
-
-    _run_periodic("dispatch_night_tasks", body)
+    """
+    Раздел 14.4: ночной воркер — тот же проход по расписанию начала ночного
+    окна, чтобы задачи `night_worker` стартовали сразу, а не через 5 минут.
+    """
+    _run_periodic("dispatch_night_tasks", _dispatch)
 
 
 @celery_app.task(name="check_llm_account_limits")

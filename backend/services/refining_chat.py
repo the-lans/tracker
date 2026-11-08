@@ -35,7 +35,9 @@ CHAT_BUSY_MESSAGE = "Дождитесь окончания ответа аген
 
 
 class ChatLostError(RuntimeError):
-    """Воркер, ведший чат задачи, перестал подавать пульс (раздел 6.6)."""
+    """
+    Воркер, ведший чат задачи, перестал подавать пульс (раздел 6.6).
+    """
 
 
 async def start_chat(db_session: AsyncSession, *, task_id: uuid.UUID) -> Task | None:

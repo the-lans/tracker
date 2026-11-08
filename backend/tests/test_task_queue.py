@@ -1,4 +1,6 @@
-"""Очередь задач пользователя и слоты параллельного запуска (раздел 14.4 ТЗ)."""
+"""
+Очередь задач пользователя и слоты параллельного запуска (раздел 14.4 ТЗ).
+"""
 
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import pytest
 from db.models.enums import TaskStatus
 from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
+from services.refining_chat import start_chat
 from services.session_heartbeat import beat
 from services.task_queue import (
     change_task_status_manually,
@@ -21,6 +24,7 @@ from services.task_queue import (
     queue_summary,
     validate_night_window,
 )
+from services.task_status import transition_task_status
 from tests.factories import make_task, make_user
 
 if TYPE_CHECKING:
@@ -84,6 +88,7 @@ class TestOccupiedSlots:
     )
     async def test_by_status(
         self,
+        *,
         db_session: AsyncSession,
         redis_client: Redis,
         status: TaskStatus,
@@ -366,3 +371,21 @@ class TestManualStatusChange:
         )
 
         assert updated.status is TaskStatus.DEFINED
+
+
+@pytest.mark.parametrize("target", [TaskStatus.READY, TaskStatus.DEFINED, TaskStatus.QUEUED])
+async def test_status_cas_rechecks_chat_flag(
+    db_session: AsyncSession,
+    target: TaskStatus,
+) -> None:
+    task = await make_task(db_session, status=TaskStatus.REFINING)
+    await start_chat(db_session, task_id=task.id)
+    with pytest.raises(ConflictError):
+        await transition_task_status(
+            db_session,
+            task_id=task.id,
+            from_status=TaskStatus.REFINING,
+            to_status=target,
+        )
+    await db_session.refresh(task)
+    assert (task.status, task.chat_active) == (TaskStatus.REFINING, True)

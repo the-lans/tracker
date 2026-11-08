@@ -147,30 +147,41 @@ def run_task_session(
     start_after_order_index: int | None = None,
     continuation: bool = False,
     chat_only: bool = False,
+    queued_only: bool = False,
 ) -> None:
     """``start_after_order_index`` — ноды с ``order_index`` не больше него
     не выполняются (продолжение после `clear_context`, перезапуск после
     `failed`). ``continuation`` — задача уже в `in_progress`: предыдущий
     таск передал сессию этому после `clear_context` (раздел 11.5).
     ``chat_only`` — чат в «Уточняется» (раздел 14.4): только ручные запросы,
-    без пайплайна и без смены статуса."""
+    без пайплайна и без смены статуса. ``queued_only`` — повторяемая доставка
+    воркера очереди: разрешён захват только из `queued`, без перезапуска `failed`."""
     run_with_fresh_pool(
         _run_task_session_async(
             uuid.UUID(task_id),
             start_after_order_index=start_after_order_index,
             continuation=continuation,
             chat_only=chat_only,
+            queued_only=queued_only,
         ),
     )
 
 
-async def _claim_task(db_session: AsyncSession, task: Task, *, continuation: bool) -> bool:
+async def _claim_task(
+    db_session: AsyncSession,
+    task: Task,
+    *,
+    continuation: bool,
+    queued_only: bool = False,
+) -> bool:
     """Переводит задачу в `in_progress`; False — задачу уже взял другой таск.
 
     Compare-and-swap (раздел 17.4) делает повторную доставку Celery-задачи
     и двойной клик «Перезапустить» безопасными: второй таск проигрывает
     переход и завершается без побочных эффектов (раздел 17.4, идемпотентность).
     """
+    if queued_only and task.status is not TaskStatus.QUEUED:
+        return False
     if continuation:
         return task.status in _CONTINUATION_STATUSES
     if task.status not in _CLAIMABLE_STATUSES:
@@ -440,6 +451,7 @@ def _defer_until_maintenance_ends(
     start_after_order_index: int | None,
     *,
     chat_only: bool = False,
+    queued_only: bool = False,
 ) -> None:
     """
     Раздел 20.6: во время обновления задача не берётся из очереди — таск
@@ -452,6 +464,7 @@ def _defer_until_maintenance_ends(
             "start_after_order_index": start_after_order_index,
             "continuation": False,
             "chat_only": chat_only,
+            **({"queued_only": True} if queued_only else {}),
         },
         countdown=MAINTENANCE_RETRY_SECONDS,
     )
@@ -463,6 +476,7 @@ async def _run_task_session_async(
     start_after_order_index: int | None,
     continuation: bool,
     chat_only: bool = False,
+    queued_only: bool = False,
 ) -> None:
     with bind_task_context(task_id):
         if chat_only:
@@ -472,6 +486,7 @@ async def _run_task_session_async(
             task_id,
             start_after_order_index=start_after_order_index,
             continuation=continuation,
+            queued_only=queued_only,
         )
 
 
@@ -507,8 +522,11 @@ async def _run_chat_in_context(task_id: uuid.UUID) -> None:
 
 
 async def _run_owned_chat(db_session: AsyncSession, *, task: Task, redis_client: Redis) -> bool:
-    """`False` — проход чата прервался ошибкой."""
+    """`False` — проход чата прервался ошибкой или командой остановки."""
     try:
+        # Чат после возврата из failed — новый запуск: прежняя команда stop
+        # не должна блокировать очередь сообщений и порождать повторные проходы.
+        await clear_task_control(redis_client, task.id)
         async with (
             llm_session_token(redis_client, task.id) as session_token,
             open_cliproxy_client() as cliproxy,
@@ -535,7 +553,7 @@ async def _run_owned_chat(db_session: AsyncSession, *, task: Task, redis_client:
         return False
     finally:
         await finish_chat(db_session, task_id=task.id)
-    return True
+    return await read_task_control(redis_client, task.id) is not TaskControlCommand.STOP
 
 
 async def _run_chat(
@@ -598,15 +616,24 @@ async def _run_task_session_in_context(
     *,
     start_after_order_index: int | None,
     continuation: bool,
+    queued_only: bool = False,
 ) -> None:
     async with async_session_factory() as db_session:
         task = await db_session.get(Task, task_id)
         if task is None:
             logger.warning("task_not_found", task_id=str(task_id))
             return
+        # Повторная доставка очереди не перезапускает failed и не ждёт
+        # владельца уже работающей сессии. CAS ниже повторяет проверку.
+        if queued_only and task.status is not TaskStatus.QUEUED:
+            return
         async with redis_connection() as redis_client:
             if not continuation and await maintenance_active(redis_client):
-                _defer_until_maintenance_ends(task_id, start_after_order_index)
+                _defer_until_maintenance_ends(
+                    task_id,
+                    start_after_order_index,
+                    queued_only=queued_only,
+                )
                 return
             try:
                 # Раздел 17.4: сначала владение сессией, затем статус — второй
@@ -616,7 +643,12 @@ async def _run_task_session_in_context(
                     task_id,
                     acquire_timeout=SESSION_OWNER_WAIT_SECONDS,
                 ):
-                    if not await _claim_task(db_session, task, continuation=continuation):
+                    if not await _claim_task(
+                        db_session,
+                        task,
+                        continuation=continuation,
+                        queued_only=queued_only,
+                    ):
                         return
                     await _run_owned_session(
                         db_session,

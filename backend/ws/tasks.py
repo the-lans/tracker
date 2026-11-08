@@ -12,6 +12,8 @@ WebSocket-канал задачи (раздел 15.2, 18.1 ТЗ): `/ws/tasks/{ta
   механизм (`services/notifications.py`, `services/push_notifications.py`).
 - ``{"type": "llm_account", "task_id", "current_llm_account_id"}`` — смена
   аккаунта, на котором работает сессия (раздел 19.7); тот же опрос БД.
+- ``{"type": "chat", "task_id", "chat_active"}`` — воркер начал или закончил
+  чат в «Уточняется» (раздел 14.4): статус при этом не меняется; тот же опрос БД.
 - ``{"type": "output_delta", "node_log_id", "text"}`` — фрагменты ответа
   LLM по мере генерации (раздел 15.2). Их публикует воркер в Redis
   (`services/output_stream.py`), опросом БД их не получить.
@@ -68,6 +70,7 @@ class TaskState:
 
     status: TaskStatus
     current_llm_account_id: uuid.UUID | None = None
+    chat_active: bool = False
 
 
 FetchState = Callable[[uuid.UUID], Awaitable[TaskState | None]]
@@ -78,7 +81,11 @@ async def _fetch_state(task_id: uuid.UUID) -> TaskState | None:
         task = await db_session.get(Task, task_id)
         if task is None:
             return None
-        return TaskState(status=task.status, current_llm_account_id=task.current_llm_account_id)
+        return TaskState(
+            status=task.status,
+            current_llm_account_id=task.current_llm_account_id,
+            chat_active=task.chat_active,
+        )
 
 
 def _changes(task_id: uuid.UUID, state: TaskState, last: TaskState | None) -> list[dict[str, Any]]:
@@ -93,6 +100,10 @@ def _changes(task_id: uuid.UUID, state: TaskState, last: TaskState | None) -> li
                 "task_id": str(task_id),
                 "current_llm_account_id": str(account_id) if account_id is not None else None,
             },
+        )
+    if last is not None and state.chat_active != last.chat_active:
+        events.append(
+            {"type": "chat", "task_id": str(task_id), "chat_active": state.chat_active},
         )
     return events
 

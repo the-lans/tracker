@@ -34,11 +34,17 @@ def upgrade() -> None:
     op.execute(
         "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS occupies_slot boolean NOT NULL DEFAULT false"
     )
+    # До очереди задачи запускались только вручную и автостартом мимо лимита:
+    # прежние прогоны слот не занимают, иначе упавшие задачи навсегда закрыли бы
+    # очередь автора. Новые задачи получают признак при каждом запуске.
     op.execute(
         "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS "
-        "launched_manually boolean NOT NULL DEFAULT false"
+        "launched_manually boolean NOT NULL DEFAULT true"
     )
-    op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS queued_from_status task_status")
+    op.execute("ALTER TABLE tasks ALTER COLUMN launched_manually SET DEFAULT false")
+    op.execute(
+        "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS queued_from_status task_status"
+    )
     op.execute(
         "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS chat_active boolean NOT NULL DEFAULT false"
     )
@@ -55,7 +61,9 @@ def upgrade() -> None:
     op.execute(
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS max_parallel_tasks integer NOT NULL DEFAULT 3"
     )
-    op.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_max_parallel_tasks")
+    op.execute(
+        "ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_max_parallel_tasks"
+    )
     op.execute(
         "ALTER TABLE users ADD CONSTRAINT ck_users_max_parallel_tasks "
         "CHECK (max_parallel_tasks BETWEEN 1 AND 50)"
@@ -74,7 +82,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("ALTER TABLE system_settings DROP COLUMN IF EXISTS night_window_end")
     op.execute("ALTER TABLE system_settings DROP COLUMN IF EXISTS night_window_start")
-    op.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_max_parallel_tasks")
+    op.execute(
+        "ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_max_parallel_tasks"
+    )
     op.execute("ALTER TABLE users DROP COLUMN IF EXISTS max_parallel_tasks")
     op.execute("DROP INDEX IF EXISTS ix_tasks_queue")
     op.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS ck_tasks_queue_priority")

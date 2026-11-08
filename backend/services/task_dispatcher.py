@@ -67,7 +67,9 @@ def session_worker_concurrency() -> int:
 
 
 async def _busy_session_processes(db_session: AsyncSession, redis_client: Redis) -> int:
-    """Процессы воркера сессий, занятые задачами в работе и чатами в `refining`."""
+    """
+    Процессы воркера сессий, занятые задачами в работе и чатами в `refining`.
+    """
     busy_statuses = (TaskStatus.QUEUED, *SESSION_ACTIVE_STATUSES)
     busy = await db_session.scalar(
         sa.select(sa.func.count()).where(Task.status.in_(busy_statuses)),
@@ -83,7 +85,9 @@ async def _queues_by_user(
     db_session: AsyncSession,
     statuses: frozenset[TaskStatus],
 ) -> dict[uuid.UUID, deque[Task]]:
-    """Очереди активных пользователей в порядке очереди (раздел 14.4)."""
+    """
+    Очереди активных пользователей в порядке очереди (раздел 14.4).
+    """
     stmt = (
         sa.select(Task)
         .join(User, User.id == Task.created_by)
@@ -173,15 +177,17 @@ async def _launch(
 
 
 async def _dispatch_round_robin(
+    *,
     db_session: AsyncSession,
     redis_client: Redis,
-    *,
     queues: dict[uuid.UUID, deque[Task]],
     free_slots: dict[uuid.UUID, int],
     free_processes: int,
     result: DispatchResult,
 ) -> None:
-    """По одной задаче каждого пользователя за круг, пока есть слоты и процессы."""
+    """
+    По одной задаче каждого пользователя за круг, пока есть слоты и процессы.
+    """
     active = deque(user_id for user_id in queues if free_slots[user_id] > 0)
     while active and free_processes > 0:
         user_id = active.popleft()
@@ -200,11 +206,10 @@ async def dispatch_queued_tasks(
     redis_client: Redis,
     *,
     now: datetime,
-    night: bool = False,
 ) -> DispatchResult:
     """
-    Проход воркера очереди. ``night`` — ночной воркер: берёт `night_worker`
-    независимо от времени; дневной берёт их только внутри ночного окна.
+    Проход воркера очереди — дневного и ночного: задачи `night_worker` берутся
+    только внутри ночного окна, в том числе при принудительном запуске.
     """
     result = DispatchResult()
     try:
@@ -214,7 +219,7 @@ async def dispatch_queued_tasks(
             ttl_seconds=DISPATCH_LOCK_TTL_SECONDS,
             busy_message="Проход воркера очереди уже выполняется",
         ):
-            await _dispatch_locked(db_session, redis_client, now=now, night=night, result=result)
+            await _dispatch_locked(db_session, redis_client, now=now, result=result)
     except LockNotAcquiredError:
         logger.info("task_dispatch_already_running")
         result.skipped = True
@@ -226,7 +231,6 @@ async def _dispatch_locked(
     redis_client: Redis,
     *,
     now: datetime,
-    night: bool,
     result: DispatchResult,
 ) -> None:
     if await maintenance_active(redis_client):
@@ -236,7 +240,7 @@ async def _dispatch_locked(
         return
     await run_scheduled_autostart_check(db_session, now=now)
     settings = await get_system_settings(db_session)
-    in_window = night or night_window_active(
+    in_window = night_window_active(
         now,
         start=settings.night_window_start,
         end=settings.night_window_end,
@@ -250,8 +254,8 @@ async def _dispatch_locked(
     )
     try:
         await _dispatch_round_robin(
-            db_session,
-            redis_client,
+            db_session=db_session,
+            redis_client=redis_client,
             queues=queues,
             free_slots=await _free_slots(db_session, redis_client, list(queues)),
             free_processes=free_processes,
@@ -264,4 +268,24 @@ async def _dispatch_locked(
         launched=len(result.launched_task_ids),
         failed=len(result.failed_task_ids),
         night_window=in_window,
+    )
+
+
+async def pending_queue_session_ids(db_session: AsyncSession) -> list[uuid.UUID]:
+    """
+    Зафиксированная постановка — намерение доставить задачу воркеру. Пока он
+    не захватил её, каждый проход повторяет доставку: сбой брокера или прохода
+    после commit не теряет задачу. Повтор защищён захватом сессии и CAS статуса.
+    Ручные перезапуски не выбираются: у них своя точка продолжения пайплайна.
+    """
+    return list(
+        await db_session.scalars(
+            sa.select(Task.id)
+            .where(
+                Task.status == TaskStatus.QUEUED,
+                Task.launched_manually == sa.false(),
+                Task.queued_from_status.in_(QUEUE_STATUSES),
+            )
+            .order_by(Task.created_at, Task.id),
+        )
     )

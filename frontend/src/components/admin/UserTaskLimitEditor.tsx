@@ -55,6 +55,7 @@ export function UserTaskLimitEditor({ user }: { user: User }) {
         className="h-8 w-20"
         value={shown}
         disabled={updateUser.isPending}
+        aria-label={`Параллельных задач ${user.email}`}
         aria-invalid={parsed === null}
         title={`От ${MIN_PARALLEL_TASKS} до ${MAX_PARALLEL_TASKS}`}
         onChange={(event) => setDraft(event.target.value)}

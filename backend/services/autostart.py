@@ -86,6 +86,10 @@ async def run_scheduled_autostart_check(
             logger.info("task_autostart_deferred_by_maintenance", task_id=str(task.id))
             break
         except (ValidationError, ConflictError) as exc:
+            current = await db_session.get(Task, task.id, populate_existing=True)
+            if isinstance(exc, ConflictError) and current is not None and current.chat_active:
+                logger.info("task_autostart_deferred_by_chat", task_id=str(task.id))
+                continue
             result.failed_task_ids.append(task.id)
             logger.error("task_autostart_failed", task_id=str(task.id), error=str(exc))
             db_session.add(
