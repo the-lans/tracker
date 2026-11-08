@@ -220,6 +220,7 @@ export function makeTemplate(overrides: Partial<Template> = {}): Template {
     id: "tpl1",
     name: "Python-сервис",
     files: { "CLAUDE.md": "# Правила проекта" },
+    uploaded_file_paths: [],
     mcp_server_ids: [],
     created_by: "u1",
     ...overrides,

@@ -590,6 +590,8 @@ export interface Template {
   id: string;
   name: string;
   files: TemplateFileTree;
+  /** Пути из `files`, загруженные с диска: форма открывает их в режиме «Из файла». */
+  uploaded_file_paths: string[];
   mcp_server_ids: string[];
   created_by: string;
 }
@@ -597,6 +599,7 @@ export interface Template {
 export interface TemplateCreateRequest {
   name: string;
   files: TemplateFileTree;
+  uploaded_file_paths?: string[];
   mcp_server_ids?: string[];
 }
 

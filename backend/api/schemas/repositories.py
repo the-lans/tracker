@@ -41,12 +41,15 @@ class RepositoryResponse(BaseModel):
 class TemplateCreateRequest(BaseModel):
     name: str
     files: dict[str, Any]
+    # Раздел 15.1: пути из `files`, содержимое которых загружено с диска.
+    uploaded_file_paths: list[str] = []
     mcp_server_ids: list[uuid.UUID] = []
 
 
 class TemplateUpdateRequest(BaseModel):
     name: str | None = None
     files: dict[str, Any] | None = None
+    uploaded_file_paths: list[str] | None = None
     mcp_server_ids: list[uuid.UUID] | None = None
 
 
@@ -56,5 +59,6 @@ class TemplateResponse(BaseModel):
     id: uuid.UUID
     name: str
     files: dict[str, Any]
+    uploaded_file_paths: list[str]
     mcp_server_ids: list[uuid.UUID]
     created_by: uuid.UUID

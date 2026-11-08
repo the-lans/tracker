@@ -7,7 +7,7 @@ import {
   TEMPLATE_FILE_NOT_TEXT,
   TEMPLATE_FILE_TOO_LARGE,
 } from "@/lib/templateFiles";
-import type { Template } from "@/lib/types";
+import type { Template, TemplateCreateRequest } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
 import { makeTemplate } from "@/test/factories";
 import { test } from "@/test/fixtures";
@@ -22,8 +22,12 @@ function renderForm(api: MockedApi, template?: Template) {
 }
 
 function savedFiles(api: MockedApi) {
-  return (api.mutations().find((request) => request.path.startsWith("/templates"))?.body as Template)
-    .files;
+  return savedBody(api).files;
+}
+
+function savedBody(api: MockedApi) {
+  return api.mutations().find((request) => request.path.startsWith("/templates"))
+    ?.body as TemplateCreateRequest;
 }
 
 describe("TemplateForm", () => {
@@ -33,7 +37,6 @@ describe("TemplateForm", () => {
       await user.type(screen.getByLabelText("Название"), "Python-сервис");
       await user.clear(screen.getByLabelText("Путь файла"));
 
-      await user.click(screen.getByRole("button", { name: "Из файла" }));
       expect(screen.getByRole("button", { name: "Из файла" })).toHaveAttribute("aria-pressed", "true");
       expect(screen.queryByLabelText("Содержимое файла")).not.toBeInTheDocument();
       await user.upload(screen.getByLabelText("Файл для без пути"), new File([RULES], "CLAUDE.md"));
@@ -42,6 +45,7 @@ describe("TemplateForm", () => {
       expect(screen.getByLabelText("Путь файла")).toHaveValue("CLAUDE.md");
       expect(screen.getByText(/^CLAUDE\.md · \d+ Б$/)).toBeInTheDocument();
       await vi.waitFor(() => expect(savedFiles(api)).toEqual({ "CLAUDE.md": RULES }));
+      expect(savedBody(api).uploaded_file_paths).toEqual(["CLAUDE.md"]);
     });
 
     test("введённый путь не меняется на имя файла", async ({ api }) => {
@@ -51,7 +55,6 @@ describe("TemplateForm", () => {
       await user.clear(path);
       await user.type(path, ".claude/commands/review.md");
 
-      await user.click(screen.getByRole("button", { name: "Из файла" }));
       await user.upload(
         screen.getByLabelText("Файл для .claude/commands/review.md"),
         new File(["Проверь diff"], "my-review.md"),
@@ -67,7 +70,6 @@ describe("TemplateForm", () => {
       const { user } = renderForm(api);
       await user.type(screen.getByLabelText("Название"), "Python-сервис");
 
-      await user.click(screen.getByRole("button", { name: "Из файла" }));
       await user.upload(screen.getByLabelText("Файл для CLAUDE.md"), new File([RULES], "rules.md"));
       await user.click(screen.getByRole("button", { name: "Из файла" }));
       const content = screen.getByLabelText("Содержимое файла");
@@ -102,7 +104,6 @@ describe("TemplateForm", () => {
     test("снятие галки убирает ошибку", async ({ api }) => {
       const { user } = renderForm(api);
 
-      await user.click(screen.getByRole("button", { name: "Из файла" }));
       await user.upload(screen.getByLabelText("Файл для CLAUDE.md"), new File(["a\u0000"], "x.bin"));
       await screen.findByRole("alert");
       await user.click(screen.getByRole("button", { name: "Из файла" }));
@@ -116,7 +117,6 @@ describe("TemplateForm", () => {
       const { user } = renderForm(api, makeTemplate({ files: { "CLAUDE.md": RULES } }));
 
       await user.click(screen.getByRole("button", { name: "Файл" }));
-      await user.click(screen.getAllByRole("button", { name: "Из файла" })[1]);
       await user.upload(screen.getByLabelText("Файл для без пути"), new File(["# Другие правила"], "CLAUDE.md"));
 
       const [first, second] = screen.getAllByLabelText("Путь файла");
@@ -141,6 +141,7 @@ describe("TemplateForm", () => {
 
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
       await vi.waitFor(() => expect(savedFiles(api)).toEqual({ "CLAUDE.md": RULES, "AGENTS.md": "" }));
+      expect(savedBody(api).uploaded_file_paths).toEqual(["AGENTS.md"]);
     });
 
     test("удаление повторяющейся строки снимает запрет сохранения", async ({ api }) => {
@@ -156,11 +157,36 @@ describe("TemplateForm", () => {
   });
 
   describe("редактирование", () => {
-    test("сохранённый шаблон открывается с вводом текстом", ({ api }) => {
-      renderForm(api, makeTemplate({ files: { "CLAUDE.md": RULES } }));
+    test.for([
+      { title: "текстом", uploaded: [], pressed: "false" },
+      { title: "из файла", uploaded: ["CLAUDE.md"], pressed: "true" },
+    ])("файл, сохранённый $title, открывается в том же режиме", ({ uploaded, pressed }, { api }) => {
+      renderForm(api, makeTemplate({ files: { "CLAUDE.md": RULES }, uploaded_file_paths: uploaded }));
 
-      expect(screen.getByRole("button", { name: "Из файла" })).toHaveAttribute("aria-pressed", "false");
-      expect(screen.getByLabelText("Содержимое файла")).toHaveValue(RULES);
+      expect(screen.getByRole("button", { name: "Из файла" })).toHaveAttribute("aria-pressed", pressed);
+    });
+
+    test("режим каждого файла сохраняется, удалённый файл уходит из списка", async ({ api }) => {
+      const { user } = renderForm(
+        api,
+        makeTemplate({ files: { "CLAUDE.md": RULES, "AGENTS.md": "x" }, uploaded_file_paths: ["AGENTS.md"] }),
+      );
+
+      await user.click(screen.getAllByRole("button", { name: "Из файла" })[0]);
+      await user.click(screen.getByRole("button", { name: "Убрать файл AGENTS.md" }));
+      await user.click(screen.getByRole("button", { name: "Сохранить" }));
+
+      await vi.waitFor(() => expect(savedBody(api).uploaded_file_paths).toEqual(["CLAUDE.md"]));
+    });
+
+    test("новый файл добавляется в режиме «Из файла»", async ({ api }) => {
+      const { user } = renderForm(api, makeTemplate({ files: { "CLAUDE.md": RULES } }));
+
+      await user.click(screen.getByRole("button", { name: "Файл" }));
+
+      const [saved, added] = screen.getAllByRole("button", { name: "Из файла" });
+      expect(saved).toHaveAttribute("aria-pressed", "false");
+      expect(added).toHaveAttribute("aria-pressed", "true");
     });
 
     test("ошибка остаётся у своей строки после удаления соседней", async ({ api }) => {
