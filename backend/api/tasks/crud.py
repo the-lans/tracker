@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.dependencies import get_current_user
 from api.schemas import (
     AwaitingDecisionCountResponse,
+    QueueSummaryResponse,
     TaskCreateRequest,
     TaskDuplicateRequest,
     TaskRepositoryResponse,
@@ -35,10 +36,25 @@ from services.task_creation import RepositoryAttachment, TaskDraft
 from services.task_creation import create_task as create_task_with_repositories
 from services.task_duplication import duplicate_task
 from services.task_editing import update_task as update_task_fields
+from services.task_queue import queue_positions, queue_summary
 from services.task_workspace import load_task_repositories
 from tasks.jira_attachments import copy_jira_attachments_to_task
 
 router = APIRouter(prefix=TASKS_PREFIX, tags=TASKS_TAGS)
+
+
+async def _with_queue_positions(
+    db_session: AsyncSession,
+    tasks: list[Task],
+) -> list[TaskResponse]:
+    """Раздел 14.4: у задач в очереди — место в очереди автора."""
+    positions = await queue_positions(db_session, [task.id for task in tasks])
+    return [
+        TaskResponse.model_validate(task).model_copy(
+            update={"queue_position": positions.get(task.id)},
+        )
+        for task in tasks
+    ]
 
 
 def _draft_from_request(
@@ -150,7 +166,7 @@ async def list_tasks(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
     status_filter: TaskStatus | None = None,
-) -> list[Task]:
+) -> list[TaskResponse]:
     stmt = (
         sa.select(Task)
         .where(owner_filter(Task.created_by, current_user))
@@ -158,7 +174,8 @@ async def list_tasks(
     )
     if status_filter is not None:
         stmt = stmt.where(Task.status == status_filter)
-    return list((await db_session.execute(stmt)).scalars().all())
+    tasks = list((await db_session.execute(stmt)).scalars().all())
+    return await _with_queue_positions(db_session, tasks)
 
 
 @router.get("/awaiting-count", response_model=AwaitingDecisionCountResponse)
@@ -188,10 +205,32 @@ async def list_my_active_sessions(
     return await list_active_sessions(db_session, user_id=current_user.id)
 
 
+@router.get("/queue-summary", response_model=QueueSummaryResponse)
+async def get_queue_summary(
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> QueueSummaryResponse:
+    """Раздел 15.1: слоты текущего пользователя и его очередь — над списком задач."""
+    async with redis_connection() as redis_client:
+        summary = await queue_summary(
+            db_session,
+            redis_client,
+            user_id=current_user.id,
+            max_parallel_tasks=current_user.max_parallel_tasks,
+        )
+    return QueueSummaryResponse(
+        max_parallel_tasks=summary.max_parallel_tasks,
+        occupied=summary.occupied,
+        ready=summary.ready,
+        night_worker=summary.night_worker,
+    )
+
+
 @router.get("/{task_id}", response_model=TaskResponse)
 async def get_task(
     task_id: uuid.UUID,
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
-) -> Task:
-    return await get_task_or_404(db_session, task_id, current_user)
+) -> TaskResponse:
+    task = await get_task_or_404(db_session, task_id, current_user)
+    return (await _with_queue_positions(db_session, [task]))[0]

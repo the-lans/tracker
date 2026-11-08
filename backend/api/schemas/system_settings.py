@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import time
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +20,9 @@ class SystemSettingsBody(BaseModel):
     default_retry_base_delay_seconds: RetryBaseDelaySeconds
     default_runner_image_python: str = Field(min_length=1)
     default_runner_image_bash: str = Field(min_length=1)
+    # Раздел 14.4: ночное окно по московскому времени.
+    night_window_start: time
+    night_window_end: time
 
 
 class IntegrationsResponse(BaseModel):

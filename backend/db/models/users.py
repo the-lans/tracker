@@ -17,6 +17,10 @@ DEFAULT_LLM_SWITCH_THRESHOLD_PCT = 93
 MIN_LLM_SWITCH_THRESHOLD_PCT = 1
 MAX_LLM_SWITCH_THRESHOLD_PCT = 100
 _THRESHOLD_RANGE = f"BETWEEN {MIN_LLM_SWITCH_THRESHOLD_PCT} AND {MAX_LLM_SWITCH_THRESHOLD_PCT}"
+# Раздел 14.4: слоты параллельного запуска задач пользователя.
+DEFAULT_MAX_PARALLEL_TASKS = 3
+MIN_MAX_PARALLEL_TASKS = 1
+MAX_MAX_PARALLEL_TASKS = 50
 
 
 class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
@@ -29,6 +33,10 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         sa.CheckConstraint(
             f"llm_switch_threshold_week_pct {_THRESHOLD_RANGE}",
             name="ck_users_llm_switch_threshold_week_pct",
+        ),
+        sa.CheckConstraint(
+            f"max_parallel_tasks BETWEEN {MIN_MAX_PARALLEL_TASKS} AND {MAX_MAX_PARALLEL_TASKS}",
+            name="ck_users_max_parallel_tasks",
         ),
     )
 
@@ -61,6 +69,11 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         sa.Integer,
         default=DEFAULT_LLM_SWITCH_THRESHOLD_PCT,
         server_default=str(DEFAULT_LLM_SWITCH_THRESHOLD_PCT),
+    )
+    max_parallel_tasks: Mapped[int] = mapped_column(
+        sa.Integer,
+        default=DEFAULT_MAX_PARALLEL_TASKS,
+        server_default=str(DEFAULT_MAX_PARALLEL_TASKS),
     )
 
 

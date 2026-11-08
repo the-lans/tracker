@@ -41,6 +41,8 @@ class NotificationEvent(StrEnum):
     FAILED = "failed"
     REMOTE_CONTROL_DISCONNECTED = "remote_control_disconnected"
     AUTOSTART_FAILED = "autostart_failed"
+    # Раздел 14.4: задача очереди не прошла проверки запуска.
+    QUEUE_LAUNCH_FAILED = "queue_launch_failed"
     DONE = "done"
     LIBRARY_PROMPT_FAILED = "library_prompt_failed"
     MANUAL_QUEUE_REQUEST_EXPIRED = "manual_queue_request_expired"
@@ -62,6 +64,7 @@ _TITLES: dict[NotificationEvent, str] = {
     NotificationEvent.FAILED: "Задача завершилась с ошибкой",
     NotificationEvent.REMOTE_CONTROL_DISCONNECTED: "Мост remote-control недоступен",
     NotificationEvent.AUTOSTART_FAILED: "Не удалось запустить задачу по расписанию",
+    NotificationEvent.QUEUE_LAUNCH_FAILED: "Не удалось запустить задачу из очереди",
     NotificationEvent.DONE: "Задача выполнена",
     NotificationEvent.LIBRARY_PROMPT_FAILED: "Промт библиотеки завершился с ошибкой",
     NotificationEvent.MANUAL_QUEUE_REQUEST_EXPIRED: "Запрос из очереди отменён по таймауту",

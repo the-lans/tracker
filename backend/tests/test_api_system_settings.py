@@ -19,6 +19,8 @@ _SETTINGS = {
     "default_retry_base_delay_seconds": 10,
     "default_runner_image_python": "registry.local/runner-python:2",
     "default_runner_image_bash": "registry.local/runner-bash:2",
+    "night_window_start": "02:30:00",
+    "night_window_end": "06:45:00",
 }
 
 

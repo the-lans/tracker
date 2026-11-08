@@ -21,11 +21,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
 import sqlalchemy as sa  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from app_logging.config import configure_logging, get_logger  # noqa: E402
 from db.models.enums import PeriodicScheduleType  # noqa: E402
 from db.models.periodic import PeriodicTask  # noqa: E402
+from db.models.settings import (  # noqa: E402
+    DEFAULT_NIGHT_WINDOW_START,
+    SYSTEM_SETTINGS_ROW_ID,
+    SystemSettings,
+)
 from db.session import async_session_factory  # noqa: E402
+from services.periodic_tasks import NIGHT_DISPATCH_TASK  # noqa: E402
+from services.task_queue import night_window_cron  # noqa: E402
 
 configure_logging()
 logger = get_logger("seed_periodic_tasks")
@@ -35,14 +43,34 @@ _HOUR = 60 * _MINUTE
 _DAY = 24 * _HOUR
 _WEEK = 7 * _DAY
 
-# (name, display_name, description, task_path, interval_seconds)
-_SEED_TASKS: list[tuple[str, str, str, str, int]] = [
+# Расписание ночного воркера выводится из начала ночного окна (раздел 16.2).
+_NIGHT_SCHEDULE = None
+
+# (name, display_name, description, task_path, interval_seconds | _NIGHT_SCHEDULE)
+_SEED_TASKS: list[tuple[str, str, str, str, int | None]] = [
     (
         "check_scheduled_tasks_for_autostart",
         "Автозапуск запланированных задач",
-        "Находит задачи со статусом new, auto_start_enabled=true и наступившим scheduled_start_at",
+        "Ставит в очередь (ready) задачи до запуска с автозапуском и наступившим "
+        "scheduled_start_at",
         "tasks.periodic.check_scheduled_tasks_for_autostart",
         5 * _MINUTE,
+    ),
+    (
+        "dispatch_ready_tasks",
+        "Дневной воркер очереди",
+        "Запускает задачи очереди (ready, в ночном окне и night_worker) в свободные слоты "
+        "пользователей",
+        "tasks.periodic.dispatch_ready_tasks",
+        5 * _MINUTE,
+    ),
+    (
+        NIGHT_DISPATCH_TASK,
+        "Ночной воркер очереди",
+        "В начале ночного окна запускает задачи очереди, включая night_worker; расписание "
+        "задаёт ночное окно в системных настройках",
+        "tasks.periodic.dispatch_night_tasks",
+        _NIGHT_SCHEDULE,
     ),
     (
         "check_llm_account_limits",
@@ -138,6 +166,12 @@ _SEED_TASKS: list[tuple[str, str, str, str, int]] = [
 ]
 
 
+async def _night_crontab(db_session: AsyncSession) -> str:
+    settings = await db_session.get(SystemSettings, SYSTEM_SETTINGS_ROW_ID)
+    start = settings.night_window_start if settings is not None else DEFAULT_NIGHT_WINDOW_START
+    return night_window_cron(start)
+
+
 async def _seed() -> None:
     async with async_session_factory() as db_session:
         created = 0
@@ -156,8 +190,15 @@ async def _seed() -> None:
                     display_name=display_name,
                     description=description,
                     task_path=task_path,
-                    schedule_type=PeriodicScheduleType.INTERVAL,
+                    schedule_type=(
+                        PeriodicScheduleType.INTERVAL
+                        if interval_seconds is not None
+                        else PeriodicScheduleType.CRONTAB
+                    ),
                     interval_seconds=interval_seconds,
+                    crontab_expression=(
+                        None if interval_seconds is not None else await _night_crontab(db_session)
+                    ),
                     is_enabled=True,
                     # Создано системой при установке (раздел 3.1).
                     updated_by=None,

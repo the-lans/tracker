@@ -96,7 +96,7 @@ from services.task_workspace import (
     task_root,
 )
 from tasks.async_runner import run_with_fresh_pool
-from tasks.celery_app import celery_app
+from tasks.celery_app import celery_app, wake_task_dispatcher
 
 if TYPE_CHECKING:
     from claude_agent_sdk.types import CanUseTool, McpServerConfig
@@ -919,6 +919,8 @@ async def _settle_pipeline_run(
             from_status=TaskStatus.IN_PROGRESS,
             to_status=TaskStatus.DONE,
         )
+        # Раздел 14.4: `done` освобождает слот автора.
+        wake_task_dispatcher()
     elif outcome.failed_order_index is not None:
         if outcome.stopped:
             logger.info("task_stopped_by_user", task_id=str(task.id))

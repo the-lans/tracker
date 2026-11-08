@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import time
+
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -9,6 +11,9 @@ from db.base import Base
 
 # Единственная строка настроек инстанса.
 SYSTEM_SETTINGS_ROW_ID = 1
+# Раздел 14.4: ночное окно по московскому времени.
+DEFAULT_NIGHT_WINDOW_START = time(3, 15)
+DEFAULT_NIGHT_WINDOW_END = time(7, 0)
 
 
 class SystemSettings(Base):
@@ -36,3 +41,13 @@ class SystemSettings(Base):
     gitlab_url: Mapped[str | None] = mapped_column(sa.String)
     gitlab_token_encrypted: Mapped[str | None] = mapped_column(sa.Text)
     jira_url: Mapped[str | None] = mapped_column(sa.String)
+    night_window_start: Mapped[time] = mapped_column(
+        sa.Time,
+        default=DEFAULT_NIGHT_WINDOW_START,
+        server_default=DEFAULT_NIGHT_WINDOW_START.isoformat(timespec="minutes"),
+    )
+    night_window_end: Mapped[time] = mapped_column(
+        sa.Time,
+        default=DEFAULT_NIGHT_WINDOW_END,
+        server_default=DEFAULT_NIGHT_WINDOW_END.isoformat(timespec="minutes"),
+    )

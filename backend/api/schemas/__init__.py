@@ -90,6 +90,7 @@ from api.schemas.tasks import (
     NodeDependentResponse,
     NodeLogResponse,
     PipelineDependentsRequest,
+    QueueSummaryResponse,
     TaskCreateRequest,
     TaskCustomNodeContent,
     TaskCustomNodeCreateRequest,
@@ -101,6 +102,7 @@ from api.schemas.tasks import (
     TaskRepositoryAttachRequest,
     TaskRepositoryResponse,
     TaskResponse,
+    TaskStatusChangeRequest,
     TaskUpdateRequest,
 )
 
@@ -150,6 +152,7 @@ __all__ = [
     "PeriodicTaskUpdateRequest",
     "PipelineCreateRequest",
     "PipelineDependentsRequest",
+    "QueueSummaryResponse",
     "PipelineResponse",
     "PipelineUpdateRequest",
     "PushSubscriptionKeys",
@@ -174,6 +177,7 @@ __all__ = [
     "TaskRepositoryAttachRequest",
     "TaskRepositoryResponse",
     "TaskResponse",
+    "TaskStatusChangeRequest",
     "TaskUpdateRequest",
     "TemplateCreateRequest",
     "TemplatePreviewRequest",

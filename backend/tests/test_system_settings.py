@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -31,6 +32,8 @@ _CUSTOM_SETTINGS = SystemSettingsValues(
     default_retry_base_delay_seconds=0,
     default_runner_image_python="py:1",
     default_runner_image_bash="sh:1",
+    night_window_start=time(3, 15),
+    night_window_end=time(7, 0),
 )
 
 

@@ -56,10 +56,32 @@ _NOTIFICATION_EVENTS_BY_STATUS: dict[TaskStatus, NotificationEvent] = {
     TaskStatus.DONE: NotificationEvent.DONE,
 }
 
+# Раздел 14.1: статусы до запуска — между ними задачу переводит пользователь.
+PRE_LAUNCH_STATUSES = frozenset(
+    {
+        TaskStatus.NEW,
+        TaskStatus.REFINING,
+        TaskStatus.DEFINED,
+        TaskStatus.READY,
+        TaskStatus.NIGHT_WORKER,
+    },
+)
+# Раздел 14.4: очередь пользователя — задачи, которые запустит воркер очереди.
+QUEUE_STATUSES = frozenset({TaskStatus.READY, TaskStatus.NIGHT_WORKER})
+# Раздел 14.4: чат с агентом в «Уточняется» уходит в ожидание решения и возвращается.
+_REFINING_DECISIONS = frozenset({TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW})
+
+
+def _pre_launch_targets(status: TaskStatus) -> frozenset[TaskStatus]:
+    """Другие статусы до запуска и `queued` («Выполнить», воркер очереди)."""
+    return (PRE_LAUNCH_STATUSES - {status}) | {TaskStatus.QUEUED}
+
+
 ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
-    TaskStatus.NEW: frozenset({TaskStatus.QUEUED}),
-    # `queued -> new` — «Отменить постановку» (раздел 14.2).
-    TaskStatus.QUEUED: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.NEW}),
+    **{status: _pre_launch_targets(status) for status in PRE_LAUNCH_STATUSES},
+    TaskStatus.REFINING: _pre_launch_targets(TaskStatus.REFINING) | _REFINING_DECISIONS,
+    # `queued -> статус до запуска` — «Отменить постановку» (раздел 14.2).
+    TaskStatus.QUEUED: frozenset({TaskStatus.IN_PROGRESS}) | PRE_LAUNCH_STATUSES,
     TaskStatus.IN_PROGRESS: frozenset(
         {
             TaskStatus.DONE,
@@ -83,13 +105,28 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
         },
     ),
     # После решения задача возвращается туда, откуда ушла в ожидание.
-    TaskStatus.PLAN_REVIEW: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
-    TaskStatus.AWAITING_INPUT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
+    TaskStatus.PLAN_REVIEW: frozenset(
+        {TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REFINING},
+    ),
+    TaskStatus.AWAITING_INPUT: frozenset(
+        {TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REFINING},
+    ),
     TaskStatus.REBASE_CONFLICT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.FAILED}),
-    # `-> new` — «Вернуть в новые» (раздел 14.2): сменить пайплайн и запустить заново.
-    TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.NEW}),
-    TaskStatus.DONE: frozenset({TaskStatus.NEW}),
+    # `-> статус до запуска` — «Вернуть в новые» и меню статуса (раздел 14.1):
+    # сменить пайплайн и запустить заново, в том числе из очереди.
+    TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS}) | PRE_LAUNCH_STATUSES,
+    TaskStatus.DONE: PRE_LAUNCH_STATUSES,
 }
+
+
+def _queue_values(from_status: TaskStatus, to_status: TaskStatus) -> dict[str, object]:
+    """
+    Раздел 3.1 `tasks.ready_at`: вход в очередь ставит время постановки, выход
+    очищает; переход между `ready` и `night_worker` место в очереди сохраняет.
+    """
+    if to_status in QUEUE_STATUSES:
+        return {} if from_status in QUEUE_STATUSES else {"ready_at": datetime.now(UTC)}
+    return {"ready_at": None} if from_status in QUEUE_STATUSES else {}
 
 
 async def lock_task(db_session: AsyncSession, task_id: uuid.UUID) -> Task | None:
@@ -191,7 +228,11 @@ async def transition_task_status(
     if to_status is TaskStatus.DONE:
         await _ensure_done_invariant(db_session, task_id)
 
-    values: dict[str, object] = {**(extra_values or {}), "status": to_status}
+    values: dict[str, object] = {
+        **_queue_values(from_status, to_status),
+        **(extra_values or {}),
+        "status": to_status,
+    }
     if to_status is TaskStatus.FAILED:
         if failed_order_index is None:
             raise ValidationError("Переход в failed требует failed_order_index (раздел 17.5)")
@@ -383,15 +424,22 @@ async def fail_task_after_error(
 RESETTABLE_STATUSES = frozenset({TaskStatus.FAILED, TaskStatus.DONE})
 
 
-async def reset_task_to_new(db_session: AsyncSession, *, task_id: uuid.UUID) -> Task:
+async def reset_task_run(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    to_status: TaskStatus = TaskStatus.NEW,
+) -> Task:
     """
-    Возвращает завершённую или упавшую задачу в `new`: пайплайн и состав нод
-    снова можно менять, «Запустить» пройдёт пайплайн с начала в той же
-    сессии. Точка перезапуска и автозапуск сбрасываются; `reset_at` отделяет
-    новый прогон от прежних выполнений нод (`_current_run_filter`). Текущий
-    LLM-аккаунт сбрасывается: первое обращение нового прогона уходит
-    стартовому аккаунту (п. 1 раздела 19.7).
+    Возвращает завершённую или упавшую задачу в статус до запуска (раздел
+    14.1): пайплайн и состав нод снова можно менять, «Выполнить» или очередь
+    пройдут пайплайн с начала в той же сессии. Точка перезапуска и автозапуск
+    сбрасываются; `reset_at` отделяет новый прогон от прежних выполнений нод
+    (`_current_run_filter`). Текущий LLM-аккаунт сбрасывается: первое
+    обращение нового прогона уходит стартовому аккаунту (п. 1 раздела 19.7).
     """
+    if to_status not in PRE_LAUNCH_STATUSES:
+        raise ValidationError(f"Вернуть задачу можно только в статус до запуска, не в {to_status}")
     task = await db_session.get(Task, task_id, populate_existing=True)
     if task is None or task.status not in RESETTABLE_STATUSES:
         raise ConflictError("Вернуть в новые можно только завершённую или упавшую задачу")
@@ -399,7 +447,7 @@ async def reset_task_to_new(db_session: AsyncSession, *, task_id: uuid.UUID) -> 
         db_session,
         task_id=task_id,
         from_status=task.status,
-        to_status=TaskStatus.NEW,
+        to_status=to_status,
         extra_values={
             "last_failed_order_index": None,
             "auto_start_enabled": False,

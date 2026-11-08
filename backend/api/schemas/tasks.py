@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from db.models.enums import (
     LibraryPromptRunStatus,
@@ -26,6 +26,7 @@ from db.models.enums import (
     RepositoryRole,
     TaskStatus,
 )
+from db.models.tasks import MAX_QUEUE_PRIORITY, MIN_QUEUE_PRIORITY
 
 
 class AwaitingDecisionCountResponse(BaseModel):
@@ -63,8 +64,9 @@ class TaskCreateRequest(TaskDuplicateRequest):
 class TaskUpdateRequest(BaseModel):
     """Поля задачи, редактируемые после создания (раздел 12.1, 14.2).
 
-    ``auto_accept_plan`` меняется в любой момент до `done` (раздел 15.2);
-    остальные — только пока задача в статусе `new`.
+    ``auto_accept_plan`` меняется в любой момент до `done` (раздел 15.2),
+    ``queue_priority`` и ``occupies_slot`` — в любом статусе (раздел 14.4);
+    остальные — только пока задача в статусе до запуска.
     """
 
     title: str | None = None
@@ -74,6 +76,9 @@ class TaskUpdateRequest(BaseModel):
     auto_start_enabled: bool | None = None
     scheduled_start_at: datetime | None = None
     auto_accept_plan: bool | None = None
+    # Раздел 14.4: меняются в любом статусе — управление прогоном, а не поля задачи.
+    queue_priority: int | None = Field(None, ge=MIN_QUEUE_PRIORITY, le=MAX_QUEUE_PRIORITY)
+    occupies_slot: bool | None = None
 
 
 class TaskRepositoryResponse(BaseModel):
@@ -112,9 +117,30 @@ class TaskResponse(BaseModel):
     auto_start_enabled: bool
     last_failed_order_index: int | None
     repo_cleaned_at: datetime | None
+    queue_priority: int
+    ready_at: datetime | None
+    occupies_slot: bool
+    launched_manually: bool
+    # Раздел 14.4: место в очереди автора (с 1) у задачи в `ready`/`night_worker`.
+    queue_position: int | None = None
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
+
+
+class TaskStatusChangeRequest(BaseModel):
+    """Раздел 14.1: ручная смена статуса — только в статус до запуска."""
+
+    to_status: TaskStatus
+
+
+class QueueSummaryResponse(BaseModel):
+    """Раздел 15.1: слоты пользователя над списком задач дашборда."""
+
+    max_parallel_tasks: int
+    occupied: int
+    ready: int
+    night_worker: int
 
 
 class BindPipelineRequest(BaseModel):

@@ -8,7 +8,8 @@
 берётся из настроек при каждом запуске по её текущему языку — так смена
 языка в редакторе не оставляет ноду в чужом раннере.
 
-Здесь же — интеграция с GitLab: адрес и токен API (раздел 16.2,
+Здесь же — ночное окно воркера очереди (раздел 14.4): его начало задаёт и
+расписание `dispatch_night_tasks`. И интеграция с GitLab: адрес и токен API (раздел 16.2,
 `sync_gitlab_merge_status`). Это настройки системы, а не переменные
 окружения: в промты и script-контейнеры они не попадают (раздел 19.4).
 """
@@ -23,8 +24,12 @@ from db.models.enums import NodeType, ScriptLanguage
 from db.models.settings import SYSTEM_SETTINGS_ROW_ID, SystemSettings
 from services.crypto import decrypt, encrypt
 from services.nodes.script import DEFAULT_RUNNER_IMAGES
+from services.periodic_tasks import set_night_dispatch_schedule
+from services.task_queue import night_window_cron, validate_night_window
 
 if TYPE_CHECKING:
+    from datetime import time
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from db.models.pipelines import Node
@@ -44,6 +49,9 @@ class SystemSettingsValues:
     default_retry_base_delay_seconds: int
     default_runner_image_python: str
     default_runner_image_bash: str
+    # Раздел 14.4: ночное окно по московскому времени, общее для всех.
+    night_window_start: time
+    night_window_end: time
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +84,15 @@ async def update_system_settings(
     *,
     values: SystemSettingsValues,
 ) -> SystemSettings:
+    validate_night_window(start=values.night_window_start, end=values.night_window_end)
     settings = await get_system_settings(db_session)
+    if settings.night_window_start != values.night_window_start:
+        await set_night_dispatch_schedule(
+            db_session,
+            crontab_expression=night_window_cron(values.night_window_start),
+        )
+    settings.night_window_start = values.night_window_start
+    settings.night_window_end = values.night_window_end
     settings.default_timeout_seconds = values.default_timeout_seconds
     settings.default_max_retries = values.default_max_retries
     settings.default_retry_base_delay_seconds = values.default_retry_base_delay_seconds

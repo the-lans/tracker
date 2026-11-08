@@ -41,8 +41,9 @@ from services.periodic_tasks import mark_periodic_task_running, record_periodic_
 from services.redis_connection import redis_connection
 from services.remote_control import check_session_bridges
 from services.system_settings import get_gitlab_credentials
+from services.task_dispatcher import dispatch_queued_tasks
 from tasks.async_runner import run_with_fresh_pool
-from tasks.celery_app import celery_app
+from tasks.celery_app import DISPATCH_READY_TASKS, celery_app, wake_task_dispatcher
 from tasks.session_worker import run_task_session
 
 if TYPE_CHECKING:
@@ -100,12 +101,44 @@ def _run_periodic(name: str, body: Callable[[AsyncSession], Awaitable[None]]) ->
 def check_scheduled_tasks_for_autostart() -> None:
     async def body(db_session: AsyncSession) -> None:
         result = await run_scheduled_autostart_check(db_session, now=datetime.now(UTC))
-        # Раздел 12.2 (п. 2): «тот же процесс запуска, что и кнопка
-        # «Выполнить»» — после `new -> queued` таск сессии ставится в очередь.
-        for task_id in result.started_task_ids:
-            run_task_session.delay(str(task_id))
+        # Раздел 12.2 (п. 2): задача встала в очередь — запускает её воркер очереди.
+        if result.queued_task_ids:
+            wake_task_dispatcher()
 
     _run_periodic("check_scheduled_tasks_for_autostart", body)
+
+
+async def _dispatch(db_session: AsyncSession, *, night: bool) -> None:
+    async with redis_connection() as redis_client:
+        result = await dispatch_queued_tasks(
+            db_session,
+            redis_client,
+            now=datetime.now(UTC),
+            night=night,
+        )
+    # Переход в `queued` уже зафиксирован — таск сессии ставится после него.
+    for task_id in result.launched_task_ids:
+        run_task_session.delay(str(task_id))
+
+
+@celery_app.task(name=DISPATCH_READY_TASKS)
+def dispatch_ready_tasks() -> None:
+    """Раздел 14.4: дневной воркер — задачи очереди в свободные слоты."""
+
+    async def body(db_session: AsyncSession) -> None:
+        await _dispatch(db_session, night=False)
+
+    _run_periodic(DISPATCH_READY_TASKS, body)
+
+
+@celery_app.task(name="dispatch_night_tasks")
+def dispatch_night_tasks() -> None:
+    """Раздел 14.4: ночной воркер — в начале ночного окна берёт и `night_worker`."""
+
+    async def body(db_session: AsyncSession) -> None:
+        await _dispatch(db_session, night=True)
+
+    _run_periodic("dispatch_night_tasks", body)
 
 
 @celery_app.task(name="check_llm_account_limits")

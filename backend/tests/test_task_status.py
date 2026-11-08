@@ -22,7 +22,7 @@ from services.node_runs import SESSION_ERROR_MESSAGE
 from services.task_status import (
     fail_task_after_error,
     first_unfinished_order_index,
-    reset_task_to_new,
+    reset_task_run,
     transition_task_status,
 )
 from tests.factories import make_llm_account, make_task
@@ -424,7 +424,7 @@ class TestRunAfterReset:
                 ),
             )
         await db_session.flush()
-        await reset_task_to_new(db_session, task_id=task.id)
+        await reset_task_run(db_session, task_id=task.id)
         return task, nodes
 
     async def test_current_llm_account_cleared(self, db_session: AsyncSession) -> None:
@@ -433,7 +433,7 @@ class TestRunAfterReset:
         task.current_llm_account_id = account.id
         await db_session.flush()
 
-        reset = await reset_task_to_new(db_session, task_id=task.id)
+        reset = await reset_task_run(db_session, task_id=task.id)
 
         assert reset.current_llm_account_id is None
 

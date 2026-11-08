@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from db.models.enums import TaskStatus
 from services.maintenance import MAINTENANCE_KEY
 from services.task_status import SESSION_ACTIVE_STATUSES
 
@@ -90,6 +91,7 @@ case "$*" in
   *"rev-parse --verify"*) echo "{_TARGET_SHA}" ;;
   *"rev-parse HEAD"*) cat "$STUB_DIR/git-head" 2>/dev/null || echo "{_PREVIOUS_SHA}" ;;
   *"merge-base --is-ancestor"*) [ -f "$STUB_DIR/not-ancestor" ] && exit 1 ;;
+  *"cat-file -e"*) [ -f "$STUB_DIR/old-target" ] && exit 1 ;;
   *"checkout --detach"*) for last; do :; done; echo "$last" > "$STUB_DIR/git-head" ;;
 esac
 exit 0
@@ -282,6 +284,20 @@ class TestSharedConstants:
         statuses = {item.strip("'") for item in raw.split(",")}
         assert statuses == {status.value for status in SESSION_ACTIVE_STATUSES}
 
+    def test_pre_launch_statuses_migration(self, stubs: Path, install_dir: Path) -> None:
+        """Откат сбрасывает именно статусы, добавленные указанной миграцией."""
+        migration = self._value(stubs, install_dir, "PRE_LAUNCH_STATUSES_MIGRATION")
+        raw = self._value(stubs, install_dir, "PRE_LAUNCH_STATUSES_ADDED")
+        statuses = {item.strip("'") for item in raw.split(",")}
+        source = (_INSTALL_SCRIPT.parents[1] / migration).read_text()
+        assert all(f'"{status}"' in source for status in statuses)
+        assert statuses == {
+            TaskStatus.REFINING,
+            TaskStatus.DEFINED,
+            TaskStatus.READY,
+            TaskStatus.NIGHT_WORKER,
+        }
+
 
 class TestRestore:
     def test_steps_in_order(
@@ -468,6 +484,34 @@ class TestUpdate:
         assert not any("checkout" in call or "compose build" in call for call in calls)
         assert "redis-cli DEL maintenance:deploy" in calls[-1]
         assert not (install_dir / ".deploy").exists()
+
+    @pytest.mark.parametrize(
+        ("old_target", "resets"),
+        [
+            pytest.param(True, True, id="откат на версию без статусов до запуска"),
+            pytest.param(False, False, id="версия со статусами до запуска"),
+        ],
+    )
+    def test_unknown_statuses_reset(
+        self,
+        stubs: Path,
+        install_dir: Path,
+        old_target: bool,
+        resets: bool,
+    ) -> None:
+        if old_target:
+            (stubs / "old-target").touch()
+
+        result = _update(stubs, install_dir, "--ref", "abc1234")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        calls = _calls(stubs)
+        assert any("cat-file -e" in call for call in calls)
+        resets_seen = [call for call in calls if "UPDATE tasks SET status = 'new'" in call]
+        assert bool(resets_seen) is resets
+        if resets:
+            assert "'refining','defined','ready','night_worker'" in resets_seen[0]
+            _assert_in_order(calls, ["cat-file -e", "UPDATE tasks", "checkout --detach"])
 
     def test_waits_for_idle(self, stubs: Path, install_dir: Path) -> None:
         (stubs / "live-sessions").write_text("2\n1\n0\n")

@@ -119,7 +119,7 @@ class TestAutostart:
         result = await run_scheduled_autostart_check(db_session, now=now)
 
         await db_session.refresh(task)
-        assert (result.started_task_ids, result.failed_task_ids) == ([], [])
+        assert (result.queued_task_ids, result.failed_task_ids) == ([], [])
         assert (task.status, notified) == (TaskStatus.NEW, [])
 
 

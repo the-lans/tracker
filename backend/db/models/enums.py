@@ -17,7 +17,12 @@ class UserRole(StrEnum):
 
 
 class TaskStatus(StrEnum):
+    # Раздел 14.1: статусы до запуска — их пользователь меняет сам.
     NEW = "new"
+    REFINING = "refining"
+    DEFINED = "defined"
+    READY = "ready"
+    NIGHT_WORKER = "night_worker"
     QUEUED = "queued"
     IN_PROGRESS = "in_progress"
     # Решение 2026-10-19 (отклонение от раздела 3.1): «Приостановить» из

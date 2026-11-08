@@ -40,6 +40,9 @@ WAIT_IDLE_MINUTES=""
 WAIT_IDLE_POLL_SECONDS="${WAIT_IDLE_POLL_SECONDS:-15}"
 # Статусы задач с живой сессией (services/task_status.py::SESSION_ACTIVE_STATUSES).
 LIVE_SESSION_STATUSES="'in_progress','paused','plan_review','awaiting_input','rebase_conflict'"
+# Раздел 20.6: статусы до запуска, которых не знает версия без этой миграции.
+PRE_LAUNCH_STATUSES_MIGRATION="alembic/versions/a3f9d2c71e58_task_queue_statuses.py"
+PRE_LAUNCH_STATUSES_ADDED="'refining','defined','ready','night_worker'"
 # Флаг обслуживания (services/maintenance.py::MAINTENANCE_KEY): запуск задач
 # отвечает 503, воркер не берёт задачи из queued. TTL — срок ожидания плюс
 # запас на сборку и миграции: упавший скрипт не оставит флаг навсегда.
@@ -621,6 +624,21 @@ step_wait_idle() {
   done
 }
 
+# Откат на версию без статусов до запуска (раздел 20.6): прежний код не
+# прочитал бы задачу с незнакомым статусом — такие задачи возвращаются в new
+# до перехода на него. Сравнение по тексту: в старой схеме этих значений нет.
+_reset_unknown_task_statuses() {
+  local commit="$1"
+  git -C "${INSTALL_DIR}" cat-file -e "${commit}:${PRE_LAUNCH_STATUSES_MIGRATION}" 2>/dev/null \
+    && return 0
+  log "Обновление: у версии ${commit} нет статусов до запуска — такие задачи возвращаются в new"
+  local query="UPDATE tasks SET status = 'new' WHERE status::text IN (${PRE_LAUNCH_STATUSES_ADDED})"
+  ( cd "${INSTALL_DIR}" \
+    && docker compose exec -T postgres \
+      sh -c 'psql -v ON_ERROR_STOP=1 -tA -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "${query}" ) \
+    || die_unchanged "не удалось вернуть задачи в статус new перед откатом"
+}
+
 # Переход на коммит из истории origin/main: вершина ветки или --ref (в том
 # числе откат). Незакоммиченные правки на сервере git не затирает — при
 # конфликте checkout прерывает обновление. Прежний коммит — цель отката.
@@ -633,6 +651,7 @@ step_fetch_code() {
     || die_unchanged "коммит ${target} не найден"
   git -C "${INSTALL_DIR}" merge-base --is-ancestor "${commit}" origin/main \
     || die_unchanged "коммит ${commit} не входит в историю origin/main"
+  _reset_unknown_task_statuses "${commit}"
   git -C "${INSTALL_DIR}" checkout --detach "${commit}" \
     || die_unchanged "переход на ${commit} мешают локальные правки"
   mkdir -p "${DEPLOY_STATE_DIR}"

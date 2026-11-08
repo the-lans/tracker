@@ -25,10 +25,27 @@ from db.models.mixins import (
 )
 
 _DEFAULT_REMOTE_CONTROL_RECONNECT_ATTEMPTS = 0
+# Раздел 14.4: ручной приоритет в очереди пользователя — больше раньше.
+DEFAULT_QUEUE_PRIORITY = 100
+MIN_QUEUE_PRIORITY = 1
+MAX_QUEUE_PRIORITY = 1_000_000
 
 
 class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     __tablename__ = "tasks"
+    __table_args__ = (
+        sa.CheckConstraint(
+            f"queue_priority BETWEEN {MIN_QUEUE_PRIORITY} AND {MAX_QUEUE_PRIORITY}",
+            name="ck_tasks_queue_priority",
+        ),
+        sa.Index(
+            "ix_tasks_queue",
+            "created_by",
+            "status",
+            sa.text("queue_priority DESC"),
+            "ready_at",
+        ),
+    )
 
     code: Mapped[str] = mapped_column(sa.String, unique=True)
     title: Mapped[str] = mapped_column(sa.String)
@@ -85,6 +102,28 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     # прежней сессии (очистка контекста, смена LLM-аккаунта).
     context_cleared_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     repo_cleaned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Раздел 14.4: очередь автора — `ready`/`night_worker` по приоритету, затем
+    # по времени постановки; слот ручного запуска и чата — по `occupies_slot`.
+    queue_priority: Mapped[int] = mapped_column(
+        sa.Integer,
+        default=DEFAULT_QUEUE_PRIORITY,
+        server_default=str(DEFAULT_QUEUE_PRIORITY),
+    )
+    ready_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    occupies_slot: Mapped[bool] = mapped_column(
+        sa.Boolean,
+        default=False,
+        server_default=sa.false(),
+    )
+    launched_manually: Mapped[bool] = mapped_column(
+        sa.Boolean,
+        default=False,
+        server_default=sa.false(),
+    )
+    # «Отменить постановку» возвращает задачу в статус, из которого она ушла в `queued`.
+    queued_from_status: Mapped[TaskStatus | None] = mapped_column(
+        pg_enum(TaskStatus, name="task_status"),
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"))
 
 

@@ -28,7 +28,7 @@ from services.pipeline_validation import (
     validate_node_shape,
 )
 from services.system_settings import resolve_node_execution_defaults
-from services.task_status import lock_task, restart_point_started
+from services.task_status import PRE_LAUNCH_STATUSES, lock_task, restart_point_started
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,13 +66,13 @@ class CustomNodeDraft:
 
 def is_position_editable(task: Task, order_index: int, *, restart_point_open: bool) -> bool:
     """
-    Правило 11 CLAUDE.md, раздел 13.2: в `new` — любая позиция; в `failed` —
+    Правило 11 CLAUDE.md, раздел 13.2: до запуска — любая позиция; в `failed` —
     только ещё не начинавшие выполнение: за точкой перезапуска
     (`order_index > last_failed_order_index`) и на ней самой, если нода там
     не начинала выполняться (``restart_point_open``: остановка на паузе,
     сбой после последней ноды); в остальных статусах — никакая.
     """
-    if task.status is TaskStatus.NEW:
+    if task.status in PRE_LAUNCH_STATUSES:
         return True
     if task.status is TaskStatus.FAILED and task.last_failed_order_index is not None:
         if order_index == task.last_failed_order_index:
@@ -215,7 +215,7 @@ async def bind_pipeline_to_task(
     Раздел 3.1, 13.1, правило 10 CLAUDE.md: снимок нод и `tasks.pipeline_id`
     — одной транзакцией.
 
-    Пока задача в `new`, пайплайн можно сменить: прежний снимок заменяется
+    Пока задача до запуска, пайплайн можно сменить: прежний снимок заменяется
     новым в той же транзакции. Строка задачи блокируется до коммита, поэтому
     две одновременные привязки не складывают снимки (решение №19 плана).
 
@@ -224,9 +224,9 @@ async def bind_pipeline_to_task(
     (раздел 15.4, «пропуск по умолчанию»).
     """
     locked = await lock_task(db_session, task.id)
-    if locked is None or locked.status is not TaskStatus.NEW:
+    if locked is None or locked.status not in PRE_LAUNCH_STATUSES:
         raise ValidationError(
-            "Пайплайн можно выбрать или сменить только у задачи в статусе new — "
+            "Пайплайн можно выбрать или сменить только у задачи до запуска — "
             "запущенную задачу сначала верните в новые",
         )
     nodes_stmt = sa.select(Node).where(Node.pipeline_id == pipeline_id).order_by(Node.order_index)
