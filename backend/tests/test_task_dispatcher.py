@@ -314,12 +314,15 @@ class TestLaunchFailure:
         monkeypatch: pytest.MonkeyPatch,
         notifications: list[NotificationEvent],
     ) -> None:
-        await self._failing(db_session, monkeypatch)
+        broken, _ = await self._failing(db_session, monkeypatch)
 
         await _dispatch(db_session, redis_client)
         await _dispatch(db_session, redis_client)
 
-        assert notifications == [NotificationEvent.QUEUE_LAUNCH_FAILED]
+        logs = (
+            await db_session.execute(sa.select(AppLog).where(AppLog.task_id == broken.id))
+        ).scalars().all()
+        assert (len(logs), notifications) == (1, [NotificationEvent.QUEUE_LAUNCH_FAILED])
 
 
 class TestSkipped:

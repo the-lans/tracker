@@ -20,7 +20,9 @@ import pytest
 
 from db.models.enums import TaskStatus
 from services.maintenance import MAINTENANCE_KEY
+from services.periodic_tasks import NIGHT_DISPATCH_TASK
 from services.task_status import SESSION_ACTIVE_STATUSES
+from tasks.celery_app import DISPATCH_READY_TASKS
 
 _INSTALL_SCRIPT = Path(__file__).resolve().parents[2] / "deploy" / "install.sh"
 # Системные утилиты, которые нужны скрипту и заглушкам. PATH теста состоит
@@ -63,6 +65,7 @@ if [ "$1 $2 $3" = "compose exec -T" ]; then
 fi
 case "$*" in
   *seed_periodic_tasks*) [ -f "$STUB_DIR/fail-seed" ] && exit 1 ;;
+  *"UPDATE tasks SET status"*) [ -f "$STUB_DIR/fail-reset" ] && exit 1 ;;
 esac
 if [ "$1" = "version" ]; then
   cat "$STUB_DIR/engine-version" 2>/dev/null || echo "27.3.1"
@@ -298,6 +301,14 @@ class TestSharedConstants:
             TaskStatus.NIGHT_WORKER,
         }
 
+    def test_queue_periodic_tasks(self, stubs: Path, install_dir: Path) -> None:
+        """Откат удаляет ровно периодические задачи воркера очереди."""
+        raw = self._value(stubs, install_dir, "QUEUE_PERIODIC_TASKS")
+        assert {item.strip("'") for item in raw.split(",")} == {
+            DISPATCH_READY_TASKS,
+            NIGHT_DISPATCH_TASK,
+        }
+
 
 class TestRestore:
     def test_steps_in_order(
@@ -511,7 +522,27 @@ class TestUpdate:
         assert bool(resets_seen) is resets
         if resets:
             assert "'refining','defined','ready','night_worker'" in resets_seen[0]
-            _assert_in_order(calls, ["cat-file -e", "UPDATE tasks", "checkout --detach"])
+            assert "'dispatch_ready_tasks','dispatch_night_tasks'" in resets_seen[0]
+            _assert_in_order(calls, ["checkout --detach", "cat-file -e", "UPDATE tasks"])
+
+    def test_failed_reset_restores_code(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "old-target").touch()
+        (stubs / "fail-reset").touch()
+
+        result = _update(stubs, install_dir, "--ref", "abc1234")
+
+        assert result.returncode == 3
+        assert "сервер не изменён" in result.stdout
+        calls = _calls(stubs)
+        _assert_in_order(
+            calls,
+            [
+                f"checkout --detach {_TARGET_SHA}",
+                "UPDATE tasks",
+                f"checkout --detach {_PREVIOUS_SHA}",
+            ],
+        )
+        assert not any("compose build" in call for call in calls)
 
     def test_waits_for_idle(self, stubs: Path, install_dir: Path) -> None:
         (stubs / "live-sessions").write_text("2\n1\n0\n")

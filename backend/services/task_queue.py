@@ -217,7 +217,14 @@ async def change_task_status_manually(
     return updated
 
 
-def frees_slot(to_status: TaskStatus) -> bool:
-    """Переход освобождает слот — пора запустить следующую задачу очереди."""
-    return to_status is TaskStatus.DONE or to_status in PRE_LAUNCH_STATUSES
-
+def cancel_target_status(queued_from_status: TaskStatus | None) -> TaskStatus:
+    """
+    Раздел 14.2 «Отменить постановку»: задача возвращается в статус, из которого
+    ушла в `queued`. Пришедшая из очереди из неё выходит (`defined`) — иначе
+    воркер очереди тут же поставил бы её снова.
+    """
+    if queued_from_status is None:
+        return TaskStatus.NEW
+    if queued_from_status in QUEUE_STATUSES:
+        return TaskStatus.DEFINED
+    return queued_from_status

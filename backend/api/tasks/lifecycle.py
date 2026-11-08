@@ -28,7 +28,7 @@ from services.task_cleanup import cleanup_task_repositories
 from services.task_control import TaskControlCommand, request_task_control
 from services.task_launch import ensure_task_launchable
 from services.task_nodes import bind_pipeline_to_task
-from services.task_queue import change_task_status_manually, frees_slot
+from services.task_queue import cancel_target_status, change_task_status_manually
 from services.task_status import PRE_LAUNCH_STATUSES, reset_task_run, transition_task_status
 from services.task_workspace import resolve_repos_root
 from tasks.celery_app import wake_task_dispatcher
@@ -151,8 +151,9 @@ async def change_task_status(
             to_status=body.to_status,
         )
     await db_session.refresh(updated)
-    # Ушла из очереди или вернулась из `failed`: слот или место могли освободиться.
-    if previous is not updated.status and frees_slot(updated.status):
+    # Встала в очередь, ушла из неё или вернулась из `failed`/`done` (слот
+    # освободился) — воркер очереди не ждёт расписания.
+    if previous is not updated.status:
         wake_task_dispatcher()
     return updated
 
@@ -262,7 +263,7 @@ async def cancel_queued_task(
 ) -> Task:
     """
     Раздел 14.2 «Отменить постановку»: `queued` -> статус, из которого задача
-    ушла (`queued_from_status`, по умолчанию `new`). Celery-таск, уже стоящий
+    ушла (`cancel_target_status`: из очереди — в `defined`). Celery-таск, уже стоящий
     в очереди, проиграет compare-and-swap захвата и ничего не сделает.
     Автозапуск выключается — иначе ближайшая проверка расписания (раздел
     12.2) поставила бы задачу в очередь снова.
@@ -273,7 +274,7 @@ async def cancel_queued_task(
             db_session,
             task_id=task_id,
             from_status=TaskStatus.QUEUED,
-            to_status=task.queued_from_status or TaskStatus.NEW,
+            to_status=cancel_target_status(task.queued_from_status),
             extra_values={"auto_start_enabled": False, "queued_from_status": None},
         )
     except ConflictError as exc:

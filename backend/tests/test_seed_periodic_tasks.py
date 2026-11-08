@@ -14,6 +14,7 @@ from types import ModuleType
 
 import sqlalchemy as sa
 
+from db.models.enums import PeriodicScheduleType
 from db.models.periodic import PeriodicTask
 from db.session import async_session_factory
 
@@ -45,6 +46,33 @@ class TestSeed:
             rows = await _seeded_rows(names)
             assert sorted(row.name for row in rows) == sorted(names)
             assert all(row.updated_by is None for row in rows)
+        finally:
+            async with async_session_factory() as session:
+                await session.execute(sa.delete(PeriodicTask).where(PeriodicTask.name.in_(names)))
+                await session.commit()
+
+    async def test_queue_workers(self, run_migrations: None) -> None:
+        """Раздел 16.2: дневной воркер — каждые 5 минут, ночной — по началу окна (UTC)."""
+        seed = _load_seed_module()
+        names = ["dispatch_ready_tasks", "dispatch_night_tasks"]
+        try:
+            await seed._seed()
+
+            rows = {row.name: row for row in await _seeded_rows(names)}
+            assert (
+                rows["dispatch_ready_tasks"].interval_seconds,
+                rows["dispatch_ready_tasks"].schedule_type,
+            ) == (
+                300,
+                PeriodicScheduleType.INTERVAL,
+            )
+            assert (
+                rows["dispatch_night_tasks"].crontab_expression,
+                rows["dispatch_night_tasks"].schedule_type,
+            ) == (
+                "15 0 * * *",
+                PeriodicScheduleType.CRONTAB,
+            )
         finally:
             async with async_session_factory() as session:
                 await session.execute(sa.delete(PeriodicTask).where(PeriodicTask.name.in_(names)))

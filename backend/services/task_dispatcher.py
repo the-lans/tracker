@@ -116,8 +116,14 @@ async def _report_launch_failure(
     task: Task,
     error: ValidationError,
 ) -> None:
-    """Задача остаётся в очереди; уведомление — раз в сутки на задачу и причину."""
+    """
+    Задача остаётся в очереди. Запись в `app_logs` и уведомление — раз в сутки
+    на задачу и причину: проход повторяется каждые 5 минут (раздел 14.4).
+    """
     logger.error("queue_task_launch_failed", task_id=str(task.id), error=str(error))
+    notice_key = f"task-dispatcher:failed:{task.id}:{error}"
+    if not await redis_client.set(notice_key, "1", nx=True, ex=LAUNCH_FAILURE_NOTICE_TTL_SECONDS):
+        return
     db_session.add(
         AppLog(
             level=AppLogLevel.ERROR,
@@ -128,14 +134,12 @@ async def _report_launch_failure(
         ),
     )
     await db_session.commit()
-    notice_key = f"task-dispatcher:failed:{task.id}:{error}"
-    if await redis_client.set(notice_key, "1", nx=True, ex=LAUNCH_FAILURE_NOTICE_TTL_SECONDS):
-        await notify_task_event(
-            db_session,
-            event=NotificationEvent.QUEUE_LAUNCH_FAILED,
-            task=task,
-            detail=f"{task.code}: не удалось запустить из очереди — {error}",
-        )
+    await notify_task_event(
+        db_session,
+        event=NotificationEvent.QUEUE_LAUNCH_FAILED,
+        task=task,
+        detail=f"{task.code}: не удалось запустить из очереди — {error}",
+    )
 
 
 async def _launch(

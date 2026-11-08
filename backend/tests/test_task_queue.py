@@ -14,7 +14,6 @@ from services.errors import ConflictError, ValidationError
 from services.session_heartbeat import beat
 from services.task_queue import (
     change_task_status_manually,
-    frees_slot,
     night_window_active,
     night_window_cron,
     occupied_slots,
@@ -66,21 +65,6 @@ class TestNightWindow:
     def test_equal_bounds_rejected(self) -> None:
         with pytest.raises(ValidationError):
             validate_night_window(start=time(3, 0), end=time(3, 0))
-
-
-class TestFreesSlot:
-    @pytest.mark.parametrize(
-        ("status", "frees"),
-        [
-            (TaskStatus.DONE, True),
-            (TaskStatus.DEFINED, True),
-            (TaskStatus.READY, True),
-            (TaskStatus.FAILED, False),
-            (TaskStatus.IN_PROGRESS, False),
-        ],
-    )
-    def test_frees(self, status: TaskStatus, frees: bool) -> None:
-        assert frees_slot(status) is frees
 
 
 class TestOccupiedSlots:
