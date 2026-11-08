@@ -257,7 +257,8 @@ alembic/
                  ошибки, LLM-прокси: провайдер, учётка и порядок аккаунтов,
                  расход окон, пороги пользователя, nodes.reasoning_effort,
                  tasks.current_llm_account_id, аккаунт, модель и уровень хода
-                 в node_logs); новые миграции пишут DDL
+                 в node_logs, доступ к GitLab API в git_credentials);
+                 новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
   verify_sdk.py — точечная проверка claude-agent-sdk (не часть пайплайна
@@ -461,7 +462,7 @@ Postgres из `backend/tests/conftest.py`:
    контейнера worker — подпутём volume, найденного через `docker inspect`),
    обязательны лимиты CPU/памяти,
    `--privileged` не используется. Переменные задачи передаются все; токен
-   GitLab — системная настройка (`system_settings`), а не переменная, и в
+   GitLab API — в учётных данных Git (`git_credentials`), а не переменная, и в
    контейнер не попадает. Пути задачи — в `TASK_REPOS_PATH` и
    `TASK_ARTIFACTS_PATH` (текст скрипта не шаблонизируется). Процесс
    Claude Code CLI — тоже в контейнере (`tracker-session`, ТЗ 19.3): только
