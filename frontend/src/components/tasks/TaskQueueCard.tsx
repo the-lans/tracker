@@ -98,7 +98,7 @@ export function TaskQueueCard({
 
       {isQueued(task.status) && (
         <div className="mt-3 border-t border-border pt-2.5 text-meta text-text-2">
-          {task.queue_position !== null && <div>№{task.queue_position} в вашей очереди</div>}
+          {task.queue_position !== null && <div>№{task.queue_position} в очереди</div>}
           {task.ready_at && <div className="text-text-3">В очереди с {formatDateTime(task.ready_at)}</div>}
           {task.status === TaskStatus.NIGHT_WORKER && settings && (
             <div className="text-text-3">

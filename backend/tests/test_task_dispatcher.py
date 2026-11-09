@@ -375,7 +375,7 @@ class TestAutostart:
             pipeline_id=pipeline.id,
             status=TaskStatus.DEFINED,
             auto_start_enabled=True,
-            scheduled_start_at=datetime.now(UTC) - timedelta(minutes=1),
+            scheduled_start_at=_DAY - timedelta(minutes=1),
         )
 
         result = await _dispatch(db_session, redis_client)

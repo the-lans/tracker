@@ -138,7 +138,9 @@ async def _deliver_queued_sessions(db_session: AsyncSession) -> None:
 
 @celery_app.task(name=DISPATCH_READY_TASKS)
 def dispatch_ready_tasks() -> None:
-    """Раздел 14.4: дневной воркер — задачи очереди в свободные слоты."""
+    """
+    Раздел 14.4: дневной воркер — задачи очереди в свободные слоты.
+    """
     _run_periodic(DISPATCH_READY_TASKS, _dispatch)
 
 

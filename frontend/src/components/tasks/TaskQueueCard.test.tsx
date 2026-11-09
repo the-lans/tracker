@@ -69,7 +69,7 @@ describe("TaskQueueCard", () => {
     test.for([TaskStatus.NEW, TaskStatus.IN_PROGRESS])("%s — не в очереди", (status, { api }) => {
       renderCard(api, { status, queue_position: null });
 
-      expect(screen.queryByText(/в вашей очереди/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^№\d+ в очереди$/)).not.toBeInTheDocument();
     });
 
     test("ready — номер и время постановки, без ночного окна", async ({ api }) => {
@@ -90,7 +90,7 @@ describe("TaskQueueCard", () => {
         </>,
       );
 
-      expect(screen.getByText("№2 в вашей очереди")).toBeInTheDocument();
+      expect(screen.getByText("№2 в очереди")).toBeInTheDocument();
       expect(screen.getByText(/^В очереди с /)).toBeInTheDocument();
       expect(await screen.findAllByText(/ночном окне/)).toHaveLength(1);
     });
