@@ -32,7 +32,7 @@ from services.parent_summary import get_or_request_parent_summary, wait_for_pare
 from services.pipeline_orchestrator import PipelineRunOutcome
 from services.plan_mode import ActiveNodeContext
 from services.system_settings import resolve_node_execution_defaults, resolve_runner_image
-from services.task_status import reset_task_to_new
+from services.task_status import reset_task_run
 from tests.factories import make_task, make_user
 from tests.fakes import FakeClaudeAgentClient
 
@@ -274,7 +274,7 @@ class TestAdmissionLifecycle:
             if status is TaskStatus.FAILED:
                 assert await worker._claim_task(session, task, continuation=False)
             else:
-                await reset_task_to_new(session, task_id=task.id)
+                await reset_task_run(session, task_id=task.id)
             await session.refresh(task)
             assert not task.manual_requests_closed
 

@@ -141,13 +141,17 @@ export function useUpdateSystemSettings() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: SystemSettings) => api.put<SystemSettings>("/system-settings", body),
-    onSuccess: (settings) => queryClient.setQueryData(SYSTEM_SETTINGS_KEY, settings),
+    onSuccess: (settings) => {
+      queryClient.setQueryData(SYSTEM_SETTINGS_KEY, settings);
+      // Раздел 16.2: начало ночного окна меняет расписание `dispatch_night_tasks`.
+      void queryClient.invalidateQueries({ queryKey: PERIODIC_TASKS_KEY });
+    },
   });
 }
 
 const INTEGRATIONS_KEY = ["admin", "integrations"] as const;
 
-/** Раздел 15.5, 15.6: адрес и токен GitLab, адрес Jira — только администратору. */
+/** Раздел 15.5, 15.6: адрес Jira — только администратору. */
 export function useIntegrations() {
   return useQuery({
     queryKey: INTEGRATIONS_KEY,

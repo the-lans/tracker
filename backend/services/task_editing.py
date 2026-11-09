@@ -1,9 +1,11 @@
 """
 Правка полей задачи после создания (раздел 12.1, 14.2, 15.2 ТЗ).
 
-``auto_accept_plan`` меняется в любой момент до `done`; остальные поля —
-только пока задача в `new`. LLM-аккаунт — только один из аккаунтов автора
-задачи, даже если правит `admin` (раздел 19.2). Сессия хранится в каталоге
+``auto_accept_plan`` меняется в любой момент до `done`, приоритет в очереди
+и галочка «Занимать слот» — в любом статусе (управление прогоном, раздел
+14.4); остальные поля — только пока задача в статусе до запуска.
+LLM-аккаунт — только один из аккаунтов автора задачи, даже если правит
+`admin` (раздел 19.2). Сессия хранится в каталоге
 задачи, а не аккаунта (раздел 6.4), поэтому смена стартового аккаунта у задачи,
 уже имевшей сессию (после «Вернуть в новые»), сессию не забывает: следующий
 запуск продолжит её на выбранном аккаунте (раздел 14.1, 19.7).
@@ -17,6 +19,7 @@ from app_logging.config import get_logger
 from db.models.enums import TaskStatus
 from services.access import ensure_llm_account_of_owner
 from services.errors import ValidationError
+from services.task_status import PRE_LAUNCH_STATUSES
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +29,7 @@ if TYPE_CHECKING:
 logger = get_logger("task_editing")
 
 _ANYTIME_FIELD = "auto_accept_plan"
+_RUN_CONTROL_FIELDS = frozenset({"queue_priority", "occupies_slot"})
 _LLM_ACCOUNT_FIELD = "llm_account_id"
 
 
@@ -45,8 +49,14 @@ async def update_task(
 ) -> Task:
     changes = dict(changes)
     auto_accept_plan = changes.pop(_ANYTIME_FIELD, None)
-    if changes and task.status is not TaskStatus.NEW:
-        raise ValidationError("Поля задачи можно менять только в статусе new")
+    # Пустое значение у этих полей ничего не меняет: в БД они NOT NULL.
+    run_control = {
+        field: value
+        for field in _RUN_CONTROL_FIELDS & changes.keys()
+        if (value := changes.pop(field)) is not None
+    }
+    if changes and task.status not in PRE_LAUNCH_STATUSES:
+        raise ValidationError("Поля задачи можно менять только до запуска")
     if auto_accept_plan is not None and task.status is TaskStatus.DONE:
         raise ValidationError("Задача уже завершена")
     if changes.get(_LLM_ACCOUNT_FIELD) is not None:
@@ -59,7 +69,7 @@ async def update_task(
         )
     _restart_on_chosen_account(task, changes)
 
-    for field, value in changes.items():
+    for field, value in {**changes, **run_control}.items():
         setattr(task, field, value)
     if auto_accept_plan is not None:
         task.auto_accept_plan = auto_accept_plan

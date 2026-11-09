@@ -26,17 +26,20 @@ import {
   type TaskNodeUpdateRequest,
 } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
 /** Раздел 13.2, 15.2: пояснение к блокировке чекбоксов нод. */
-function nodesHint(status: TaskStatus): string {
-  if (status === TaskStatus.NEW)
+function nodesHint({ status, chat_active }: Task): string {
+  if (isPreLaunch(status))
     return "Снимите галочку, чтобы пропустить ноду в этой задаче, или вставьте свой промт кнопкой «+ Промт»";
   if (status === TaskStatus.FAILED) {
-    return "Пройденные и упавшая ноды уже выполнены — менять можно только ноды после точки сбоя. Чтобы сменить пайплайн, верните задачу в новые";
+    return "Пройденные и упавшая ноды уже выполнены — менять можно только ноды после точки сбоя. Чтобы сменить пайплайн, переведите задачу в статус до запуска";
   }
   if (status === TaskStatus.DONE) {
-    return "Задача завершена — чтобы сменить пайплайн и запустить заново, верните её в новые";
+    return "Задача завершена — чтобы сменить пайплайн и запустить заново, переведите её в статус до запуска";
   }
+  // Раздел 14.4: вопрос агента в чате «Уточняется» — пайплайн ещё не запускался.
+  if (chat_active) return "Состав нод заблокирован, пока агент ждёт ответа в чате";
   return "Состав нод заблокирован — задача уже запущена";
 }
 
@@ -119,7 +122,7 @@ export function TaskNodesCard({
       <Card>
         <CardTitle>
           <span>Ноды пайплайна</span>
-          {task.status === TaskStatus.NEW ? (
+          {isPreLaunch(task.status) ? (
             <Button size="sm" variant="secondary" onClick={onChangePipeline}>
               Сменить пайплайн
             </Button>
@@ -177,7 +180,7 @@ export function TaskNodesCard({
         </div>
         <div className="mt-2 flex items-center gap-1.5 text-caption text-text-3">
           <Lock className="size-3" />
-          {nodesHint(task.status)}
+          {nodesHint(task)}
         </div>
       </Card>
       <DependentNodesDialog

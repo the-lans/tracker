@@ -10,9 +10,20 @@ describe("bridgeViewOf", () => {
     { status: TaskStatus.IN_PROGRESS, bridge: RemoteControlStatus.UNAVAILABLE, llm: "acc1", view: "unavailable" },
     { status: TaskStatus.IN_PROGRESS, bridge: RemoteControlStatus.UNAVAILABLE, llm: null, view: "hidden" },
     { status: TaskStatus.DONE, bridge: RemoteControlStatus.DISCONNECTED, llm: "acc1", view: "hidden" },
+    { status: TaskStatus.REFINING, bridge: RemoteControlStatus.DISCONNECTED, llm: "acc1", view: "hidden" },
   ])("$status, мост $bridge, аккаунт $llm → $view", ({ status, bridge, llm, view }) => {
     expect(
       bridgeViewOf(makeTask({ status, remote_control_status: bridge, llm_account_id: llm })),
     ).toBe(view);
+  });
+
+  test("вопрос агента в чате «Уточняется» — без моста", () => {
+    const task = makeTask({
+      status: TaskStatus.AWAITING_INPUT,
+      remote_control_status: RemoteControlStatus.DISCONNECTED,
+      chat_active: true,
+    });
+
+    expect(bridgeViewOf(task)).toBe("hidden");
   });
 });

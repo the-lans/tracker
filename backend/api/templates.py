@@ -20,6 +20,7 @@ from services.integrity import (
     commit_or_conflict,
     ensure_template_deletable,
 )
+from services.template_files import resolve_uploaded_file_paths
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 
@@ -45,6 +46,7 @@ async def _to_response(db_session: AsyncSession, template: Template) -> Template
         id=template.id,
         name=template.name,
         files=template.files,
+        uploaded_file_paths=template.uploaded_file_paths,
         mcp_server_ids=await _mcp_server_ids(db_session, template.id),
         created_by=template.created_by,
     )
@@ -75,6 +77,7 @@ async def create_template(
         id=uuid.uuid4(),
         name=body.name,
         files=body.files,
+        uploaded_file_paths=resolve_uploaded_file_paths(body.files, body.uploaded_file_paths),
         created_by=current_user.id,
     )
     db_session.add(template)
@@ -122,8 +125,14 @@ async def update_template(
     template = await _get_template_or_404(db_session, template_id, current_user)
     if body.name is not None:
         template.name = body.name
-    if body.files is not None:
-        template.files = body.files
+    if body.files is not None or body.uploaded_file_paths is not None:
+        files = body.files if body.files is not None else template.files
+        template.uploaded_file_paths = resolve_uploaded_file_paths(
+            files,
+            body.uploaded_file_paths,
+            previous=template.uploaded_file_paths,
+        )
+        template.files = files
     if body.mcp_server_ids is not None:
         await _replace_mcp_server_links(
             db_session,

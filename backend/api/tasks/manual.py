@@ -26,8 +26,8 @@ from api.tasks.common import (
     TASKS_PREFIX,
     TASKS_TAGS,
     get_task_or_404,
-    publish_signal,
     require_status,
+    wake_session_for_request,
 )
 from db.models.enums import ManualRequestStatus
 from db.models.pipelines import Node
@@ -45,7 +45,7 @@ from services.manual_queue import (
 from services.plan_mode import record_user_decision
 from services.redis_connection import redis_connection
 from services.task_control import request_manual_stop
-from services.task_status import SESSION_ACTIVE_STATUSES
+from services.task_status import MANUAL_REQUEST_STATUSES
 
 router = APIRouter(prefix=TASKS_PREFIX, tags=TASKS_TAGS)
 
@@ -81,14 +81,14 @@ async def submit_freeform_prompt(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> ManualRequestResponse:
     task = await get_task_or_404(db_session, task_id, current_user)
-    require_status(task, SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
+    require_status(task, MANUAL_REQUEST_STATUSES, "Сессия задачи не активна (раздел 8.2)")
     request = await enqueue_freeform_prompt_run(
         db_session,
         task_id=task_id,
         raw_prompt_text=body.raw_prompt_text,
         requested_by=current_user.id,
     )
-    await publish_signal(task_id)
+    await wake_session_for_request(task)
     return ManualRequestResponse.model_validate(request)
 
 
@@ -125,7 +125,7 @@ async def run_library_prompt(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> ManualRequestResponse:
     task = await get_task_or_404(db_session, task_id, current_user)
-    require_status(task, SESSION_ACTIVE_STATUSES, "Сессия задачи не активна (раздел 8.2)")
+    require_status(task, MANUAL_REQUEST_STATUSES, "Сессия задачи не активна (раздел 8.2)")
     task_library_prompt = await get_task_record_or_404(
         db_session,
         TaskLibraryPrompt,
@@ -146,7 +146,7 @@ async def run_library_prompt(
         node=node,
         requested_by=current_user.id,
     )
-    await publish_signal(task_id)
+    await wake_session_for_request(task)
     return ManualRequestResponse.model_validate(request)
 
 

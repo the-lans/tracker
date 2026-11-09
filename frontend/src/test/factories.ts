@@ -55,6 +55,12 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     auto_start_enabled: false,
     last_failed_order_index: null,
     repo_cleaned_at: null,
+    queue_priority: 100,
+    ready_at: null,
+    occupies_slot: false,
+    launched_manually: false,
+    chat_active: false,
+    queue_position: null,
     created_by: "u1",
     created_at: CREATED_AT,
     updated_at: CREATED_AT,
@@ -180,6 +186,7 @@ export function makeUser(overrides: Partial<User> = {}): User {
     jira_token_set: false,
     llm_switch_threshold_5h_pct: 93,
     llm_switch_threshold_week_pct: 93,
+    max_parallel_tasks: 3,
     ...overrides,
   };
 }
@@ -220,6 +227,7 @@ export function makeTemplate(overrides: Partial<Template> = {}): Template {
     id: "tpl1",
     name: "Python-сервис",
     files: { "CLAUDE.md": "# Правила проекта" },
+    uploaded_file_paths: [],
     mcp_server_ids: [],
     created_by: "u1",
     ...overrides,

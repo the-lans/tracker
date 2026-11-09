@@ -1,14 +1,15 @@
 """
 «Системные настройки» админки (раздел 15.5 ТЗ): значения по умолчанию для
-новых нод — таймаут, политика retry и Docker-образ раннера script-ноды.
+новых нод — таймаут и политика retry.
 
 Таймаут и retry подставляются в момент создания ноды (раздел 15.5: «для
 новых нод»), поэтому их изменение не трогает уже созданные ноды. Образ
 раннера в ноду не записывается: если у script-ноды он не задан явно, образ
-берётся из настроек при каждом запуске по её текущему языку — так смена
+берётся из стандартных образов в коде по её текущему языку — так смена
 языка в редакторе не оставляет ноду в чужом раннере.
 
-Здесь же — интеграция с GitLab: адрес и токен API (раздел 16.2,
+Здесь же — ночное окно воркера очереди (раздел 14.4): его начало задаёт и
+расписание `dispatch_night_tasks`. И интеграция с GitLab: адрес и токен API (раздел 16.2,
 `sync_gitlab_merge_status`). Это настройки системы, а не переменные
 окружения: в промты и script-контейнеры они не попадают (раздел 19.4).
 """
@@ -21,10 +22,13 @@ from typing import TYPE_CHECKING
 from app_logging.config import get_logger
 from db.models.enums import NodeType, ScriptLanguage
 from db.models.settings import SYSTEM_SETTINGS_ROW_ID, SystemSettings
-from services.crypto import decrypt, encrypt
 from services.nodes.script import DEFAULT_RUNNER_IMAGES
+from services.periodic_tasks import set_night_dispatch_schedule
+from services.task_queue import night_window_cron, validate_night_window
 
 if TYPE_CHECKING:
+    from datetime import time
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from db.models.pipelines import Node
@@ -42,8 +46,9 @@ class SystemSettingsValues:
     default_timeout_seconds: int
     default_max_retries: int
     default_retry_base_delay_seconds: int
-    default_runner_image_python: str
-    default_runner_image_bash: str
+    # Раздел 14.4: ночное окно по московскому времени, общее для всех.
+    night_window_start: time
+    night_window_end: time
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +68,7 @@ async def get_system_settings(db_session: AsyncSession) -> SystemSettings:
         default_timeout_seconds=DEFAULT_NODE_TIMEOUT_SECONDS,
         default_max_retries=DEFAULT_NODE_MAX_RETRIES,
         default_retry_base_delay_seconds=DEFAULT_NODE_RETRY_BASE_DELAY_SECONDS,
+        # Устаревшие столбцы NOT NULL: заполняются для предыдущей версии при откате.
         default_runner_image_python=DEFAULT_RUNNER_IMAGES[ScriptLanguage.PYTHON],
         default_runner_image_bash=DEFAULT_RUNNER_IMAGES[ScriptLanguage.BASH],
     )
@@ -76,21 +82,22 @@ async def update_system_settings(
     *,
     values: SystemSettingsValues,
 ) -> SystemSettings:
+    validate_night_window(start=values.night_window_start, end=values.night_window_end)
     settings = await get_system_settings(db_session)
+    if settings.night_window_start != values.night_window_start:
+        await set_night_dispatch_schedule(
+            db_session,
+            crontab_expression=night_window_cron(values.night_window_start),
+        )
+    settings.night_window_start = values.night_window_start
+    settings.night_window_end = values.night_window_end
     settings.default_timeout_seconds = values.default_timeout_seconds
     settings.default_max_retries = values.default_max_retries
     settings.default_retry_base_delay_seconds = values.default_retry_base_delay_seconds
-    settings.default_runner_image_python = values.default_runner_image_python
-    settings.default_runner_image_bash = values.default_runner_image_bash
     await db_session.commit()
     logger.info("system_settings_updated")
     return settings
 
-
-def default_runner_image(settings: SystemSettings, language: ScriptLanguage) -> str:
-    if language is ScriptLanguage.PYTHON:
-        return settings.default_runner_image_python
-    return settings.default_runner_image_bash
 
 
 async def resolve_node_execution_defaults(
@@ -132,27 +139,7 @@ async def resolve_runner_image(db_session: AsyncSession, node: Node) -> str | No
         return None
     if node.docker_image:
         return node.docker_image
-    settings = await db_session.get(SystemSettings, SYSTEM_SETTINGS_ROW_ID)
-    if settings is None:
-        return DEFAULT_RUNNER_IMAGES[node.script_language]
-    return default_runner_image(settings, node.script_language)
-
-
-@dataclass(frozen=True, slots=True)
-class GitlabCredentials:
-    url: str
-    token: str
-
-
-async def get_gitlab_credentials(db_session: AsyncSession) -> GitlabCredentials | None:
-    """Адрес и токен GitLab API; `None` — интеграция не настроена."""
-    settings = await get_system_settings(db_session)
-    if not settings.gitlab_url or not settings.gitlab_token_encrypted:
-        return None
-    return GitlabCredentials(
-        url=settings.gitlab_url,
-        token=decrypt(settings.gitlab_token_encrypted),
-    )
+    return DEFAULT_RUNNER_IMAGES[node.script_language]
 
 
 async def get_jira_url(db_session: AsyncSession) -> str | None:
@@ -163,24 +150,14 @@ async def get_jira_url(db_session: AsyncSession) -> str | None:
 async def update_integrations(
     db_session: AsyncSession,
     *,
-    gitlab_url: str | None,
-    gitlab_token: str | None,
     jira_url: str | None,
 ) -> SystemSettings:
-    """
-    ``gitlab_token``: `None` — оставить сохранённый, пустая строка — удалить.
-    Значение токена API не возвращает никогда.
-    """
+    """Раздел 15.5: адрес Jira; доступ к GitLab API — в учётных данных Git."""
     settings = await get_system_settings(db_session)
-    settings.gitlab_url = gitlab_url or None
-    if gitlab_token is not None:
-        settings.gitlab_token_encrypted = encrypt(gitlab_token) if gitlab_token else None
     settings.jira_url = jira_url.rstrip("/") if jira_url else None
     await db_session.commit()
     logger.info(
         "integrations_updated",
-        gitlab_url_set=settings.gitlab_url is not None,
-        gitlab_token_set=settings.gitlab_token_encrypted is not None,
         jira_url_set=settings.jira_url is not None,
     )
     return settings

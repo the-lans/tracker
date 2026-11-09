@@ -20,6 +20,11 @@ class GitCredential(UUIDPrimaryKeyMixin, Base):
     host: Mapped[str] = mapped_column(sa.String)
     username: Mapped[str] = mapped_column(sa.String, default="oauth2")
     secret_encrypted: Mapped[str] = mapped_column(sa.Text)
+    # Опрос статуса MR через GitLab API (раздел 16.2): без своего токена у
+    # `https_token` используется сам токен Git.
+    gitlab_api_enabled: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    gitlab_api_token_encrypted: Mapped[str | None] = mapped_column(sa.Text)
+    gitlab_api_url: Mapped[str | None] = mapped_column(sa.String)
 
 
 class Repository(UUIDPrimaryKeyMixin, Base):
@@ -38,6 +43,12 @@ class Template(UUIDPrimaryKeyMixin, Base):
     name: Mapped[str] = mapped_column(sa.String)
     # Дерево файлов шаблона (CLAUDE.md, .claude/commands/*.md, .claude/settings.json).
     files: Mapped[JsonValue] = mapped_column(JSONB)
+    # Пути из `files`, загруженные с диска: форма открывает их в режиме «Из файла».
+    uploaded_file_paths: Mapped[list[str]] = mapped_column(
+        JSONB,
+        default=list,
+        server_default=sa.text("'[]'::jsonb"),
+    )
     # Раздел 19.2: шаблон — личный; шаблон репозитория по умолчанию при этом
     # применяется к задачам любого пользователя (решение №16 плана).
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), index=True)

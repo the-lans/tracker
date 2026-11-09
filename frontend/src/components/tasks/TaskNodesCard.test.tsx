@@ -51,10 +51,12 @@ function renderCard(
   {
     status = TaskStatus.NEW,
     lastFailed = null,
+    chatActive = false,
     nodes = [analysis, tests, report],
     nodeLogs = [],
   }: {
     status?: TaskStatus;
+    chatActive?: boolean;
     lastFailed?: number | null;
     nodes?: TaskNodeItem[];
     nodeLogs?: NodeLog[];
@@ -64,7 +66,7 @@ function renderCard(
   const onChangePipeline = vi.fn();
   const view = renderWithProviders(
     <TaskNodesCard
-      task={makeTask({ status, last_failed_order_index: lastFailed })}
+      task={makeTask({ status, last_failed_order_index: lastFailed, chat_active: chatActive })}
       nodeLogs={nodeLogs}
       onChangePipeline={onChangePipeline}
     />,
@@ -103,8 +105,19 @@ describe("TaskNodesCard", () => {
       { status: TaskStatus.QUEUED, hint: "Состав нод заблокирован — задача уже запущена" },
       { status: TaskStatus.IN_PROGRESS, hint: "Состав нод заблокирован — задача уже запущена" },
       { status: TaskStatus.PAUSED, hint: "Состав нод заблокирован — задача уже запущена" },
-    ])("$status: подсказка о правке состава", ({ status, hint }, { api }) => {
-      renderCard(api, { status });
+      { status: TaskStatus.AWAITING_INPUT, hint: "Состав нод заблокирован — задача уже запущена" },
+      {
+        status: TaskStatus.AWAITING_INPUT,
+        chatActive: true,
+        hint: "Состав нод заблокирован, пока агент ждёт ответа в чате",
+      },
+      {
+        status: TaskStatus.PLAN_REVIEW,
+        chatActive: true,
+        hint: "Состав нод заблокирован, пока агент ждёт ответа в чате",
+      },
+    ].map((row) => ({ chatActive: false, ...row })))("$status (чат: $chatActive): подсказка о правке состава", ({ status, chatActive, hint }, { api }) => {
+      renderCard(api, { status, chatActive });
 
       expect(screen.getByText(hint)).toBeInTheDocument();
     });

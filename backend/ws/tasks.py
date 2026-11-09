@@ -12,6 +12,8 @@ WebSocket-канал задачи (раздел 15.2, 18.1 ТЗ): `/ws/tasks/{ta
   механизм (`services/notifications.py`, `services/push_notifications.py`).
 - ``{"type": "llm_account", "task_id", "current_llm_account_id"}`` — смена
   аккаунта, на котором работает сессия (раздел 19.7); тот же опрос БД.
+- ``{"type": "chat", "task_id", "chat_active"}`` — воркер начал или закончил
+  чат в «Уточняется» (раздел 14.4): статус при этом не меняется; тот же опрос БД.
 - ``{"type": "output_delta", "node_log_id", "text"}`` — фрагменты ответа
   LLM по мере генерации (раздел 15.2). Их публикует воркер в Redis
   (`services/output_stream.py`), опросом БД их не получить.
@@ -56,6 +58,11 @@ AUTH_TIMEOUT_SECONDS = 5.0
 # Доступ перепроверяется каждые N опросов статуса (~N секунд).
 ACCESS_RECHECK_POLLS = 10
 _AUTH_MESSAGE_TYPE = "auth"
+# Типы событий канала (см. docstring модуля).
+STATUS_EVENT = "status"
+LLM_ACCOUNT_EVENT = "llm_account"
+CHAT_EVENT = "chat"
+OUTPUT_DELTA_EVENT = "output_delta"
 
 SendJson = Callable[[dict[str, Any]], Awaitable[None]]
 # Код закрытия, если доступ к каналу потерян; `None` — доступ есть.
@@ -68,6 +75,7 @@ class TaskState:
 
     status: TaskStatus
     current_llm_account_id: uuid.UUID | None = None
+    chat_active: bool = False
 
 
 FetchState = Callable[[uuid.UUID], Awaitable[TaskState | None]]
@@ -78,21 +86,29 @@ async def _fetch_state(task_id: uuid.UUID) -> TaskState | None:
         task = await db_session.get(Task, task_id)
         if task is None:
             return None
-        return TaskState(status=task.status, current_llm_account_id=task.current_llm_account_id)
+        return TaskState(
+            status=task.status,
+            current_llm_account_id=task.current_llm_account_id,
+            chat_active=task.chat_active,
+        )
 
 
 def _changes(task_id: uuid.UUID, state: TaskState, last: TaskState | None) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     if last is None or state.status != last.status:
-        events.append({"type": "status", "task_id": str(task_id), "status": state.status.value})
+        events.append({"type": STATUS_EVENT, "task_id": str(task_id), "status": state.status.value})
     if last is not None and state.current_llm_account_id != last.current_llm_account_id:
         account_id = state.current_llm_account_id
         events.append(
             {
-                "type": "llm_account",
+                "type": LLM_ACCOUNT_EVENT,
                 "task_id": str(task_id),
                 "current_llm_account_id": str(account_id) if account_id is not None else None,
             },
+        )
+    if last is not None and state.chat_active != last.chat_active:
+        events.append(
+            {"type": CHAT_EVENT, "task_id": str(task_id), "chat_active": state.chat_active},
         )
     return events
 
@@ -133,7 +149,7 @@ async def stream_task_events(
             )
             if message is not None:
                 delta = json.loads(message["data"])
-                await send({"type": "output_delta", **delta})
+                await send({"type": OUTPUT_DELTA_EVENT, **delta})
     finally:
         await pubsub.unsubscribe()
         # redis-py: PubSub.aclose без аннотаций типов.

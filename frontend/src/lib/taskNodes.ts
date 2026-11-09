@@ -1,8 +1,9 @@
 import { TaskStatus, type Task, type TaskNodeItem } from "@/lib/types";
+import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
 /**
  * Правило 11 CLAUDE.md, раздел 13.2 — зеркало `services/task_nodes.is_position_editable`:
- * в `new` — любая позиция; в `failed` — за точкой перезапуска и на ней самой,
+ * в статусах до запуска — любая позиция; в `failed` — за точкой перезапуска и на ней самой,
  * если нода там ещё не начинала выполняться (backend отмечает её `editable`;
  * за концом снимка ноды нет — остановка на паузе после последней ноды).
  */
@@ -11,7 +12,7 @@ export function isPositionEditable(
   taskNodes: TaskNodeItem[],
   orderIndex: number,
 ): boolean {
-  if (task.status === TaskStatus.NEW) return true;
+  if (isPreLaunch(task.status)) return true;
   if (task.status !== TaskStatus.FAILED || task.last_failed_order_index === null) return false;
   if (orderIndex !== task.last_failed_order_index) return orderIndex > task.last_failed_order_index;
   const atRestartPoint = taskNodes.find((node) => node.order_index === orderIndex);

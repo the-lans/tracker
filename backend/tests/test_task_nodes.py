@@ -37,7 +37,7 @@ from services.task_nodes import (
     set_task_node_pause_after,
     update_custom_task_node,
 )
-from services.task_status import reset_task_to_new
+from services.task_status import reset_task_run
 from tests.factories import make_node_log
 
 if TYPE_CHECKING:
@@ -584,7 +584,7 @@ class TestCustomNodesLifecycle:
         task.last_failed_order_index = 0
         await db_session.commit()
 
-        await reset_task_to_new(db_session, task_id=task.id)
+        await reset_task_run(db_session, task_id=task.id)
 
         assert await _names(db_session, task) == ["Уточнения", "node-0"]
 

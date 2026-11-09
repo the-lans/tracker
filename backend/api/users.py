@@ -21,6 +21,7 @@ from db.session import get_session
 from services.access import get_or_404
 from services.errors import ConflictError
 from services.users import ensure_allowed_email_deletable
+from tasks.celery_app import wake_task_dispatcher
 
 router = APIRouter(tags=["admin-users"])
 
@@ -75,12 +76,20 @@ async def update_user(
         user.is_active = body.is_active
     if body.os_username is not None:
         user.os_username = body.os_username
+    limit_raised = (
+        body.max_parallel_tasks is not None and body.max_parallel_tasks > user.max_parallel_tasks
+    )
+    if body.max_parallel_tasks is not None:
+        user.max_parallel_tasks = body.max_parallel_tasks
     try:
         await db_session.commit()
     except sa.exc.IntegrityError as exc:
         await db_session.rollback()
         raise ConflictError("Логин SFTP уже занят другим пользователем") from exc
     await db_session.refresh(user)
+    if limit_raised:
+        # Раздел 14.4: новые слоты — задачи очереди запускаются, не дожидаясь расписания.
+        wake_task_dispatcher()
     return user
 
 

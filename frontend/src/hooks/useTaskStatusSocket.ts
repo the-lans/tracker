@@ -25,6 +25,14 @@ function applyEvent(queryClient: QueryClient, taskId: string, payload: TaskSocke
     void queryClient.invalidateQueries({ queryKey: ["llm-accounts"] });
     return;
   }
+  if (payload.type === "chat") {
+    // Раздел 14.4: пока агент отвечает, смена статуса и запуск недоступны.
+    queryClient.setQueryData<Task | undefined>(["tasks", "detail", taskId], (prev) =>
+      prev ? { ...prev, chat_active: payload.chat_active } : prev,
+    );
+    void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "node-logs"] });
+    return;
+  }
   queryClient.setQueryData<Task | undefined>(["tasks", "detail", taskId], (prev) =>
     prev ? { ...prev, status: payload.status } : prev,
   );

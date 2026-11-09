@@ -39,6 +39,7 @@ from db.models.tasks import Task
 from db.models.users import User
 from services.autostart import run_scheduled_autostart_check
 from services.plan_mode import PLAN_ACCEPTED_MESSAGE, PlanDecisionOption
+from services.task_dispatcher import dispatch_queued_tasks
 from tasks import session_worker
 from tests.factories import make_llm_account, make_repository
 from tests.fakes import FakeClaudeAgentClient, make_result_message, patch_plan_mode_signals
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from httpx import AsyncClient
+    from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from tests.worker_support import WorkerEnv
@@ -169,6 +171,7 @@ class TestFullCycle:
         authed_client: AsyncClient,
         current_user: User,
         db_session: AsyncSession,
+        redis_client: Redis,
         worker_env: WorkerEnv,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -201,7 +204,7 @@ class TestFullCycle:
         )
         library_prompt = await user.post("/library-prompts", {"node_id": str(library_node.id)})
 
-        # 3. Автозапуск с датой в прошлом.
+        # 3. Автозапуск с датой в прошлом: задача встаёт в очередь, воркер очереди её запускает.
         past = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
         patched = await authed_client.patch(
             f"/tasks/{user.task_id}",
@@ -209,7 +212,9 @@ class TestFullCycle:
         )
         assert patched.status_code == 200, patched.text
         autostart = await run_scheduled_autostart_check(db_session, now=datetime.now(UTC))
-        assert [str(task_id) for task_id in autostart.started_task_ids] == [user.task_id]
+        assert [str(task_id) for task_id in autostart.queued_task_ids] == [user.task_id]
+        dispatched = await dispatch_queued_tasks(db_session, redis_client, now=datetime.now(UTC))
+        assert [str(task_id) for task_id in dispatched.launched_task_ids] == [user.task_id]
 
         # 4. Ход сессии: действия пользователя по ходу выполнения нод.
         patch_plan_mode_signals(monkeypatch, user.accept_plan)

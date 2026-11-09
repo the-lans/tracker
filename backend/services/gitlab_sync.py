@@ -6,10 +6,13 @@
 постоянный сбой репозитория (прочие 4xx) пишется в `app_logs`, автор задачи
 получает уведомление, а репозиторий пропускается на
 `PERMANENT_FAILURE_COOLDOWN_SECONDS` — без бесполезных повторов и повторных
-уведомлений. Отклонённый токен (401/403) — сбой всей интеграции: цикл
-прерывается, ошибка пишется в `app_logs` один раз для администратора, и
-синхронизация ставится на ту же паузу целиком. После паузы — новая попытка:
-администратор мог исправить токен или путь проекта.
+уведомлений. Адрес и токен API берутся из учётных данных Git репозитория
+(`services/git_credentials.gitlab_api_access`); репозитории без доступа к API
+пропускаются. Отклонённый токен (401/403) — сбой этих учётных данных: их
+репозитории до конца запуска не опрашиваются, ошибка пишется в `app_logs` один
+раз для администратора, и учётные данные ставятся на ту же паузу. Остальные
+учётные данные опрашиваются дальше. После паузы — новая попытка: администратор
+мог исправить токен или путь проекта.
 
 `closed` (MR закрыт без слияния) намеренно не отображается ни в одно из
 значений `task_repositories.merge_status` (`not_pushed`/`pushed`/`merged`/
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from itertools import groupby
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -34,17 +38,18 @@ from db.models.enums import AppLogLevel, MergeStatus, TaskStatus
 from db.models.logs import AppLog
 from db.models.tasks import Task, TaskRepository
 from services.errors import ExternalServiceError
+from services.git_credentials import GitlabApiAccess, gitlab_api_access
 from services.notifications import NotificationEvent, notify_task_event
 from services.task_signal import publish_task_signal
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from clients.gitlab import GitlabClient
-    from db.models.repositories import Repository
+    from db.models.repositories import GitCredential, Repository
 
 logger = get_logger("gitlab_sync")
 
@@ -92,7 +97,8 @@ async def sync_task_repository_merge_status(
     return new_status
 
 
-ACCESS_DENIED_KEY = "gitlab-sync:access-denied"
+def access_denied_key(credential_id: uuid.UUID) -> str:
+    return f"gitlab-sync:access-denied:{credential_id}"
 
 
 def permanent_failure_key(task_repository_id: uuid.UUID) -> str:
@@ -103,13 +109,18 @@ async def _report_access_denied(
     db_session: AsyncSession,
     *,
     redis_client: Redis,
+    credential: GitCredential,
     error: GitlabAccessDeniedError,
 ) -> None:
-    """Токен один на систему — сообщается администратору, а не авторам задач."""
-    logger.error("gitlab_sync_access_denied", error=error.message)
+    """Токен — у учётных данных Git: сообщается администратору, а не авторам задач."""
+    logger.error(
+        "gitlab_sync_access_denied",
+        git_credential_id=str(credential.id),
+        error=error.message,
+    )
     # SET NX: запись одна за паузу, даже если два запуска пересеклись (правило 12).
     first_report = await redis_client.set(
-        ACCESS_DENIED_KEY,
+        access_denied_key(credential.id),
         "1",
         nx=True,
         ex=PERMANENT_FAILURE_COOLDOWN_SECONDS,
@@ -120,10 +131,11 @@ async def _report_access_denied(
                 level=AppLogLevel.ERROR,
                 source=_SYNC_LOG_SOURCE,
                 message=(
-                    f"{error.message}: синхронизация статусов MR приостановлена на сутки. "
-                    "Проверьте токен GitLab в «Системных настройках»"
+                    f"{error.message}: синхронизация статусов MR по учётным данным "
+                    f"«{credential.name}» приостановлена на сутки. Проверьте токен "
+                    "GitLab API в «Учётные данные Git»"
                 ),
-                context={},
+                context={"git_credential_id": str(credential.id)},
             ),
         )
         await db_session.commit()
@@ -154,17 +166,54 @@ async def _report_permanent_failure(
     )
 
 
+SyncRow = tuple[TaskRepository, "Repository", Task]
+
+
+def _credential_id(row: SyncRow) -> str:
+    return str(row[1].git_credential_id or "")
+
+
 async def sync_merge_statuses(
     db_session: AsyncSession,
     *,
-    rows: Sequence[tuple[TaskRepository, Repository, Task]],
+    rows: Sequence[SyncRow],
+    client_for: Callable[[GitlabApiAccess], GitlabClient],
+    redis_client: Redis,
+) -> None:
+    """
+    Раздел 16.2 + 17.3: `sync_gitlab_merge_status` по всем репозиториям задач,
+    каждый — с доступом к API своих учётных данных Git.
+    """
+    skipped = 0
+    for _, group in groupby(sorted(rows, key=_credential_id), key=_credential_id):
+        credential_rows = list(group)
+        credential = credential_rows[0][1].git_credential
+        access = gitlab_api_access(credential)
+        if credential is None or access is None:
+            skipped += len(credential_rows)
+            continue
+        if await redis_client.exists(access_denied_key(credential.id)):
+            logger.info("gitlab_sync_paused_access_denied", git_credential_id=str(credential.id))
+            continue
+        await _sync_credential_rows(
+            db_session,
+            rows=credential_rows,
+            credential=credential,
+            gitlab_client=client_for(access),
+            redis_client=redis_client,
+        )
+    if skipped:
+        logger.info("gitlab_sync_skipped_no_api", repositories=skipped)
+
+
+async def _sync_credential_rows(
+    db_session: AsyncSession,
+    *,
+    rows: Sequence[SyncRow],
+    credential: GitCredential,
     gitlab_client: GitlabClient,
     redis_client: Redis,
 ) -> None:
-    """Раздел 16.2 + 17.3: `sync_gitlab_merge_status` по всем репозиториям задач."""
-    if await redis_client.exists(ACCESS_DENIED_KEY):
-        logger.info("gitlab_sync_paused_access_denied")
-        return
     for task_repository, repository, task in rows:
         key = permanent_failure_key(task_repository.id)
         if await redis_client.exists(key):
@@ -177,7 +226,12 @@ async def sync_merge_statuses(
                 gitlab_client=gitlab_client,
             )
         except GitlabAccessDeniedError as exc:
-            await _report_access_denied(db_session, redis_client=redis_client, error=exc)
+            await _report_access_denied(
+                db_session,
+                redis_client=redis_client,
+                credential=credential,
+                error=exc,
+            )
             return
         except ExternalServiceError as exc:
             # Ошибка — ответ GitLab до каких-либо изменений в БД: откатывать нечего.

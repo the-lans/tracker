@@ -3,18 +3,22 @@ import { ListTodo, Plus, Search, SearchX } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { NotificationBell } from "@/components/layout/NotificationBell";
 import { TaskCard } from "@/components/tasks/TaskCard";
+import { QueueSummaryLine } from "@/components/tasks/QueueSummaryLine";
 import { CreateTaskDialog } from "@/components/tasks/CreateTaskDialog";
 import { Button } from "@/components/ui/button";
 import { useTasks } from "@/hooks/useTasks";
 import { TaskStatus } from "@/lib/types";
+import { PRE_LAUNCH_STATUSES, QUEUE_STATUSES } from "@/lib/taskStatusTransitions";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 
-type FilterKey = "all" | "in_progress" | "awaiting" | "done" | "failed";
+type FilterKey = "all" | "pre_launch" | "queue" | "in_progress" | "awaiting" | "done" | "failed";
 
-const FILTERS: { key: FilterKey; label: string; statuses: TaskStatus[] | null }[] = [
+const FILTERS: { key: FilterKey; label: string; statuses: readonly TaskStatus[] | null }[] = [
   { key: "all", label: "Все", statuses: null },
+  { key: "pre_launch", label: "До запуска", statuses: PRE_LAUNCH_STATUSES },
+  { key: "queue", label: "В очереди", statuses: QUEUE_STATUSES },
   { key: "in_progress", label: "В работе", statuses: [TaskStatus.IN_PROGRESS, TaskStatus.PAUSED] },
   {
     key: "awaiting",
@@ -38,6 +42,8 @@ export function DashboardPage() {
   const counts = useMemo(() => {
     const result: Record<FilterKey, number> = {
       all: tasks?.length ?? 0,
+      pre_launch: 0,
+      queue: 0,
       in_progress: 0,
       awaiting: 0,
       done: 0,
@@ -94,6 +100,7 @@ export function DashboardPage() {
         }
       />
 
+      <QueueSummaryLine />
       <div className="flex flex-wrap items-center gap-2 px-5 pb-4 lg:px-8">
         {FILTERS.map((filterDef) => (
           <button
@@ -116,7 +123,7 @@ export function DashboardPage() {
           <EmptyState
             icon={ListTodo}
             title="Задач пока нет"
-            hint="Нажмите «+ Новая задача» вверху справа: укажите код задачи (например, RR-12345), название, описание и репозитории. Затем на странице задачи выберите пайплайн и нажмите «Запустить»."
+            hint="Нажмите «+ Новая задача» вверху справа: укажите код задачи (например, RR-12345), название, описание и репозитории. Затем на странице задачи выберите пайплайн и нажмите «Запустить» или поставьте задачу в очередь статусом «Готова к реализации»."
           />
         ) : (
           <EmptyState

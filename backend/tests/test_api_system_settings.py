@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from db.models.enums import NodeType, ScriptLanguage
-from services.system_settings import get_gitlab_credentials, get_jira_url
+from services.system_settings import get_jira_url
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -17,8 +17,8 @@ _SETTINGS = {
     "default_timeout_seconds": 900,
     "default_max_retries": 2,
     "default_retry_base_delay_seconds": 10,
-    "default_runner_image_python": "registry.local/runner-python:2",
-    "default_runner_image_bash": "registry.local/runner-bash:2",
+    "night_window_start": "02:30:00",
+    "night_window_end": "06:45:00",
 }
 
 
@@ -27,7 +27,8 @@ class TestSystemSettings:
         initial = await admin_client.get("/system-settings")
         assert initial.status_code == 200
         assert initial.json()["default_timeout_seconds"] == 600
-        assert initial.json()["default_runner_image_bash"] == "tracker-runner-bash:latest"
+        assert "default_runner_image_python" not in initial.json()
+        assert "default_runner_image_bash" not in initial.json()
 
         updated = await admin_client.put("/system-settings", json=_SETTINGS)
 
@@ -40,7 +41,6 @@ class TestSystemSettings:
             ("default_timeout_seconds", 0),
             ("default_max_retries", 11),
             ("default_retry_base_delay_seconds", -1),
-            ("default_runner_image_python", ""),
         ],
     )
     async def test_rejects_out_of_range(
@@ -104,48 +104,17 @@ class TestNewNodeDefaults:
 
 
 class TestIntegrations:
-    async def test_token_saved_but_never_returned(
-        self,
-        admin_client: AsyncClient,
-        db_session: AsyncSession,
-    ) -> None:
-        saved = await admin_client.put(
-            "/system-settings/integrations",
-            json={"gitlab_url": "https://gitlab.example.com", "gitlab_token": "glpat-example"},
-        )
-
-        assert saved.json() == {
-            "gitlab_url": "https://gitlab.example.com",
-            "gitlab_token_set": True,
-            "jira_url": None,
-        }
-        assert "glpat-example" not in (await admin_client.get("/system-settings/integrations")).text
-        credentials = await get_gitlab_credentials(db_session)
-        assert credentials is not None
-        assert credentials.token == "glpat-example"
-
-    @pytest.mark.parametrize(
-        ("token", "token_set"),
-        [(None, True), ("", False)],
-        ids=["keep", "clear"],
-    )
-    async def test_token_kept_or_cleared(
-        self,
-        admin_client: AsyncClient,
-        token: str | None,
-        token_set: bool,
-    ) -> None:
-        await admin_client.put(
-            "/system-settings/integrations",
-            json={"gitlab_url": "https://gitlab.example.com", "gitlab_token": "glpat-example"},
-        )
-
+    async def test_only_jira(self, admin_client: AsyncClient) -> None:
+        """Доступ к GitLab API — в учётных данных Git: прежние поля не принимаются и не отдаются."""
         response = await admin_client.put(
             "/system-settings/integrations",
-            json={"gitlab_url": "https://gitlab.example.com", "gitlab_token": token},
+            json={"gitlab_url": "https://gitlab.example.com", "gitlab_token": "glpat-example"},
         )
 
-        assert response.json()["gitlab_token_set"] is token_set
+        assert response.json() == {"jira_url": None}
+        assert (await admin_client.get("/system-settings/integrations")).json() == {
+            "jira_url": None,
+        }
 
     async def test_jira_url_saved(
         self,

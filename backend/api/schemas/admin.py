@@ -15,6 +15,7 @@ from db.models.enums import (
     PeriodicScheduleType,
     UserRole,
 )
+from db.models.users import MAX_MAX_PARALLEL_TASKS, MIN_MAX_PARALLEL_TASKS
 from services.sftp_access import SFTP_LOGIN_PATTERN
 from services.ssh_keys import MAX_PUBLIC_KEY_LENGTH, fingerprint_of_public_key
 
@@ -38,6 +39,8 @@ class UserResponse(BaseModel):
     # Раздел 19.7: пороги переключения LLM-аккаунтов по окнам лимита.
     llm_switch_threshold_5h_pct: int
     llm_switch_threshold_week_pct: int
+    # Раздел 14.4: лимит параллельных задач — задаёт администратор.
+    max_parallel_tasks: int
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -112,6 +115,11 @@ class UserUpdateRequest(BaseModel):
     is_active: bool | None = None
     # Раздел 3.1, 15.5: логин SFTP-шлюза назначает администратор.
     os_username: str | None = Field(default=None, pattern=SFTP_LOGIN_PATTERN)
+    max_parallel_tasks: int | None = Field(
+        default=None,
+        ge=MIN_MAX_PARALLEL_TASKS,
+        le=MAX_MAX_PARALLEL_TASKS,
+    )
 
 
 class AllowedEmailCreateRequest(BaseModel):

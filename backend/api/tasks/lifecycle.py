@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user
-from api.schemas import BindPipelineRequest, TaskResponse
+from api.schemas import BindPipelineRequest, TaskResponse, TaskStatusChangeRequest
 from api.tasks.common import TASKS_PREFIX, TASKS_TAGS, get_task_or_404, require_status
 from db.models.enums import TaskStatus
 from db.models.tasks import Task
@@ -22,14 +22,17 @@ from services.access import get_pipeline_for_user
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_pipeline_attachable
 from services.redis_connection import redis_connection
+from services.refining_chat import CHAT_BUSY_MESSAGE
 from services.remote_control import start_bridge_reconnect
 from services.session_context import clear_task_session_context
 from services.task_cleanup import cleanup_task_repositories
 from services.task_control import TaskControlCommand, request_task_control
 from services.task_launch import ensure_task_launchable
 from services.task_nodes import bind_pipeline_to_task
-from services.task_status import reset_task_to_new, transition_task_status
+from services.task_queue import cancel_target_status, change_task_status_manually
+from services.task_status import PRE_LAUNCH_STATUSES, reset_task_run, transition_task_status
 from services.task_workspace import resolve_repos_root
+from tasks.celery_app import wake_task_dispatcher
 from tasks.session_worker import run_task_session
 
 router = APIRouter(prefix=TASKS_PREFIX, tags=TASKS_TAGS)
@@ -70,16 +73,23 @@ async def start_task(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
-    """Раздел 12.2: "тот же процесс запуска, что и ручная кнопка «Выполнить»" —
-    `new -> queued`, затем Celery-таск, владеющий сессией, подхватывает
-    задачу асинхронно (`tasks/session_worker.py`)."""
+    """
+    Раздел 14.1, 14.4: «Выполнить» — из любого статуса до запуска сразу в
+    `queued`, мимо очереди и лимита слотов; Celery-таск, владеющий сессией,
+    подхватывает задачу асинхронно (`tasks/session_worker.py`).
+    """
     task = await get_task_or_404(db_session, task_id, current_user)
+    if task.status not in PRE_LAUNCH_STATUSES:
+        raise ConflictError("Выполнить можно только задачу, которая ещё не запущена")
+    if task.chat_active:
+        raise ConflictError(CHAT_BUSY_MESSAGE)
     await ensure_task_launchable(db_session, task)
     updated = await transition_task_status(
         db_session,
         task_id=task_id,
-        from_status=TaskStatus.NEW,
+        from_status=task.status,
         to_status=TaskStatus.QUEUED,
+        extra_values={"launched_manually": True, "queued_from_status": task.status},
     )
 
     run_task_session.delay(str(task_id))
@@ -117,8 +127,37 @@ async def reset_task(
     Раздел 14.2 «Вернуть в новые»: из `failed`/`done` — чтобы сменить пайплайн.
     """
     await get_task_or_404(db_session, task_id, current_user)
-    updated = await reset_task_to_new(db_session, task_id=task_id)
+    updated = await reset_task_run(db_session, task_id=task_id)
     await db_session.refresh(updated)
+    wake_task_dispatcher()
+    return updated
+
+
+@router.post("/{task_id}/status", response_model=TaskResponse)
+async def change_task_status(
+    task_id: uuid.UUID,
+    body: TaskStatusChangeRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Task:
+    """
+    Раздел 14.1: пользователь сам переводит задачу между статусами до запуска,
+    а завершённую или упавшую — в статус до запуска со сбросом прогона.
+    """
+    task = await get_task_or_404(db_session, task_id, current_user)
+    previous = task.status
+    async with redis_connection() as redis_client:
+        updated = await change_task_status_manually(
+            db_session,
+            redis_client,
+            task=task,
+            to_status=body.to_status,
+        )
+    await db_session.refresh(updated)
+    # Встала в очередь, ушла из неё или вернулась из `failed`/`done` (слот
+    # освободился) — воркер очереди не ждёт расписания.
+    if previous is not updated.status:
+        wake_task_dispatcher()
     return updated
 
 
@@ -225,20 +264,24 @@ async def cancel_queued_task(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Task:
-    """Раздел 14.2 «Отменить постановку»: `queued -> new`. Celery-таск,
-    уже стоящий в очереди, проиграет compare-and-swap захвата и ничего не
-    сделает. Автозапуск выключается — иначе ближайшая проверка расписания
-    (раздел 12.2) поставила бы задачу в очередь снова."""
-    await get_task_or_404(db_session, task_id, current_user)
+    """
+    Раздел 14.2 «Отменить постановку»: `queued` -> статус, из которого задача
+    ушла (`cancel_target_status`: из очереди — в `defined`). Celery-таск, уже стоящий
+    в очереди, проиграет compare-and-swap захвата и ничего не сделает.
+    Автозапуск выключается — иначе ближайшая проверка расписания (раздел
+    12.2) поставила бы задачу в очередь снова.
+    """
+    task = await get_task_or_404(db_session, task_id, current_user)
     try:
         updated = await transition_task_status(
             db_session,
             task_id=task_id,
             from_status=TaskStatus.QUEUED,
-            to_status=TaskStatus.NEW,
-            extra_values={"auto_start_enabled": False},
+            to_status=cancel_target_status(task.queued_from_status),
+            extra_values={"auto_start_enabled": False, "queued_from_status": None},
         )
     except ConflictError as exc:
         raise ConflictError("Задача уже не в очереди — сессия запущена или отменена") from exc
     await db_session.refresh(updated)
+    wake_task_dispatcher()
     return updated

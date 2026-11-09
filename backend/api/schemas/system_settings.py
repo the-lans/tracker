@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import time
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,24 +18,20 @@ class SystemSettingsBody(BaseModel):
     default_timeout_seconds: TimeoutSeconds
     default_max_retries: MaxRetries
     default_retry_base_delay_seconds: RetryBaseDelaySeconds
-    default_runner_image_python: str = Field(min_length=1)
-    default_runner_image_bash: str = Field(min_length=1)
+    # Раздел 14.4: ночное окно по московскому времени.
+    night_window_start: time
+    night_window_end: time
 
 
 class IntegrationsResponse(BaseModel):
     """
-    Раздел 15.5: токен GitLab не возвращается — только признак, что он сохранён.
+    Раздел 15.5: доступ к GitLab API задаётся в учётных данных Git, здесь — только Jira.
     """
 
-    gitlab_url: str | None
-    gitlab_token_set: bool
     jira_url: str | None
 
 
 class IntegrationsUpdateRequest(BaseModel):
-    gitlab_url: str | None = Field(default=None, pattern=HTTP_URL_PATTERN)
-    # `None` — оставить сохранённый токен, пустая строка — удалить.
-    gitlab_token: str | None = None
     # Раздел 15.6: сервер Jira, к которому обращается импорт задач.
     jira_url: str | None = Field(default=None, pattern=HTTP_URL_PATTERN)
 

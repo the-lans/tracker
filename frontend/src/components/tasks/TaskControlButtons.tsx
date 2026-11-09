@@ -16,6 +16,7 @@ import { toastError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { TaskStatus, type Task } from "@/lib/types";
 import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
+import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
 /** Раздел 14.2: действия пользователя, доступные в текущем статусе задачи. */
 export function TaskControlButtons({ task }: { task: Task }) {
@@ -41,13 +42,13 @@ export function TaskControlButtons({ task }: { task: Task }) {
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
       {/* Раздел 14.2: запуск новой задачи — прямо со страницы, где её настраивают. */}
-      {task.status === TaskStatus.NEW && (
+      {isPreLaunch(task.status) && (
         <button
           type="button"
           className={cn(HEADER_BUTTON, task.pipeline_id && "border-accent bg-accent text-on-accent")}
           aria-label="Запустить задачу"
           title={task.pipeline_id ? "Запустить задачу" : "Сначала выберите пайплайн на вкладке «Обзор»"}
-          disabled={!task.pipeline_id || startTask.isPending}
+          disabled={!task.pipeline_id || task.chat_active || startTask.isPending}
           onClick={() =>
             startTask.mutate(undefined, {
               onSuccess: () => toast.success("Задача поставлена в очередь"),

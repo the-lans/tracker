@@ -11,6 +11,7 @@ import type {
   NodeLog,
   NodeLogStatus,
   NodeLogTriggerType,
+  QueueSummary,
   Task,
   TaskCreateRequest,
   TaskDuplicateRequest,
@@ -20,6 +21,7 @@ import type {
   TaskNodeItem,
   TaskNodeUpdateRequest,
   TaskRepository,
+  TaskStatus,
   TaskUpdateRequest,
 } from "@/lib/types";
 
@@ -39,7 +41,7 @@ export const ACTIVE_TASK_POLL_MS = 4_000;
 
 function taskRefetchInterval(task: Task | undefined): number | false {
   if (task?.remote_control_status === RemoteControlStatus.RECONNECTING) return BRIDGE_RECONNECT_POLL_MS;
-  if (task && SESSION_ACTIVE_STATUSES.includes(task.status)) return ACTIVE_TASK_POLL_MS;
+  if (task && (task.chat_active || SESSION_ACTIVE_STATUSES.includes(task.status))) return ACTIVE_TASK_POLL_MS;
   return false;
 }
 
@@ -52,12 +54,22 @@ export const taskKeys = {
   nodes: (id: string) => ["tasks", id, "nodes"] as const,
   libraryPrompts: (id: string) => ["tasks", id, "library-prompts"] as const,
   manualQueue: (id: string) => ["tasks", id, "manual-queue"] as const,
+  queueSummary: ["tasks", "queue-summary"] as const,
 };
 
 export function useTasks(statusFilter?: string) {
   return useQuery({
     queryKey: taskKeys.list(statusFilter),
     queryFn: () => api.get<Task[]>("/tasks", { status_filter: statusFilter }),
+    refetchInterval: 15_000,
+  });
+}
+
+/** Раздел 15.1: слоты и очередь текущего пользователя — строка над списком задач. */
+export function useQueueSummary() {
+  return useQuery({
+    queryKey: taskKeys.queueSummary,
+    queryFn: () => api.get<QueueSummary>("/tasks/queue-summary"),
     refetchInterval: 15_000,
   });
 }
@@ -162,7 +174,7 @@ export function useDuplicateTask(taskId: string) {
 /** Раздел 14.2, 14.3: действия над завершённой/упавшей задачей, возвращающие её. */
 function useTaskLifecycleAction(
   taskId: string,
-  action: "cleanup-repositories" | "clear-context" | "reset",
+  action: "cleanup-repositories" | "clear-context",
 ) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -182,9 +194,20 @@ export function useClearContext(taskId: string) {
   return useTaskLifecycleAction(taskId, "clear-context");
 }
 
-/** Раздел 14.2 «Вернуть в новые»: из `failed`/`done` — чтобы сменить пайплайн. */
-export function useResetTask(taskId: string) {
-  return useTaskLifecycleAction(taskId, "reset");
+/**
+ * Раздел 14.1: ручная смена статуса — между статусами до запуска, а из
+ * `failed`/`done` — со сбросом прогона.
+ */
+export function useChangeTaskStatus(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (toStatus: TaskStatus) =>
+      api.post<Task>(`/tasks/${taskId}/status`, { to_status: toStatus }),
+    onSuccess: (task) => {
+      queryClient.setQueryData(taskKeys.detail(taskId), task);
+      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+    },
+  });
 }
 
 /** Раздел 6.5: новая попытка поднять мост — статус обновит воркер. */

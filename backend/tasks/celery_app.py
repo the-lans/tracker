@@ -20,6 +20,8 @@ from celery import Celery, signals
 from app_logging.config import configure_logging
 
 SESSIONS_QUEUE = "sessions"
+# Раздел 14.4: дневной проход воркера очереди — и по расписанию, и внеочередной.
+DISPATCH_READY_TASKS = "dispatch_ready_tasks"
 # Раздел 17.4: сообщение, которое воркер взял, но не подтвердил (отложенное
 # продолжение после `clear_context`), Redis вернёт в очередь лишь через этот
 # срок — заведомо дольше, чем второй исполнитель ждёт владения сессией
@@ -60,3 +62,12 @@ def _configure_structured_logging(**_kwargs: object) -> None:
 
 # Подключённый обработчик `setup_logging` заменяет настройку логирования Celery.
 signals.setup_logging.connect(_configure_structured_logging)
+
+
+def wake_task_dispatcher() -> None:
+    """
+    Раздел 14.4: слот освободился — внеочередной проход воркера очереди, не
+    дожидаясь расписания. По имени, без импорта модуля задачи: его импортирует
+    воркер сессий, и прямой импорт замкнул бы цикл.
+    """
+    celery_app.send_task(DISPATCH_READY_TASKS)

@@ -15,8 +15,13 @@ import { SectionTitle } from "@/components/common/typography/SectionTitle";
 import {
   useGitCredentials, useSaveGitCredential, useDeleteGitCredential, type GitCredential,
 } from "@/hooks/useGitCredentials";
+import { GitlabApiFields } from "@/components/admin/GitlabApiFields";
+import type { GitCredentialCheck, GitlabApiState } from "@/components/admin/gitCredentials.types";
 import { api } from "@/lib/apiClient";
 import { errorMessage, toastError } from "@/lib/errors";
+import {
+  GITLAB_API_OK, gitlabApiBody, gitlabApiCheckMessage, gitlabApiTokenMissing, initialGitlabApi,
+} from "@/lib/gitlabApi";
 
 function CredentialForm({ credential, onSaved }: { credential?: GitCredential; onSaved: () => void }) {
   const [name, setName] = useState(credential?.name ?? "");
@@ -27,6 +32,8 @@ function CredentialForm({ credential, onSaved }: { credential?: GitCredential; o
   const [showSecret, setShowSecret] = useState(false);
   const [checkUrl, setCheckUrl] = useState("");
   const [checking, setChecking] = useState(false);
+  const [gitlabApi, setGitlabApi] = useState<GitlabApiState>(() => initialGitlabApi(credential));
+  const apiTokenSet = credential?.gitlab_api_token_set ?? false;
   const save = useSaveGitCredential(credential?.id);
   return <>
     <div className="flex flex-col gap-3">
@@ -67,6 +74,8 @@ function CredentialForm({ credential, onSaved }: { credential?: GitCredential; o
         </Button>
         </div>
         <p className="text-small text-text-3">Секрет хранится зашифрованным и не отображается после сохранения.</p></div>
+      <GitlabApiFields kind={kind} host={host} tokenSet={apiTokenSet} value={gitlabApi}
+        onChange={(patch) => setGitlabApi((prev) => ({ ...prev, ...patch }))} />
     </div>
     {credential && <div className="my-3 flex flex-col gap-2">
       <Label htmlFor="git-access-check">URL для проверки чтения</Label>
@@ -74,15 +83,24 @@ function CredentialForm({ credential, onSaved }: { credential?: GitCredential; o
       <Button variant="secondary" disabled={!checkUrl || checking} onClick={async () => {
         setChecking(true);
         try {
-          await api.post(`/git-credentials/${credential.id}/check`, { git_url: checkUrl });
-          toast.success("Чтение доступно. Право записи этой проверкой не проверяется.");
+          const result = await api.post<GitCredentialCheck>(`/git-credentials/${credential.id}/check`, { git_url: checkUrl });
+          const apiMessage = gitlabApiCheckMessage(result.gitlab_api);
+          const gitMessage = "Чтение доступно. Право записи этой проверкой не проверяется.";
+          const message = apiMessage ? `${gitMessage} ${apiMessage}` : gitMessage;
+          // Git читается, но API отклонён — ошибка настройки опроса статуса MR.
+          if (apiMessage && result.gitlab_api !== GITLAB_API_OK) toast.error(message);
+          else toast.success(message);
         } catch (e) { toast.error(errorMessage(e, "Не удалось проверить доступ")); }
         finally { setChecking(false); }
       }}>Проверить сохранённый доступ</Button>
     </div>}
     <DialogFooter><Button variant="secondary" onClick={onSaved}>Отмена</Button>
-      <Button disabled={!name.trim() || !host.trim() || !username || (!credential && !secret) || save.isPending}
-        onClick={() => save.mutate({ name, host, kind, username, ...(secret ? { secret } : {}) }, {
+      <Button disabled={!name.trim() || !host.trim() || !username || (!credential && !secret)
+        || gitlabApiTokenMissing(kind, gitlabApi, apiTokenSet) || save.isPending}
+        onClick={() => save.mutate({
+          name, host, kind, username, ...(secret ? { secret } : {}),
+          ...gitlabApiBody(kind, gitlabApi, apiTokenSet),
+        }, {
           onSuccess: onSaved, onError: (e) => toast.error(errorMessage(e, "Не удалось сохранить доступ Git")),
         })}>Сохранить</Button></DialogFooter>
   </>;
@@ -100,7 +118,7 @@ export function GitCredentialsPanel() {
     {!isLoading && !data?.length && <p>Учётных данных пока нет.</p>}
     {data?.map((c) => <Card key={c.id} className="flex items-center gap-3">
       <div className="min-w-0 flex-1"><div className="font-bold">{c.name}</div>
-        <div className="text-small text-text-3">{c.kind === "ssh_key" ? "SSH" : "HTTPS"} · {c.host}</div></div>
+        <div className="text-small text-text-3">{c.kind === "ssh_key" ? "SSH" : "HTTPS"} · {c.host}{c.gitlab_api_enabled && " · статус MR"}</div></div>
       <EditButton name={c.name} onClick={() => setTarget(c)} />
       <ConfirmDeleteButton kind="Учётные данные Git" name={c.name} pending={remove.isPending}
         onConfirm={() => remove.mutate(c.id, { onError: toastError("Не удалось удалить доступ Git") })} />

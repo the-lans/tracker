@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
-import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
+import { TaskStatusMenu } from "@/components/tasks/TaskStatusMenu";
 import { TaskOverviewPanel } from "@/components/tasks/TaskOverviewPanel";
 import { TaskChatFeed } from "@/components/tasks/TaskChatFeed";
 import { TaskLogsPanel } from "@/components/tasks/TaskLogsPanel";
@@ -53,7 +53,7 @@ export function TaskPage() {
         <div className="min-w-0 flex-1 basis-56">
           <div className="flex items-center gap-2">
             <span className="font-mono text-small font-bold text-text-3">{task.code}</span>
-            <TaskStatusBadge status={task.status} />
+            <TaskStatusMenu task={task} />
           </div>
           <div className="truncate text-title font-extrabold tracking-tight" title={task.title}>
             {task.title}

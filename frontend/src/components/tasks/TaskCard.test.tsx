@@ -2,6 +2,7 @@ import { screen } from "@testing-library/react";
 import { describe, expect } from "vitest";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { TaskStatus, UserRole, type Task } from "@/lib/types";
+import { PRE_LAUNCH_STATUSES } from "@/lib/taskStatusTransitions";
 import { makeCurrentUser, makeTask, makeUser } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
@@ -26,6 +27,8 @@ describe("TaskCard", () => {
       { task: { status: TaskStatus.FAILED, last_failed_order_index: 0 }, text: "Сбой на ноде №1" },
       { task: { status: TaskStatus.FAILED, last_failed_order_index: 2 }, text: "Сбой на ноде №3" },
       { task: { status: TaskStatus.QUEUED, scheduled_start_at: "2026-10-25T09:30:00" }, text: "старт в 09:30" },
+      { task: { status: TaskStatus.READY, queue_position: 2 }, text: "№2 в очереди" },
+      { task: { status: TaskStatus.DEFINED, pipeline_id: null }, text: "Пайплайн не выбран" },
     ])("$text", ({ task, text }) => {
       renderCard(task);
 
@@ -44,7 +47,19 @@ describe("TaskCard", () => {
   });
 
   describe("быстрый запуск", () => {
-    test.for(Object.values(TaskStatus).filter((status) => status !== TaskStatus.NEW))(
+    test.for(PRE_LAUNCH_STATUSES)("%s — запуск мимо очереди", (status) => {
+      renderCard({ status });
+
+      expect(screen.getByRole("button", START)).toBeEnabled();
+    });
+
+    test("пока агент отвечает в чате, запускать нельзя", () => {
+      renderCard({ status: TaskStatus.REFINING, chat_active: true });
+
+      expect(screen.getByRole("button", START)).toBeDisabled();
+    });
+
+    test.for(Object.values(TaskStatus).filter((status) => !PRE_LAUNCH_STATUSES.includes(status)))(
       "%s — кнопки запуска нет",
       (status) => {
         renderCard({ status });

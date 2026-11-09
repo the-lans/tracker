@@ -40,6 +40,11 @@ async def list_enabled_periodic_tasks(db_session: AsyncSession) -> list[Periodic
 
 
 CRONTAB_FIELD_COUNT = 5
+# Раздел 16.2: расписание ночного воркера выводится из начала ночного окна.
+NIGHT_DISPATCH_TASK = "dispatch_night_tasks"
+NIGHT_SCHEDULE_MANAGED_MESSAGE = (
+    "Расписание ночного воркера задаётся началом ночного окна в «Системных настройках»"
+)
 
 
 def validate_crontab_expression(expression: str) -> str:
@@ -78,6 +83,8 @@ async def update_periodic_task(
             )
         periodic_task.interval_seconds = interval_seconds
     if crontab_expression is not None:
+        if periodic_task.name == NIGHT_DISPATCH_TASK:
+            raise ValidationError(NIGHT_SCHEDULE_MANAGED_MESSAGE)
         if periodic_task.schedule_type is not PeriodicScheduleType.CRONTAB:
             raise ValidationError(
                 f"Задача {periodic_task.name} использует {periodic_task.schedule_type}, "
@@ -90,6 +97,19 @@ async def update_periodic_task(
     await db_session.commit()
     await db_session.refresh(periodic_task)
     return periodic_task
+
+
+async def set_night_dispatch_schedule(db_session: AsyncSession, *, crontab_expression: str) -> None:
+    """
+    Раздел 15.5: сохранение начала ночного окна меняет расписание ночного
+    воркера в той же транзакции; Beat подхватит его при следующем чтении.
+    """
+    await db_session.execute(
+        sa.update(PeriodicTask)
+        .where(PeriodicTask.name == NIGHT_DISPATCH_TASK)
+        .values(crontab_expression=crontab_expression),
+    )
+    logger.info("night_dispatch_schedule_updated", crontab_expression=crontab_expression)
 
 
 def compute_next_run_at(periodic_task: PeriodicTask, *, now: datetime) -> datetime:

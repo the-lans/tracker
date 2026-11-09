@@ -9,12 +9,13 @@ import { ApiError } from "@/lib/apiClient";
 import { useTemplatePreview } from "@/hooks/useTemplates";
 import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { errorMessage } from "@/lib/errors";
-import { ManualRequestStatus, ManualRequestType, type TaskStatus } from "@/lib/types";
+import { ManualRequestStatus, ManualRequestType, TaskStatus } from "@/lib/types";
+import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
 /** Раздел 8, 15.2: свободный параметризованный промт — отдельно от поля
  * ответа на awaiting_input/plan_review (см. `DecisionWidget`). Не привязан к
  * конкретному статусу, но принимается, только пока сессия задачи активна
- * (раздел 8.2); при занятой сессии запрос ждёт в очереди — индикатор
+ * (раздел 8.2), а до запуска — в чате «Уточняется» (раздел 14.4); при занятой сессии запрос ждёт в очереди — индикатор
  * «В очереди» рядом с полем. Предпросмотр (раздел 8.2) показывает текст
  * после подстановки переменных — ровно тот, что уйдёт в сессию. */
 export function Composer({
@@ -47,6 +48,8 @@ export function Composer({
   const preview = useTemplatePreview();
   const { data: queue } = useManualQueue(taskId);
   const sessionActive = SESSION_ACTIVE_STATUSES.includes(taskStatus);
+  const refining = taskStatus === TaskStatus.REFINING;
+  const acceptsRequests = sessionActive || refining;
   const queuedFreeform = (queue ?? []).filter(
     (request) =>
       (request.request_type === ManualRequestType.FREEFORM_PROMPT || request.command_name) &&
@@ -139,12 +142,22 @@ export function Composer({
         <p className="rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
           Задача завершается — приём новых промтов и команд закрыт
         </p>
-      ) : !hasLlmAccount && !sessionActive ? (
+      ) : isPreLaunch(taskStatus) && !refining ? (
+        <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
+          <MessageSquarePlus className="size-3.5 shrink-0" />
+          Переведите задачу в «Уточняется», чтобы обсудить её с агентом
+        </div>
+      ) : refining && !hasLlmAccount ? (
+        <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
+          <MessageSquarePlus className="size-3.5 shrink-0" />
+          Чат с агентом ведёт LLM — выберите стартовый LLM-аккаунт задачи
+        </div>
+      ) : !hasLlmAccount && !acceptsRequests ? (
         <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
           <MessageSquarePlus className="size-3.5 shrink-0" />
           У задачи нет LLM-аккаунта — свободный промт выполнить некому
         </div>
-      ) : !sessionActive ? (
+      ) : !acceptsRequests ? (
         <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
           <MessageSquarePlus className="size-3.5 shrink-0" />
           Свободный промт доступен, пока сессия задачи активна
@@ -156,7 +169,7 @@ export function Composer({
           className="flex touch-target w-full items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-left text-note text-text-3 short:py-1"
         >
           <MessageSquarePlus className="size-3.5 shrink-0" />
-          Свободный промт — задать вопрос сессии в любой момент
+          {refining ? "Сообщение агенту — обсудить задачу до запуска" : "Свободный промт — задать вопрос сессии в любой момент"}
         </button>
       ) : (
         <div className="flex flex-col gap-2">

@@ -164,9 +164,12 @@ async def find_tasks_requiring_remote_control_check(db_session: AsyncSession) ->
     """
     Раздел 6.6: `check_remote_control_bridges` — все задачи, сессию которых
     держит воркер, в том числе без LLM-аккаунта: моста у них нет, но
-    потерянный воркер переводит в `failed` и их.
+    потерянный воркер переводит в `failed` и их. И чаты «Уточняется»
+    (раздел 14.4): их потерянный воркер возвращает задачу в `refining`.
     """
-    stmt = sa.select(Task).where(Task.status.in_(SESSION_ACTIVE_STATUSES))
+    stmt = sa.select(Task).where(
+        sa.or_(Task.status.in_(SESSION_ACTIVE_STATUSES), Task.chat_active == sa.true()),
+    )
     return list((await db_session.execute(stmt)).scalars().all())
 
 

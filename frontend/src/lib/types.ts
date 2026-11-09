@@ -8,6 +8,13 @@ export type UserRole = (typeof UserRole)[keyof typeof UserRole];
 
 export const TaskStatus = {
   NEW: "new",
+  /** Раздел 14.4: до запуска — обсуждение с агентом в чате. */
+  REFINING: "refining",
+  DEFINED: "defined",
+  /** Раздел 14.4: очередь дневного воркера. */
+  READY: "ready",
+  /** Раздел 14.4: очередь ночного воркера — только в ночном окне. */
+  NIGHT_WORKER: "night_worker",
   QUEUED: "queued",
   IN_PROGRESS: "in_progress",
   PAUSED: "paused",
@@ -207,6 +214,8 @@ export interface User {
   /** Раздел 19.7: пороги переключения LLM-аккаунта по окнам лимита, в процентах. */
   llm_switch_threshold_5h_pct: number;
   llm_switch_threshold_week_pct: number;
+  /** Раздел 14.4: лимит параллельных задач, задаёт администратор (1–50). */
+  max_parallel_tasks: number;
 }
 
 export interface LlmThresholdsUpdate {
@@ -256,6 +265,7 @@ export interface UserUpdateRequest {
   role?: UserRole | null;
   is_active?: boolean | null;
   os_username?: string | null;
+  max_parallel_tasks?: number | null;
 }
 
 export interface AllowedEmail {
@@ -292,9 +302,28 @@ export interface Task {
   auto_start_enabled: boolean;
   last_failed_order_index: number | null;
   repo_cleaned_at: string | null;
+  /** Раздел 14.4: больше — раньше в очереди автора. */
+  queue_priority: number;
+  /** Когда задача встала в `ready`/`night_worker`. */
+  ready_at: string | null;
+  /** «Занимать слот параллельного запуска задач» — для ручного запуска и чата. */
+  occupies_slot: boolean;
+  launched_manually: boolean;
+  /** Воркер ведёт чат в `refining`: ввод и смена статуса ждут конца ответа. */
+  chat_active: boolean;
+  /** Место (с 1) в очереди автора у задачи в `ready`/`night_worker`. */
+  queue_position: number | null;
   created_by: string;
   created_at: string;
   updated_at: string;
+}
+
+/** Раздел 15.1: слоты пользователя над списком задач дашборда. */
+export interface QueueSummary {
+  max_parallel_tasks: number;
+  occupied: number;
+  ready: number;
+  night_worker: number;
 }
 
 export interface TaskRepositoryAttach {
@@ -320,7 +349,10 @@ export interface TaskCreateRequest extends TaskDuplicateRequest {
   jira_issue_key?: string | null;
 }
 
-/** PATCH /tasks/{id}: auto_accept_plan — до `done`, остальное — только в `new`. */
+/**
+ * PATCH /tasks/{id}: auto_accept_plan — до `done`, приоритет и слот — всегда,
+ * остальное — только в статусах до запуска.
+ */
 export interface TaskUpdateRequest {
   title?: string;
   description?: string;
@@ -329,6 +361,9 @@ export interface TaskUpdateRequest {
   auto_start_enabled?: boolean;
   scheduled_start_at?: string | null;
   auto_accept_plan?: boolean;
+  /** Раздел 14.4: приоритет и галочка слота меняются в любом статусе. */
+  queue_priority?: number;
+  occupies_slot?: boolean;
 }
 
 export interface TaskRepository {
@@ -496,7 +531,18 @@ export interface TaskLlmAccountEvent {
   current_llm_account_id: string | null;
 }
 
-export type TaskSocketEvent = TaskStatusEvent | TaskOutputDeltaEvent | TaskLlmAccountEvent;
+/** Раздел 14.4: воркер начал или закончил чат в «Уточняется» — статус не меняется. */
+export interface TaskChatEvent {
+  type: "chat";
+  task_id: string;
+  chat_active: boolean;
+}
+
+export type TaskSocketEvent =
+  | TaskStatusEvent
+  | TaskOutputDeltaEvent
+  | TaskLlmAccountEvent
+  | TaskChatEvent;
 
 /** Накопленный потоковый текст по `node_logs.id`. */
 export type TaskOutputStream = Record<string, string>;
@@ -590,6 +636,8 @@ export interface Template {
   id: string;
   name: string;
   files: TemplateFileTree;
+  /** Пути из `files`, загруженные с диска: форма открывает их в режиме «Из файла». */
+  uploaded_file_paths: string[];
   mcp_server_ids: string[];
   created_by: string;
 }
@@ -597,6 +645,7 @@ export interface Template {
 export interface TemplateCreateRequest {
   name: string;
   files: TemplateFileTree;
+  uploaded_file_paths?: string[];
   mcp_server_ids?: string[];
 }
 
@@ -809,26 +858,20 @@ export interface SystemSettings {
   default_timeout_seconds: number;
   default_max_retries: number;
   default_retry_base_delay_seconds: number;
-  default_runner_image_python: string;
-  default_runner_image_bash: string;
+  /** Раздел 14.4: ночное окно по МСК, «ЧЧ:ММ:СС». */
+  night_window_start: string;
+  night_window_end: string;
 }
 
 /**
- * Раздел 15.5, 15.6: интеграции — GitLab (токен API не возвращается, только
- * признак) и адрес Jira для импорта задач.
+ * Раздел 15.5, 15.6: адрес Jira для импорта задач. Доступ к GitLab API —
+ * в учётных данных Git.
  */
 export interface Integrations {
-  gitlab_url: string | null;
-  gitlab_token_set: boolean;
   jira_url: string | null;
 }
 
-/** `gitlab_token`: `null` — оставить сохранённый, пустая строка — удалить. */
-export interface IntegrationsUpdate {
-  gitlab_url: string | null;
-  gitlab_token: string | null;
-  jira_url: string | null;
-}
+export type IntegrationsUpdate = Integrations;
 
 /** Раздел 15.5: в скольких задачах используется промт библиотеки. */
 export interface LibraryUsage {

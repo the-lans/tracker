@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.repositories import GitCredential, Repository
 from services.crypto import decrypt, encrypt
+from services.git_credentials import GitlabApiAccess, gitlab_api_access
 
 _SEED_SCRIPT = Path(__file__).resolve().parents[2] / "scripts/qa/seed_qa_data.py"
 
@@ -53,17 +54,25 @@ class TestQARepository:
             await db_session.flush()
         await qa_seed._repository(db_session, key)
         await db_session.flush()
+        await qa_seed._gitlab_api(db_session)
         repository = (await db_session.scalars(sa.select(Repository))).one()
         credential = (await db_session.scalars(sa.select(GitCredential))).one()
         assert repository.git_url == qa_seed.GIT_URL
         assert repository.git_credential_id == credential.id
         assert (credential.kind, credential.host) == ("ssh_key", "qa-git")
         assert decrypt(credential.secret_encrypted) == key
+        assert gitlab_api_access(credential) == GitlabApiAccess(
+            qa_seed.MOCKS_URL,
+            qa_seed.GITLAB_TOKEN,
+        )
         # Повторный запуск не заменяет ключ и не создаёт дубликаты.
         other_key = asyncssh.generate_private_key("ssh-ed25519").export_private_key().decode()
+        credential.gitlab_api_token_encrypted = encrypt("admin-token")
         await qa_seed._repository(db_session, other_key)
         await db_session.flush()
+        await qa_seed._gitlab_api(db_session)
         assert (await db_session.scalars(sa.select(Repository.id))).all() == [repository.id]
         assert (await db_session.scalars(sa.select(GitCredential.id))).all() == [credential.id]
         await db_session.refresh(credential)
         assert decrypt(credential.secret_encrypted) == key
+        assert decrypt(credential.gitlab_api_token_encrypted or "") == "admin-token"

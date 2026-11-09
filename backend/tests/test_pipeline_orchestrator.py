@@ -40,9 +40,9 @@ from services.pipeline_orchestrator import (
     run_pipeline,
 )
 from services.plan_mode import ActiveNodeContext
-from services.system_settings import update_integrations
 from services.task_control import TaskControlCommand, request_task_control
 from services.task_status import transition_task_status
+from tests.factories import build_git_credential
 from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
@@ -343,7 +343,7 @@ async def test_run_pipeline_executes_script_node_in_docker(
 
 
 class TestScriptEnv:
-    """Раздел 11.4: переменные задачи — в контейнер, системный токен GitLab — нет."""
+    """Раздел 11.4: переменные задачи — в контейнер, токен GitLab API учётных данных — нет."""
 
     async def test_without_gitlab_token(
         self,
@@ -360,13 +360,14 @@ class TestScriptEnv:
                 ),
             ],
         )
-        # Токен GitLab — системная настройка, а не переменная окружения задачи.
-        await update_integrations(
-            db_session,
-            gitlab_url="https://gitlab.example.com",
-            gitlab_token="секрет",
-            jira_url=None,
+        # Токен GitLab API — в учётных данных Git, а не переменная окружения задачи.
+        db_session.add(
+            build_git_credential(
+                gitlab_api_enabled=True,
+                gitlab_api_token_encrypted=encrypt("glpat-secret"),
+            ),
         )
+        await db_session.flush()
         await _add_node(
             db_session,
             task,
@@ -374,7 +375,7 @@ class TestScriptEnv:
             node_type=NodeType.SCRIPT,
             script_language=ScriptLanguage.PYTHON,
             script_content=(
-                "import os\nprint(os.environ['API_URL'], os.environ.get('GITLAB_TOKEN'))"
+                "import os\nprint(os.environ['API_URL'], 'glpat-secret' in str(os.environ))"
             ),
         )
         session = ClaudeCodeSession(FakeClaudeAgentClient(messages_per_query=[]))
@@ -388,7 +389,7 @@ class TestScriptEnv:
 
         assert outcome.completed is True
         logs = await _node_logs_for(db_session, task.id)
-        assert (logs[0].script_stdout or "").strip() == "из задачи None"
+        assert (logs[0].script_stdout or "").strip() == "из задачи False"
 
 
 async def test_run_pipeline_executes_plan_prompt_node_with_active_node_context(

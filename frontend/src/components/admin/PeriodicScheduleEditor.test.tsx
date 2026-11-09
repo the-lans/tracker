@@ -1,6 +1,6 @@
 import { screen } from "@testing-library/react";
 import { describe, expect } from "vitest";
-import { PeriodicScheduleEditor } from "@/components/admin/PeriodicScheduleEditor";
+import { NIGHT_DISPATCH_TASK, PeriodicScheduleEditor } from "@/components/admin/PeriodicScheduleEditor";
 import { PeriodicScheduleType, type PeriodicTask } from "@/lib/types";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
@@ -99,5 +99,18 @@ describe("PeriodicScheduleEditor", () => {
 
     expect(screen.getByText("каждые 5 минут")).toBeInTheDocument();
     expect(api.mutations()).toEqual([]);
+  });
+});
+
+describe("PeriodicScheduleEditor: ночной воркер", () => {
+  test("расписание выводится из ночного окна — без правки", () => {
+    renderWithProviders(
+      <PeriodicScheduleEditor
+        task={{ ...cronTask, name: NIGHT_DISPATCH_TASK, display_name: "Ночной воркер", crontab_expression: "15 0 * * *" }}
+      />,
+    );
+
+    expect(screen.getByText(/15 0 \* \* \* \(UTC\) — в начале ночного окна/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Изменить расписание/ })).not.toBeInTheDocument();
   });
 });

@@ -10,16 +10,26 @@ from __future__ import annotations
 
 import gzip
 import os
+import re
 import shutil
 import subprocess
 import tarfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+import sqlalchemy as sa
 
+from db.models.enums import TaskStatus
 from services.maintenance import MAINTENANCE_KEY
+from services.periodic_tasks import NIGHT_DISPATCH_TASK
 from services.task_status import SESSION_ACTIVE_STATUSES
+from tasks.celery_app import DISPATCH_READY_TASKS
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
 
 _INSTALL_SCRIPT = Path(__file__).resolve().parents[2] / "deploy" / "install.sh"
 # Системные утилиты, которые нужны скрипту и заглушкам. PATH теста состоит
@@ -62,6 +72,7 @@ if [ "$1 $2 $3" = "compose exec -T" ]; then
 fi
 case "$*" in
   *seed_periodic_tasks*) [ -f "$STUB_DIR/fail-seed" ] && exit 1 ;;
+  *"UPDATE tasks SET status"*) [ -f "$STUB_DIR/fail-reset" ] && exit 1 ;;
 esac
 if [ "$1" = "version" ]; then
   cat "$STUB_DIR/engine-version" 2>/dev/null || echo "27.3.1"
@@ -90,6 +101,7 @@ case "$*" in
   *"rev-parse --verify"*) echo "{_TARGET_SHA}" ;;
   *"rev-parse HEAD"*) cat "$STUB_DIR/git-head" 2>/dev/null || echo "{_PREVIOUS_SHA}" ;;
   *"merge-base --is-ancestor"*) [ -f "$STUB_DIR/not-ancestor" ] && exit 1 ;;
+  *"cat-file -e"*) [ -f "$STUB_DIR/old-target" ] && exit 1 ;;
   *"checkout --detach"*) for last; do :; done; echo "$last" > "$STUB_DIR/git-head" ;;
 esac
 exit 0
@@ -282,6 +294,28 @@ class TestSharedConstants:
         statuses = {item.strip("'") for item in raw.split(",")}
         assert statuses == {status.value for status in SESSION_ACTIVE_STATUSES}
 
+    def test_pre_launch_statuses_migration(self, stubs: Path, install_dir: Path) -> None:
+        """Откат сбрасывает именно статусы, добавленные указанной миграцией."""
+        migration = self._value(stubs, install_dir, "PRE_LAUNCH_STATUSES_MIGRATION")
+        raw = self._value(stubs, install_dir, "PRE_LAUNCH_STATUSES_ADDED")
+        statuses = {item.strip("'") for item in raw.split(",")}
+        source = (_INSTALL_SCRIPT.parents[1] / migration).read_text()
+        assert all(f'"{status}"' in source for status in statuses)
+        assert statuses == {
+            TaskStatus.REFINING,
+            TaskStatus.DEFINED,
+            TaskStatus.READY,
+            TaskStatus.NIGHT_WORKER,
+        }
+
+    def test_queue_periodic_tasks(self, stubs: Path, install_dir: Path) -> None:
+        """Откат удаляет ровно периодические задачи воркера очереди."""
+        raw = self._value(stubs, install_dir, "QUEUE_PERIODIC_TASKS")
+        assert {item.strip("'") for item in raw.split(",")} == {
+            DISPATCH_READY_TASKS,
+            NIGHT_DISPATCH_TASK,
+        }
+
 
 class TestRestore:
     def test_steps_in_order(
@@ -468,6 +502,54 @@ class TestUpdate:
         assert not any("checkout" in call or "compose build" in call for call in calls)
         assert "redis-cli DEL maintenance:deploy" in calls[-1]
         assert not (install_dir / ".deploy").exists()
+
+    @pytest.mark.parametrize(
+        ("old_target", "resets"),
+        [
+            pytest.param(True, True, id="откат на версию без статусов до запуска"),
+            pytest.param(False, False, id="версия со статусами до запуска"),
+        ],
+    )
+    def test_unknown_statuses_reset(
+        self,
+        stubs: Path,
+        install_dir: Path,
+        old_target: bool,
+        resets: bool,
+    ) -> None:
+        if old_target:
+            (stubs / "old-target").touch()
+
+        result = _update(stubs, install_dir, "--ref", "abc1234")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        calls = _calls(stubs)
+        assert any("cat-file -e" in call for call in calls)
+        resets_seen = [call for call in calls if "UPDATE tasks SET status = 'new'" in call]
+        assert bool(resets_seen) is resets
+        if resets:
+            assert "'refining','defined','ready','night_worker'" in resets_seen[0]
+            assert "'dispatch_ready_tasks','dispatch_night_tasks'" in resets_seen[0]
+            _assert_in_order(calls, ["checkout --detach", "cat-file -e", "UPDATE tasks"])
+
+    def test_failed_reset_restores_code(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "old-target").touch()
+        (stubs / "fail-reset").touch()
+
+        result = _update(stubs, install_dir, "--ref", "abc1234")
+
+        assert result.returncode == 3
+        assert "сервер не изменён" in result.stdout
+        calls = _calls(stubs)
+        _assert_in_order(
+            calls,
+            [
+                f"checkout --detach {_TARGET_SHA}",
+                "UPDATE tasks",
+                f"checkout --detach {_PREVIOUS_SHA}",
+            ],
+        )
+        assert not any("compose build" in call for call in calls)
 
     def test_waits_for_idle(self, stubs: Path, install_dir: Path) -> None:
         (stubs / "live-sessions").write_text("2\n1\n0\n")
@@ -739,3 +821,35 @@ class TestInvalidEnv:
         assert "SECRET_ENCRYPTION_KEY" in result.stdout
         assert not any("docker run" in call for call in _calls(stubs))
         assert (install_dir / ".env").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["с чатом", "прежняя схема"])
+async def test_deploy_live_count_supports_chat_and_legacy_schema(
+    db_session: AsyncSession,
+    legacy: bool,
+) -> None:
+    source = _INSTALL_SCRIPT.read_text()
+    statuses = re.search(r'^LIVE_SESSION_STATUSES="(.*)"', source, re.MULTILINE)
+    function = source.split("_live_session_count() {", 1)[1].split("\n}", 1)[0]
+    query = re.search(r'local query="(.*)"', function)
+    assert statuses is not None and query is not None
+    sql = query[1].replace("${LIVE_SESSION_STATUSES}", statuses[1])
+    sql = sql.replace("tasks", "deploy_live_count_test")
+    chat_column = "" if legacy else ", chat_active boolean NOT NULL DEFAULT false"
+    await db_session.execute(
+        sa.text(
+            f"CREATE TEMP TABLE deploy_live_count_test (status text{chat_column}) ON COMMIT DROP",
+        )
+    )
+    if legacy:
+        values = "('new'), ('in_progress')"
+        columns = "status"
+    else:
+        values = "('refining', true), ('refining', false), ('new', false)"
+        columns = "status, chat_active"
+    await db_session.execute(
+        sa.text(
+            f"INSERT INTO deploy_live_count_test ({columns}) VALUES {values}",
+        )
+    )
+    assert await db_session.scalar(sa.text(sql)) == 1

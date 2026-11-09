@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user
 from api.schemas import ManualRequestResponse
-from api.tasks.common import TASKS_PREFIX, TASKS_TAGS, get_task_or_404, publish_signal
+from api.tasks.common import TASKS_PREFIX, TASKS_TAGS, get_task_or_404, wake_session_for_request
 from db.models.enums import NodeType
 from db.models.users import User
 from db.session import get_session
@@ -82,7 +82,7 @@ async def run_command(
         invocation=body.invocation,
         client_request_id=body.client_request_id,
     )
-    await publish_signal(task_id)
+    await wake_session_for_request(task)
     return ManualRequestResponse.model_validate(request)
 
 

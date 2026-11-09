@@ -18,9 +18,17 @@ import type { TemplateFileRow } from "@/components/templates/templateForm.types"
 
 let nextRowKey = 0;
 
-function fileRow(path: string, content: string): TemplateFileRow {
+// Раздел 15.1: новый файл шаблона по умолчанию загружается с диска.
+function fileRow(path: string, content: string, fromFile = true): TemplateFileRow {
   nextRowKey += 1;
-  return { key: nextRowKey, path, content, fromFile: false };
+  return { key: nextRowKey, path, content, fromFile };
+}
+
+function savedFileRows(template: Template): TemplateFileRow[] {
+  const uploaded = new Set(template.uploaded_file_paths);
+  return Object.entries(template.files).map(([path, content]) =>
+    fileRow(path, content, uploaded.has(path)),
+  );
 }
 
 const NEW_TEMPLATE_FILE_PATH = "CLAUDE.md";
@@ -42,9 +50,7 @@ export function TemplateForm({
 
   const [name, setName] = useState(template?.name ?? "");
   const [files, setFiles] = useState<TemplateFileRow[]>(() =>
-    template
-      ? Object.entries(template.files).map(([path, content]) => fileRow(path, content))
-      : [fileRow(NEW_TEMPLATE_FILE_PATH, "")],
+    template ? savedFileRows(template) : [fileRow(NEW_TEMPLATE_FILE_PATH, "")],
   );
   const [mcpServerIds, setMcpServerIds] = useState<string[]>(template?.mcp_server_ids ?? []);
 
@@ -55,18 +61,23 @@ export function TemplateForm({
   const duplicatePaths = duplicateTemplatePaths(files.map((file) => file.path));
 
   function handleSave() {
-    const filesRecord = Object.fromEntries(
-      files
-        .map((file) => [file.path.trim(), file.content])
-        .filter(([path]) => path),
-    );
+    const savedRows = files
+      .map((file) => ({ ...file, path: file.path.trim() }))
+      .filter((file) => file.path);
+    const filesRecord = Object.fromEntries(savedRows.map((file) => [file.path, file.content]));
+    const uploadedFilePaths = savedRows.filter((file) => file.fromFile).map((file) => file.path);
     const onError = (error: unknown) =>
       toast.error(errorMessage(error, "Не удалось сохранить шаблон"));
-    const mcp = { mcp_server_ids: mcpServerIds };
+    const body = {
+      name,
+      files: filesRecord,
+      uploaded_file_paths: uploadedFilePaths,
+      mcp_server_ids: mcpServerIds,
+    };
     if (template) {
-      updateTemplate.mutate({ name, files: filesRecord, ...mcp }, { onSuccess: onSaved, onError });
+      updateTemplate.mutate(body, { onSuccess: onSaved, onError });
     } else {
-      createTemplate.mutate({ name, files: filesRecord, ...mcp }, { onSuccess: onSaved, onError });
+      createTemplate.mutate(body, { onSuccess: onSaved, onError });
     }
   }
 

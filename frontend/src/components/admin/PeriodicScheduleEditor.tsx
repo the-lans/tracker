@@ -7,6 +7,9 @@ import { toastError } from "@/lib/errors";
 import { formatInterval } from "@/lib/utils";
 import { PeriodicScheduleType, type PeriodicTask, type PeriodicTaskUpdateRequest } from "@/lib/types";
 
+/** Раздел 14.4: расписание ночного воркера выводится из начала ночного окна. */
+export const NIGHT_DISPATCH_TASK = "dispatch_night_tasks";
+
 function scheduleText(task: PeriodicTask): string {
   return task.schedule_type === PeriodicScheduleType.INTERVAL
     ? formatInterval(task.interval_seconds ?? 0)
@@ -31,7 +34,8 @@ function toUpdate(task: PeriodicTask, draft: string): PeriodicTaskUpdateRequest 
 
 /**
  * Раздел 15.5, 16.1: расписание периодической задачи меняется из админки без
- * деплоя. Тип расписания задан задачей — правится только его значение.
+ * деплоя. Тип расписания задан задачей — правится только его значение;
+ * у ночного воркера оно задаётся ночным окном в «Системных настройках».
  */
 export function PeriodicScheduleEditor({ task }: { task: PeriodicTask }) {
   const updateTask = useUpdatePeriodicTask(task.id);
@@ -46,6 +50,14 @@ export function PeriodicScheduleEditor({ task }: { task: PeriodicTask }) {
       onSuccess: () => setEditing(false),
       onError: toastError("Не удалось сохранить расписание"),
     });
+  }
+
+  if (task.name === NIGHT_DISPATCH_TASK) {
+    return (
+      <div className="text-meta text-text-3">
+        {scheduleText(task)} (UTC) — в начале ночного окна, меняется в «Системных настройках»
+      </div>
+    );
   }
 
   if (editing) {
