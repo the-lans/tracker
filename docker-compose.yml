@@ -192,6 +192,10 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      # Коммит образа: по нему manifest.json копии в S3 называет версию кода
+      # для восстановления (раздел 20.4).
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     restart: unless-stopped
     command: ["celery", "-A", "tasks.celery_app", "worker", "-Q", "celery", "-l", "info"]
     environment: *backend_env
@@ -260,6 +264,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     restart: unless-stopped
     command: ["celery", "-A", "tasks.celery_app", "beat", "-l", "info"]
     environment: *backend_env
@@ -280,6 +286,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     restart: unless-stopped
     entrypoint: ["python", "-m", "sftp_gateway"]
     environment:

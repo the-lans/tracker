@@ -55,6 +55,20 @@ class TestBackupWorker:
         assert all(volume.endswith(":ro") for volume in mounted.values())
 
 
+class TestBackendImages:
+    def test_know_their_commit(self, compose: dict[str, Any]) -> None:
+        """Коммит образа — версия в /api/health и в manifest.json копии (раздел 20.4)."""
+        built = {
+            name: service["build"]
+            for name, service in compose["services"].items()
+            if service.get("build", {}).get("dockerfile") == "backend/Dockerfile"
+        }
+        assert {"backend", "backup-worker", "worker", "beat", "sftp"} <= set(built)
+        assert {
+            name: build.get("args", {}).get("GIT_SHA") for name, build in built.items()
+        } == dict.fromkeys(built, "${GIT_SHA:-unknown}")
+
+
 class TestLlmProxy:
     def test_proxy_not_published(self, compose: dict[str, Any]) -> None:
         assert "ports" not in compose["services"]["cliproxy"]
