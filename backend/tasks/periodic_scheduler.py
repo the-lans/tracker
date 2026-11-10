@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 logger = get_logger("periodic_scheduler")
 
 _REFRESH_INTERVAL_SECONDS = 10.0
+
+
 def parse_crontab_expression(expression: str) -> tuple[str, str, str, str, str]:
     """Стандартный 5-польный cron (`минута час день_месяца месяц день_недели`)."""
     parts = expression.split()

@@ -41,8 +41,6 @@ def _make_repository(*, git_url: str = "git@gitlab.example.com:g/p.git") -> Repo
     return build_repository(name="r", git_url=git_url)
 
 
-
-
 async def _make_task(
     db_session: AsyncSession,
     *,
@@ -354,13 +352,17 @@ class TestSyncFailures:
         assert requested == ["gone"]
         assert pushes == [(NotificationEvent.GITLAB_SYNC_FAILED, row[2].id)]
         logs = (
-            await db_session.execute(
-                sa.select(AppLog).where(
-                    AppLog.task_id == row[2].id,
-                    AppLog.level == AppLogLevel.ERROR,
-                ),
+            (
+                await db_session.execute(
+                    sa.select(AppLog).where(
+                        AppLog.task_id == row[2].id,
+                        AppLog.level == AppLogLevel.ERROR,
+                    ),
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(logs) == 1
 
     async def test_retries_after_pause_expires(
@@ -420,13 +422,17 @@ class TestSyncFailures:
             assert not await redis_client.exists(access_denied_key(other.id))
             assert not await redis_client.exists(permanent_failure_key(first[0].id))
             logs = (
-                await db_session.execute(
-                    sa.select(AppLog).where(
-                        AppLog.source == "periodic.sync_gitlab_merge_status",
-                        AppLog.message.contains("токен GitLab API"),
-                    ),
+                (
+                    await db_session.execute(
+                        sa.select(AppLog).where(
+                            AppLog.source == "periodic.sync_gitlab_merge_status",
+                            AppLog.message.contains("токен GitLab API"),
+                        ),
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert [log.context for log in logs] == [{"git_credential_id": str(credential.id)}]
             assert "«Основной»" in logs[0].message
         finally:

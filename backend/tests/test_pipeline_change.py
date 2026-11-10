@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-
 async def _pipeline(client: AsyncClient, name: str) -> str:
     pipeline = (await client.post("/pipelines", json={"name": name})).json()
     node = await client.post(

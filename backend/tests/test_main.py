@@ -117,10 +117,14 @@ class TestUnhandledErrorLog:
 
         async with async_session_factory() as session:
             rows = (
-                await session.execute(
-                    sa.select(AppLog).where(AppLog.context["request_id"].astext == request_id),
+                (
+                    await session.execute(
+                        sa.select(AppLog).where(AppLog.context["request_id"].astext == request_id),
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             await session.execute(sa.delete(AppLog).where(AppLog.id.in_([r.id for r in rows])))
             await session.commit()
 

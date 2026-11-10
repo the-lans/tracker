@@ -61,6 +61,7 @@ class TestSystemSettingsService:
         assert settings.default_timeout_seconds == DEFAULT_NODE_TIMEOUT_SECONDS
         assert settings.default_runner_image_python == "tracker-runner-python:latest"
 
+
 class TestNodeExecutionDefaults:
     async def test_empty_values_from_settings(self, db_session: AsyncSession) -> None:
         await update_system_settings(db_session, values=_CUSTOM_SETTINGS)

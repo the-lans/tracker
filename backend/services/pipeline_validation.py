@@ -72,9 +72,7 @@ def validate_node_shape(node: Node, *, check_description: bool = True) -> None:
 
 async def _pipeline_nodes(db_session: AsyncSession, pipeline_id: uuid.UUID) -> OrderedNodes:
     stmt = (
-        sa.select(Node)
-        .where(Node.pipeline_id == pipeline_id)
-        .order_by(Node.order_index, Node.id)
+        sa.select(Node).where(Node.pipeline_id == pipeline_id).order_by(Node.order_index, Node.id)
     )
     return [(node.order_index, node) for node in (await db_session.execute(stmt)).scalars().all()]
 

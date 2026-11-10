@@ -18,6 +18,7 @@ from services.system_settings import get_jira_url
 
 router = APIRouter(prefix="/jira", tags=["jira"])
 
+
 async def get_jira_http_client() -> AsyncIterator[httpx.AsyncClient]:
     """HTTP-клиент к Jira на время запроса; тесты подменяют его транспорт."""
     async with new_jira_http_client() as client:
