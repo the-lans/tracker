@@ -31,6 +31,7 @@ from services.template_context import RenderedText, render_for_task, resolve_tas
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from datetime import datetime
     from pathlib import Path
 
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -127,6 +128,8 @@ class NodeExecutionOutcome:
     session_lost: bool = False
     # Аккаунт, модель и уровень хода (раздел 19.7); у скриптов — None.
     route: TurnRoute | None = None
+    # Все аккаунты оказались на пороге уже после ворот лимита: до когда ждать.
+    limit_wait_until: datetime | None = None
 
 
 async def record_sdk_failure(
@@ -178,8 +181,14 @@ async def execute_llm_node(
             node_type=node_type,
             boundary=boundary,
         )
-    except (NoLlmAccountAvailableError, LlmLimitWaitError) as exc:
+    except NoLlmAccountAvailableError as exc:
         return NodeExecutionOutcome(success=False, error_message=exc.message)
+    except LlmLimitWaitError as exc:
+        return NodeExecutionOutcome(
+            success=False,
+            error_message=exc.message,
+            limit_wait_until=exc.until,
+        )
     if turn.is_error:
         # Отклонённый вход и лимит временны, только пока у автора есть другой аккаунт.
         is_transient = turn.account_transient

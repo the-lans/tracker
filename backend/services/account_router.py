@@ -88,8 +88,16 @@ USAGE_MAX_AGE = timedelta(seconds=60)
 ROUTE_LOCK_KEY = "llm-route:{user_id}"
 ROUTE_LOCK_TTL_SECONDS = 30
 ROUTE_LOCK_WAIT_SECONDS = 10.0
-# Задачи автора, которым сейчас нужен аккаунт: нагрузка окон и число задач в работе.
-IN_WORK_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.REFINING, TaskStatus.REBASE_CONFLICT)
+# Задачи автора в работе — нагрузка окон и число задач в работе: держат сессию
+# и продолжат без нового запуска, в том числе ждущие ответа пользователя.
+# Пауза — решение пользователя остановиться, она аккаунт не занимает.
+IN_WORK_STATUSES = (
+    TaskStatus.IN_PROGRESS,
+    TaskStatus.PLAN_REVIEW,
+    TaskStatus.AWAITING_INPUT,
+    TaskStatus.REBASE_CONFLICT,
+    TaskStatus.REFINING,
+)
 _REJECTED = "rejected"
 # Сжатие выполнит прежний аккаунт и на пороге, но не исключённый или исчерпанный.
 _CANNOT_COMPACT = (LimitState.EXCLUDED, LimitState.EXHAUSTED)

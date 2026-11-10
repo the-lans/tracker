@@ -28,7 +28,7 @@ from clients.claude_agent import (
     build_claude_agent_options,
 )
 from clients.cliproxy import open_cliproxy_client
-from db.models.enums import ParentSummaryStatus, RemoteControlStatus, TaskStatus
+from db.models.enums import NodeType, ParentSummaryStatus, RemoteControlStatus, TaskStatus
 from db.models.mcp import McpServer
 from db.models.repositories import Repository, TemplateMcpServer
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
@@ -238,6 +238,8 @@ class _SessionControl:
     limit_gate: LimitGate | None = None
     # Продолжение после сброса лимита задачи, ждавшей на паузе: сначала — пауза.
     resume_paused: bool = False
+    # Продолжение после сброса лимита: попытка, с которой продолжает первая нода.
+    first_attempt: int = 1
 
     async def recover_session(self) -> None:
         session_id = self.claude_session.session_id or self.task.session_id
@@ -280,7 +282,7 @@ class _SessionControl:
             # Конфликт разбирает агент (раздел 14) — без LLM-аккаунта некому.
             logger.info("rebase_conflict_without_llm", task_id=str(self.task.id))
             return False
-        await check_limit_gate(self.limit_gate)
+        await check_limit_gate(self.limit_gate, node_type=NodeType.PLAIN_PROMPT)
         logger.info("rebase_conflict_resolution_started", task_id=str(self.task.id))
         if not await resolve_rebase_conflict(
             self.db_session,
@@ -522,7 +524,7 @@ async def _wait_for_limit(
     db_session: AsyncSession,
     *,
     task: Task,
-    until: datetime,
+    wait: LlmLimitWaitError,
     redis_client: Redis,
 ) -> None:
     """
@@ -540,11 +542,12 @@ async def _wait_for_limit(
         if await enter_limit_wait(
             db_session,
             task=task,
-            until=until,
+            until=wait.until,
             redis_client=redis_client,
             paused=paused,
+            attempt=wait.attempt,
         ):
-            _schedule_limit_resume(task.id, until)
+            _schedule_limit_resume(task.id, wait.until)
             return
     await _fail_task(
         db_session,
@@ -746,6 +749,7 @@ async def _resume_after_limit_in_context(task_id: uuid.UUID) -> None:
                         start_after_order_index=start_after,
                         continuation=True,
                         resume_paused=resume.status is TaskStatus.PAUSED,
+                        first_attempt=resume.attempt,
                     )
                     return
         except SessionAlreadyOwnedError:
@@ -814,6 +818,7 @@ async def _run_owned_session(
     start_after_order_index: int | None,
     continuation: bool,
     resume_paused: bool = False,
+    first_attempt: int = 1,
 ) -> None:
     try:
         if not continuation:
@@ -838,6 +843,7 @@ async def _run_owned_session(
                 ),
                 start_after_order_index=start_after_order_index,
                 resume_paused=resume_paused,
+                first_attempt=first_attempt,
             )
     except Exception as exc:
         # Раздел 17.3: любая ошибка сессии переводит задачу в `failed`,
@@ -954,6 +960,7 @@ async def _obtain_parent_summary(
     if parent is None or parent.session_id is None:
         await mark_parent_summary_unavailable(db_session, summary=summary, reason=REASON_NO_SESSION)
         return summary
+    await check_limit_gate(lane.router.limit_gate, node_type=NodeType.PLAIN_PROMPT)
     await _summarize_parent_in_fork(
         db_session,
         summary=summary,
@@ -1049,19 +1056,25 @@ async def _run_claimed_task(
     lane: _LlmLane,
     start_after_order_index: int | None,
     resume_paused: bool = False,
+    first_attempt: int = 1,
 ) -> None:
     repos_root = resolve_repos_root()
     workspace = await prepare_task_workspace(db_session, task=task, repos_root=repos_root)
 
     parent_summary = None
     if needs_parent_summary(task):
-        parent_summary = await _obtain_parent_summary(
-            db_session,
-            task=task,
-            redis_client=redis_client,
-            repos_root=repos_root,
-            lane=lane,
-        )
+        try:
+            parent_summary = await _obtain_parent_summary(
+                db_session,
+                task=task,
+                redis_client=redis_client,
+                repos_root=repos_root,
+                lane=lane,
+            )
+        except LlmLimitWaitError as wait:
+            # Пересказ в ответвлении сессии родителя повторится после сброса.
+            await _wait_for_limit(db_session, task=task, wait=wait, redis_client=redis_client)
+            return
         if parent_summary is None:
             logger.info("task_stopped_while_waiting_parent_summary", task_id=str(task.id))
             await _fail_task(
@@ -1117,6 +1130,7 @@ async def _run_claimed_task(
         has_llm=make_client.has_llm,
         limit_gate=lane.router.limit_gate if make_client.has_llm else None,
         resume_paused=resume_paused,
+        first_attempt=first_attempt,
     )
     await session.connect()
     if enable_remote_control:
@@ -1131,7 +1145,7 @@ async def _run_claimed_task(
     except LlmLimitWaitError as wait:
         await _persist_session_id(db_session, task=task, session=session)
         await _disconnect_quietly(session)
-        await _wait_for_limit(db_session, task=task, until=wait.until, redis_client=redis_client)
+        await _wait_for_limit(db_session, task=task, wait=wait, redis_client=redis_client)
         return
     except BaseException:
         await _disconnect_quietly(session)
@@ -1175,6 +1189,9 @@ async def _run_connected_session(
     task = control.task
     session = control.claude_session
     if parent_summary is not None and parent_summary.delivered_at is None:
+        if parent_summary.status is ParentSummaryStatus.READY:
+            # Пересказ — ход модели: на пороге он ждёт сброса и не теряется.
+            await check_limit_gate(control.limit_gate, node_type=NodeType.PLAIN_PROMPT)
         await deliver_parent_summary(
             db_session,
             child=task,
@@ -1209,6 +1226,7 @@ async def _run_connected_session(
         stop_guard=StopGuard(redis_client=control.redis_client, task_id=task.id),
         recover_session=control.recover_session,
         limit_gate=control.limit_gate,
+        first_attempt=control.first_attempt,
     )
     if not outcome.completed:
         return outcome, True

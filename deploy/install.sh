@@ -47,6 +47,9 @@ PRE_LAUNCH_STATUSES_ADDED="'refining','defined','ready','night_worker'"
 # миграции. Ждущие лимита задачи возвращаются в её статусы — тем же запросом,
 # что downgrade миграции (_RESTORE_LIMIT_WAITS).
 LIMIT_WAIT_MIGRATION="alembic/versions/e5b81c4d2f97_llm_limit_control.py"
+# Новые причины смены аккаунта в node_logs — ближайшими прежними
+# (_RESTORE_SWITCH_REASONS миграции): иначе прежняя версия не прочитает ленту.
+LIMIT_SWITCH_REASONS_RESET="UPDATE node_logs SET llm_switch_reason = CASE llm_switch_reason::text WHEN 'week_exhausted' THEN 'threshold_week'::llm_switch_reason ELSE 'threshold_5h'::llm_switch_reason END WHERE llm_switch_reason::text IN ('window_planned', 'window_balance', 'week_exhausted')"
 LIMIT_WAIT_RESET="UPDATE tasks SET status = CASE WHEN limit_wait_from_status::text = 'refining' THEN 'refining'::task_status ELSE 'failed'::task_status END, last_failed_order_index = CASE WHEN limit_wait_from_status::text = 'refining' THEN last_failed_order_index ELSE coalesce(limit_wait_order_index, last_failed_order_index) END WHERE status::text = 'awaiting_limit'"
 # Периодические задачи воркера очереди: прежняя версия их не знает. Новая
 # создаёт их заново сидом (scripts/seed_periodic_tasks.py).
@@ -644,7 +647,7 @@ _reset_unknown_task_statuses() {
   local commit="$1" previous="$2" query=""
   if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${LIMIT_WAIT_MIGRATION}" 2>/dev/null; then
     log "Обновление: у версии ${commit} нет статуса awaiting_limit — ждущие лимита задачи уходят в failed или refining"
-    query="${LIMIT_WAIT_RESET}; "
+    query="${LIMIT_WAIT_RESET}; ${LIMIT_SWITCH_REASONS_RESET}; "
   fi
   if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${PRE_LAUNCH_STATUSES_MIGRATION}" 2>/dev/null; then
     log "Обновление: у версии ${commit} нет статусов до запуска — такие задачи возвращаются в new"

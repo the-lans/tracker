@@ -47,7 +47,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
   const canStop = task.status === TaskStatus.IN_PROGRESS || task.status === TaskStatus.PAUSED || limitWait;
   const chatWait = limitWait && task.limit_wait_from_status === TaskStatus.REFINING;
   const preLaunch = isPreLaunch(task.status);
-  const { data: llmLimit } = useLlmLimit(preLaunch);
+  const { data: llmLimit } = useLlmLimit(task.created_by, preLaunch);
   const launchWaitUntil = preLaunch ? llmLimit?.wait_until : null;
 
   function handleStop() {

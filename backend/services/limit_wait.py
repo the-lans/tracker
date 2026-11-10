@@ -14,19 +14,22 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import sqlalchemy as sa
 from redis.exceptions import RedisError
 
 from app_logging.config import get_logger
-from db.models.enums import TaskStatus
+from db.models.enums import ManualRequestStatus, ManualRequestType, NodeType, TaskStatus
+from db.models.pipelines import Node, TaskNode
+from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task
 from services.account_router import TaskAccountRouter
 from services.errors import ConflictError
+from services.library_commands import load_snapshot
 from services.llm_account_choice import LlmLimitWaitError
 from services.notifications import NotificationEvent, notify_task_event
 from services.task_queue import NIGHT_WINDOW_TIMEZONE
@@ -44,8 +47,17 @@ if TYPE_CHECKING:
 
 logger = get_logger("limit_wait")
 
-# Ворота лимита: до какого времени ход ждать сброса; None — ход можно начинать.
-type LimitGate = Callable[[], Awaitable[datetime | None]]
+# Ходы модели; скрипт и очистка контекста ворот лимита не ждут.
+LLM_TURN_NODE_TYPES = frozenset(
+    {NodeType.PLAIN_PROMPT, NodeType.SLASH_COMMAND, NodeType.PLAN_PROMPT},
+)
+
+
+class LimitGate(Protocol):
+    """Ворота лимита: до какого времени ход ждать сброса; None — ход можно начинать."""
+
+    def __call__(self, *, node_type: NodeType | None = None) -> Awaitable[datetime | None]: ...
+
 
 # «Приостановить» в ожидании: после сброса задача встанет на паузу.
 _PAUSABLE_FROM_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.REBASE_CONFLICT)
@@ -55,6 +67,7 @@ _CLEARED_WAIT: dict[str, object] = {
     "limit_wait_from_status": None,
     "limit_wait_until": None,
     "limit_wait_order_index": None,
+    "limit_wait_attempt": None,
 }
 
 
@@ -64,15 +77,64 @@ class LimitResume:
 
     status: TaskStatus
     order_index: int | None
+    attempt: int = 1
 
 
-async def check_limit_gate(gate: LimitGate | None) -> None:
-    """Ворота перед ходом: `LlmLimitWaitError`, если ход надо отложить до сброса."""
-    if gate is None:
+async def check_limit_gate(gate: LimitGate | None, *, node_type: NodeType) -> None:
+    """
+    Ворота перед ходом: `LlmLimitWaitError`, если ход надо отложить до сброса.
+    Тип хода решает, какие аккаунты годятся (`plan_prompt` — не у всех
+    провайдеров); ход без модели ворота не проверяет.
+    """
+    if gate is None or node_type not in LLM_TURN_NODE_TYPES:
         return
-    until = await gate()
+    until = await gate(node_type=node_type)
     if until is not None:
         raise LlmLimitWaitError(until)
+
+
+async def manual_request_node_type(
+    db_session: AsyncSession,
+    request: TaskManualRequestQueue,
+) -> NodeType:
+    """Тип хода ручного запроса: свободный промт и пересказ — текстовый промт."""
+    if request.request_type is not ManualRequestType.LIBRARY_PROMPT:
+        return NodeType.PLAIN_PROMPT
+    if request.command_snapshot_encrypted is not None:
+        return load_snapshot(request).node_type
+    node_type = await db_session.scalar(sa.select(Node.node_type).where(Node.id == request.node_id))
+    return node_type or NodeType.PLAIN_PROMPT
+
+
+async def _waiting_node_type(db_session: AsyncSession, task: Task) -> NodeType:
+    """
+    Ход, который ждёт сброса: конфликт ребейза разбирается первым, затем —
+    первый запрос ручной очереди, затем — нода продолжения.
+    """
+    if task.limit_wait_from_status is TaskStatus.REBASE_CONFLICT:
+        return NodeType.PLAIN_PROMPT
+    request = await db_session.scalar(
+        sa.select(TaskManualRequestQueue)
+        .where(
+            TaskManualRequestQueue.task_id == task.id,
+            TaskManualRequestQueue.status == ManualRequestStatus.QUEUED,
+        )
+        .order_by(TaskManualRequestQueue.requested_at)
+        .limit(1),
+    )
+    if request is not None:
+        return await manual_request_node_type(db_session, request)
+    if task.limit_wait_order_index is None:
+        return NodeType.PLAIN_PROMPT
+    node_type = await db_session.scalar(
+        sa.select(Node.node_type)
+        .join(TaskNode, TaskNode.node_id == Node.id)
+        .where(
+            TaskNode.task_id == task.id,
+            TaskNode.order_index == task.limit_wait_order_index,
+        ),
+    )
+    return node_type or NodeType.PLAIN_PROMPT
 
 
 async def enter_limit_wait(
@@ -82,12 +144,14 @@ async def enter_limit_wait(
     until: datetime,
     redis_client: Redis,
     paused: bool = False,
+    attempt: int = 1,
 ) -> bool:
     """
     Compare-and-swap текущего статуса в `awaiting_limit` (воркер, пока
     держит пульс). ``paused`` — пока ход ждал, пользователь нажал
-    «Приостановить»: после сброса задача встанет на паузу. False — статус
-    уже другой, ожидание не начато.
+    «Приостановить»: после сброса задача встанет на паузу. ``attempt`` —
+    попытка ждущей ноды пайплайна. False — статус уже другой, ожидание не
+    начато.
     """
     await db_session.refresh(task)
     from_status = task.status
@@ -112,6 +176,7 @@ async def enter_limit_wait(
                 "limit_wait_from_status": resume_status,
                 "limit_wait_until": until,
                 "limit_wait_order_index": order_index,
+                "limit_wait_attempt": attempt,
             },
         )
     except ConflictError:
@@ -172,6 +237,7 @@ async def leave_limit_wait(db_session: AsyncSession, *, task: Task) -> LimitResu
     if task.status is not TaskStatus.AWAITING_LIMIT or from_status is None:
         return None
     order_index = task.limit_wait_order_index
+    attempt = task.limit_wait_attempt or 1
     try:
         await transition_task_status(
             db_session,
@@ -184,7 +250,7 @@ async def leave_limit_wait(db_session: AsyncSession, *, task: Task) -> LimitResu
         return None
     await db_session.refresh(task)
     logger.info("task_limit_wait_finished", task_id=str(task.id), status=from_status)
-    return LimitResume(status=from_status, order_index=order_index)
+    return LimitResume(status=from_status, order_index=order_index, attempt=attempt)
 
 
 async def stop_limit_wait(db_session: AsyncSession, *, task: Task) -> Task:
@@ -271,13 +337,16 @@ async def limit_waits_to_resume(
     свободный аккаунт (вход, включение, повышение порога).
     """
     resumable: list[uuid.UUID] = []
-    author_gates: dict[uuid.UUID, datetime | None] = {}
+    # Ворота по автору и типу хода: `plan_prompt` годится не каждому аккаунту.
+    author_gates: dict[tuple[uuid.UUID, NodeType], datetime | None] = {}
     for task in await limit_waiting_tasks(db_session):
         until = task.limit_wait_until
         if until is None or until <= now:
             resumable.append(task.id)
             continue
-        if task.created_by not in author_gates:
+        node_type = await _waiting_node_type(db_session, task)
+        key = (task.created_by, node_type)
+        if key not in author_gates:
             router = TaskAccountRouter(
                 db_session=db_session,
                 redis_client=redis_client,
@@ -285,7 +354,7 @@ async def limit_waits_to_resume(
                 cliproxy=cliproxy,
                 clock=lambda: now,
             )
-            author_gates[task.created_by] = await router.limit_gate()
-        if author_gates[task.created_by] is None:
+            author_gates[key] = await router.limit_gate(node_type=node_type)
+        if author_gates[key] is None:
             resumable.append(task.id)
     return resumable

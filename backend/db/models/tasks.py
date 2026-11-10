@@ -138,6 +138,8 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     )
     limit_wait_until: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     limit_wait_order_index: Mapped[int | None] = mapped_column(sa.Integer)
+    # Попытка ноды, ждавшей сброса: после него повторы продолжают счёт с неё.
+    limit_wait_attempt: Mapped[int | None] = mapped_column(sa.Integer)
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"))
 
 

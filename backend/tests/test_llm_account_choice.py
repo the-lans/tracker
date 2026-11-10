@@ -12,6 +12,7 @@ import pytest
 from db.models.enums import LlmAccountStatus, LlmSwitchReason
 from db.models.llm import LlmAccount
 from services.llm_account_choice import (
+    MIN_LIMIT_WAIT,
     AccountChoice,
     AccountView,
     ChoiceRequest,
@@ -137,6 +138,14 @@ class TestLimitState:
             ({"started_ago": 5, "resets_5h_in": 0}, 0, False, (LimitState.FREE, None)),
             ({}, 0, False, (LimitState.FREE, None)),
             ({"provider": "google"}, 0, False, (LimitState.FREE, None)),
+            ({"pct_5h": "95", "resets_5h_in": -0.5}, 0, False, (LimitState.FREE, None)),
+            (
+                {"status": LlmAccountStatus.RATE_LIMITED, "rate_resets_in": -0.1},
+                0,
+                False,
+                (LimitState.FREE, None),
+            ),
+            ({"pct_week": "100", "resets_week_in": -1}, 0, False, (LimitState.FREE, None)),
         ],
         ids=[
             "login_required",
@@ -155,6 +164,9 @@ class TestLimitState:
             "window_reset",
             "no_data",
             "plan_not_needed",
+            "usage_of_reset_window",
+            "rate_limit_reset",
+            "week_reset",
         ],
     )
     def test_state(
@@ -395,6 +407,11 @@ class TestLimitWait:
         account = _account(1, status=LlmAccountStatus.RATE_LIMITED)
 
         assert _choose([account]) == LimitWait(until=_at(5))
+
+    def test_not_shorter_than_minute(self) -> None:
+        account = _account(1, pct_5h="95", resets_5h_in=1 / 3600)
+
+        assert _choose([account]) == LimitWait(until=_NOW + MIN_LIMIT_WAIT)
 
     @pytest.mark.parametrize(
         ("accounts", "plan_prompt"),

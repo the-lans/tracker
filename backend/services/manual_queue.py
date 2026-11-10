@@ -40,7 +40,7 @@ from services.distributed_lock import LockNotAcquiredError, acquire_task_operati
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_library_prompt_attachable
 from services.library_commands import load_snapshot, render_command
-from services.limit_wait import LimitGate, check_limit_gate
+from services.limit_wait import LimitGate, check_limit_gate, manual_request_node_type
 from services.manual_admission import ensure_manual_requests_open, lock_manual_task
 from services.node_runs import apply_node_outcome, mark_node_log_stopped, start_node_log
 from services.nodes.dispatch import (
@@ -581,8 +581,9 @@ async def process_manual_queue_once(
     отдельный запрос защищён распределённой блокировкой (раздел 17.5) —
     если другой процесс уже обрабатывает очередь этой задачи, обработка
     останавливается без ошибки (раздел 17.4: идемпотентность).
-    ``limit_gate`` — ворота лимита перед каждым запросом (раздел 19.7):
-    `LlmLimitWaitError`, а запрос остаётся в `queued` до сброса.
+    ``limit_gate`` — ворота лимита перед каждым запросом к модели (раздел
+    19.7): `LlmLimitWaitError`, а запрос остаётся в `queued` до сброса;
+    скрипт библиотеки выполняется и без свободного аккаунта.
     """
     processed = 0
     stop_guard = StopGuard(redis_client=redis_client, task_id=task.id)
@@ -604,7 +605,10 @@ async def process_manual_queue_once(
         request = await db_session.scalar(stmt)
         if request is None:
             return processed
-        await check_limit_gate(limit_gate)
+        await check_limit_gate(
+            limit_gate,
+            node_type=await manual_request_node_type(db_session, request),
+        )
         try:
             async with acquire_task_operation_lock(
                 redis_client,

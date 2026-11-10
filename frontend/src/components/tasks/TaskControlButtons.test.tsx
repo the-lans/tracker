@@ -1,5 +1,5 @@
 import { screen, within } from "@testing-library/react";
-import { describe, expect } from "vitest";
+import { describe, expect, vi } from "vitest";
 import { TaskControlButtons } from "@/components/tasks/TaskControlButtons";
 import { TaskStatus, type Task } from "@/lib/types";
 import { makeTask } from "@/test/factories";
@@ -209,6 +209,14 @@ describe("TaskControlButtons", () => {
       if (shown) expect(await screen.findByText(HINT)).toBeInTheDocument();
       else expect(screen.queryByText(HINT)).not.toBeInTheDocument();
       await expect.poll(asked).toBe(status === TaskStatus.NEW);
+    });
+
+    test("ожидание спрашивается у автора задачи, а не у смотрящего", async ({ api }) => {
+      api.respond("GET /tasks/llm-limit", { wait_until: null });
+      renderButtons({ status: TaskStatus.NEW, created_by: "author-7" });
+
+      const askedUrls = () => vi.mocked(fetch).mock.calls.map(([input]) => String(input));
+      await expect.poll(askedUrls).toContain("/api/tasks/llm-limit?author_id=author-7");
     });
 
     test("после запуска подсказки нет, хотя ожидание ещё в кеше", async ({ api }) => {

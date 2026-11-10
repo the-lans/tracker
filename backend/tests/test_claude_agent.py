@@ -18,6 +18,7 @@ import pytest
 import structlog
 from claude_agent_sdk import AssistantMessage, ProcessError, RateLimitInfo, TextBlock
 
+from clients import claude_agent
 from clients.claude_agent import (
     COMPACT_COMMAND,
     REMOTE_CONTROL_EXTRA_ARG,
@@ -641,6 +642,33 @@ class TestCompaction:
         assert client.queries == [COMPACT_COMMAND, "go"]
         assert router.compactions == [False]
         assert router.errors == [(_OLD_ROUTE, "rate_limit")]
+        assert (turn.route, turn.is_error) == (FAKE_ROUTE, False)
+
+    async def test_compaction_outside_node_time(self) -> None:
+        client = FakeClaudeAgentClient(
+            messages_per_query=[[make_text_delta("сжато"), make_result_message()]] * 2,
+        )
+        session = ClaudeCodeSession(client, router=FakeTurnRouter(compact_with=_OLD_ROUTE))
+
+        await session.send_and_collect_text("go")
+
+        assert session.user_wait_clock.waited_seconds() >= 2 * client.message_delay_seconds
+        assert session.user_wait_clock.is_waiting() is False
+
+    async def test_hung_compaction_interrupted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(claude_agent, "COMPACT_TIMEOUT_SECONDS", 0.05)
+        router = FakeTurnRouter(compact_with=_OLD_ROUTE)
+        client = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()], [make_result_message()]],
+        )
+        client.message_delay_seconds = 0.2
+        session = ClaudeCodeSession(client, router=router)
+
+        turn = await session.send_and_collect_text("go")
+
+        assert client.interrupted is True
+        assert client.queries == [COMPACT_COMMAND, "go"]
+        assert router.compactions == [False]
         assert (turn.route, turn.is_error) == (FAKE_ROUTE, False)
 
     async def test_crash_during_compaction(self) -> None:

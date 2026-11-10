@@ -29,6 +29,14 @@ _RESTORE_LIMIT_WAITS = (
     "ELSE coalesce(limit_wait_order_index, last_failed_order_index) END "
     "WHERE status::text = 'awaiting_limit'"
 )
+# Причин смены аккаунта из `_SWITCH_REASONS` прежняя версия не знает и не
+# прочитает ленту задачи: они заменяются ближайшими прежними.
+_RESTORE_SWITCH_REASONS = (
+    "UPDATE node_logs SET llm_switch_reason = CASE llm_switch_reason::text "
+    "WHEN 'week_exhausted' THEN 'threshold_week'::llm_switch_reason "
+    "ELSE 'threshold_5h'::llm_switch_reason END "
+    "WHERE llm_switch_reason::text IN ('window_planned', 'window_balance', 'week_exhausted')"
+)
 
 
 def upgrade() -> None:
@@ -42,6 +50,7 @@ def upgrade() -> None:
     op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS limit_wait_from_status task_status")
     op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS limit_wait_until timestamptz")
     op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS limit_wait_order_index integer")
+    op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS limit_wait_attempt integer")
     op.execute("ALTER TABLE llm_accounts ADD COLUMN IF NOT EXISTS window_started_at timestamptz")
     op.execute("ALTER TABLE llm_accounts ADD COLUMN IF NOT EXISTS turn_cost_pct numeric(5, 2)")
     op.execute(
@@ -59,10 +68,16 @@ def downgrade() -> None:
     # уходят в статусы прежней версии (как откат в `deploy/install.sh`),
     # значения остаются в типах.
     op.execute(_RESTORE_LIMIT_WAITS)
+    op.execute(_RESTORE_SWITCH_REASONS)
     op.execute("ALTER TABLE node_logs DROP COLUMN IF EXISTS llm_context_compacted")
     op.execute("ALTER TABLE users DROP COLUMN IF EXISTS llm_compact_on_switch")
     op.execute("ALTER TABLE llm_accounts DROP COLUMN IF EXISTS turn_cost_pct")
     op.execute("ALTER TABLE llm_accounts DROP COLUMN IF EXISTS window_started_at")
-    for column in ("limit_wait_order_index", "limit_wait_until", "limit_wait_from_status"):
+    for column in (
+        "limit_wait_attempt",
+        "limit_wait_order_index",
+        "limit_wait_until",
+        "limit_wait_from_status",
+    ):
         op.execute(f"ALTER TABLE tasks DROP COLUMN IF EXISTS {column}")
 

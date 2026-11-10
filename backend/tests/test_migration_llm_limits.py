@@ -19,6 +19,7 @@ _NEW_COLUMNS = {
     "limit_wait_from_status",
     "limit_wait_until",
     "limit_wait_order_index",
+    "limit_wait_attempt",
     "window_started_at",
     "turn_cost_pct",
     "llm_compact_on_switch",
@@ -150,3 +151,41 @@ class TestLlmLimitMigration:
             await engine.dispose()
         assert tuple(restored) == (expected_status, expected_restart)
         assert not columns & _NEW_COLUMNS
+
+    @pytest.mark.parametrize(
+        ("reason", "expected"),
+        [
+            ("window_planned", "threshold_5h"),
+            ("window_balance", "threshold_5h"),
+            ("week_exhausted", "threshold_week"),
+            ("rate_limited", "rate_limited"),
+        ],
+    )
+    async def test_downgrade_switch_reasons(
+        self,
+        scratch_database: str,
+        reason: str,
+        expected: str,
+    ) -> None:
+        """Причины новой версии прежняя не прочитает — откат заменяет их прежними."""
+        run_alembic(scratch_database, "upgrade", _PREVIOUS_REVISION)
+        engine = create_async_engine(scratch_database)
+        try:
+            task_id = await _seed_task(engine)
+            run_alembic(scratch_database, "upgrade", _REVISION)
+            async with engine.begin() as connection:
+                await connection.execute(
+                    sa.text(
+                        "INSERT INTO node_logs (id, task_id, trigger_type, attempt_number, "
+                        "status, llm_switch_reason) VALUES (:id, :task_id, 'pipeline', 1, "
+                        "'success', CAST(:reason AS llm_switch_reason))",
+                    ),
+                    {"id": uuid.uuid4(), "task_id": task_id, "reason": reason},
+                )
+            run_alembic(scratch_database, "downgrade", _PREVIOUS_REVISION)
+            async with engine.connect() as connection:
+                query = sa.text("SELECT llm_switch_reason::text FROM node_logs")
+                restored = (await connection.execute(query)).scalar_one()
+        finally:
+            await engine.dispose()
+        assert restored == expected

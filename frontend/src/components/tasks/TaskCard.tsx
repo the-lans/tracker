@@ -18,7 +18,7 @@ export function TaskCard({ task }: { task: Task }) {
   const meta = TASK_STATUS_META[task.status];
   const startTask = useStartTask(task.id);
   const preLaunch = isPreLaunch(task.status);
-  const { data: llmLimit } = useLlmLimit(preLaunch);
+  const { data: llmLimit } = useLlmLimit(task.created_by, preLaunch);
   const launchTitle = !task.pipeline_id
     ? "Сначала выберите пайплайн на странице задачи"
     : llmLimit?.wait_until

@@ -25,6 +25,7 @@ from db.models.logs import NodeLog
 from db.models.pipelines import Node
 from services.failure_classification import is_transient_sdk_exception
 from services.limit_wait import LimitGate, check_limit_gate
+from services.llm_account_choice import LlmLimitWaitError
 from services.node_history import load_node_context_history
 from services.node_runs import (
     SESSION_ERROR_MESSAGE,
@@ -156,6 +157,7 @@ async def run_pipeline_node_with_retry(
     stop_guard: StopGuard | None = None,
     recover_session: SessionRecovery | None = None,
     limit_gate: LimitGate | None = None,
+    first_attempt: int = 1,
 ) -> NodeRunOutcome:
     """Одна нода пайплайна, с retry (раздел 11.7).
 
@@ -172,13 +174,16 @@ async def run_pipeline_node_with_retry(
     обновлять при вызове `ExitPlanMode`/`AskUserQuestion`.
 
     ``limit_gate`` — ворота лимита (раздел 19.7) перед каждой попыткой
-    LLM-ноды: все аккаунты на пороге — `LlmLimitWaitError` до записи
-    `node_logs`, воркер уводит задачу в `awaiting_limit`.
+    хода модели: все аккаунты на пороге — `LlmLimitWaitError` до записи
+    `node_logs`, воркер уводит задачу в `awaiting_limit`. ``first_attempt`` —
+    с какой попытки продолжить нода, ждавшая сброса лимита.
     """
-    attempt = 1
+    attempt = first_attempt
     while True:
-        if node.node_type is not NodeType.SCRIPT:
-            await check_limit_gate(limit_gate)
+        try:
+            await check_limit_gate(limit_gate, node_type=node.node_type)
+        except LlmLimitWaitError as wait:
+            raise LlmLimitWaitError(wait.until, attempt=attempt) from None
         node_log, outcome = await _run_pipeline_attempt(
             db_session,
             task=task,
@@ -452,6 +457,7 @@ async def run_pipeline(
     recover_session: SessionRecovery | None = None,
     pause_after_node: PausePoint | None = None,
     limit_gate: LimitGate | None = None,
+    first_attempt: int = 1,
 ) -> PipelineRunOutcome:
     """Итерирует `task_nodes` в порядке `order_index` (раздел 13.3).
 
@@ -462,6 +468,8 @@ async def run_pipeline(
     уже имеют зафиксированную историю и повторно не выполняются.
     ``active_node_context``/``stop_guard``/``recover_session``/``limit_gate`` —
     см. `run_pipeline_node_with_retry`.
+    ``first_attempt`` — попытка, с которой продолжает первая нода прогона
+    после ожидания лимита.
     ``checkpoint`` вызывается перед каждой включённой нодой; `STOP`
     завершает прогон до её выполнения. ``pause_after_node`` — после успешной
     ноды с отметкой «пауза после»; `STOP` на этой паузе завершает прогон.
@@ -502,7 +510,9 @@ async def run_pipeline(
             stop_guard=stop_guard,
             recover_session=recover_session,
             limit_gate=limit_gate,
+            first_attempt=first_attempt,
         )
+        first_attempt = 1
         if not outcome.success:
             return PipelineRunOutcome(
                 completed=False,

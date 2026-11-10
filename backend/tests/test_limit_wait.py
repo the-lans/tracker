@@ -9,20 +9,31 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from db.models.enums import LlmAccountStatus, TaskStatus
+from db.models.enums import (
+    LlmAccountStatus,
+    ManualRequestStatus,
+    ManualRequestType,
+    NodeType,
+    TaskStatus,
+)
+from db.models.pipelines import Node, TaskNode
+from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task
 from services import limit_wait
 from services.errors import ConflictError
 from services.limit_wait import (
     author_waits_for_limit,
+    check_limit_gate,
     enter_limit_wait,
     leave_limit_wait,
     limit_waits_to_resume,
+    manual_request_node_type,
     pause_limit_wait,
     stop_limit_wait,
 )
+from services.llm_account_choice import LlmLimitWaitError
 from services.notifications import NotificationEvent
-from tests.factories import make_llm_account, make_task, make_user
+from tests.factories import make_llm_account, make_pipeline, make_task, make_user
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -294,3 +305,154 @@ class TestLimitWaitsToResume:
         )
 
         assert selected == ([task.id] if resumed else [])
+
+
+class _RecordingGate:
+    """Ворота, которые всегда ждут сброса и запоминают тип хода."""
+
+    def __init__(self) -> None:
+        self.asked: list[NodeType | None] = []
+
+    async def __call__(self, *, node_type: NodeType | None = None) -> datetime | None:
+        self.asked.append(node_type)
+        return _UNTIL
+
+
+class TestCheckLimitGate:
+    @pytest.mark.parametrize(
+        "node_type",
+        [NodeType.PLAIN_PROMPT, NodeType.SLASH_COMMAND, NodeType.PLAN_PROMPT],
+    )
+    async def test_model_turn_waits(self, node_type: NodeType) -> None:
+        gate = _RecordingGate()
+
+        with pytest.raises(LlmLimitWaitError) as raised:
+            await check_limit_gate(gate, node_type=node_type)
+
+        assert (raised.value.until, gate.asked) == (_UNTIL, [node_type])
+
+    @pytest.mark.parametrize("node_type", [NodeType.SCRIPT, NodeType.CLEAR_CONTEXT])
+    async def test_no_model_turn_skipped(self, node_type: NodeType) -> None:
+        gate = _RecordingGate()
+
+        await check_limit_gate(gate, node_type=node_type)
+
+        assert gate.asked == []
+
+
+async def _add_waiting_node(
+    db_session: AsyncSession,
+    task: Task,
+    node_type: NodeType,
+) -> Node:
+    pipeline = await make_pipeline(db_session, created_by=task.created_by)
+    node = Node(
+        created_by=task.created_by,
+        pipeline_id=pipeline.id,
+        order_index=3,
+        name="waiting",
+        node_type=node_type,
+        prompt_template="план",
+        timeout_seconds=60,
+        max_retries=1,
+        retry_base_delay_seconds=0,
+        is_skipped=False,
+        is_library_item=False,
+        is_archived=False,
+    )
+    db_session.add(node)
+    await db_session.flush()
+    db_session.add(TaskNode(task_id=task.id, node_id=node.id, order_index=3))
+    await db_session.flush()
+    return node
+
+
+class TestResumeByTurnType:
+    """Аккаунт без план-режима свободен — продолжает только ход, которому он годится."""
+
+    @pytest.mark.parametrize(
+        ("node_type", "queued_freeform", "resumed"),
+        [
+            (NodeType.PLAN_PROMPT, False, False),
+            (NodeType.PLAIN_PROMPT, False, True),
+            (NodeType.PLAN_PROMPT, True, True),
+        ],
+        ids=["plan_waits", "plain_resumes", "queued_request_first"],
+    )
+    async def test_selected(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        node_type: NodeType,
+        queued_freeform: bool,
+        resumed: bool,
+    ) -> None:
+        user_id = (await make_user(db_session)).id
+        claude = await make_llm_account(db_session, owner_id=user_id)
+        claude.usage_5h_pct = Decimal("95")
+        claude.usage_5h_resets_at = _UNTIL
+        claude.usage_checked_at = _NOW
+        await make_llm_account(
+            db_session,
+            owner_id=user_id,
+            provider="xai",
+            default_model="grok-5",
+            label="grok",
+        )
+        task = await _waiting(db_session, TaskStatus.IN_PROGRESS, created_by=user_id)
+        await _add_waiting_node(db_session, task, node_type)
+        if queued_freeform:
+            db_session.add(
+                TaskManualRequestQueue(
+                    task_id=task.id,
+                    request_type=ManualRequestType.FREEFORM_PROMPT,
+                    raw_prompt_text="вопрос",
+                    requested_by=user_id,
+                    status=ManualRequestStatus.QUEUED,
+                    requested_at=_NOW,
+                ),
+            )
+            await db_session.flush()
+
+        selected = await limit_waits_to_resume(
+            db_session,
+            redis_client=redis_client,
+            cliproxy=fake_cliproxy.client(),
+            now=_NOW,
+        )
+
+        assert selected == ([task.id] if resumed else [])
+
+
+class TestManualRequestNodeType:
+    @pytest.mark.parametrize(
+        ("request_type", "node_type", "expected"),
+        [
+            (ManualRequestType.FREEFORM_PROMPT, None, NodeType.PLAIN_PROMPT),
+            (ManualRequestType.PARENT_SUMMARY, None, NodeType.PLAIN_PROMPT),
+            (ManualRequestType.LIBRARY_PROMPT, NodeType.SCRIPT, NodeType.SCRIPT),
+            (ManualRequestType.LIBRARY_PROMPT, NodeType.PLAN_PROMPT, NodeType.PLAN_PROMPT),
+        ],
+        ids=["freeform", "parent_summary", "library_script", "library_plan"],
+    )
+    async def test_type(
+        self,
+        db_session: AsyncSession,
+        request_type: ManualRequestType,
+        node_type: NodeType | None,
+        expected: NodeType,
+    ) -> None:
+        task = await _task(db_session, TaskStatus.IN_PROGRESS)
+        node = None if node_type is None else await _add_waiting_node(db_session, task, node_type)
+        request = TaskManualRequestQueue(
+            task_id=task.id,
+            request_type=request_type,
+            node_id=None if node is None else node.id,
+            raw_prompt_text="вопрос" if node is None else None,
+            requested_by=task.created_by,
+            status=ManualRequestStatus.QUEUED,
+            requested_at=_NOW,
+        )
+
+        assert await manual_request_node_type(db_session, request) is expected

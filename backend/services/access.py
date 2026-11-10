@@ -21,7 +21,7 @@ from db.models.pipelines import Node, Pipeline
 from db.models.repositories import Template
 from db.models.tasks import Task
 from db.models.users import User
-from services.errors import NotFoundError, UnauthorizedError, ValidationError
+from services.errors import ForbiddenError, NotFoundError, UnauthorizedError, ValidationError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +48,15 @@ def owner_filter(column: InstrumentedAttribute[uuid.UUID], user: User) -> sa.Col
 
 def can_access(record: OwnedRecord, user: User) -> bool:
     return is_admin(user) or record.created_by == user.id
+
+
+def author_for_user(author_id: uuid.UUID | None, user: User) -> uuid.UUID:
+    """Чьи данные смотрит пользователь: свои, а `admin` — и любого автора."""
+    if author_id is None or author_id == user.id:
+        return user.id
+    if not is_admin(user):
+        raise ForbiddenError("Данные другого пользователя доступны только администратору")
+    return author_id
 
 
 async def _get_owned(

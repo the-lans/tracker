@@ -128,3 +128,37 @@ class TestAccountLimitStates:
 
     async def test_empty(self, db_session: AsyncSession) -> None:
         assert await account_limit_states(db_session, [], now=_NOW) == {}
+
+
+class TestActiveTasks:
+    @pytest.mark.parametrize(
+        ("status", "counted"),
+        [
+            (TaskStatus.IN_PROGRESS, True),
+            (TaskStatus.PLAN_REVIEW, True),
+            (TaskStatus.AWAITING_INPUT, True),
+            (TaskStatus.REBASE_CONFLICT, True),
+            (TaskStatus.REFINING, True),
+            (TaskStatus.PAUSED, False),
+            (TaskStatus.DONE, False),
+        ],
+    )
+    async def test_counted(
+        self,
+        db_session: AsyncSession,
+        status: TaskStatus,
+        counted: bool,
+    ) -> None:
+        """Задача, ждущая ответа пользователя, продолжит на аккаунте — она его нагрузка."""
+        owner = await make_user(db_session)
+        account = await make_llm_account(db_session, owner_id=owner.id)
+        await make_task(
+            db_session,
+            created_by=owner.id,
+            status=status,
+            current_llm_account_id=account.id,
+        )
+
+        states = await account_limit_states(db_session, [account], now=_NOW)
+
+        assert states[account.id].active_tasks == int(counted)

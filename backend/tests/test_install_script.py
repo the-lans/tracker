@@ -310,12 +310,25 @@ class TestSharedConstants:
             TaskStatus.NIGHT_WORKER,
         }
 
-    def test_limit_wait_reset(self, stubs: Path, install_dir: Path) -> None:
-        """Откат уводит ждущие лимита задачи тем же запросом, что downgrade миграции."""
+    @pytest.mark.parametrize(
+        ("variable", "constant"),
+        [
+            ("LIMIT_WAIT_RESET", "_RESTORE_LIMIT_WAITS"),
+            ("LIMIT_SWITCH_REASONS_RESET", "_RESTORE_SWITCH_REASONS"),
+        ],
+    )
+    def test_limit_control_reset(
+        self,
+        stubs: Path,
+        install_dir: Path,
+        variable: str,
+        constant: str,
+    ) -> None:
+        """Откат возвращает данные в значения прежней версии тем же запросом, что downgrade."""
         migration = self._value(stubs, install_dir, "LIMIT_WAIT_MIGRATION")
-        query = self._value(stubs, install_dir, "LIMIT_WAIT_RESET")
+        query = self._value(stubs, install_dir, variable)
         source = (_INSTALL_SCRIPT.parents[1] / migration).read_text()
-        restore = re.search(r"_RESTORE_LIMIT_WAITS = \((.*?)\n\)", source, re.DOTALL)
+        restore = re.search(rf"{constant} = \((.*?)\n\)", source, re.DOTALL)
         assert restore is not None
         assert query == "".join(re.findall(r'"(.*?)"', restore.group(1)))
 
@@ -542,6 +555,7 @@ class TestUpdate:
         assert len(resets_seen) == int(limit_reset or pre_launch_reset)
         reset = resets_seen[0] if resets_seen else ""
         assert ("WHERE status::text = 'awaiting_limit'" in reset) is limit_reset
+        assert ("UPDATE node_logs SET llm_switch_reason" in reset) is limit_reset
         assert ("UPDATE tasks SET status = 'new'" in reset) is pre_launch_reset
         if pre_launch_reset:
             assert "'refining','defined','ready','night_worker'" in reset

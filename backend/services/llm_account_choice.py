@@ -39,6 +39,9 @@ BALANCE_SWITCH_GAIN = 1.5
 # Нижняя граница времени до сброса: срочность конечна и у окна на грани сброса.
 _MIN_HOURS = 1 / 60
 _HOUR = timedelta(hours=1)
+# Ожидание не короче минуты: сброс, который по данным уже наступил, но опрос
+# расхода ещё не обновил аккаунт, не крутит задачу в цикле «продолжить — ждать».
+MIN_LIMIT_WAIT = timedelta(minutes=1)
 
 _IN_WORK_STATUSES = frozenset({LlmAccountStatus.ACTIVE, LlmAccountStatus.RATE_LIMITED})
 _STATUS_REASONS = {
@@ -61,13 +64,16 @@ class LlmLimitWaitError(Exception):
     """
     Все аккаунты автора на пороге или исчерпаны (п. 5): ход ждёт сброса до
     ``until``. Обычно это ловят ворота лимита до хода; здесь — гонка после них.
+    ``attempt`` — попытка ноды пайплайна, которая ждёт: после сброса счёт
+    повторов продолжается с неё, а не начинается заново.
     """
 
     message = "Все LLM-аккаунты на пороге — ход ждёт сброса лимита"
 
-    def __init__(self, until: datetime) -> None:
+    def __init__(self, until: datetime, *, attempt: int = 1) -> None:
         super().__init__(self.message)
         self.until = until
+        self.attempt = attempt
 
 
 class LimitState(StrEnum):
@@ -154,18 +160,35 @@ def _window_start(account: LlmAccount, *, now: datetime) -> datetime | None:
     return end - FIVE_HOUR_WINDOW if end is not None else None
 
 
+def _usage_5h(account: LlmAccount, *, now: datetime) -> Decimal | None:
+    """Расход идущего 5-часового окна; после его сброса прежний расход не действует."""
+    resets_at = account.usage_5h_resets_at
+    if resets_at is not None and resets_at <= now:
+        return None
+    return account.usage_5h_pct
+
+
 def _reserve_pct(view: AccountView) -> Decimal:
     cost = view.account.turn_cost_pct
     return (cost if cost is not None else DEFAULT_TURN_COST_PCT) * view.running_turns
 
 
-def _exhausted(account: LlmAccount) -> AccountLimit | None:
-    """Лимит провайдера (`rate_limited`) или неделя исчерпаны; None — нет."""
-    if account.status is LlmAccountStatus.RATE_LIMITED:
-        return AccountLimit(LimitState.EXHAUSTED, until=account.rate_limit_resets_at)
+def _not_reset(resets_at: datetime | None, *, now: datetime) -> bool:
+    return resets_at is None or resets_at > now
+
+
+def _exhausted(account: LlmAccount, *, now: datetime) -> AccountLimit | None:
+    """
+    Лимит провайдера (`rate_limited`) или неделя исчерпаны; None — нет или
+    сброс уже наступил, а опрос ещё не обновил аккаунт.
+    """
+    resets_at = account.rate_limit_resets_at
+    if account.status is LlmAccountStatus.RATE_LIMITED and _not_reset(resets_at, now=now):
+        return AccountLimit(LimitState.EXHAUSTED, until=resets_at)
     week = account.usage_week_pct
-    if week is not None and week >= FULL_USAGE_PCT:
-        return AccountLimit(LimitState.EXHAUSTED, until=account.usage_week_resets_at)
+    resets_at = account.usage_week_resets_at
+    if week is not None and week >= FULL_USAGE_PCT and _not_reset(resets_at, now=now):
+        return AccountLimit(LimitState.EXHAUSTED, until=resets_at)
     return None
 
 
@@ -180,11 +203,11 @@ def limit_state(
     account = view.account
     if account.status not in _IN_WORK_STATUSES or not _suitable(account, plan_prompt=plan_prompt):
         return AccountLimit(LimitState.EXCLUDED)
-    exhausted = _exhausted(account)
+    exhausted = _exhausted(account, now=now)
     if exhausted is not None:
         return exhausted
     end = window_end(account, now=now)
-    usage = account.usage_5h_pct
+    usage = _usage_5h(account, now=now)
     if usage is not None and usage + _reserve_pct(view) >= threshold_pct:
         return AccountLimit(LimitState.AT_THRESHOLD, until=end or now + FIVE_HOUR_WINDOW)
     if end is not None:
@@ -199,7 +222,7 @@ def _hours_until(moment: datetime | None, *, now: datetime, default: timedelta) 
 
 def _urgency(account: LlmAccount, *, threshold_pct: int, now: datetime) -> float:
     """Темп, с которым окно нужно расходовать, чтобы квота не сгорела."""
-    usage = account.usage_5h_pct
+    usage = _usage_5h(account, now=now)
     if usage is None:
         return 0.0
     hours = _hours_until(window_end(account, now=now), now=now, default=FIVE_HOUR_WINDOW)
@@ -286,8 +309,10 @@ def _wait_or_fail(pool: _Pool) -> LimitWait:
     blocked = pool.ids(LimitState.AT_THRESHOLD) + pool.ids(LimitState.EXHAUSTED)
     if not blocked:
         raise NoLlmAccountAvailableError
+    now = pool.request.now
     moments = [until for key in blocked if (until := pool.limits[key].until) is not None]
-    return LimitWait(until=min(moments) if moments else pool.request.now + FIVE_HOUR_WINDOW)
+    until = min(moments) if moments else now + FIVE_HOUR_WINDOW
+    return LimitWait(until=max(until, now + MIN_LIMIT_WAIT))
 
 
 def _switch_reason(pool: _Pool, *, chosen_running: bool) -> LlmSwitchReason:

@@ -70,6 +70,9 @@ _TEXT_BLOCK = "text"
 TEXT_BLOCK_SEPARATOR = "\n\n"
 # Раздел 19.7, «Сжатие контекста»: слэш-команда CLI, уходит буквально (правило 2).
 COMPACT_COMMAND = "/compact"
+# Сжатие не входит в таймаут ноды, но и не длится бесконечно: зависшее
+# прерывается, и ход идёт на новом аккаунте без него.
+COMPACT_TIMEOUT_SECONDS = 600.0
 
 # Получатель фрагментов ответа по мере генерации (раздел 15.2).
 TextDeltaHandler = Callable[[str], Awaitable[None]]
@@ -296,7 +299,8 @@ class UserWaitClock:
     """
     Раздел 7.3: таймаут ноды ограничивает ожидание ответа LLM, а не решения
     пользователя — время, пока ход ждёт ответа в виджете выбора (9.6), в него
-    не входит.
+    не входит. Не входит и служебный ход сжатия контекста (раздел 19.7): у
+    него свой предел `COMPACT_TIMEOUT_SECONDS`.
     """
 
     def __init__(self, now: Callable[[], float] = time.monotonic) -> None:
@@ -441,19 +445,23 @@ class ClaudeCodeSession:
                 return
             if self._on_abort is not None:
                 await self._on_abort()
-            await self._client.interrupt()
-
-            async def drain() -> None:
-                async for message in self._client.receive_response():
-                    if isinstance(message, ResultMessage):
-                        return
-
-            try:
-                await asyncio.wait_for(drain(), timeout=drain_timeout_seconds)
-            except TimeoutError:
-                logger.warning("session_abort_drain_timed_out")
-            self._turn_open = False
+            await self._interrupt_open_turn(drain_timeout_seconds=drain_timeout_seconds)
             logger.info("session_turn_aborted")
+
+    async def _interrupt_open_turn(self, *, drain_timeout_seconds: float) -> None:
+        """`interrupt()` и вычитка хвоста прерванного хода — под мьютексом вызывающего."""
+        await self._client.interrupt()
+
+        async def drain() -> None:
+            async for message in self._client.receive_response():
+                if isinstance(message, ResultMessage):
+                    return
+
+        try:
+            await asyncio.wait_for(drain(), timeout=drain_timeout_seconds)
+        except TimeoutError:
+            logger.warning("session_abort_drain_timed_out")
+        self._turn_open = False
 
     async def set_permission_mode(self, mode: SdkPermissionMode) -> None:
         """Раздел 9.1/9.4: переключение режима разрешений посреди сессии
@@ -560,25 +568,28 @@ class ClaudeCodeSession:
     async def _compact(self, route: TurnRoute) -> bool:
         """
         Служебный ход `/compact` перед ходом на новом аккаунте (раздел 19.7):
-        ответ не транслируется и в `node_logs` не пишется. Ошибка хода
-        сообщается аккаунту сжатия, а ход на новом аккаунте всё равно идёт.
+        ответ не транслируется и в `node_logs` не пишется. Ошибка или
+        превышение `COMPACT_TIMEOUT_SECONDS` сообщается аккаунту сжатия либо
+        в журнал, а ход на новом аккаунте всё равно идёт. Время сжатия в
+        таймаут ноды не входит (`user_wait_clock`).
         """
         assert self._router is not None
         logger.info("session_compaction_started", account_id=str(route.account_id))
         self._turn_open = True
         self._turn_text_parts = []
-        result: ResultMessage | None = None
-        assistant_error: str | None = None
+        self.user_wait_clock.begin()
         try:
-            await self._client.query(COMPACT_COMMAND)
-            async for message in self._client.receive_response():
-                if isinstance(message, AssistantMessage) and message.error is not None:
-                    assistant_error = message.error
-                if isinstance(message, ResultMessage):
-                    result = message
+            async with asyncio.timeout(COMPACT_TIMEOUT_SECONDS):
+                result, assistant_error = await self._collect_compaction()
+        except TimeoutError:
+            logger.warning("session_compaction_timed_out", account_id=str(route.account_id))
+            await self._interrupt_open_turn(drain_timeout_seconds=_ABORT_DRAIN_TIMEOUT_SECONDS)
+            return False
         except ClaudeSDKError:
             self._turn_open = False
             raise
+        finally:
+            self.user_wait_clock.end()
         self._turn_open = False
         if result is None:
             logger.warning("session_compaction_without_result")
@@ -589,6 +600,18 @@ class ClaudeCodeSession:
             await self._router.report_error(route, assistant_error)
             return False
         return True
+
+    async def _collect_compaction(self) -> tuple[ResultMessage | None, str | None]:
+        """Итог хода `/compact` и ошибка ассистента, если была."""
+        result: ResultMessage | None = None
+        assistant_error: str | None = None
+        await self._client.query(COMPACT_COMMAND)
+        async for message in self._client.receive_response():
+            if isinstance(message, AssistantMessage) and message.error is not None:
+                assistant_error = message.error
+            if isinstance(message, ResultMessage):
+                result = message
+        return result, assistant_error
 
     async def _forward_text_delta(self, message: StreamEvent) -> None:
         if self._on_text_delta is None:

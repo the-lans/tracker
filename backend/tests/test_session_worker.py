@@ -2048,6 +2048,89 @@ class TestLimitWait:
         )
         assert worker_env.client.queries == ["шаг 0"]
 
+    async def test_clear_context_not_gated(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Очистка контекста модели не нужна — ворот лимита перед ней нет."""
+        task, _ = await self._waiting_task(db_session, worker_env, nodes=1)
+        await _add_node(db_session, task, order_index=1, node_type=NodeType.CLEAR_CONTEXT)
+        await _add_node(db_session, task, order_index=2)
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.IN_PROGRESS
+        assert worker_env.enqueued == [
+            ([str(task.id)], {"start_after_order_index": 1, "continuation": True}),
+        ]
+
+    async def test_plan_prompt_waits(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Свободен лишь аккаунт без план-режима — нода `plan_prompt` ждёт сброса."""
+        task, _ = await self._waiting_task(db_session, worker_env, nodes=1)
+        plan = await _add_node(db_session, task, order_index=1, node_type=NodeType.PLAN_PROMPT)
+        plan.prompt_template = "план"
+        await make_llm_account(
+            db_session,
+            owner_id=task.created_by,
+            provider="xai",
+            default_model="grok-5",
+            label="grok",
+        )
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert (task.status, task.limit_wait_order_index) == (TaskStatus.AWAITING_LIMIT, 1)
+        assert worker_env.client.queries == ["шаг 0"]
+
+    async def test_retry_count_kept(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Попытка, ждавшая сброса, — вторая из двух: после сброса повторов больше нет."""
+        task, account = await self._waiting_task(db_session, worker_env, nodes=0)
+        node = await _add_node(db_session, task, order_index=0)
+        node.max_retries = 2
+        failing_turn: list[Message] = [
+            make_assistant_error("server_error"),
+            make_result_message(is_error=True, session_id="sess-worker"),
+        ]
+
+        async def reach_threshold() -> None:
+            account.usage_5h_pct = Decimal("95")
+            account.usage_5h_resets_at = _LIMIT_RESET
+            account.usage_checked_at = datetime.now(UTC)
+            await db_session.flush()
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=[failing_turn],
+            on_query=reach_threshold,
+        )
+        await _run_worker(task)
+        await db_session.refresh(task)
+        assert (task.status, task.limit_wait_attempt) == (TaskStatus.AWAITING_LIMIT, 2)
+
+        await self._reset_limit(db_session, account)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=[failing_turn] * 2)
+        await self._resume(task)
+
+        await db_session.refresh(task)
+        attempts = await db_session.scalars(
+            sa.select(NodeLog.attempt_number)
+            .where(NodeLog.task_id == task.id)
+            .order_by(NodeLog.attempt_number),
+        )
+        assert task.status is TaskStatus.FAILED
+        assert list(attempts) == [1, 2]
+        assert task.limit_wait_attempt is None
+
     async def test_resume_still_at_threshold_waits_again(
         self,
         db_session: AsyncSession,

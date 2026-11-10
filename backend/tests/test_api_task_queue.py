@@ -669,3 +669,52 @@ class TestLlmLimit:
         response = await authed_client.get("/tasks/llm-limit")
 
         assert datetime.fromisoformat(response.json()["wait_until"]) == soon
+
+
+class TestLlmLimitOfAuthor:
+    """Подсказка у «Выполнить» — по ожиданию автора задачи, а не смотрящего."""
+
+    _UNTIL = datetime(2099, 1, 1, 12, 0, tzinfo=UTC)
+
+    async def _author_waiting(self, db_session: AsyncSession) -> uuid.UUID:
+        task = await make_task(
+            db_session,
+            status=TaskStatus.AWAITING_LIMIT,
+            limit_wait_from_status=TaskStatus.IN_PROGRESS,
+            limit_wait_until=self._UNTIL,
+        )
+        return task.created_by
+
+    async def test_admin_sees_author_wait(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        author_id = await self._author_waiting(db_session)
+
+        response = await admin_client.get("/tasks/llm-limit", params={"author_id": str(author_id)})
+
+        assert datetime.fromisoformat(response.json()["wait_until"]) == self._UNTIL
+
+    async def test_user_cannot_see_other_author(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        author_id = await self._author_waiting(db_session)
+
+        response = await authed_client.get("/tasks/llm-limit", params={"author_id": str(author_id)})
+
+        assert response.status_code == 403
+
+    async def test_own_author_id(
+        self,
+        authed_client: AsyncClient,
+        current_user: User,
+    ) -> None:
+        response = await authed_client.get(
+            "/tasks/llm-limit",
+            params={"author_id": str(current_user.id)},
+        )
+
+        assert (response.status_code, response.json()) == (200, {"wait_until": None})
