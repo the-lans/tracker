@@ -83,6 +83,14 @@ async def _add_enabled_node(db_session: AsyncSession, task: Task, *, order_index
         (TaskStatus.AWAITING_INPUT, TaskStatus.PAUSED),
         (TaskStatus.REBASE_CONFLICT, TaskStatus.IN_PROGRESS),
         (TaskStatus.FAILED, TaskStatus.IN_PROGRESS),
+        (TaskStatus.IN_PROGRESS, TaskStatus.AWAITING_LIMIT),
+        (TaskStatus.PAUSED, TaskStatus.AWAITING_LIMIT),
+        (TaskStatus.REBASE_CONFLICT, TaskStatus.AWAITING_LIMIT),
+        (TaskStatus.REFINING, TaskStatus.AWAITING_LIMIT),
+        (TaskStatus.AWAITING_LIMIT, TaskStatus.IN_PROGRESS),
+        (TaskStatus.AWAITING_LIMIT, TaskStatus.PAUSED),
+        (TaskStatus.AWAITING_LIMIT, TaskStatus.REBASE_CONFLICT),
+        (TaskStatus.AWAITING_LIMIT, TaskStatus.REFINING),
     ],
 )
 async def test_allowed_transitions_succeed(
@@ -114,6 +122,10 @@ async def test_allowed_transitions_succeed(
         (TaskStatus.REBASE_CONFLICT, TaskStatus.DONE),
         (TaskStatus.PLAN_REVIEW, TaskStatus.REBASE_CONFLICT),
         (TaskStatus.AWAITING_INPUT, TaskStatus.DONE),
+        (TaskStatus.QUEUED, TaskStatus.AWAITING_LIMIT),
+        (TaskStatus.PLAN_REVIEW, TaskStatus.AWAITING_LIMIT),
+        (TaskStatus.AWAITING_LIMIT, TaskStatus.DONE),
+        (TaskStatus.AWAITING_LIMIT, TaskStatus.NEW),
     ],
 )
 async def test_disallowed_transitions_are_rejected(
@@ -348,8 +360,10 @@ async def test_fail_task_after_error_fails_task_and_closes_running_logs(
     assert running_log.status is NodeLogStatus.FAILED
     assert running_log.error_message == SESSION_ERROR_MESSAGE
     app_logs = (
-        await db_session.execute(sa.select(AppLog).where(AppLog.task_id == task.id))
-    ).scalars().all()
+        (await db_session.execute(sa.select(AppLog).where(AppLog.task_id == task.id)))
+        .scalars()
+        .all()
+    )
     assert ["SDK упал" in log.message for log in app_logs] == [True]
 
 
@@ -474,4 +488,3 @@ class TestRunAfterReset:
             to_status=TaskStatus.DONE,
         )
         assert updated.status is TaskStatus.DONE
-

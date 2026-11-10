@@ -11,6 +11,7 @@ import { TaskControlButtons } from "@/components/tasks/TaskControlButtons";
 import { RemoteControlButton } from "@/components/tasks/RemoteControlButton";
 import { RemoteControlNotice } from "@/components/tasks/RemoteControlNotice";
 import { TaskLlmAccountBadge } from "@/components/tasks/TaskLlmAccountBadge";
+import { TaskLimitWaitBanner } from "@/components/tasks/TaskLimitWaitBanner";
 import { bridgeViewOf } from "@/components/tasks/taskStatusMeta";
 import { REMOTE_CONTROL_STATUS_LABEL } from "@/lib/labels";
 import { RemoteControlStatus } from "@/lib/types";
@@ -65,6 +66,7 @@ export function TaskPage() {
           {bridgeView === "reconnect" && <RemoteControlButton task={task} />}
         </div>
         {bridgeView === "reconnect" && <RemoteControlNotice />}
+        <TaskLimitWaitBanner task={task} />
         {bridgeView === "unavailable" && (
           <p className="basis-full text-right text-caption text-text-3">
             {REMOTE_CONTROL_STATUS_LABEL[RemoteControlStatus.UNAVAILABLE]}
@@ -90,7 +92,7 @@ export function TaskPage() {
             <TaskChatFeed
               taskId={task.id}
               taskStatus={task.status}
-              hasLlmAccount={task.llm_account_id !== null}
+              ownerId={task.created_by}
               manualRequestsClosed={task.manual_requests_closed ?? false}
               nodeLogs={nodeLogs ?? []}
               header={workspaceTabs}

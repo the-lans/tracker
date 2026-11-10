@@ -38,7 +38,7 @@ async def start_node_log(db_session: AsyncSession, node_log: NodeLog) -> NodeLog
 def record_turn_route(node_log: NodeLog, route: TurnRoute | None) -> None:
     """
     Аккаунт, модель и уровень (после перевода провайдеру), которыми выполнен
-    ход, и причина смены аккаунта, если он сменился.
+    ход, причина смены аккаунта, если он сменился, и сжат ли контекст перед ним.
     """
     if route is None:
         return
@@ -46,6 +46,7 @@ def record_turn_route(node_log: NodeLog, route: TurnRoute | None) -> None:
     node_log.llm_model = route.model
     node_log.reasoning_effort = route.provider_effort
     node_log.llm_switch_reason = route.switch_reason
+    node_log.llm_context_compacted = route.context_compacted
 
 
 def mark_node_log_stopped(

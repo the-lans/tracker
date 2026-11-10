@@ -36,16 +36,27 @@ async def set_ssh_public_key(db_session: AsyncSession, *, user: User, public_key
     return user
 
 
-async def set_llm_switch_thresholds(
+async def set_llm_switch_threshold(
     db_session: AsyncSession,
     *,
     user: User,
     five_hour_pct: int,
-    week_pct: int,
 ) -> User:
-    """Раздел 19.7: пороги переключения аккаунта действуют со следующего обращения к модели."""
+    """Раздел 19.7: порог 5-часового окна действует со следующего обращения к модели."""
     user.llm_switch_threshold_5h_pct = five_hour_pct
-    user.llm_switch_threshold_week_pct = week_pct
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+
+async def set_llm_compact_on_switch(
+    db_session: AsyncSession,
+    *,
+    user: User,
+    enabled: bool,
+) -> User:
+    """Раздел 19.7: сжимать ли контекст сессии при смене LLM-аккаунта на границе хода."""
+    user.llm_compact_on_switch = enabled
     await db_session.commit()
     await db_session.refresh(user)
     return user

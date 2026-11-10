@@ -39,8 +39,7 @@ async def _insert_user(connection: AsyncConnection, email: str) -> uuid.UUID:
     user_id = uuid.uuid4()
     await connection.execute(
         sa.text(
-            "INSERT INTO users (id, email, role, is_active) "
-            "VALUES (:id, :email, 'user', true)",
+            "INSERT INTO users (id, email, role, is_active) VALUES (:id, :email, 'user', true)",
         ),
         {"id": user_id, "email": email},
     )

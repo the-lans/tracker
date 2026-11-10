@@ -7,21 +7,21 @@ import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
 function renderCard(api: MockedApi) {
-  const profile = makeUser({ llm_switch_threshold_5h_pct: 93, llm_switch_threshold_week_pct: 90 });
+  const profile = makeUser({ llm_switch_threshold_5h_pct: 93 });
   api.respond("GET /profile", profile);
   api.respond("PUT /profile/llm-thresholds", profile);
   return renderWithProviders(<LlmThresholdsCard />);
 }
 
 describe("LlmThresholdsCard", () => {
-  test("показывает пороги из профиля", async ({ api }) => {
+  test("показывает порог из профиля и только его", async ({ api }) => {
     renderCard(api);
 
     expect(await screen.findByLabelText("5-часовое окно, %")).toHaveValue(93);
-    expect(screen.getByLabelText("Недельное окно, %")).toHaveValue(90);
+    expect(screen.queryByLabelText(/Недельное окно/)).not.toBeInTheDocument();
   });
 
-  test("сохраняет оба порога", async ({ api, toasts }) => {
+  test("сохраняет порог 5-часового окна", async ({ api, toasts }) => {
     const { user } = renderCard(api);
 
     const fiveHour = await screen.findByLabelText("5-часовое окно, %");
@@ -30,20 +30,20 @@ describe("LlmThresholdsCard", () => {
     await user.click(screen.getByRole("button", { name: "Сохранить" }));
 
     expect(api.mutations()).toEqual([
-      { method: "PUT", path: "/profile/llm-thresholds", body: { five_hour_pct: 80, week_pct: 90 } },
+      { method: "PUT", path: "/profile/llm-thresholds", body: { five_hour_pct: 80 } },
     ]);
-    expect(toasts.success).toHaveBeenCalledWith("Пороги переключения сохранены");
+    expect(toasts.success).toHaveBeenCalledWith("Порог сохранён");
   });
 
   test.for(["0", "101", ""])("порог «%s» не отправляется", async (value, { api }) => {
     const { user } = renderCard(api);
 
-    const week = await screen.findByLabelText("Недельное окно, %");
-    await user.clear(week);
-    if (value) await user.type(week, value);
+    const fiveHour = await screen.findByLabelText("5-часовое окно, %");
+    await user.clear(fiveHour);
+    if (value) await user.type(fiveHour, value);
     await user.click(screen.getByRole("button", { name: "Сохранить" }));
 
-    expect(week).toBeInvalid();
+    expect(fiveHour).toBeInvalid();
     expect(api.mutations()).toEqual([]);
   });
 });

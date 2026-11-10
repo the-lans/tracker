@@ -9,14 +9,18 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
+import uuid
 from typing import TYPE_CHECKING
 
 import pytest
 import structlog
 from claude_agent_sdk import AssistantMessage, ProcessError, RateLimitInfo, TextBlock
 
+from clients import claude_agent
 from clients.claude_agent import (
+    COMPACT_COMMAND,
     REMOTE_CONTROL_EXTRA_ARG,
     SEQUENTIAL_TURNS_ENV,
     ClaudeCodeSession,
@@ -24,7 +28,7 @@ from clients.claude_agent import (
     build_claude_agent_options,
 )
 from db.models.enums import NodeType, ReasoningEffort
-from services.llm_routing import NoLlmAccountAvailableError
+from services.llm_account_choice import NoLlmAccountAvailableError
 from tests.fakes import (
     FAKE_ROUTE,
     FakeClaudeAgentClient,
@@ -592,3 +596,106 @@ class TestTurnRouter:
             await session.send_and_collect_text("go")
 
         assert router.routed == []
+
+
+_OLD_ROUTE = dataclasses.replace(FAKE_ROUTE, account_id=uuid.uuid4(), prefix="acc-old")
+
+
+class TestCompaction:
+    """Раздел 19.7, «Сжатие контекста»: `/compact` на прежнем аккаунте перед ходом."""
+
+    async def test_compact_before_prompt(self) -> None:
+        router = FakeTurnRouter(compact_with=_OLD_ROUTE)
+        streamed: list[str] = []
+
+        async def collect(text: str) -> None:
+            streamed.append(text)
+
+        client = FakeClaudeAgentClient(
+            messages_per_query=[
+                [make_text_delta("сжато"), make_result_message()],
+                [make_text_delta("ответ"), make_result_message()],
+            ],
+        )
+        session = ClaudeCodeSession(client, router=router, on_text_delta=collect)
+
+        turn = await session.send_and_collect_text("go")
+
+        assert client.queries == [COMPACT_COMMAND, "go"]
+        assert streamed == ["ответ"]
+        assert router.compactions == [True]
+        assert turn.route == dataclasses.replace(FAKE_ROUTE, context_compacted=True)
+        assert session.turn_route == turn.route
+
+    async def test_failed_compaction_keeps_turn(self) -> None:
+        router = FakeTurnRouter(compact_with=_OLD_ROUTE)
+        client = FakeClaudeAgentClient(
+            messages_per_query=[
+                [make_assistant_error("rate_limit"), make_result_message(is_error=True)],
+                [make_result_message()],
+            ],
+        )
+        session = ClaudeCodeSession(client, router=router)
+
+        turn = await session.send_and_collect_text("go")
+
+        assert client.queries == [COMPACT_COMMAND, "go"]
+        assert router.compactions == [False]
+        assert router.errors == [(_OLD_ROUTE, "rate_limit")]
+        assert (turn.route, turn.is_error) == (FAKE_ROUTE, False)
+
+    async def test_compaction_outside_node_time(self) -> None:
+        client = FakeClaudeAgentClient(
+            messages_per_query=[[make_text_delta("сжато"), make_result_message()]] * 2,
+        )
+        session = ClaudeCodeSession(client, router=FakeTurnRouter(compact_with=_OLD_ROUTE))
+
+        await session.send_and_collect_text("go")
+
+        assert session.user_wait_clock.waited_seconds() >= 2 * client.message_delay_seconds
+        assert session.user_wait_clock.is_waiting() is False
+
+    async def test_hung_compaction_interrupted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(claude_agent, "COMPACT_TIMEOUT_SECONDS", 0.05)
+        router = FakeTurnRouter(compact_with=_OLD_ROUTE)
+        client = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()], [make_result_message()]],
+        )
+        client.message_delay_seconds = 0.2
+        session = ClaudeCodeSession(client, router=router)
+
+        turn = await session.send_and_collect_text("go")
+
+        assert client.interrupted is True
+        assert client.queries == [COMPACT_COMMAND, "go"]
+        assert router.compactions == [False]
+        assert (turn.route, turn.is_error) == (FAKE_ROUTE, False)
+
+    async def test_crash_during_compaction(self) -> None:
+        router = FakeTurnRouter(compact_with=_OLD_ROUTE)
+        client = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()]],
+            failures_per_query={0: ProcessError("CLI упал")},
+        )
+        session = ClaudeCodeSession(client, router=router)
+
+        with pytest.raises(ProcessError):
+            await session.send_and_collect_text("go")
+
+        assert client.queries == [COMPACT_COMMAND]
+        assert router.compactions == []
+        await session.abort_turn()
+        assert client.interrupted is False
+
+    async def test_boundary_and_history_passed(self) -> None:
+        router = FakeTurnRouter()
+        session = ClaudeCodeSession(
+            FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 2),
+            router=router,
+        )
+
+        await session.send_and_collect_text("go")
+        await session.send_and_collect_text("again", boundary=False)
+
+        assert router.boundaries == [(True, False), (False, True)]
+        assert router.compactions == []

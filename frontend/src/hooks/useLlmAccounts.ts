@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
+import { hasUsableAccount } from "@/lib/llmAccounts";
 import type {
   LlmAccount,
   LlmAccountCreateRequest,
@@ -19,6 +20,16 @@ const LOGIN_POLL_MS = 2000;
 /** Аккаунты пользователя в порядке переключения (`switch_order`, раздел 19.7). */
 export function useLlmAccounts() {
   return useQuery({ queryKey: KEY, queryFn: () => api.get<LlmAccount[]>("/llm-accounts") });
+}
+
+/**
+ * Раздел 3.1, 19.7: у автора задачи есть рабочий LLM-аккаунт — промт выполнит
+ * автоматически выбранный аккаунт. Пока список не загружен, ввод не
+ * блокируется: запрос всё равно проверит сервер.
+ */
+export function useLlmAvailable(ownerId: string): boolean {
+  const { data: accounts } = useLlmAccounts();
+  return accounts === undefined || hasUsableAccount(accounts, ownerId);
 }
 
 /** Реестр провайдеров трекера — меняется только с релизом. */

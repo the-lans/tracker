@@ -1650,10 +1650,14 @@ class TestDuplicateTask:
         assert [prompt["last_run_status"] for prompt in prompts] == ["never_run"]
         copy_id = uuid.UUID(copy["id"])
         variables = (
-            await db_session.execute(
-                sa.select(TaskEnvVariable.key).where(TaskEnvVariable.task_id == copy_id),
+            (
+                await db_session.execute(
+                    sa.select(TaskEnvVariable.key).where(TaskEnvVariable.task_id == copy_id),
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert list(variables) == ["API_URL"]
         [attached] = (await authed_client.get(f"/tasks/{copy['id']}/repositories")).json()
         assert attached["branch_name"] == "feature/RR-30001"

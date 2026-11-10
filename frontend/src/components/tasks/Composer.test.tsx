@@ -13,11 +13,11 @@ const OPEN_COMPOSER = "Свободный промт — задать вопро
 
 function renderComposer({
   status = TaskStatus.IN_PROGRESS,
-  hasLlmAccount = true,
+  llmAvailable = true,
   manualRequestsClosed = false,
-}: { status?: TaskStatus; hasLlmAccount?: boolean; manualRequestsClosed?: boolean } = {}) {
+}: { status?: TaskStatus; llmAvailable?: boolean; manualRequestsClosed?: boolean } = {}) {
   return renderWithProviders(
-    <Composer taskId="t1" taskStatus={status} hasLlmAccount={hasLlmAccount} manualRequestsClosed={manualRequestsClosed} />,
+    <Composer taskId="t1" taskStatus={status} llmAvailable={llmAvailable} manualRequestsClosed={manualRequestsClosed} />,
   );
 }
 
@@ -50,6 +50,7 @@ describe("Composer", () => {
       TaskStatus.PLAN_REVIEW,
       TaskStatus.AWAITING_INPUT,
       TaskStatus.REBASE_CONFLICT,
+      TaskStatus.AWAITING_LIMIT,
     ])("%s: промт можно написать", (status) => {
       renderComposer({ status });
 
@@ -66,17 +67,17 @@ describe("Composer", () => {
       },
     );
 
-    test("без LLM-аккаунта в активной задаче доступны команды-скрипты", async () => {
-      const { user } = renderComposer({ hasLlmAccount: false });
+    test("без доступного LLM-аккаунта в активной задаче доступны команды-скрипты", async () => {
+      const { user } = renderComposer({ llmAvailable: false });
       await user.click(screen.getByRole("button", { name: OPEN_COMPOSER }));
-      expect(screen.getByText("Без LLM-аккаунта доступны только команды-скрипты.")).toBeInTheDocument();
+      expect(screen.getByText("Нет доступного LLM-аккаунта — доступны только команды-скрипты.")).toBeInTheDocument();
       await user.type(screen.getByRole("textbox"), "Обычный текст");
       expect(screen.getByRole("button", { name: "Отправить" })).toBeDisabled();
     });
 
-    test("без LLM-аккаунта упавшая задача не принимает запросы", () => {
-      renderComposer({ status: TaskStatus.FAILED, hasLlmAccount: false });
-      expect(screen.getByText("У задачи нет LLM-аккаунта — свободный промт выполнить некому")).toBeInTheDocument();
+    test("без доступного LLM-аккаунта упавшая задача не принимает запросы", () => {
+      renderComposer({ status: TaskStatus.FAILED, llmAvailable: false });
+      expect(screen.getByText("Нет доступного LLM-аккаунта — свободный промт выполнить некому")).toBeInTheDocument();
       expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     });
 
@@ -102,10 +103,10 @@ describe("Composer", () => {
       ]);
     });
 
-    test("refining без LLM-аккаунта: чат вести некому", () => {
-      renderComposer({ status: TaskStatus.REFINING, hasLlmAccount: false });
+    test("refining без доступного LLM-аккаунта: чат вести некому", () => {
+      renderComposer({ status: TaskStatus.REFINING, llmAvailable: false });
 
-      expect(screen.getByText("Чат с агентом ведёт LLM — выберите стартовый LLM-аккаунт задачи")).toBeInTheDocument();
+      expect(screen.getByText("Нет доступного LLM-аккаунта — войдите в аккаунт на странице «LLM-аккаунты», чтобы обсудить задачу с агентом")).toBeInTheDocument();
       expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     });
 

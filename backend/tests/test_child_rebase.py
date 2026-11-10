@@ -163,4 +163,3 @@ class TestApplyRequestedRebases:
 
         assert child.task_repository.merge_status is MergeStatus.NOT_PUSHED
         assert child.task.status is TaskStatus.IN_PROGRESS
-

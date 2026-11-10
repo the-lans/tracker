@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -21,7 +20,7 @@ from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task
 from services import refining_chat
 from services.autostart import find_tasks_due_for_autostart
-from services.errors import ConflictError, ValidationError
+from services.errors import ConflictError
 from services.manual_admission import ensure_manual_requests_open
 from services.manual_queue import enqueue_freeform_prompt_run, expire_stale_manual_queue_requests
 from services.remote_control import check_session_bridges
@@ -440,16 +439,15 @@ class TestAdmission:
     """
 
     @pytest.mark.parametrize(
-        ("status", "with_llm", "error"),
+        ("status", "error"),
         [
-            pytest.param(TaskStatus.REFINING, True, None, id="чат"),
-            pytest.param(TaskStatus.REFINING, False, ValidationError, id="чат без LLM"),
-            pytest.param(TaskStatus.IN_PROGRESS, False, None, id="скрипт в работе"),
-            pytest.param(TaskStatus.DEFINED, True, ConflictError, id="не уточняется"),
+            pytest.param(TaskStatus.REFINING, None, id="чат"),
+            pytest.param(TaskStatus.IN_PROGRESS, None, id="в работе"),
+            pytest.param(TaskStatus.DEFINED, ConflictError, id="не уточняется"),
         ],
     )
-    def test_open(self, status: TaskStatus, with_llm: bool, error: type[Exception] | None) -> None:
-        task = Task(status=status, llm_account_id=uuid.uuid4() if with_llm else None)
+    def test_open(self, status: TaskStatus, error: type[Exception] | None) -> None:
+        task = Task(status=status)
         task.manual_requests_closed = False
 
         if error is None:

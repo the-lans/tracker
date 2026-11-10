@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import structlog
 
 from db.models.enums import ScriptLanguage
 from services import docker_mounts
@@ -137,6 +138,14 @@ async def test_temporary_script_file_is_cleaned_up(tmp_path: Path) -> None:
     assert list(scripts_dir.iterdir()) == []
 
 
+# Выходит по SIGTERM сразу: `docker stop` не ждёт десять секунд до SIGKILL.
+_EXIT_ON_SIGTERM_SCRIPT = (
+    "import signal, sys, time\n"
+    "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+    "time.sleep(60)\n"
+)
+
+
 async def test_cancelled_script_stops_its_container(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -173,6 +182,79 @@ async def test_cancelled_script_stops_its_container(
         text=True,
     )
     assert running.stdout.strip() == ""
+
+
+class TestCancelRace:
+    async def test_container_started_after_first_stop(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Отмена пришла, пока контейнер ещё не запущен: первый `docker stop`
+        его не остановил — остановка повторяется, пока контейнер не выйдет.
+        """
+        stopped: list[str] = []
+        original_stop = script_module._force_stop_container
+
+        async def miss_first_stop(container_name: str) -> None:
+            stopped.append(container_name)
+            if len(stopped) > 1:
+                await original_stop(container_name)
+
+        monkeypatch.setattr(script_module, "_force_stop_container", miss_first_stop)
+        monkeypatch.setattr(script_module, "_STOP_WAIT_SECONDS", 2.0)
+        run = asyncio.ensure_future(
+            run_script_node(
+                script_content=_EXIT_ON_SIGTERM_SCRIPT,
+                script_language=ScriptLanguage.PYTHON,
+                docker_image=None,
+                repos_path=tmp_path,
+                timeout_seconds=120,
+            ),
+        )
+        await asyncio.sleep(2)
+
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+
+        assert len(stopped) == 2
+        running = subprocess.run(
+            ["docker", "ps", "-q", "--filter", f"name={stopped[0]}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert running.stdout.strip() == ""
+
+
+class _EndlessProcess:
+    """Клиент `docker run`, который не завершается: контейнер так и не остановлен."""
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        await asyncio.Event().wait()
+        return b"", b""
+
+
+class TestStopUntilExited:
+    async def test_gives_up_after_attempts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stopped: list[str] = []
+
+        async def record_stop(container_name: str) -> None:
+            stopped.append(container_name)
+
+        monkeypatch.setattr(script_module, "_force_stop_container", record_stop)
+        monkeypatch.setattr(script_module, "_STOP_WAIT_SECONDS", 0.01)
+
+        with structlog.testing.capture_logs() as logs:
+            await script_module._stop_until_exited(
+                _EndlessProcess(),  # type: ignore[arg-type]
+                container_name="tracker-node-x",
+            )
+
+        assert stopped == ["tracker-node-x"] * script_module._STOP_ATTEMPTS
+        assert [entry["event"] for entry in logs] == ["script_container_not_stopped"]
 
 
 class TestEnv:

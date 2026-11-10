@@ -44,9 +44,7 @@ os.environ.setdefault("VAPID_PRIVATE_KEY", "test-vapid-private-key")
 os.environ.setdefault("VAPID_CLAIMS_EMAIL", "admin@example.com")
 
 _TEST_PG_PORT = 55432
-_TEST_DATABASE_URL = (
-    f"postgresql+asyncpg://tracker:testpass@localhost:{_TEST_PG_PORT}/tracker"
-)
+_TEST_DATABASE_URL = f"postgresql+asyncpg://tracker:testpass@localhost:{_TEST_PG_PORT}/tracker"
 os.environ.setdefault("DATABASE_URL", _TEST_DATABASE_URL)
 
 import pytest  # noqa: E402

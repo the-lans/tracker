@@ -125,7 +125,6 @@ def session_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.usefixtures("session_roots")
 class TestSessionDockerArgs:
-
     async def _docker_args(
         self,
         tmp_path: Path,

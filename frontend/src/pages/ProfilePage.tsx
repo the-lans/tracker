@@ -4,6 +4,7 @@ import { ActiveSessionsCard } from "@/components/profile/ActiveSessionsCard";
 import { SshKeyCard } from "@/components/profile/SshKeyCard";
 import { SftpConnectionCard } from "@/components/profile/SftpConnectionCard";
 import { JiraConnectionCard } from "@/components/profile/JiraConnectionCard";
+import { LlmCompactSwitchCard } from "@/components/profile/LlmCompactSwitchCard";
 import { LlmThresholdsCard } from "@/components/profile/LlmThresholdsCard";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,8 @@ export function ProfilePage() {
           <JiraConnectionCard />
 
           <LlmThresholdsCard />
+
+          <LlmCompactSwitchCard />
 
           <ActiveSessionsCard />
 

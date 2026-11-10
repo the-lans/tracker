@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
 
 from clients.cliproxy import CliproxyManagementClient, CliproxySettings
-from db.models.enums import LlmAccountStatus
+from db.models.enums import LlmAccountStatus, NodeLogStatus, NodeLogTriggerType
 from db.models.llm import LlmAccount
+from db.models.logs import NodeLog
 from services import llm_usage
 from services.llm_providers import UsageSource
 from services.llm_usage import (
@@ -24,7 +25,12 @@ from services.llm_usage import (
     apply_usage,
     parse_usage,
     refresh_account_usage,
+    turns_since_usage_check,
 )
+from tests.factories import make_llm_account, make_task, make_user
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 _NOW = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
 _RESET_5H = datetime(2026, 11, 1, 15, 0, tzinfo=UTC)
@@ -191,6 +197,97 @@ class TestApplyUsage:
         apply_usage(account, _snapshot("100", None), now=_NOW)
 
         assert (account.status, account.rate_limit_resets_at) == (status, None)
+
+
+def _measured(previous_pct: str | None, previous_cost: str | None) -> LlmAccount:
+    account = _account()
+    account.usage_5h_pct = Decimal(previous_pct) if previous_pct else None
+    account.usage_5h_resets_at = _RESET_5H
+    account.turn_cost_pct = Decimal(previous_cost) if previous_cost else None
+    return account
+
+
+def _five_hour(pct: str, resets_at: datetime = _RESET_5H) -> UsageSnapshot:
+    return UsageSnapshot(five_hour=UsageWindow(Decimal(pct), resets_at), week=_UNKNOWN)
+
+
+class TestTurnCost:
+    @pytest.mark.parametrize(
+        ("previous_cost", "expected"),
+        [(None, Decimal("2.00")), ("1.00", Decimal("1.30"))],
+        ids=["first_sample", "smoothed"],
+    )
+    def test_measured(self, previous_cost: str | None, expected: Decimal) -> None:
+        account = _measured("10", previous_cost)
+
+        apply_usage(account, _five_hour("16"), now=_NOW, turns=3)
+
+        assert account.turn_cost_pct == expected
+
+    @pytest.mark.parametrize(
+        ("previous_pct", "snapshot", "turns"),
+        [
+            ("10", _five_hour("16"), 0),
+            (None, _five_hour("16"), 3),
+            ("10", _five_hour("16", _RESET_5H + timedelta(hours=1)), 3),
+            ("10", _five_hour("4"), 3),
+        ],
+        ids=["no_turns", "no_previous", "new_window", "usage_dropped"],
+    )
+    def test_kept(self, previous_pct: str | None, snapshot: UsageSnapshot, turns: int) -> None:
+        account = _measured(previous_pct, "1.50")
+
+        apply_usage(account, snapshot, now=_NOW, turns=turns)
+
+        assert account.turn_cost_pct == Decimal("1.50")
+
+    def test_reset_time_drift_tolerated(self) -> None:
+        account = _measured("10", None)
+
+        apply_usage(account, _five_hour("12", _RESET_5H + timedelta(minutes=2)), now=_NOW, turns=1)
+
+        assert account.turn_cost_pct == Decimal("2.00")
+
+
+class TestWindowStart:
+    @pytest.mark.parametrize(
+        ("started_ago", "kept"),
+        [(timedelta(hours=4, minutes=59), True), (timedelta(hours=5), False)],
+    )
+    def test_forgotten_after_reset(self, started_ago: timedelta, kept: bool) -> None:
+        account = _account()
+        account.window_started_at = _NOW - started_ago
+
+        apply_usage(account, _five_hour("0"), now=_NOW)
+
+        assert account.window_started_at == (_NOW - started_ago if kept else None)
+
+
+class TestTurnsSinceUsageCheck:
+    async def test_counts_turns_after_check(self, db_session: AsyncSession) -> None:
+        owner_id = (await make_user(db_session)).id
+        account = await make_llm_account(db_session, owner_id=owner_id)
+        other = await make_llm_account(db_session, owner_id=owner_id, label="other")
+        task = await make_task(db_session, created_by=owner_id)
+        account.usage_checked_at = _NOW
+        for minutes, owner in [(-1, account), (1, account), (2, account), (3, other)]:
+            db_session.add(
+                NodeLog(
+                    task_id=task.id,
+                    trigger_type=NodeLogTriggerType.PIPELINE,
+                    status=NodeLogStatus.SUCCESS,
+                    llm_account_id=owner.id,
+                    started_at=_NOW + timedelta(minutes=minutes),
+                ),
+            )
+        await db_session.flush()
+
+        assert await turns_since_usage_check(db_session, account) == 2
+
+    async def test_never_checked(self, db_session: AsyncSession) -> None:
+        account = await make_llm_account(db_session, owner_id=(await make_user(db_session)).id)
+
+        assert await turns_since_usage_check(db_session, account) == 0
 
 
 def _cliproxy(reply: httpx.Response, calls: list[dict[str, Any]]) -> CliproxyManagementClient:

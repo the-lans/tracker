@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { describe, expect } from "vitest";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { TaskStatus, UserRole, type Task } from "@/lib/types";
@@ -67,6 +67,17 @@ describe("TaskCard", () => {
         expect(screen.queryByRole("button", START)).not.toBeInTheDocument();
       },
     );
+
+    test.for([
+      { waitUntil: "2026-11-10T18:40:00Z", title: /^Все LLM-аккаунты на пороге — задача начнёт работу в / },
+      { waitUntil: null, title: /^Запустить задачу$/ },
+    ])("ожидание лимита до $waitUntil — подсказка у запуска", async ({ waitUntil, title }, { api }) => {
+      api.respond("GET /tasks/llm-limit", { wait_until: waitUntil });
+      renderCard({ status: TaskStatus.NEW });
+
+      await waitFor(() => expect(screen.getByRole("button", START).getAttribute("title")).toMatch(title));
+      expect(screen.getByRole("button", START)).toBeEnabled();
+    });
 
     test("без пайплайна запускать нечего", () => {
       renderCard({ status: TaskStatus.NEW, pipeline_id: null });

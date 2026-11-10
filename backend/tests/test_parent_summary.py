@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -26,11 +28,14 @@ from db.models.enums import (
     ParentSummaryStatus,
     TaskStatus,
 )
+from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task, TaskParentSummary
 from db.models.users import User
+from services.account_router import TaskAccountRouter
+from services.llm_routing import TurnPlan
 from services.manual_queue import process_manual_queue_once
 from services.parent_summary import DELIVERY_INSTRUCTION, deny_all_tools
 from services.task_control import TaskControlCommand, request_task_control
@@ -47,14 +52,13 @@ if TYPE_CHECKING:
     from tests.worker_support import WorkerEnv
 
 _SUMMARY = "Родитель сделал авторизацию, осталось покрыть тестами."
+_LIMIT_RESET = datetime(2099, 1, 1, 12, 0, tzinfo=UTC)
 _SUMMARY_PROMPT_START = "Кратко перескажи историю этой задачи"
 _DELIVERY_START = "Контекст родительской задачи"
 
 
 def _answer(text: str) -> list[Message]:
     return [AssistantMessage(content=[TextBlock(text=text)], model="claude"), make_result_message()]
-
-
 
 
 async def _make_parent(
@@ -304,6 +308,38 @@ class TestIdleParent:
         await db_session.refresh(child)
         assert child.status is TaskStatus.DONE
 
+    async def test_summary_turns_keep_account(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 19.7: пересказ родителя — не граница хода, сжатия при нём нет."""
+        boundaries: list[bool] = []
+        plan_turn = TaskAccountRouter.plan_turn
+
+        async def record(router: TaskAccountRouter, **kwargs: Any) -> TurnPlan:
+            boundaries.append(kwargs["boundary"])
+            return await plan_turn(router, **kwargs)
+
+        monkeypatch.setattr(TaskAccountRouter, "plan_turn", record)
+        user = await make_user(db_session)
+        parent = await _make_parent(
+            db_session,
+            user,
+            status=TaskStatus.DONE,
+            session_id="sess-parent",
+        )
+        child = await _make_child(db_session, user, parent)
+        worker_env.queued_clients = [FakeClaudeAgentClient(messages_per_query=[_answer(_SUMMARY)])]
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=[_answer("Принято"), [make_result_message()]],
+        )
+
+        await _run_child(child)
+
+        assert boundaries == [False, False, True]
+
     async def test_delivery_turn_without_tools(
         self,
         db_session: AsyncSession,
@@ -386,3 +422,166 @@ class TestRestart:
 
         assert worker_env.client.queries == ["шаг 0"]
         assert await _status_of(db_session, child) is TaskStatus.DONE
+
+
+async def _set_usage(db_session: AsyncSession, user: User, *, pct: str) -> None:
+    """Расход всех аккаунтов автора: опрос свежий, роутер его не обновляет."""
+    await db_session.execute(
+        sa.update(LlmAccount)
+        .where(LlmAccount.created_by == user.id)
+        .values(
+            usage_5h_pct=Decimal(pct),
+            usage_5h_resets_at=_LIMIT_RESET,
+            usage_checked_at=datetime.now(UTC),
+        ),
+    )
+    await db_session.flush()
+
+
+class TestLimitWait:
+    """Раздел 19.7: пересказ — ход модели; на пороге он ждёт сброса, а не теряется."""
+
+    async def _resume(self, child: Task) -> None:
+        await session_worker._run_task_session_async(
+            child.id,
+            start_after_order_index=None,
+            continuation=False,
+            limit_resume=True,
+        )
+
+    async def test_fork_waits_for_reset(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        user = await make_user(db_session)
+        parent = await _make_parent(
+            db_session,
+            user,
+            status=TaskStatus.DONE,
+            session_id="sess-parent",
+        )
+        child = await _make_child(db_session, user, parent)
+        await _set_usage(db_session, user, pct="95")
+        fork_client = FakeClaudeAgentClient(messages_per_query=[_answer(_SUMMARY)])
+        worker_env.queued_clients = [fork_client]
+
+        await _run_child(child)
+
+        assert await _status_of(db_session, child) is TaskStatus.AWAITING_LIMIT
+        assert fork_client.queries == []
+        assert (await _summary_of(db_session, child)).status is ParentSummaryStatus.PENDING
+
+        await _set_usage(db_session, user, pct="10")
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=[_answer("Принято"), [make_result_message()]],
+        )
+        await self._resume(child)
+
+        assert await _status_of(db_session, child) is TaskStatus.DONE
+        assert _SUMMARY in worker_env.client.queries[0]
+
+    async def test_delivery_waits_for_reset(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        user = await make_user(db_session)
+        parent = await _make_parent(
+            db_session,
+            user,
+            status=TaskStatus.DONE,
+            session_id="sess-parent",
+        )
+        child = await _make_child(db_session, user, parent)
+
+        async def reach_threshold() -> None:
+            await _set_usage(db_session, user, pct="95")
+
+        worker_env.queued_clients = [
+            FakeClaudeAgentClient(messages_per_query=[_answer(_SUMMARY)], on_query=reach_threshold),
+        ]
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=[])
+
+        await _run_child(child)
+
+        summary = await _summary_of(db_session, child)
+        assert await _status_of(db_session, child) is TaskStatus.AWAITING_LIMIT
+        assert (summary.status, summary.delivered_at) == (ParentSummaryStatus.READY, None)
+        assert worker_env.client.queries == []
+        assert await _logs(db_session, child) == []
+
+        await _set_usage(db_session, user, pct="10")
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=[_answer("Принято"), [make_result_message()]],
+        )
+        await self._resume(child)
+
+        assert await _status_of(db_session, child) is TaskStatus.DONE
+        assert _SUMMARY in worker_env.client.queries[0]
+        assert (await _summary_of(db_session, child)).delivered_at is not None
+
+    @pytest.mark.parametrize(
+        ("stage", "pending_status"),
+        [
+            ("fork", ParentSummaryStatus.PENDING),
+            ("delivery", ParentSummaryStatus.READY),
+        ],
+    )
+    async def test_route_race(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        monkeypatch: pytest.MonkeyPatch,
+        stage: str,
+        pending_status: ParentSummaryStatus,
+    ) -> None:
+        """Ворота пропустили ход, а выбор аккаунта уже на пороге: пересказ не теряется."""
+        user = await make_user(db_session)
+        parent = await _make_parent(
+            db_session,
+            user,
+            status=TaskStatus.DONE,
+            session_id="sess-parent",
+        )
+        child = await _make_child(db_session, user, parent)
+        real_gate = TaskAccountRouter.limit_gate
+
+        async def open_gate(_self: TaskAccountRouter, **_kwargs: Any) -> None:
+            return None
+
+        monkeypatch.setattr(TaskAccountRouter, "limit_gate", open_gate)
+
+        async def reach_threshold() -> None:
+            await _set_usage(db_session, user, pct="95")
+
+        if stage == "fork":
+            await reach_threshold()
+        fork_client = FakeClaudeAgentClient(
+            messages_per_query=[_answer(_SUMMARY)],
+            on_query=reach_threshold if stage == "delivery" else None,
+        )
+        worker_env.queued_clients = [fork_client]
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=[])
+
+        await _run_child(child)
+
+        summary = await _summary_of(db_session, child)
+        assert await _status_of(db_session, child) is TaskStatus.AWAITING_LIMIT
+        assert (summary.status, summary.delivered_at) == (pending_status, None)
+        assert worker_env.client.queries == []
+
+        monkeypatch.setattr(TaskAccountRouter, "limit_gate", real_gate)
+        await _set_usage(db_session, user, pct="10")
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=[_answer("Принято"), [make_result_message()]],
+        )
+        if stage == "fork":
+            worker_env.queued_clients = [
+                FakeClaudeAgentClient(messages_per_query=[_answer(_SUMMARY)]),
+            ]
+        await self._resume(child)
+
+        assert await _status_of(db_session, child) is TaskStatus.DONE
+        assert _SUMMARY in worker_env.client.queries[0]
+        assert (await _summary_of(db_session, child)).delivered_at is not None

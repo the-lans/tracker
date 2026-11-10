@@ -102,6 +102,27 @@ class TestList:
 
         assert ids == [str(first.id), str(second.id)]
 
+    async def test_limit_state(
+        self,
+        authed_client: AsyncClient,
+        current_user: User,
+        db_session: AsyncSession,
+    ) -> None:
+        """Раздел 15.1: бейдж состояния — состояние, сброс и задачи на аккаунте."""
+        account = await make_llm_account(db_session, owner_id=current_user.id)
+        account.window_started_at = datetime.now(UTC)
+        await _task(
+            db_session,
+            current_user.id,
+            status=TaskStatus.IN_PROGRESS,
+            current_llm_account_id=account.id,
+        )
+
+        [item] = (await authed_client.get("/llm-accounts")).json()
+
+        assert (item["limit_state"], item["active_tasks"]) == ("running", 1)
+        assert item["limit_state_until"] is not None
+
     async def test_admin_sees_all(
         self,
         admin_client: AsyncClient,
@@ -395,28 +416,37 @@ class TestThresholds:
 
         response = await authed_client.put(
             "/profile/llm-thresholds",
-            json={"five_hour_pct": 80, "week_pct": 100},
+            json={"five_hour_pct": 80, "week_pct": 50},
         )
 
-        assert (before["llm_switch_threshold_5h_pct"], before["llm_switch_threshold_week_pct"]) == (
-            93,
-            93,
-        )
+        assert before["llm_switch_threshold_5h_pct"] == 93
         body = response.json()
         assert body["llm_switch_threshold_5h_pct"] == 80
-        assert body["llm_switch_threshold_week_pct"] == 100
+        assert "llm_switch_threshold_week_pct" not in body
 
-    @pytest.mark.parametrize(("five_hour", "week"), [(0, 50), (50, 101), (None, 50)])
-    async def test_out_of_range(
-        self,
-        authed_client: AsyncClient,
-        five_hour: int | None,
-        week: int,
-    ) -> None:
+    @pytest.mark.parametrize("five_hour", [0, 101, None])
+    async def test_out_of_range(self, authed_client: AsyncClient, five_hour: int | None) -> None:
         response = await authed_client.put(
             "/profile/llm-thresholds",
-            json={"five_hour_pct": five_hour, "week_pct": week},
+            json={"five_hour_pct": five_hour},
         )
+
+        assert response.status_code == 422
+
+
+class TestCompactOnSwitch:
+    async def test_toggled(self, authed_client: AsyncClient) -> None:
+        before = (await authed_client.get("/profile")).json()
+
+        response = await authed_client.put("/profile/llm-compact", json={"enabled": False})
+
+        assert before["llm_compact_on_switch"] is True
+        assert response.json()["llm_compact_on_switch"] is False
+        assert (await authed_client.get("/profile")).json()["llm_compact_on_switch"] is False
+
+    @pytest.mark.parametrize("body", [{}, {"enabled": "maybe"}])
+    async def test_invalid(self, authed_client: AsyncClient, body: dict[str, object]) -> None:
+        response = await authed_client.put("/profile/llm-compact", json=body)
 
         assert response.status_code == 422
 

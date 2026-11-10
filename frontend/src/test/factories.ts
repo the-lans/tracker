@@ -1,6 +1,7 @@
 import {
   LibraryPromptRunStatus,
   LlmAccountStatus,
+  LlmLimitState,
   ManualRequestStatus,
   ManualRequestType,
   NodeLogStatus,
@@ -85,6 +86,7 @@ export function makeNodeLog(overrides: Partial<NodeLog> = {}): NodeLog {
     llm_model: null,
     reasoning_effort: null,
     llm_switch_reason: null,
+    llm_context_compacted: false,
     status: NodeLogStatus.SUCCESS,
     pending_question: null,
     pending_plan_text: null,
@@ -185,7 +187,7 @@ export function makeUser(overrides: Partial<User> = {}): User {
     jira_email: null,
     jira_token_set: false,
     llm_switch_threshold_5h_pct: 93,
-    llm_switch_threshold_week_pct: 93,
+    llm_compact_on_switch: true,
     max_parallel_tasks: 3,
     ...overrides,
   };
@@ -208,6 +210,9 @@ export function makeLlmAccount(overrides: Partial<LlmAccount> = {}): LlmAccount 
     usage_week_resets_at: null,
     usage_checked_at: null,
     created_by: "u1",
+    limit_state: LlmLimitState.FREE,
+    limit_state_until: null,
+    active_tasks: 0,
     ...overrides,
   };
 }

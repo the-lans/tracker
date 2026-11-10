@@ -22,7 +22,8 @@ from db.models.enums import AppLogLevel, NodeLogStatus, NodeType, PermissionMode
 from db.models.logs import NodeLog
 from db.models.tasks import Task
 from services.failure_classification import is_transient_assistant_error
-from services.llm_routing import NoLlmAccountAvailableError, TurnRoute
+from services.llm_account_choice import LlmLimitWaitError, NoLlmAccountAvailableError
+from services.llm_routing import TurnRoute
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.nodes.script import ScriptExecutionResult, run_script_node
 from services.task_artifacts import task_artifacts_dir
@@ -30,6 +31,7 @@ from services.template_context import RenderedText, render_for_task, resolve_tas
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from datetime import datetime
     from pathlib import Path
 
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -126,6 +128,8 @@ class NodeExecutionOutcome:
     session_lost: bool = False
     # Аккаунт, модель и уровень хода (раздел 19.7); у скриптов — None.
     route: TurnRoute | None = None
+    # Все аккаунты оказались на пороге уже после ворот лимита: до когда ждать.
+    limit_wait_until: datetime | None = None
 
 
 async def record_sdk_failure(
@@ -161,20 +165,30 @@ async def execute_llm_node(
     *,
     effort: ReasoningEffort | None = None,
     node_type: NodeType | None = None,
+    boundary: bool = True,
 ) -> NodeExecutionOutcome:
     """
     Выполняет `plain_prompt`/`slash_command` — единая точка обращения к сессии
-    (раздел 6.2). Нет ни одного `active` LLM-аккаунта — сбой, временный для
-    ноды пайплайна (раздел 19.7, п. 5): повтор выберет аккаунт заново.
+    (раздел 6.2). Нет доступного LLM-аккаунта или все на пороге после ворот
+    лимита — сбой, временный для ноды пайплайна (раздел 19.7, п. 5): повтор
+    выберет аккаунт заново. ``boundary`` — ход начинает ноду, её повтор или
+    ручной запрос (раздел 19.7): только тогда аккаунт меняется со сжатием.
     """
     try:
         turn = await claude_session.send_and_collect_text(
             prompt,
             effort=effort,
             node_type=node_type,
+            boundary=boundary,
         )
     except NoLlmAccountAvailableError as exc:
         return NodeExecutionOutcome(success=False, error_message=exc.message)
+    except LlmLimitWaitError as exc:
+        return NodeExecutionOutcome(
+            success=False,
+            error_message=exc.message,
+            limit_wait_until=exc.until,
+        )
     if turn.is_error:
         # Отклонённый вход и лимит временны, только пока у автора есть другой аккаунт.
         is_transient = turn.account_transient
@@ -233,6 +247,7 @@ async def execute_llm_node_with_timeout(
     timeout_seconds: float,
     effort: ReasoningEffort | None = None,
     node_type: NodeType | None = None,
+    boundary: bool = True,
 ) -> NodeExecutionOutcome:
     """Раздел 3.1: `timeout_seconds` применяется одинаково к нодам пайплайна
     и к запускам из библиотеки, для ЛЮБОГО типа ноды — включая LLM-ноды, не
@@ -242,7 +257,13 @@ async def execute_llm_node_with_timeout(
     """
     try:
         return await _run_within_active_time(
-            execute_llm_node(claude_session, prompt, effort=effort, node_type=node_type),
+            execute_llm_node(
+                claude_session,
+                prompt,
+                effort=effort,
+                node_type=node_type,
+                boundary=boundary,
+            ),
             timeout_seconds=timeout_seconds,
             clock=claude_session.user_wait_clock,
         )

@@ -134,6 +134,6 @@ def install_worker_env(
     monkeypatch.setattr(
         session_worker.run_task_session,
         "apply_async",
-        lambda args, kwargs, countdown: env.enqueued.append((args, kwargs)),
+        lambda args, kwargs, **_options: env.enqueued.append((args, kwargs)),
     )
     return env

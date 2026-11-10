@@ -64,10 +64,18 @@ QUEUE_ORDER = (Task.queue_priority.desc(), Task.ready_at.asc(), Task.id.asc())
 
 def slot_clause() -> sa.ColumnElement[bool]:
     """
-    Задача в работе занимает слот автора (без чата в `refining`).
+    Задача в работе занимает слот автора (без чата в `refining`). Ожидание
+    лимита держит слот по тем же правилам, кроме ушедшего ждать чата.
     """
-    return sa.and_(
+    in_work = sa.or_(
         Task.status.in_(SLOT_STATUSES),
+        sa.and_(
+            Task.status == TaskStatus.AWAITING_LIMIT,
+            Task.limit_wait_from_status.is_distinct_from(TaskStatus.REFINING),
+        ),
+    )
+    return sa.and_(
+        in_work,
         sa.or_(Task.launched_manually == sa.false(), Task.occupies_slot == sa.true()),
     )
 

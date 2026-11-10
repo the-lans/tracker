@@ -36,9 +36,9 @@ class UserResponse(BaseModel):
     # Раздел 15.6: личный доступ к Jira; токен не отдаётся — только признак.
     jira_email: str | None = None
     jira_token_encrypted: str | None = Field(default=None, exclude=True)
-    # Раздел 19.7: пороги переключения LLM-аккаунтов по окнам лимита.
+    # Раздел 19.7: порог 5-часового окна и сжатие контекста при смене аккаунта.
     llm_switch_threshold_5h_pct: int
-    llm_switch_threshold_week_pct: int
+    llm_compact_on_switch: bool
     # Раздел 14.4: лимит параллельных задач — задаёт администратор.
     max_parallel_tasks: int
 

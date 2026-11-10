@@ -21,6 +21,8 @@ export const TaskStatus = {
   PLAN_REVIEW: "plan_review",
   AWAITING_INPUT: "awaiting_input",
   REBASE_CONFLICT: "rebase_conflict",
+  /** Раздел 19.7: все LLM-аккаунты на пороге — ждёт сброса лимита. */
+  AWAITING_LIMIT: "awaiting_limit",
   FAILED: "failed",
   DONE: "done",
 } as const;
@@ -142,8 +144,13 @@ export type ReasoningEffort = (typeof ReasoningEffort)[keyof typeof ReasoningEff
 export const LlmSwitchReason = {
   START: "start",
   KEPT: "kept",
+  /** Новое окно по плановому шагу и более срочное запущенное окно. */
+  WINDOW_PLANNED: "window_planned",
+  WINDOW_BALANCE: "window_balance",
   THRESHOLD_5H: "threshold_5h",
+  /** Только в истории прежних версий: недельного порога больше нет. */
   THRESHOLD_WEEK: "threshold_week",
+  WEEK_EXHAUSTED: "week_exhausted",
   RATE_LIMITED: "rate_limited",
   LOGIN_REQUIRED: "login_required",
   DISABLED: "disabled",
@@ -151,6 +158,16 @@ export const LlmSwitchReason = {
   ALL_ABOVE_THRESHOLD: "all_above_threshold",
 } as const;
 export type LlmSwitchReason = (typeof LlmSwitchReason)[keyof typeof LlmSwitchReason];
+
+/** Раздел 19.7: состояние лимита аккаунта для бейджа в списке аккаунтов. */
+export const LlmLimitState = {
+  EXCLUDED: "excluded",
+  EXHAUSTED: "exhausted",
+  AT_THRESHOLD: "at_threshold",
+  RUNNING: "running",
+  FREE: "free",
+} as const;
+export type LlmLimitState = (typeof LlmLimitState)[keyof typeof LlmLimitState];
 
 /** Раздел 19.7: состояние входа OAuth через прокси. */
 export const LlmLoginState = { WAIT: "wait", OK: "ok", ERROR: "error" } as const;
@@ -211,16 +228,25 @@ export interface User {
   /** Раздел 15.6: личный доступ к Jira; токен не возвращается — только признак. */
   jira_email: string | null;
   jira_token_set: boolean;
-  /** Раздел 19.7: пороги переключения LLM-аккаунта по окнам лимита, в процентах. */
+  /** Раздел 19.7: порог 5-часового окна лимита, в процентах; не переступается. */
   llm_switch_threshold_5h_pct: number;
-  llm_switch_threshold_week_pct: number;
+  /** Раздел 19.7: `/compact` при смене LLM-аккаунта на границе хода. */
+  llm_compact_on_switch: boolean;
   /** Раздел 14.4: лимит параллельных задач, задаёт администратор (1–50). */
   max_parallel_tasks: number;
 }
 
 export interface LlmThresholdsUpdate {
   five_hour_pct: number;
-  week_pct: number;
+}
+
+export interface LlmCompactUpdate {
+  enabled: boolean;
+}
+
+/** Раздел 15.2: ближайший сброс, которого ждут задачи пользователя; null — ожидания нет. */
+export interface LlmLimit {
+  wait_until: string | null;
 }
 
 /** `jira_token`: `null` — оставить сохранённый, пустая строка — удалить. */
@@ -313,6 +339,10 @@ export interface Task {
   chat_active: boolean;
   /** Место (с 1) в очереди автора у задачи в `ready`/`night_worker`. */
   queue_position: number | null;
+  /** Раздел 19.7: статус до `awaiting_limit` — в него задача вернётся после сброса. */
+  limit_wait_from_status?: TaskStatus | null;
+  /** Ближайший сброс лимита, которого ждёт задача. */
+  limit_wait_until?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -403,6 +433,8 @@ export interface NodeLog {
   reasoning_effort: ReasoningEffort | null;
   /** null — аккаунт не сменился по сравнению с прежним обращением. */
   llm_switch_reason: LlmSwitchReason | null;
+  /** Раздел 19.7: перед обращением контекст сессии сжат `/compact`. */
+  llm_context_compacted: boolean;
   status: NodeLogStatus;
   pending_question: string | null;
   pending_plan_text: string | null;
@@ -696,6 +728,10 @@ export interface LlmAccount {
   usage_checked_at: string | null;
   /** Раздел 19.2: владелец аккаунта — тот, кто его завёл. */
   created_by: string;
+  /** Раздел 15.1: состояние лимита, его конец (сброс окна или недели) и задачи на аккаунте. */
+  limit_state: LlmLimitState;
+  limit_state_until: string | null;
+  active_tasks: number;
 }
 
 export interface LlmAccountCreateRequest {

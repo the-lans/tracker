@@ -29,11 +29,11 @@ describe("DashboardPage", () => {
     test("счётчики считают каждую группу статусов", async ({ api }) => {
       renderDashboard(api);
 
-      expect(await screen.findByRole("button", { name: "Все · 13" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Все · 14" })).toBeInTheDocument();
       for (const name of [
         "До запуска · 5",
         "В очереди · 2",
-        "В работе · 2",
+        "В работе · 3",
         "Ждут решения · 2",
         "Завершено · 1",
         "Ошибки · 2",
@@ -45,7 +45,7 @@ describe("DashboardPage", () => {
     test.for([
       { filter: "До запуска", codes: ["RR-new", "RR-refining", "RR-defined", "RR-ready", "RR-night_worker"] },
       { filter: "В очереди", codes: ["RR-ready", "RR-night_worker"] },
-      { filter: "В работе", codes: ["RR-in_progress", "RR-paused"] },
+      { filter: "В работе", codes: ["RR-in_progress", "RR-paused", "RR-awaiting_limit"] },
       { filter: "Ждут решения", codes: ["RR-plan_review", "RR-awaiting_input"] },
       { filter: "Завершено", codes: ["RR-done"] },
       { filter: "Ошибки", codes: ["RR-rebase_conflict", "RR-failed"] },

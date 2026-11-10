@@ -5,6 +5,7 @@ import {
   NodeType,
   EnvVariableScope,
   LlmAccountStatus,
+  LlmLimitState,
   LlmSwitchReason,
   McpIsolationMode,
   PeriodicRunStatus,
@@ -59,6 +60,23 @@ export const APP_LOG_LEVEL_LABEL: Record<AppLogLevel, string> = {
 export const REPOSITORY_ROLE_LABEL: Record<RepositoryRole, string> = {
   [RepositoryRole.READ_WRITE]: "чтение и запись",
   [RepositoryRole.READ_ONLY]: "только чтение",
+};
+
+/** Раздел 15.1: состояние лимита аккаунта (раздел 19.7). */
+export const LLM_LIMIT_STATE_LABEL: Record<LlmLimitState, string> = {
+  [LlmLimitState.RUNNING]: "Запущен",
+  [LlmLimitState.FREE]: "Свободен",
+  [LlmLimitState.AT_THRESHOLD]: "На пороге",
+  [LlmLimitState.EXHAUSTED]: "Исчерпан",
+  [LlmLimitState.EXCLUDED]: "Не участвует",
+};
+
+export const LLM_LIMIT_STATE_TONE: Record<LlmLimitState, BadgeTone> = {
+  [LlmLimitState.RUNNING]: "info",
+  [LlmLimitState.FREE]: "success",
+  [LlmLimitState.AT_THRESHOLD]: "warning",
+  [LlmLimitState.EXHAUSTED]: "danger",
+  [LlmLimitState.EXCLUDED]: "neutral",
 };
 
 export const LLM_ACCOUNT_STATUS_TONE: Record<LlmAccountStatus, BadgeTone> = {
@@ -131,8 +149,11 @@ export const REASONING_EFFORT_LABEL: Record<ReasoningEffort, string> = {
 export const LLM_SWITCH_REASON_LABEL: Record<LlmSwitchReason, string> = {
   [LlmSwitchReason.START]: "стартовый аккаунт задачи",
   [LlmSwitchReason.KEPT]: "аккаунт не менялся",
+  [LlmSwitchReason.WINDOW_PLANNED]: "новое окно лимита по плану",
+  [LlmSwitchReason.WINDOW_BALANCE]: "более срочное окно лимита",
   [LlmSwitchReason.THRESHOLD_5H]: "порог 5-часового окна",
   [LlmSwitchReason.THRESHOLD_WEEK]: "порог недельного окна",
+  [LlmSwitchReason.WEEK_EXHAUSTED]: "исчерпан недельный лимит",
   [LlmSwitchReason.RATE_LIMITED]: "исчерпан лимит",
   [LlmSwitchReason.LOGIN_REQUIRED]: "нужен повторный вход в прежний аккаунт",
   [LlmSwitchReason.DISABLED]: "прежний аккаунт выключен",

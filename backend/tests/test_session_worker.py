@@ -23,10 +23,11 @@ from claude_agent_sdk import ClaudeAgentOptions, PermissionResultAllow, ProcessE
 from claude_agent_sdk.types import ToolPermissionContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from clients.claude_agent import REMOTE_CONTROL_EXTRA_ARG
+from clients.claude_agent import COMPACT_COMMAND, REMOTE_CONTROL_EXTRA_ARG
 from db.models.enums import (
     LlmAccountStatus,
     LlmSwitchReason,
+    ManualRequestStatus,
     McpAuthType,
     McpIsolationMode,
     MergeStatus,
@@ -42,10 +43,13 @@ from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.pipelines import Node, TaskNode
+from db.models.prompts import TaskManualRequestQueue
 from db.models.repositories import Repository, Template, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
+from db.models.users import User
 from services import gitlab_sync
 from services import task_status as task_status_module
+from services.account_router import TaskAccountRouter
 from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
 from services.llm_routing import resolve_session_token
@@ -88,11 +92,13 @@ from tests.worker_support import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from claude_agent_sdk import Message
     from redis.asyncio import Redis
 
 _REPOSITORY_NAME = "backend"
-
+_LIMIT_RESET = datetime(2099, 1, 1, 12, 0, tzinfo=UTC)
 
 
 async def _make_task(
@@ -1013,7 +1019,6 @@ class TestBridgeReconnect:
         assert await consume_bridge_reconnect(redis_client, task.id) is False
         assert len(worker_env.options) == 1
 
-
     async def test_unavailable_bridge_untouched(
         self,
         db_session: AsyncSession,
@@ -1099,6 +1104,11 @@ class TestSessionContainer:
         assert await resolve_session_token(redis_client, token) is None
 
 
+def _compactions(logs: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Аккаунты, на которых сжат контекст (событие `llm_context_compacted`)."""
+    return [entry["account_id"] for entry in logs if entry["event"] == "llm_context_compacted"]
+
+
 class TestAccountSwitching:
     """
     Раздел 19.7, сценарий 13 раздела 21.2: аккаунт выбирается перед каждым
@@ -1134,12 +1144,25 @@ class TestAccountSwitching:
         rows = await db_session.execute(stmt)
         return [(row.llm_account_id, row.llm_switch_reason) for row in rows]
 
+    async def _compacted(self, db_session: AsyncSession, task: Task) -> list[bool]:
+        stmt = (
+            sa.select(NodeLog.llm_context_compacted)
+            .where(NodeLog.task_id == task.id)
+            .order_by(NodeLog.started_at)
+        )
+        return list((await db_session.execute(stmt)).scalars())
+
+    @pytest.mark.parametrize("compact", [True, False], ids=["compact", "no_compact"])
     async def test_threshold_switches_next_node(
         self,
         db_session: AsyncSession,
         worker_env: WorkerEnv,
+        compact: bool,
     ) -> None:
         task, start, spare = await self._task_with_spare(db_session, nodes=2)
+        author = await db_session.get(User, task.created_by)
+        assert author is not None
+        author.llm_compact_on_switch = compact
         queries = 0
 
         async def exhaust_start_after_first_turn() -> None:
@@ -1151,11 +1174,12 @@ class TestAccountSwitching:
                 await db_session.flush()
 
         worker_env.client = FakeClaudeAgentClient(
-            messages_per_query=_results(2),
+            messages_per_query=_results(3),
             on_query=exhaust_start_after_first_turn,
         )
 
-        await _run_worker(task)
+        with structlog.testing.capture_logs() as logs:
+            await _run_worker(task)
 
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
@@ -1165,6 +1189,11 @@ class TestAccountSwitching:
         ]
         assert task.current_llm_account_id == spare.id
         assert len(worker_env.options) == 1
+        # Сжатие — на прежнем аккаунте: на пороге он ещё может выполнить ход.
+        compact_turns = [COMPACT_COMMAND] if compact else []
+        assert worker_env.client.queries == ["шаг 0", *compact_turns, "шаг 1"]
+        assert await self._compacted(db_session, task) == [False, compact]
+        assert _compactions(logs) == ([str(start.id)] if compact else [])
 
     async def test_limit_mid_turn_retried_on_other_account(
         self,
@@ -1179,17 +1208,39 @@ class TestAccountSwitching:
         worker_env.client = FakeClaudeAgentClient(
             messages_per_query=[
                 [make_assistant_error("rate_limit"), make_result_message(is_error=True)],
-                [make_result_message(session_id="sess-worker")],
+                *_results(2),
             ],
         )
 
-        await _run_worker(task)
+        with structlog.testing.capture_logs() as logs:
+            await _run_worker(task)
 
         await db_session.refresh(task)
         await db_session.refresh(start)
         assert task.status is TaskStatus.DONE
         assert await self._attempts(db_session, task) == [start.id, spare.id]
         assert start.status is LlmAccountStatus.RATE_LIMITED
+        # Прежний аккаунт исчерпан — контекст сжимает новый.
+        assert worker_env.client.queries == ["шаг 0", COMPACT_COMMAND, "шаг 0"]
+        assert _compactions(logs) == [str(spare.id)]
+
+    async def test_automatic_account_without_start(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Раздел 3.1: пустой стартовый аккаунт — первый ход на аккаунте автора."""
+        task, start, _ = await self._task_with_spare(db_session, nodes=1)
+        task.llm_account_id = None
+        await db_session.flush()
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert worker_env.client.queries == ["шаг 0"]
+        assert await self._attempts(db_session, task) == [start.id]
 
     async def test_no_account_fails_node(
         self,
@@ -1879,3 +1930,368 @@ class TestPauseAfterNode:
         ]
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
+
+
+class TestLimitWait:
+    """
+    Раздел 19.7 «Ожидание лимита»: все аккаунты на пороге — задача уходит в
+    `awaiting_limit` до записи `node_logs` и после сброса продолжает ту же
+    ноду в той же сессии и в прежнем статусе.
+    """
+
+    async def _waiting_task(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        *,
+        nodes: int = 2,
+    ) -> tuple[Task, LlmAccount]:
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        account = await db_session.get(LlmAccount, task.llm_account_id)
+        assert account is not None
+        for order_index in range(nodes):
+            await _add_node(db_session, task, order_index=order_index)
+
+        async def reach_threshold() -> None:
+            account.usage_5h_pct = Decimal("95")
+            account.usage_5h_resets_at = _LIMIT_RESET
+            account.usage_checked_at = datetime.now(UTC)
+            await db_session.flush()
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(1),
+            on_query=reach_threshold,
+        )
+        return task, account
+
+    async def _reset_limit(self, db_session: AsyncSession, account: LlmAccount) -> None:
+        account.usage_5h_pct = Decimal("0")
+        account.usage_5h_resets_at = None
+        account.window_started_at = None
+        await db_session.flush()
+
+    async def _resume(self, task: Task) -> None:
+        await session_worker._run_task_session_async(
+            task.id,
+            start_after_order_index=None,
+            continuation=False,
+            limit_resume=True,
+        )
+
+    async def _pipeline_logs(self, db_session: AsyncSession, task: Task) -> int:
+        count = await db_session.scalar(
+            sa.select(sa.func.count(NodeLog.id)).where(NodeLog.task_id == task.id),
+        )
+        return int(count or 0)
+
+    async def test_waits_before_node_then_continues(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        task, account = await self._waiting_task(db_session, worker_env)
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert (task.status, task.limit_wait_from_status) == (
+            TaskStatus.AWAITING_LIMIT,
+            TaskStatus.IN_PROGRESS,
+        )
+        assert (task.limit_wait_until, task.limit_wait_order_index) == (_LIMIT_RESET, 1)
+        assert task.session_id == "sess-worker"
+        assert await self._pipeline_logs(db_session, task) == 1
+        assert worker_env.enqueued == [([str(task.id)], {"limit_resume": True})]
+
+        await self._reset_limit(db_session, account)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+        await self._resume(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert worker_env.client.queries == ["шаг 1"]
+        assert worker_env.options[-1].resume == "sess-worker"
+        assert (task.limit_wait_from_status, task.limit_wait_until) == (None, None)
+
+    async def test_waits_before_conflict_resolution(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        task, account = await self._waiting_task(db_session, worker_env)
+
+        async def threshold_and_conflict() -> None:
+            account.usage_5h_pct = Decimal("95")
+            account.usage_5h_resets_at = _LIMIT_RESET
+            account.usage_checked_at = datetime.now(UTC)
+            await db_session.flush()
+            await transition_task_status(
+                db_session,
+                task_id=task.id,
+                from_status=TaskStatus.IN_PROGRESS,
+                to_status=TaskStatus.REBASE_CONFLICT,
+            )
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(2),
+            on_query=threshold_and_conflict,
+        )
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert (task.status, task.limit_wait_from_status) == (
+            TaskStatus.AWAITING_LIMIT,
+            TaskStatus.REBASE_CONFLICT,
+        )
+        assert worker_env.client.queries == ["шаг 0"]
+
+    async def test_clear_context_not_gated(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Очистка контекста модели не нужна — ворот лимита перед ней нет."""
+        task, _ = await self._waiting_task(db_session, worker_env, nodes=1)
+        await _add_node(db_session, task, order_index=1, node_type=NodeType.CLEAR_CONTEXT)
+        await _add_node(db_session, task, order_index=2)
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.IN_PROGRESS
+        assert worker_env.enqueued == [
+            ([str(task.id)], {"start_after_order_index": 1, "continuation": True}),
+        ]
+
+    async def test_plan_prompt_waits(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Свободен лишь аккаунт без план-режима — нода `plan_prompt` ждёт сброса."""
+        task, _ = await self._waiting_task(db_session, worker_env, nodes=1)
+        plan = await _add_node(db_session, task, order_index=1, node_type=NodeType.PLAN_PROMPT)
+        plan.prompt_template = "план"
+        await make_llm_account(
+            db_session,
+            owner_id=task.created_by,
+            provider="xai",
+            default_model="grok-5",
+            label="grok",
+        )
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert (task.status, task.limit_wait_order_index) == (TaskStatus.AWAITING_LIMIT, 1)
+        assert worker_env.client.queries == ["шаг 0"]
+
+    async def test_retry_count_kept(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Попытка, ждавшая сброса, — вторая из двух: после сброса повторов больше нет."""
+        task, account = await self._waiting_task(db_session, worker_env, nodes=0)
+        node = await _add_node(db_session, task, order_index=0)
+        node.max_retries = 2
+        failing_turn: list[Message] = [
+            make_assistant_error("server_error"),
+            make_result_message(is_error=True, session_id="sess-worker"),
+        ]
+
+        async def reach_threshold() -> None:
+            account.usage_5h_pct = Decimal("95")
+            account.usage_5h_resets_at = _LIMIT_RESET
+            account.usage_checked_at = datetime.now(UTC)
+            await db_session.flush()
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=[failing_turn],
+            on_query=reach_threshold,
+        )
+        await _run_worker(task)
+        await db_session.refresh(task)
+        assert (task.status, task.limit_wait_attempt) == (TaskStatus.AWAITING_LIMIT, 2)
+
+        await self._reset_limit(db_session, account)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=[failing_turn] * 2)
+        await self._resume(task)
+
+        await db_session.refresh(task)
+        attempts = await db_session.scalars(
+            sa.select(NodeLog.attempt_number)
+            .where(NodeLog.task_id == task.id)
+            .order_by(NodeLog.attempt_number),
+        )
+        assert task.status is TaskStatus.FAILED
+        assert list(attempts) == [1, 2]
+        assert task.limit_wait_attempt is None
+
+    async def test_resume_still_at_threshold_waits_again(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        task, _ = await self._waiting_task(db_session, worker_env)
+        await _run_worker(task)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=[])
+
+        await self._resume(task)
+
+        await db_session.refresh(task)
+        assert (task.status, task.limit_wait_order_index) == (TaskStatus.AWAITING_LIMIT, 1)
+        assert worker_env.client.queries == []
+
+    @pytest.mark.parametrize(
+        ("command", "status", "from_status"),
+        [
+            (TaskControlCommand.STOP, TaskStatus.FAILED, None),
+            (TaskControlCommand.PAUSE, TaskStatus.AWAITING_LIMIT, TaskStatus.PAUSED),
+        ],
+        ids=["stop", "pause"],
+    )
+    async def test_pending_command(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+        command: TaskControlCommand,
+        status: TaskStatus,
+        from_status: TaskStatus | None,
+    ) -> None:
+        task, _ = await self._waiting_task(db_session, worker_env)
+
+        async def ask_on_gate() -> datetime | None:
+            await request_task_control(redis_client, task.id, command)
+            return _LIMIT_RESET
+
+        monkeypatch.setattr(
+            TaskAccountRouter,
+            "limit_gate",
+            lambda _self, **_kwargs: ask_on_gate(),
+        )
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert (task.status, task.limit_wait_from_status) == (status, from_status)
+        assert task.last_failed_order_index == (0 if command is TaskControlCommand.STOP else None)
+
+    async def test_paused_wait_resumes_on_pause(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        task, account = await self._waiting_task(db_session, worker_env)
+        await _run_worker(task)
+        await db_session.refresh(task)
+        task.limit_wait_from_status = TaskStatus.PAUSED
+        await self._reset_limit(db_session, account)
+
+        async def user_resumes(observed: list[TaskStatus]) -> None:
+            await db_session.refresh(task)
+            observed.append(task.status)
+            await request_task_control(redis_client, task.id, TaskControlCommand.RESUME)
+
+        observed = _patch_pause_wait(monkeypatch, user_resumes)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+        await self._resume(task)
+
+        await db_session.refresh(task)
+        assert observed == [TaskStatus.PAUSED]
+        assert task.status is TaskStatus.DONE
+        assert worker_env.client.queries == ["шаг 1"]
+
+    async def test_manual_request_stays_queued(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        task, account = await self._waiting_task(db_session, worker_env)
+
+        async def threshold_then_request() -> None:
+            account.usage_5h_pct = Decimal("95")
+            account.usage_5h_resets_at = _LIMIT_RESET
+            account.usage_checked_at = datetime.now(UTC)
+            await db_session.flush()
+            await _enqueue_freeform(db_session, task, "вопрос")
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(1),
+            on_query=threshold_then_request,
+        )
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.AWAITING_LIMIT
+        statuses = (
+            await db_session.execute(
+                sa.select(TaskManualRequestQueue.status).where(
+                    TaskManualRequestQueue.task_id == task.id,
+                ),
+            )
+        ).scalars()
+        assert list(statuses) == [ManualRequestStatus.QUEUED]
+
+    @pytest.mark.parametrize("status", [TaskStatus.IN_PROGRESS, TaskStatus.FAILED])
+    async def test_redelivery_without_wait_ignored(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        status: TaskStatus,
+    ) -> None:
+        task = await _make_task(db_session, status=status)
+        await _add_node(db_session, task, order_index=0)
+
+        await self._resume(task)
+
+        await db_session.refresh(task)
+        assert task.status is status
+        assert worker_env.options == []
+
+    async def test_refining_chat_waits_and_returns(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.REFINING)
+        account = await db_session.get(LlmAccount, task.llm_account_id)
+        assert account is not None
+        account.usage_5h_pct = Decimal("95")
+        account.usage_5h_resets_at = _LIMIT_RESET
+        account.usage_checked_at = datetime.now(UTC)
+        await _enqueue_freeform(db_session, task, "уточни")
+        chats: list[str] = []
+        monkeypatch.setattr(
+            session_worker.run_task_session,
+            "delay",
+            lambda task_id, **kwargs: chats.append(task_id) if kwargs.get("chat_only") else None,
+        )
+
+        await session_worker._run_task_session_async(
+            task.id,
+            start_after_order_index=None,
+            continuation=False,
+            chat_only=True,
+        )
+
+        await db_session.refresh(task)
+        assert (task.status, task.limit_wait_from_status) == (
+            TaskStatus.AWAITING_LIMIT,
+            TaskStatus.REFINING,
+        )
+        assert (task.chat_active, task.limit_wait_order_index) == (False, None)
+        assert worker_env.client.queries == []
+
+        await self._reset_limit(db_session, account)
+        await self._resume(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.REFINING
+        assert chats == [str(task.id)]

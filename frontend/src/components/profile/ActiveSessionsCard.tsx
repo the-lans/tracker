@@ -1,15 +1,16 @@
 import { Link } from "react-router-dom";
 import { Card, CardTitle } from "@/components/ui/card";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
+import { hasLlmSession } from "@/components/tasks/taskStatusMeta";
 import { useActiveSessions } from "@/hooks/useTasks";
 import { REMOTE_CONTROL_STATUS_LABEL } from "@/lib/labels";
 import type { Task } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 
-/** У задачи без LLM-аккаунта нет моста `/remote-control` (раздел 3.1). */
+/** У задачи без LLM нет моста `/remote-control` (раздел 3.1). */
 function bridgeLabel(task: Task): string {
-  if (task.llm_account_id === null) return "без моста — нет LLM-аккаунта";
+  if (!hasLlmSession(task)) return "без моста — задача без LLM";
   return REMOTE_CONTROL_STATUS_LABEL[task.remote_control_status];
 }
 

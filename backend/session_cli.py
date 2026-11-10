@@ -35,9 +35,7 @@ _USAGE_EXIT_CODE = 2
 def forwarded_env_names(environ: Mapping[str, str]) -> list[str]:
     """Настройки CLI и SDK и прокси; секреты сервера под эти имена не попадают."""
     return sorted(
-        name
-        for name in environ
-        if name.startswith(_FORWARDED_PREFIXES) or name in _FORWARDED_NAMES
+        name for name in environ if name.startswith(_FORWARDED_PREFIXES) or name in _FORWARDED_NAMES
     )
 
 

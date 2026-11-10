@@ -77,9 +77,17 @@ def _pre_launch_targets(status: TaskStatus) -> frozenset[TaskStatus]:
     return (PRE_LAUNCH_STATUSES - {status}) | {TaskStatus.QUEUED}
 
 
+# Раздел 19.7: ход ждёт сброса лимита и возвращается туда, откуда ушёл ждать.
+LIMIT_WAIT_RETURN_STATUSES = frozenset(
+    {TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT, TaskStatus.REFINING},
+)
+_TO_LIMIT_WAIT = frozenset({TaskStatus.AWAITING_LIMIT})
+
 ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     **{status: _pre_launch_targets(status) for status in PRE_LAUNCH_STATUSES},
-    TaskStatus.REFINING: _pre_launch_targets(TaskStatus.REFINING) | REFINING_DECISION_STATUSES,
+    TaskStatus.REFINING: (
+        _pre_launch_targets(TaskStatus.REFINING) | REFINING_DECISION_STATUSES | _TO_LIMIT_WAIT
+    ),
     # `queued -> статус до запуска` — «Отменить постановку» (раздел 14.2).
     TaskStatus.QUEUED: frozenset({TaskStatus.IN_PROGRESS}) | PRE_LAUNCH_STATUSES,
     TaskStatus.IN_PROGRESS: frozenset(
@@ -90,6 +98,7 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
             TaskStatus.AWAITING_INPUT,
             TaskStatus.REBASE_CONFLICT,
             TaskStatus.FAILED,
+            TaskStatus.AWAITING_LIMIT,
         },
     ),
     # «Приостановить» (раздел 14.2): продолжить, остановить или поймать
@@ -102,6 +111,7 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
             TaskStatus.REBASE_CONFLICT,
             TaskStatus.PLAN_REVIEW,
             TaskStatus.AWAITING_INPUT,
+            TaskStatus.AWAITING_LIMIT,
         },
     ),
     # После решения задача возвращается туда, откуда ушла в ожидание.
@@ -111,7 +121,11 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.AWAITING_INPUT: frozenset(
         {TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REFINING},
     ),
-    TaskStatus.REBASE_CONFLICT: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.FAILED}),
+    TaskStatus.REBASE_CONFLICT: frozenset(
+        {TaskStatus.IN_PROGRESS, TaskStatus.FAILED, TaskStatus.AWAITING_LIMIT},
+    ),
+    # «Остановить» в ожидании — `failed` (раздел 14.2).
+    TaskStatus.AWAITING_LIMIT: LIMIT_WAIT_RETURN_STATUSES | {TaskStatus.FAILED},
     # `-> статус до запуска` — «Вернуть в новые» и меню статуса (раздел 14.1):
     # сменить пайплайн и запустить заново, в том числе из очереди.
     TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS}) | PRE_LAUNCH_STATUSES,
@@ -287,8 +301,9 @@ SESSION_ACTIVE_STATUSES = frozenset(
         TaskStatus.REBASE_CONFLICT,
     },
 )
-# Раздел 8.2, 14.4: ручные запросы принимаются у активной сессии и в чате «Уточняется».
-MANUAL_REQUEST_STATUSES = SESSION_ACTIVE_STATUSES | {TaskStatus.REFINING}
+# Раздел 8.2, 14.4, 19.7: ручные запросы принимаются у активной сессии, в чате
+# «Уточняется» и в ожидании лимита — выполнятся после сброса.
+MANUAL_REQUEST_STATUSES = SESSION_ACTIVE_STATUSES | {TaskStatus.REFINING, TaskStatus.AWAITING_LIMIT}
 # Статусы, из которых `failed` достижим напрямую (раздел 14.1).
 FAILABLE_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT)
 

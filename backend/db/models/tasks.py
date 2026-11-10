@@ -131,6 +131,15 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
         default=False,
         server_default=sa.false(),
     )
+    # Раздел 19.7: ожидание сброса лимита — статус, в который задача вернётся,
+    # когда продолжит, и нода, с которой продолжит.
+    limit_wait_from_status: Mapped[TaskStatus | None] = mapped_column(
+        pg_enum(TaskStatus, name="task_status"),
+    )
+    limit_wait_until: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    limit_wait_order_index: Mapped[int | None] = mapped_column(sa.Integer)
+    # Попытка ноды, ждавшей сброса: после него повторы продолжают счёт с неё.
+    limit_wait_attempt: Mapped[int | None] = mapped_column(sa.Integer)
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"))
 
 

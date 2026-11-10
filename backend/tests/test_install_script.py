@@ -101,6 +101,8 @@ case "$*" in
   *"rev-parse --verify"*) echo "{_TARGET_SHA}" ;;
   *"rev-parse HEAD"*) cat "$STUB_DIR/git-head" 2>/dev/null || echo "{_PREVIOUS_SHA}" ;;
   *"merge-base --is-ancestor"*) [ -f "$STUB_DIR/not-ancestor" ] && exit 1 ;;
+  *"cat-file -e"*llm_limit_control*)
+    [ -f "$STUB_DIR/old-target" ] || [ -f "$STUB_DIR/pre-limit-target" ] && exit 1 ;;
   *"cat-file -e"*) [ -f "$STUB_DIR/old-target" ] && exit 1 ;;
   *"checkout --detach"*) for last; do :; done; echo "$last" > "$STUB_DIR/git-head" ;;
 esac
@@ -308,6 +310,28 @@ class TestSharedConstants:
             TaskStatus.NIGHT_WORKER,
         }
 
+    @pytest.mark.parametrize(
+        ("variable", "constant"),
+        [
+            ("LIMIT_WAIT_RESET", "_RESTORE_LIMIT_WAITS"),
+            ("LIMIT_SWITCH_REASONS_RESET", "_RESTORE_SWITCH_REASONS"),
+        ],
+    )
+    def test_limit_control_reset(
+        self,
+        stubs: Path,
+        install_dir: Path,
+        variable: str,
+        constant: str,
+    ) -> None:
+        """Откат возвращает данные в значения прежней версии тем же запросом, что downgrade."""
+        migration = self._value(stubs, install_dir, "LIMIT_WAIT_MIGRATION")
+        query = self._value(stubs, install_dir, variable)
+        source = (_INSTALL_SCRIPT.parents[1] / migration).read_text()
+        restore = re.search(rf"{constant} = \((.*?)\n\)", source, re.DOTALL)
+        assert restore is not None
+        assert query == "".join(re.findall(r'"(.*?)"', restore.group(1)))
+
     def test_queue_periodic_tasks(self, stubs: Path, install_dir: Path) -> None:
         """Откат удаляет ровно периодические задачи воркера очереди."""
         raw = self._value(stubs, install_dir, "QUEUE_PERIODIC_TASKS")
@@ -504,32 +528,41 @@ class TestUpdate:
         assert not (install_dir / ".deploy").exists()
 
     @pytest.mark.parametrize(
-        ("old_target", "resets"),
+        ("target", "limit_reset", "pre_launch_reset"),
         [
-            pytest.param(True, True, id="откат на версию без статусов до запуска"),
-            pytest.param(False, False, id="версия со статусами до запуска"),
+            pytest.param("old-target", True, True, id="откат на версию без статусов до запуска"),
+            pytest.param("pre-limit-target", True, False, id="откат на версию без ожидания лимита"),
+            pytest.param(None, False, False, id="версия со всеми статусами"),
         ],
     )
     def test_unknown_statuses_reset(
         self,
         stubs: Path,
         install_dir: Path,
-        old_target: bool,
-        resets: bool,
+        target: str | None,
+        limit_reset: bool,
+        pre_launch_reset: bool,
     ) -> None:
-        if old_target:
-            (stubs / "old-target").touch()
+        if target is not None:
+            (stubs / target).touch()
 
         result = _update(stubs, install_dir, "--ref", "abc1234")
 
         assert result.returncode == 0, result.stdout + result.stderr
         calls = _calls(stubs)
         assert any("cat-file -e" in call for call in calls)
-        resets_seen = [call for call in calls if "UPDATE tasks SET status = 'new'" in call]
-        assert bool(resets_seen) is resets
-        if resets:
-            assert "'refining','defined','ready','night_worker'" in resets_seen[0]
-            assert "'dispatch_ready_tasks','dispatch_night_tasks'" in resets_seen[0]
+        resets_seen = [call for call in calls if "UPDATE tasks SET status" in call]
+        assert len(resets_seen) == int(limit_reset or pre_launch_reset)
+        reset = resets_seen[0] if resets_seen else ""
+        assert ("WHERE status::text = 'awaiting_limit'" in reset) is limit_reset
+        assert ("UPDATE node_logs SET llm_switch_reason" in reset) is limit_reset
+        assert ("UPDATE tasks SET status = 'new'" in reset) is pre_launch_reset
+        if pre_launch_reset:
+            assert "'refining','defined','ready','night_worker'" in reset
+            assert "'dispatch_ready_tasks','dispatch_night_tasks'" in reset
+            # Ждущие чата задачи сначала уходят в refining, затем — в new.
+            assert reset.index("awaiting_limit") < reset.index("status = 'new'")
+        if resets_seen:
             _assert_in_order(calls, ["checkout --detach", "cat-file -e", "UPDATE tasks"])
 
     def test_failed_reset_restores_code(self, stubs: Path, install_dir: Path) -> None:

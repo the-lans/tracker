@@ -328,6 +328,42 @@ class TestLaunchFailure:
         assert (len(logs), notifications) == (1, [NotificationEvent.QUEUE_LAUNCH_FAILED])
 
 
+class TestLimitWait:
+    """Раздел 14.4, 19.7: пока у автора ожидание лимита, его задачи с LLM ждут в очереди."""
+
+    @pytest.mark.parametrize("waiting", [True, False], ids=["wait", "no_wait"])
+    async def test_llm_tasks_held(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        notifications: list[NotificationEvent],
+        waiting: bool,
+    ) -> None:
+        user = await _user(db_session)
+        llm_task = await _queued(db_session, user, minutes_ago=30)
+        llm_task.use_parent_summary = True
+        scripts_only = await _queued(db_session, user, minutes_ago=5)
+        if waiting:
+            await make_task(
+                db_session,
+                created_by=user.id,
+                status=TaskStatus.AWAITING_LIMIT,
+                limit_wait_from_status=TaskStatus.IN_PROGRESS,
+                limit_wait_until=datetime.now(UTC) + timedelta(hours=1),
+            )
+        await db_session.flush()
+
+        result = await _dispatch(db_session, redis_client)
+
+        assert scripts_only.id in result.launched_task_ids
+        if waiting:
+            assert result.limit_waiting_task_ids == [llm_task.id]
+            assert await _status(db_session, llm_task) is TaskStatus.READY
+            assert (result.failed_task_ids, notifications) == ([], [])
+        else:
+            assert result.limit_waiting_task_ids == []
+
+
 class TestSkipped:
     async def test_lock_taken(self, db_session: AsyncSession, redis_client: Redis) -> None:
         task = await _queued(db_session, await _user(db_session))

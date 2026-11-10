@@ -99,7 +99,6 @@ async def update_system_settings(
     return settings
 
 
-
 async def resolve_node_execution_defaults(
     db_session: AsyncSession,
     *,

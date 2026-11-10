@@ -55,8 +55,8 @@ class NotificationEvent(StrEnum):
     STALE_SSH_KEY = "stale_ssh_key"
     # Раздел 19.7: аккаунту нужен повторный вход — владельцу аккаунта.
     LLM_LOGIN_REQUIRED = "llm_login_required"
-    # Раздел 19.7: все аккаунты автора выше порога — задача на наименее израсходованном.
-    LLM_ACCOUNTS_ABOVE_THRESHOLD = "llm_accounts_above_threshold"
+    # Раздел 19.7: все аккаунты автора на пороге — задача ждёт сброса лимита.
+    LLM_LIMIT_WAIT = "llm_limit_wait"
 
 
 _TITLES: dict[NotificationEvent, str] = {
@@ -73,7 +73,7 @@ _TITLES: dict[NotificationEvent, str] = {
     NotificationEvent.AWAITING_DECISION_REMINDER: "Задача всё ещё ждёт решения",
     NotificationEvent.STALE_SSH_KEY: "SSH-ключ давно не использовался",
     NotificationEvent.LLM_LOGIN_REQUIRED: "LLM-аккаунту нужен повторный вход",
-    NotificationEvent.LLM_ACCOUNTS_ABOVE_THRESHOLD: "Все LLM-аккаунты выше порога переключения",
+    NotificationEvent.LLM_LIMIT_WAIT: "Задача ждёт сброса лимита LLM-аккаунтов",
 }
 
 

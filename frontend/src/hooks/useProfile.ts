@@ -4,6 +4,7 @@ import type {
   JiraConnectionUpdate,
   JiraIssueDraft,
   JiraServer,
+  LlmCompactUpdate,
   LlmThresholdsUpdate,
   SftpConnection,
   SshKeyUpdateRequest,
@@ -25,11 +26,20 @@ export function useUpdateSshKey() {
   });
 }
 
-/** Раздел 19.7: пороги переключения LLM-аккаунта в профиле. */
+/** Раздел 19.7: порог 5-часового окна лимита в профиле. */
 export function useUpdateLlmThresholds() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: LlmThresholdsUpdate) => api.put<User>("/profile/llm-thresholds", body),
+    onSuccess: (profile) => queryClient.setQueryData(PROFILE_KEY, profile),
+  });
+}
+
+/** Раздел 19.7: сжатие контекста `/compact` при смене LLM-аккаунта. */
+export function useUpdateLlmCompact() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: LlmCompactUpdate) => api.put<User>("/profile/llm-compact", body),
     onSuccess: (profile) => queryClient.setQueryData(PROFILE_KEY, profile),
   });
 }

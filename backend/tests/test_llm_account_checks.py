@@ -188,7 +188,6 @@ class TestSignIn:
         assert pushes == [(NotificationEvent.LLM_LOGIN_REQUIRED, account.created_by)]
         assert fake_cliproxy.api_calls == []
 
-
     async def test_login_finished_during_check_kept(
         self,
         db_session: AsyncSession,

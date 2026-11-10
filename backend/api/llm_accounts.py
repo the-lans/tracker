@@ -10,6 +10,7 @@ LLM-аккаунты (разделы 3.1, 15.1, 19.5 ТЗ).
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.dependencies import get_cliproxy, get_current_user
 from api.schemas import (
     LlmAccountCreateRequest,
+    LlmAccountFields,
     LlmAccountOrderRequest,
     LlmAccountResponse,
     LlmAccountUpdateRequest,
@@ -48,6 +50,7 @@ from services.llm_accounts import (
     update_account,
     visible_accounts,
 )
+from services.llm_limit_state import account_limit_states
 from services.llm_providers import PROVIDERS
 from services.redis_connection import redis_connection
 
@@ -56,6 +59,28 @@ router = APIRouter(prefix="/llm-accounts", tags=["llm-accounts"])
 Cliproxy = Annotated[CliproxyManagementClient, Depends(get_cliproxy)]
 DbSession = Annotated[AsyncSession, Depends(get_session)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def _responses(
+    db_session: AsyncSession,
+    accounts: Sequence[LlmAccount],
+) -> list[LlmAccountResponse]:
+    """Раздел 15.1: аккаунты с состоянием лимита для бейджа."""
+    states = await account_limit_states(db_session, accounts, now=datetime.now(UTC))
+    return [
+        LlmAccountResponse(
+            **LlmAccountFields.model_validate(account).model_dump(),
+            limit_state=states[account.id].state,
+            limit_state_until=states[account.id].until,
+            active_tasks=states[account.id].active_tasks,
+        )
+        for account in accounts
+    ]
+
+
+async def _response(db_session: AsyncSession, account: LlmAccount) -> LlmAccountResponse:
+    [response] = await _responses(db_session, [account])
+    return response
 
 
 @router.get("/providers", response_model=list[LlmProviderResponse])
@@ -77,19 +102,23 @@ async def create_llm_account(
     body: LlmAccountCreateRequest,
     db_session: DbSession,
     current_user: CurrentUser,
-) -> LlmAccount:
-    return await create_account(
+) -> LlmAccountResponse:
+    account = await create_account(
         db_session,
         owner_id=current_user.id,
         label=body.label,
         provider=body.provider,
     )
+    return await _response(db_session, account)
 
 
 @router.get("", response_model=list[LlmAccountResponse])
-async def list_llm_accounts(db_session: DbSession, current_user: CurrentUser) -> list[LlmAccount]:
+async def list_llm_accounts(
+    db_session: DbSession,
+    current_user: CurrentUser,
+) -> list[LlmAccountResponse]:
     """Раздел 15.1: в порядке переключения (у admin — по владельцам)."""
-    return await visible_accounts(db_session, current_user)
+    return await _responses(db_session, await visible_accounts(db_session, current_user))
 
 
 @router.put("/order", response_model=list[LlmAccountResponse])
@@ -97,13 +126,14 @@ async def reorder_llm_accounts(
     body: LlmAccountOrderRequest,
     db_session: DbSession,
     current_user: CurrentUser,
-) -> list[LlmAccount]:
+) -> list[LlmAccountResponse]:
     """Раздел 15.1: порядок переключения своих аккаунтов (кнопки ↑/↓)."""
-    return await reorder_accounts(
+    accounts = await reorder_accounts(
         db_session,
         owner_id=current_user.id,
         account_ids=body.account_ids,
     )
+    return await _responses(db_session, accounts)
 
 
 @router.get("/{llm_account_id}", response_model=LlmAccountResponse)
@@ -111,8 +141,9 @@ async def get_llm_account(
     llm_account_id: uuid.UUID,
     db_session: DbSession,
     current_user: CurrentUser,
-) -> LlmAccount:
-    return await get_llm_account_for_user(db_session, llm_account_id, user=current_user)
+) -> LlmAccountResponse:
+    account = await get_llm_account_for_user(db_session, llm_account_id, user=current_user)
+    return await _response(db_session, account)
 
 
 @router.patch("/{llm_account_id}", response_model=LlmAccountResponse)
@@ -122,9 +153,9 @@ async def update_llm_account(
     db_session: DbSession,
     current_user: CurrentUser,
     cliproxy: Cliproxy,
-) -> LlmAccount:
+) -> LlmAccountResponse:
     llm_account = await get_llm_account_for_user(db_session, llm_account_id, user=current_user)
-    return await update_account(
+    account = await update_account(
         db_session,
         cliproxy,
         llm_account,
@@ -134,6 +165,7 @@ async def update_llm_account(
         enabled=body.enabled,
         now=datetime.now(UTC),
     )
+    return await _response(db_session, account)
 
 
 @router.delete("/{llm_account_id}", status_code=204)

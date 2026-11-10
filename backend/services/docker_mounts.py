@@ -59,7 +59,8 @@ async def _inspect_root_mount(root: Path) -> RootMount | None:
     """Монтирование `root` в своём контейнере; `None` — не в контейнере."""
     destination = str(root.resolve())
     template = (
-        "{{range .Mounts}}{{if eq .Destination " + f'"{destination}"'
+        "{{range .Mounts}}{{if eq .Destination "
+        + f'"{destination}"'
         + "}}{{.Type}} {{.Name}} {{.Source}}{{end}}{{end}}"
     )
     process = await asyncio.create_subprocess_exec(
@@ -116,8 +117,7 @@ def subpath_mount_args(path: Path, root: Path, root_mount: RootMount | None) -> 
     if root_mount.type == _VOLUME_MOUNT:
         return [
             "--mount",
-            f"type=volume,src={root_mount.name},dst={path},"
-            f"volume-subpath={subpath.as_posix()}",
+            f"type=volume,src={root_mount.name},dst={path},volume-subpath={subpath.as_posix()}",
         ]
     host_path = Path(root_mount.source) / subpath
     return ["-v", f"{host_path}:{path}:rw"]

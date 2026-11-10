@@ -37,6 +37,7 @@ from db.models.enums import (
 from db.models.logs import NodeLog
 from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task, TaskParentSummary
+from services.llm_account_choice import LlmLimitWaitError
 from services.node_runs import record_turn_route
 from services.nodes.dispatch import execute_llm_node_with_timeout
 from services.task_signal import publish_task_signal, wait_for_task_signal
@@ -234,8 +235,13 @@ async def _run_summary_turn(
     claude_session: ClaudeCodeSession,
     timeout_seconds: int,
     active_node_context: ActiveNodeContext | None,
+    wait_for_limit: bool = False,
 ) -> str | None:
-    """Ход пересказа в сессии родителя; запись — в ленте родителя."""
+    """
+    Ход пересказа в сессии родителя; запись — в ленте родителя.
+    ``wait_for_limit`` — все аккаунты на пороге: `LlmLimitWaitError` вместо
+    неудачи, пересказ повторится после сброса.
+    """
     node_log = NodeLog(
         task_id=parent.id,
         trigger_type=NodeLogTriggerType.SUMMARY_FOR_CHILD,
@@ -252,6 +258,8 @@ async def _run_summary_turn(
         claude_session,
         prompt,
         timeout_seconds=timeout_seconds,
+        # Пересказ — не граница хода: аккаунт без нужды не меняется (раздел 19.7).
+        boundary=False,
     )
     node_log.finished_at = datetime.now(UTC)
     node_log.llm_output_text = outcome.llm_output_text
@@ -260,6 +268,8 @@ async def _run_summary_turn(
     succeeded = outcome.success and bool(outcome.llm_output_text)
     node_log.status = NodeLogStatus.SUCCESS if succeeded else NodeLogStatus.FAILED
     await db_session.commit()
+    if wait_for_limit and outcome.limit_wait_until is not None:
+        raise LlmLimitWaitError(outcome.limit_wait_until)
     return outcome.llm_output_text if succeeded else None
 
 
@@ -316,6 +326,7 @@ async def summarize_parent_in_fork(
         claude_session=claude_session,
         timeout_seconds=timeout_seconds,
         active_node_context=None,
+        wait_for_limit=True,
     )
     if text is None:
         _mark_unavailable(summary, REASON_SUMMARY_FAILED)
@@ -345,7 +356,8 @@ async def deliver_parent_summary(
 ) -> None:
     """
     Первое сообщение новой сессии дочерней задачи; без пересказа — только
-    пометка в её ленте.
+    пометка в её ленте. Все аккаунты на пороге — `LlmLimitWaitError`, а
+    пересказ остаётся недоставленным до сброса.
     """
     parent = await db_session.get(Task, summary.parent_task_id)
     node_log = NodeLog(
@@ -374,11 +386,17 @@ async def deliver_parent_summary(
             claude_session,
             message,
             timeout_seconds=timeout_seconds,
+            boundary=False,
         )
         node_log.llm_output_text = outcome.llm_output_text
         node_log.error_message = outcome.error_message
         record_turn_route(node_log, outcome.route)
         node_log.status = NodeLogStatus.SUCCESS if outcome.success else NodeLogStatus.FAILED
+        if outcome.limit_wait_until is not None:
+            # Пересказ не доставлен, а ждёт сброса: после него воркер повторит доставку.
+            node_log.finished_at = datetime.now(UTC)
+            await db_session.commit()
+            raise LlmLimitWaitError(outcome.limit_wait_until)
     else:
         reason = summary.unavailable_reason or REASON_NO_SESSION
         node_log.rendered_prompt = f"Саммари родительской задачи недоступно: {reason}"

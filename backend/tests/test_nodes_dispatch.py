@@ -745,6 +745,23 @@ class TestTurnAccount:
         assert (outcome.success, outcome.is_transient) == (False, expected)
         assert outcome.route == FAKE_ROUTE
 
+    @pytest.mark.parametrize("boundary", [True, False])
+    async def test_boundary_routed(self, boundary: bool) -> None:
+        router = FakeTurnRouter()
+        session = ClaudeCodeSession(
+            FakeClaudeAgentClient(messages_per_query=[[make_result_message()]]),
+            router=router,
+        )
+
+        await execute_llm_node_with_timeout(
+            session,
+            "go",
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+            boundary=boundary,
+        )
+
+        assert router.boundaries == [(boundary, False)]
+
     async def test_timeout_keeps_route(self) -> None:
         client = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
         client.message_delay_seconds = 1.0

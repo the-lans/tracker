@@ -131,7 +131,6 @@ class TestEnsureLlmAccountOfOwner:
         with pytest.raises(NotFoundError):
             await ensure_llm_account_of_owner(db_session, account_id, owner_id=owner.id)
 
-
     @pytest.mark.parametrize(
         ("status", "require_active", "allowed"),
         [

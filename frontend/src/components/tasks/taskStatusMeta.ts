@@ -27,6 +27,11 @@ export const TASK_STATUS_META: Record<TaskStatus, StatusMeta> = {
     tone: "danger",
     borderVar: "var(--danger)",
   },
+  [TaskStatus.AWAITING_LIMIT]: {
+    label: "Ждёт лимита",
+    tone: "warning",
+    borderVar: "var(--warning)",
+  },
   [TaskStatus.FAILED]: { label: "Ошибка", tone: "danger", borderVar: "var(--danger)" },
   [TaskStatus.DONE]: { label: "Готово", tone: "success", borderVar: "var(--success)" },
 };
@@ -41,15 +46,29 @@ export const SESSION_ACTIVE_STATUSES: TaskStatus[] = [
 ];
 
 /**
+ * Раздел 8.2, 19.7: ручные запросы принимаются и в ожидании лимита — они
+ * ждут в очереди и выполнятся после сброса.
+ */
+export const MANUAL_REQUEST_STATUSES: TaskStatus[] = [
+  ...SESSION_ACTIVE_STATUSES,
+  TaskStatus.AWAITING_LIMIT,
+];
+
+/** Раздел 3.1: сессия задачи обращалась к модели или задаче выбран стартовый аккаунт. */
+export function hasLlmSession(task: Task): boolean {
+  return task.llm_account_id !== null || task.current_llm_account_id !== null;
+}
+
+/**
  * Раздел 6.3, 6.5: что показать в шапке задачи про мост `claude.ai/code`.
- * Мост есть только у живой сессии Claude Code (у задачи с LLM-аккаунтом);
+ * Мост есть только у живой сессии Claude Code (у задачи с LLM);
  * через LLM-прокси он недоступен — тогда только подпись, без кнопки.
  */
 export type BridgeView = "hidden" | "reconnect" | "unavailable";
 
 export function bridgeViewOf(task: Task): BridgeView {
   // Раздел 14.4: чат «Уточняется» моста не поднимает и в ожидании ответа.
-  if (task.llm_account_id === null || task.chat_active || !SESSION_ACTIVE_STATUSES.includes(task.status)) {
+  if (!hasLlmSession(task) || task.chat_active || !SESSION_ACTIVE_STATUSES.includes(task.status)) {
     return "hidden";
   }
   return task.remote_control_status === RemoteControlStatus.UNAVAILABLE ? "unavailable" : "reconnect";

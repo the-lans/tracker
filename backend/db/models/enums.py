@@ -31,6 +31,8 @@ class TaskStatus(StrEnum):
     PLAN_REVIEW = "plan_review"
     AWAITING_INPUT = "awaiting_input"
     REBASE_CONFLICT = "rebase_conflict"
+    # Раздел 19.7: все LLM-аккаунты автора на пороге — ждёт сброса лимита.
+    AWAITING_LIMIT = "awaiting_limit"
     FAILED = "failed"
     DONE = "done"
 
@@ -148,8 +150,13 @@ class LlmSwitchReason(StrEnum):
 
     START = "start"
     KEPT = "kept"
+    # Новое окно по плановому шагу и более срочное запущенное окно.
+    WINDOW_PLANNED = "window_planned"
+    WINDOW_BALANCE = "window_balance"
     THRESHOLD_5H = "threshold_5h"
+    # Только в истории прежних версий: недельного порога больше нет.
     THRESHOLD_WEEK = "threshold_week"
+    WEEK_EXHAUSTED = "week_exhausted"
     RATE_LIMITED = "rate_limited"
     LOGIN_REQUIRED = "login_required"
     DISABLED = "disabled"

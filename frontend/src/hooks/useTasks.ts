@@ -6,6 +6,7 @@ import { RemoteControlStatus } from "@/lib/types";
 import type {
   BindPipelineRequest,
   DecisionRequest,
+  LlmLimit,
   ManualRequest,
   NodeDependent,
   NodeLog,
@@ -55,6 +56,7 @@ export const taskKeys = {
   libraryPrompts: (id: string) => ["tasks", id, "library-prompts"] as const,
   manualQueue: (id: string) => ["tasks", id, "manual-queue"] as const,
   queueSummary: ["tasks", "queue-summary"] as const,
+  llmLimit: (authorId: string) => ["tasks", "llm-limit", authorId] as const,
 };
 
 export function useTasks(statusFilter?: string) {
@@ -71,6 +73,19 @@ export function useQueueSummary() {
     queryKey: taskKeys.queueSummary,
     queryFn: () => api.get<QueueSummary>("/tasks/queue-summary"),
     refetchInterval: 15_000,
+  });
+}
+
+/**
+ * Раздел 15.2, 19.7: все LLM-аккаунты автора задачи на пороге — до какого
+ * времени ждут его задачи; подсказка у кнопки запуска.
+ */
+export function useLlmLimit(authorId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: taskKeys.llmLimit(authorId),
+    queryFn: () => api.get<LlmLimit>("/tasks/llm-limit", { author_id: authorId }),
+    enabled,
+    refetchInterval: 60_000,
   });
 }
 

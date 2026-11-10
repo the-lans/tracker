@@ -35,6 +35,7 @@ from db.models.tasks import Task, TaskRepository
 from db.session import async_session_factory
 from services import gitlab_sync, maintenance_tasks, users
 from services.autostart import run_scheduled_autostart_check
+from services.limit_wait import limit_waits_to_resume
 from services.llm_account_checks import check_llm_accounts
 from services.log_rotation import resolve_archive_root, rotate_node_logs
 from services.maintenance import maintenance_active
@@ -157,18 +158,29 @@ def dispatch_night_tasks() -> None:
 def check_llm_account_limits() -> None:
     async def body(db_session: AsyncSession) -> None:
         async with redis_connection() as redis_client, open_cliproxy_client() as cliproxy:
+            now = datetime.now(UTC)
             result = await check_llm_accounts(
                 db_session,
                 redis_client=redis_client,
                 cliproxy=cliproxy,
-                now=datetime.now(UTC),
+                now=now,
             )
+            # Раздел 19.7: страховка отложенного продолжения ждущих лимита задач.
+            resumed = await limit_waits_to_resume(
+                db_session,
+                redis_client=redis_client,
+                cliproxy=cliproxy,
+                now=now,
+            )
+        for task_id in resumed:
+            run_task_session.delay(str(task_id), limit_resume=True)
         logger.info(
             "llm_accounts_checked",
             restored=len(result.restored),
             polled=len(result.polled),
             login_required=len(result.login_required),
             cancelled_logins=result.cancelled_logins,
+            limit_waits_resumed=len(resumed),
         )
 
     _run_periodic("check_llm_account_limits", body)

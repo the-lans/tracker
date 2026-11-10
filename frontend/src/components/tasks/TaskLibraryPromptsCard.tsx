@@ -17,8 +17,10 @@ import {
   useStopManualRequest,
   useTaskLibraryPrompts,
 } from "@/hooks/useTasks";
-import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
+import { MANUAL_REQUEST_STATUSES } from "@/components/tasks/taskStatusMeta";
+import { useLlmAvailable } from "@/hooks/useLlmAccounts";
 import { errorMessage } from "@/lib/errors";
+import { NO_LLM_ACCOUNT } from "@/lib/llmAccounts";
 import { formatDateTime } from "@/lib/utils";
 import {
   LibraryPromptRunStatus,
@@ -57,18 +59,20 @@ export function TaskLibraryPromptsCard({
   const addLibraryPrompt = useAddLibraryPrompt(task.id);
   const runLibraryPrompt = useRunLibraryPrompt(task.id);
   const stopManualRequest = useStopManualRequest(task.id);
-  const sessionActive = SESSION_ACTIVE_STATUSES.includes(task.status);
+  const acceptsRequests = MANUAL_REQUEST_STATUSES.includes(task.status);
+  const llmAvailable = useLlmAvailable(task.created_by);
   const refining = task.status === TaskStatus.REFINING;
 
   /**
-   * Раздел 3.1: без LLM-аккаунта у задачи нет сессии Claude — доступны только
-   * скрипты; чат «Уточняется» (раздел 14.4) ведёт только агент.
+   * Раздел 3.1: без рабочего LLM-аккаунта автора промт выполнить некому —
+   * доступны только скрипты; чат «Уточняется» (раздел 14.4) ведёт только агент.
+   * В «Ждёт лимита» запрос встаёт в очередь (раздел 19.7).
    */
   function runBlockReason(prompt: TaskLibraryPromptItem): string | null {
-    if (refining && task.llm_account_id === null) return "Чат с агентом ведёт LLM — выберите LLM-аккаунт";
-    if (!sessionActive && !refining) return "Сессия задачи не активна";
-    if (task.llm_account_id === null && prompt.node_type !== NodeType.SCRIPT) {
-      return "У задачи нет LLM-аккаунта — доступны только скрипты";
+    if (refining && !llmAvailable) return `${NO_LLM_ACCOUNT} — чат с агентом ведёт LLM`;
+    if (!acceptsRequests && !refining) return "Сессия задачи не активна";
+    if (!llmAvailable && prompt.node_type !== NodeType.SCRIPT) {
+      return `${NO_LLM_ACCOUNT} — доступны только скрипты`;
     }
     return null;
   }

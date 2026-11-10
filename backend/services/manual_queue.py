@@ -40,6 +40,7 @@ from services.distributed_lock import LockNotAcquiredError, acquire_task_operati
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_library_prompt_attachable
 from services.library_commands import load_snapshot, render_command
+from services.limit_wait import LimitGate, check_limit_gate, manual_request_node_type
 from services.manual_admission import ensure_manual_requests_open, lock_manual_task
 from services.node_runs import apply_node_outcome, mark_node_log_stopped, start_node_log
 from services.nodes.dispatch import (
@@ -56,7 +57,7 @@ from services.parent_summary import run_parent_summary_request
 from services.pipeline_orchestrator import StopGuard, run_node_execution
 from services.system_settings import resolve_runner_image
 from services.task_control import clear_manual_stop, is_manual_stop_requested
-from services.task_launch import requires_llm_account
+from services.task_launch import ensure_llm_for_request, requires_llm_account
 from services.task_status import SESSION_ACTIVE_STATUSES
 from services.template_context import RenderedText, render_for_task
 from services.templating import (
@@ -115,13 +116,6 @@ async def attach_library_prompt(
     return task_library_prompt
 
 
-async def _ensure_task_has_llm_account(db_session: AsyncSession, task_id: uuid.UUID) -> None:
-    """Раздел 3.1: без LLM-аккаунта сессии Claude Code у задачи нет."""
-    task = await db_session.get(Task, task_id)
-    if task is not None and task.llm_account_id is None:
-        raise ValidationError("Промт выполняет LLM — выберите у задачи LLM-аккаунт")
-
-
 def _add_queued_request(
     db_session: AsyncSession,
     *,
@@ -158,8 +152,7 @@ async def enqueue_library_prompt_run(
     ensure_manual_requests_open(task)
     if node.node_type in LIBRARY_FORBIDDEN_NODE_TYPES:
         raise ValidationError(f"Тип ноды {node.node_type} недопустим для библиотеки промтов")
-    if requires_llm_account(node):
-        await _ensure_task_has_llm_account(db_session, task_library_prompt.task_id)
+    await ensure_llm_for_request(db_session, task, needs_llm=requires_llm_account(node))
     request = _add_queued_request(
         db_session,
         task_id=task_library_prompt.task_id,
@@ -188,8 +181,8 @@ async def enqueue_freeform_prompt_run(
     # здесь же, до постановки в очередь, а не только на предпросмотре.
     task = await lock_manual_task(db_session, task_id)
     validate_template_variables(raw_prompt_text, scope=RenderScope.FREEFORM)
-    await _ensure_task_has_llm_account(db_session, task_id)
     ensure_manual_requests_open(task)
+    await ensure_llm_for_request(db_session, task, needs_llm=True)
     request = _add_queued_request(
         db_session,
         task_id=task_id,
@@ -578,6 +571,7 @@ async def process_manual_queue_once(
     repos_path: Path,
     redis_client: Redis,
     active_node_context: ActiveNodeContext | None = None,
+    limit_gate: LimitGate | None = None,
 ) -> int:
     """Обрабатывает ВСЕ `queued`-запросы FIFO по `requested_at` (раздел 7.3).
 
@@ -587,6 +581,9 @@ async def process_manual_queue_once(
     отдельный запрос защищён распределённой блокировкой (раздел 17.5) —
     если другой процесс уже обрабатывает очередь этой задачи, обработка
     останавливается без ошибки (раздел 17.4: идемпотентность).
+    ``limit_gate`` — ворота лимита перед каждым запросом к модели (раздел
+    19.7): `LlmLimitWaitError`, а запрос остаётся в `queued` до сброса;
+    скрипт библиотеки выполняется и без свободного аккаунта.
     """
     processed = 0
     stop_guard = StopGuard(redis_client=redis_client, task_id=task.id)
@@ -608,6 +605,10 @@ async def process_manual_queue_once(
         request = await db_session.scalar(stmt)
         if request is None:
             return processed
+        await check_limit_gate(
+            limit_gate,
+            node_type=await manual_request_node_type(db_session, request),
+        )
         try:
             async with acquire_task_operation_lock(
                 redis_client,
@@ -632,8 +633,13 @@ async def process_manual_queue_once(
 
 # Раздел 16.2: сколько запрос может ждать в очереди задачи без живой сессии.
 STALE_QUEUED_REQUEST_AGE = timedelta(minutes=30)
-# Сессия жива или вот-вот начнётся — её очередь обработает воркер.
-_TASK_STATUSES_WITH_LIVE_SESSION = (TaskStatus.QUEUED, *SESSION_ACTIVE_STATUSES)
+# Сессия жива или вот-вот начнётся (в том числе после сброса лимита) — её
+# очередь обработает воркер.
+_TASK_STATUSES_WITH_LIVE_SESSION = (
+    TaskStatus.QUEUED,
+    TaskStatus.AWAITING_LIMIT,
+    *SESSION_ACTIVE_STATUSES,
+)
 
 
 async def expire_stale_manual_queue_requests(

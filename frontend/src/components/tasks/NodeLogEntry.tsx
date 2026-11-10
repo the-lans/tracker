@@ -73,6 +73,7 @@ export function NodeLogEntry({
           accountLabel={accountLabel ?? "—"}
           model={log.llm_model}
           reason={log.llm_switch_reason}
+          compacted={log.llm_context_compacted}
         />
       )}
       <div className="flex items-center justify-between gap-2 text-caption font-bold text-text-3">

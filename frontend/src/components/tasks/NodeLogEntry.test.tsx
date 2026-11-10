@@ -249,7 +249,9 @@ describe("NodeLogEntry", () => {
 
     test.for([
       { reason: LlmSwitchReason.THRESHOLD_5H, text: "порог 5-часового окна" },
-      { reason: LlmSwitchReason.THRESHOLD_WEEK, text: "порог недельного окна" },
+      { reason: LlmSwitchReason.WINDOW_PLANNED, text: "новое окно лимита по плану" },
+      { reason: LlmSwitchReason.WINDOW_BALANCE, text: "более срочное окно лимита" },
+      { reason: LlmSwitchReason.WEEK_EXHAUSTED, text: "исчерпан недельный лимит" },
       { reason: LlmSwitchReason.RATE_LIMITED, text: "исчерпан лимит" },
       { reason: LlmSwitchReason.LOGIN_REQUIRED, text: "нужен повторный вход в прежний аккаунт" },
     ])("смена аккаунта ($reason) — строка перед ответом", ({ reason, text }) => {
@@ -262,6 +264,18 @@ describe("NodeLogEntry", () => {
         `Переключено на аккаунт Codex — запасной (gpt-5.5-codex): ${text}`,
       );
       expectOrder(container, ["Переключено на аккаунт", "Готово"]);
+    });
+
+    test.for([
+      { compacted: true, text: "Переключено на аккаунт Codex — запасной (gpt-5.5-codex): порог 5-часового окна · контекст сессии сжат перед сменой" },
+      { compacted: false, text: "Переключено на аккаунт Codex — запасной (gpt-5.5-codex): порог 5-часового окна" },
+    ])("сжатие контекста $compacted — отметка в строке смены", ({ compacted, text }) => {
+      renderEntry(
+        { ...ROUTED, llm_switch_reason: LlmSwitchReason.THRESHOLD_5H, llm_context_compacted: compacted },
+        { accountLabel: "Codex — запасной" },
+      );
+
+      expect(screen.getByRole("note").textContent?.replace(/\s+/g, " ").trim()).toBe(text);
     });
 
     test("без смены аккаунта строки нет", () => {

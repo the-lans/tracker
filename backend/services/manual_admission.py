@@ -9,10 +9,10 @@ import uuid
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import ManualRequestStatus, TaskStatus
+from db.models.enums import ManualRequestStatus
 from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task
-from services.errors import ConflictError, NotFoundError, ValidationError
+from services.errors import ConflictError, NotFoundError
 from services.task_status import MANUAL_REQUEST_STATUSES
 
 
@@ -28,15 +28,13 @@ async def lock_manual_task(session: AsyncSession, task_id: uuid.UUID) -> Task:
     return task
 
 
-CHAT_LLM_ACCOUNT_REQUIRED = "Чат с агентом ведёт LLM — выберите LLM-аккаунт задачи"
-
-
 def ensure_manual_requests_open(task: Task) -> None:
-    """Раздел 8.2, 14.4: у активной сессии и в чате «Уточняется» (только с LLM)."""
+    """
+    Раздел 8.2, 14.4: у активной сессии и в чате «Уточняется»; нужен ли
+    запросу LLM — `services/task_launch.ensure_llm_for_request`.
+    """
     if task.status not in MANUAL_REQUEST_STATUSES:
         raise ConflictError("Сессия задачи не активна")
-    if task.status is TaskStatus.REFINING and task.llm_account_id is None:
-        raise ValidationError(CHAT_LLM_ACCOUNT_REQUIRED)
     if task.manual_requests_closed:
         raise ConflictError("Задача завершается: приём новых запросов уже закрыт")
 

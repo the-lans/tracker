@@ -42,12 +42,33 @@ describe("TaskStartAccountCard", () => {
     await user.click(trigger());
     const options = await screen.findAllByRole("option");
     expect(options.map((option) => option.textContent)).toEqual([
+      "Автоматически",
       "Claude — основной",
       "Codex — запасной",
     ]);
     await user.click(screen.getByRole("option", { name: "Codex — запасной" }));
 
     expect(onUpdate).toHaveBeenCalledWith({ llm_account_id: "a2" });
+  });
+
+  test("без стартового аккаунта — «Автоматически»", async ({ api }) => {
+    const { user, onUpdate } = renderCard(api, { llm_account_id: null });
+
+    await vi.waitFor(() => expect(trigger()).toHaveTextContent("Автоматически"));
+    await user.click(trigger());
+    await user.click(await screen.findByRole("option", { name: "Claude — основной" }));
+
+    expect(onUpdate).toHaveBeenCalledWith({ llm_account_id: "a1" });
+  });
+
+  test("«Автоматически» сбрасывает стартовый аккаунт", async ({ api }) => {
+    const { user, onUpdate } = renderCard(api, { llm_account_id: "a1" });
+
+    await vi.waitFor(() => expect(trigger()).toHaveTextContent("Claude — основной"));
+    await user.click(trigger());
+    await user.click(await screen.findByRole("option", { name: "Автоматически" }));
+
+    expect(onUpdate).toHaveBeenCalledWith({ llm_account_id: null });
   });
 
   test("выключенный стартовый аккаунт остаётся выбранным", async ({ api }) => {

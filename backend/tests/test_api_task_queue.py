@@ -514,3 +514,207 @@ class TestRefiningChat:
 
         assert response.status_code == 409
         assert response.json()["error"]["message"] == CHAT_BUSY_MESSAGE
+
+
+class TestLimitWaitControl:
+    """
+    Раздел 14.2, 19.7: у ждущей лимита задачи воркера нет — её останавливает
+    и ставит на паузу API.
+    """
+
+    _UNTIL = datetime(2099, 1, 1, 12, 0, tzinfo=UTC)
+
+    async def _waiting(
+        self,
+        db_session: AsyncSession,
+        owner: User,
+        from_status: TaskStatus,
+    ) -> Task:
+        return await _task(
+            db_session,
+            owner,
+            TaskStatus.AWAITING_LIMIT,
+            limit_wait_from_status=from_status,
+            limit_wait_until=self._UNTIL,
+            limit_wait_order_index=None if from_status is TaskStatus.REFINING else 2,
+        )
+
+    @pytest.mark.parametrize(
+        ("from_status", "status", "restart"),
+        [
+            pytest.param(TaskStatus.IN_PROGRESS, TaskStatus.FAILED, 2, id="из работы"),
+            pytest.param(TaskStatus.REFINING, TaskStatus.REFINING, None, id="из чата"),
+        ],
+    )
+    async def test_stop(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        wakes: list[None],
+        from_status: TaskStatus,
+        status: TaskStatus,
+        restart: int | None,
+    ) -> None:
+        task = await self._waiting(db_session, current_user, from_status)
+
+        response = await authed_client.post(f"/tasks/{task.id}/stop")
+
+        assert response.status_code == 202, response.text
+        await db_session.refresh(task)
+        assert (task.status, task.last_failed_order_index) == (status, restart)
+        assert (task.limit_wait_from_status, task.limit_wait_until) == (None, None)
+        assert len(wakes) == 1
+
+    @pytest.mark.parametrize(
+        ("from_status", "code", "expected_from"),
+        [
+            pytest.param(TaskStatus.IN_PROGRESS, 202, TaskStatus.PAUSED, id="из работы"),
+            pytest.param(TaskStatus.REFINING, 409, TaskStatus.REFINING, id="из чата"),
+        ],
+    )
+    async def test_pause(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        from_status: TaskStatus,
+        code: int,
+        expected_from: TaskStatus,
+    ) -> None:
+        task = await self._waiting(db_session, current_user, from_status)
+
+        response = await authed_client.post(f"/tasks/{task.id}/pause")
+
+        assert response.status_code == code, response.text
+        await db_session.refresh(task)
+        assert (task.status, task.limit_wait_from_status) == (
+            TaskStatus.AWAITING_LIMIT,
+            expected_from,
+        )
+
+    async def test_resume_rejected(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        task = await self._waiting(db_session, current_user, TaskStatus.PAUSED)
+
+        response = await authed_client.post(f"/tasks/{task.id}/resume")
+
+        assert response.status_code == 409
+
+    @pytest.mark.usefixtures("redis_client")
+    async def test_freeform_queued(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        account = await make_llm_account(db_session, owner_id=current_user.id)
+        task = await self._waiting(db_session, current_user, TaskStatus.IN_PROGRESS)
+        task.llm_account_id = account.id
+        await db_session.flush()
+
+        response = await authed_client.post(
+            f"/tasks/{task.id}/freeform",
+            json={"raw_prompt_text": "после сброса"},
+        )
+
+        assert response.status_code == 201, response.text
+        assert response.json()["status"] == "queued"
+
+    async def test_task_fields(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        task = await self._waiting(db_session, current_user, TaskStatus.PAUSED)
+
+        body = (await authed_client.get(f"/tasks/{task.id}")).json()
+
+        assert body["status"] == "awaiting_limit"
+        assert body["limit_wait_from_status"] == "paused"
+        assert datetime.fromisoformat(body["limit_wait_until"]) == self._UNTIL
+
+
+class TestLlmLimit:
+    async def test_no_wait(self, authed_client: AsyncClient) -> None:
+        response = await authed_client.get("/tasks/llm-limit")
+
+        assert (response.status_code, response.json()) == (200, {"wait_until": None})
+
+    async def test_own_nearest_wait(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        soon = datetime.now(UTC) + timedelta(hours=1)
+        for owner_id, until in [
+            (current_user.id, soon + timedelta(hours=2)),
+            (current_user.id, soon),
+            (None, soon - timedelta(minutes=30)),
+        ]:
+            await make_task(
+                db_session,
+                created_by=owner_id,
+                status=TaskStatus.AWAITING_LIMIT,
+                limit_wait_from_status=TaskStatus.IN_PROGRESS,
+                limit_wait_until=until,
+            )
+
+        response = await authed_client.get("/tasks/llm-limit")
+
+        assert datetime.fromisoformat(response.json()["wait_until"]) == soon
+
+
+class TestLlmLimitOfAuthor:
+    """Подсказка у «Выполнить» — по ожиданию автора задачи, а не смотрящего."""
+
+    _UNTIL = datetime(2099, 1, 1, 12, 0, tzinfo=UTC)
+
+    async def _author_waiting(self, db_session: AsyncSession) -> uuid.UUID:
+        task = await make_task(
+            db_session,
+            status=TaskStatus.AWAITING_LIMIT,
+            limit_wait_from_status=TaskStatus.IN_PROGRESS,
+            limit_wait_until=self._UNTIL,
+        )
+        return task.created_by
+
+    async def test_admin_sees_author_wait(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        author_id = await self._author_waiting(db_session)
+
+        response = await admin_client.get("/tasks/llm-limit", params={"author_id": str(author_id)})
+
+        assert datetime.fromisoformat(response.json()["wait_until"]) == self._UNTIL
+
+    async def test_user_cannot_see_other_author(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        author_id = await self._author_waiting(db_session)
+
+        response = await authed_client.get("/tasks/llm-limit", params={"author_id": str(author_id)})
+
+        assert response.status_code == 403
+
+    async def test_own_author_id(
+        self,
+        authed_client: AsyncClient,
+        current_user: User,
+    ) -> None:
+        response = await authed_client.get(
+            "/tasks/llm-limit",
+            params={"author_id": str(current_user.id)},
+        )
+
+        assert (response.status_code, response.json()) == (200, {"wait_until": None})

@@ -107,7 +107,6 @@ def _reference(kind: str, *, task: Task, node: Node, user_id: uuid.UUID) -> obje
     )
 
 
-
 @pytest.mark.parametrize("kind", ["task_node", "node_log"])
 async def test_ensure_pipeline_deletable_rejects_pipeline_with_used_nodes(
     db_session: AsyncSession,

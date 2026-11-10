@@ -1,13 +1,14 @@
 import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useLlmAccounts } from "@/hooks/useLlmAccounts";
-import { startAccountOptions } from "@/lib/llmAccounts";
+import { AUTO_ACCOUNT, AUTO_ACCOUNT_LABEL, startAccountOptions } from "@/lib/llmAccounts";
 import type { Task, TaskUpdateRequest } from "@/lib/types";
 import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
 /**
- * Раздел 15.2: стартовый LLM-аккаунт задачи. Меняется до запуска; после
- * запуска — после возврата в статус до запуска, аккаунт работы задачи выбирает воркер.
+ * Раздел 15.2: стартовый LLM-аккаунт задачи, необязательный — «Автоматически»
+ * оставляет выбор трекеру (раздел 19.7). Меняется до запуска; после запуска —
+ * после возврата в статус до запуска, аккаунт работы задачи выбирает воркер.
  */
 export function TaskStartAccountCard({
   task,
@@ -26,14 +27,17 @@ export function TaskStartAccountCard({
     <Card>
       <div className="text-body font-bold">Стартовый LLM-аккаунт</div>
       <Select
-        value={task.llm_account_id ?? ""}
+        value={task.llm_account_id ?? AUTO_ACCOUNT}
         disabled={!editable || pending}
-        onValueChange={(llmAccountId) => onUpdate({ llm_account_id: llmAccountId })}
+        onValueChange={(choice) =>
+          onUpdate({ llm_account_id: choice === AUTO_ACCOUNT ? null : choice })
+        }
       >
         <SelectTrigger aria-label="Стартовый LLM-аккаунт" className="mt-2">
-          <SelectValue placeholder="Без аккаунта — только скрипты" />
+          <SelectValue />
         </SelectTrigger>
         <SelectContent>
+          <SelectItem value={AUTO_ACCOUNT}>{AUTO_ACCOUNT_LABEL}</SelectItem>
           {(options?.choices ?? []).map((account) => (
             <SelectItem key={account.id} value={account.id}>
               {account.label}
@@ -48,7 +52,7 @@ export function TaskStartAccountCard({
       )}
       <div className="mt-1 text-meta text-text-3">
         {editable
-          ? "С этого аккаунта задача начнёт работу; дальше аккаунт переключается автоматически по порогам из профиля."
+          ? "С выбранного аккаунта задача начнёт работу, если его окно лимита свободно или запущено; «Автоматически» — аккаунт выберет трекер."
           : "Сменить можно, вернув задачу в статус до запуска, — новый прогон начнётся с выбранного аккаунта."}
       </div>
     </Card>

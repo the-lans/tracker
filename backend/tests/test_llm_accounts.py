@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-
 async def _account(db_session: AsyncSession, status: LlmAccountStatus) -> LlmAccount:
     owner = await make_user(db_session)
     return await make_llm_account(db_session, owner_id=owner.id, status=status)
