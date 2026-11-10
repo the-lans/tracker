@@ -28,6 +28,7 @@ from db.models.tasks import Task
 from services.crypto import encrypt
 from services.distributed_lock import acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
+from services.llm_account_choice import LlmLimitWaitError
 from services.manual_queue import (
     LIBRARY_FORBIDDEN_NODE_TYPES,
     MANUAL_QUEUE_LOCK_OPERATION,
@@ -921,3 +922,113 @@ class TestLibraryPromptTimeout:
         assert request.status is ManualRequestStatus.DONE
         await db_session.refresh(task)
         assert task.status is TaskStatus.IN_PROGRESS
+
+
+class _AlwaysWaitGate:
+    """Ворота: все аккаунты на пороге; запоминают тип хода."""
+
+    def __init__(self) -> None:
+        self.asked: list[NodeType | None] = []
+
+    async def __call__(self, *, node_type: NodeType | None = None) -> datetime | None:
+        self.asked.append(node_type)
+        return datetime.now(UTC) + timedelta(hours=1)
+
+
+async def _queued_request(
+    db_session: AsyncSession,
+    task: Task,
+    user_id: uuid.UUID,
+    node_type: NodeType | None,
+) -> TaskManualRequestQueue:
+    """Свободный промт (``node_type`` None) или запуск ноды библиотеки."""
+    node = None
+    if node_type is not None:
+        node = await _make_library_node(db_session, created_by=user_id, node_type=node_type)
+        node.script_language = ScriptLanguage.PYTHON
+        node.script_content = "print('ok')"
+    request = TaskManualRequestQueue(
+        task_id=task.id,
+        request_type=(
+            ManualRequestType.FREEFORM_PROMPT if node is None else ManualRequestType.LIBRARY_PROMPT
+        ),
+        node_id=None if node is None else node.id,
+        raw_prompt_text="вопрос" if node is None else None,
+        requested_by=user_id,
+        status=ManualRequestStatus.QUEUED,
+        requested_at=datetime.now(UTC),
+    )
+    db_session.add(request)
+    await db_session.flush()
+    return request
+
+
+class TestLimitGateByRequest:
+    """Раздел 19.7: ворота лимита ручной очереди — только перед ходом модели."""
+
+    async def _process(
+        self,
+        db_session: AsyncSession,
+        task: Task,
+        *,
+        tmp_path: Path,
+        redis_client: Redis,
+        gate: _AlwaysWaitGate,
+    ) -> int:
+        return await process_manual_queue_once(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(FakeClaudeAgentClient(messages_per_query=[])),
+            repos_path=tmp_path,
+            redis_client=redis_client,
+            limit_gate=gate,
+        )
+
+    @pytest.mark.parametrize(
+        "node_type",
+        [None, NodeType.PLAIN_PROMPT],
+        ids=["freeform", "library_prompt"],
+    )
+    async def test_model_request_waits(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        redis_client: Redis,
+        node_type: NodeType | None,
+    ) -> None:
+        task, user_id = await _make_task(db_session)
+        request = await _queued_request(db_session, task, user_id, node_type)
+        gate = _AlwaysWaitGate()
+
+        with pytest.raises(LlmLimitWaitError):
+            await self._process(
+                db_session,
+                task,
+                tmp_path=tmp_path,
+                redis_client=redis_client,
+                gate=gate,
+            )
+
+        await db_session.refresh(request)
+        assert (request.status, gate.asked) == (ManualRequestStatus.QUEUED, [NodeType.PLAIN_PROMPT])
+
+    async def test_library_script_not_gated(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        redis_client: Redis,
+    ) -> None:
+        task, user_id = await _make_task(db_session)
+        request = await _queued_request(db_session, task, user_id, NodeType.SCRIPT)
+        gate = _AlwaysWaitGate()
+
+        processed = await self._process(
+            db_session,
+            task,
+            tmp_path=tmp_path,
+            redis_client=redis_client,
+            gate=gate,
+        )
+
+        await db_session.refresh(request)
+        assert (processed, request.status, gate.asked) == (1, ManualRequestStatus.DONE, [])

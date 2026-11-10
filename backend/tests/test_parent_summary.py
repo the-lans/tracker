@@ -522,3 +522,68 @@ class TestLimitWait:
         assert await _status_of(db_session, child) is TaskStatus.DONE
         assert _SUMMARY in worker_env.client.queries[0]
         assert (await _summary_of(db_session, child)).delivered_at is not None
+
+    @pytest.mark.parametrize(
+        ("stage", "pending_status"),
+        [
+            ("fork", ParentSummaryStatus.PENDING),
+            ("delivery", ParentSummaryStatus.READY),
+        ],
+    )
+    async def test_route_race(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        monkeypatch: pytest.MonkeyPatch,
+        stage: str,
+        pending_status: ParentSummaryStatus,
+    ) -> None:
+        """Ворота пропустили ход, а выбор аккаунта уже на пороге: пересказ не теряется."""
+        user = await make_user(db_session)
+        parent = await _make_parent(
+            db_session,
+            user,
+            status=TaskStatus.DONE,
+            session_id="sess-parent",
+        )
+        child = await _make_child(db_session, user, parent)
+        real_gate = TaskAccountRouter.limit_gate
+
+        async def open_gate(_self: TaskAccountRouter, **_kwargs: Any) -> None:
+            return None
+
+        monkeypatch.setattr(TaskAccountRouter, "limit_gate", open_gate)
+
+        async def reach_threshold() -> None:
+            await _set_usage(db_session, user, pct="95")
+
+        if stage == "fork":
+            await reach_threshold()
+        fork_client = FakeClaudeAgentClient(
+            messages_per_query=[_answer(_SUMMARY)],
+            on_query=reach_threshold if stage == "delivery" else None,
+        )
+        worker_env.queued_clients = [fork_client]
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=[])
+
+        await _run_child(child)
+
+        summary = await _summary_of(db_session, child)
+        assert await _status_of(db_session, child) is TaskStatus.AWAITING_LIMIT
+        assert (summary.status, summary.delivered_at) == (pending_status, None)
+        assert worker_env.client.queries == []
+
+        monkeypatch.setattr(TaskAccountRouter, "limit_gate", real_gate)
+        await _set_usage(db_session, user, pct="10")
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=[_answer("Принято"), [make_result_message()]],
+        )
+        if stage == "fork":
+            worker_env.queued_clients = [
+                FakeClaudeAgentClient(messages_per_query=[_answer(_SUMMARY)]),
+            ]
+        await self._resume(child)
+
+        assert await _status_of(db_session, child) is TaskStatus.DONE
+        assert _SUMMARY in worker_env.client.queries[0]
+        assert (await _summary_of(db_session, child)).delivered_at is not None

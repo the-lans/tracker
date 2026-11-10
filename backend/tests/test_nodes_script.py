@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import structlog
 
 from db.models.enums import ScriptLanguage
 from services import docker_mounts
@@ -226,6 +227,34 @@ class TestCancelRace:
             text=True,
         )
         assert running.stdout.strip() == ""
+
+
+class _EndlessProcess:
+    """Клиент `docker run`, который не завершается: контейнер так и не остановлен."""
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        await asyncio.Event().wait()
+        return b"", b""
+
+
+class TestStopUntilExited:
+    async def test_gives_up_after_attempts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stopped: list[str] = []
+
+        async def record_stop(container_name: str) -> None:
+            stopped.append(container_name)
+
+        monkeypatch.setattr(script_module, "_force_stop_container", record_stop)
+        monkeypatch.setattr(script_module, "_STOP_WAIT_SECONDS", 0.01)
+
+        with structlog.testing.capture_logs() as logs:
+            await script_module._stop_until_exited(
+                _EndlessProcess(),  # type: ignore[arg-type]
+                container_name="tracker-node-x",
+            )
+
+        assert stopped == ["tracker-node-x"] * script_module._STOP_ATTEMPTS
+        assert [entry["event"] for entry in logs] == ["script_container_not_stopped"]
 
 
 class TestEnv:

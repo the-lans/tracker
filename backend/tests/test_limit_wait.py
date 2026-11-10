@@ -14,13 +14,16 @@ from db.models.enums import (
     ManualRequestStatus,
     ManualRequestType,
     NodeType,
+    ScriptLanguage,
     TaskStatus,
 )
 from db.models.pipelines import Node, TaskNode
 from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task
 from services import limit_wait
+from services.crypto import encrypt
 from services.errors import ConflictError
+from services.library_commands import CommandSnapshot
 from services.limit_wait import (
     author_waits_for_limit,
     check_limit_gate,
@@ -371,19 +374,21 @@ class TestResumeByTurnType:
     """Аккаунт без план-режима свободен — продолжает только ход, которому он годится."""
 
     @pytest.mark.parametrize(
-        ("node_type", "queued_freeform", "resumed"),
+        ("from_status", "node_type", "queued_freeform", "resumed"),
         [
-            (NodeType.PLAN_PROMPT, False, False),
-            (NodeType.PLAIN_PROMPT, False, True),
-            (NodeType.PLAN_PROMPT, True, True),
+            (TaskStatus.IN_PROGRESS, NodeType.PLAN_PROMPT, False, False),
+            (TaskStatus.IN_PROGRESS, NodeType.PLAIN_PROMPT, False, True),
+            (TaskStatus.IN_PROGRESS, NodeType.PLAN_PROMPT, True, True),
+            (TaskStatus.REBASE_CONFLICT, NodeType.PLAN_PROMPT, False, True),
         ],
-        ids=["plan_waits", "plain_resumes", "queued_request_first"],
+        ids=["plan_waits", "plain_resumes", "queued_request_first", "rebase_first"],
     )
     async def test_selected(
         self,
         db_session: AsyncSession,
         redis_client: Redis,
         fake_cliproxy: FakeCliproxy,
+        from_status: TaskStatus,
         node_type: NodeType,
         queued_freeform: bool,
         resumed: bool,
@@ -400,7 +405,7 @@ class TestResumeByTurnType:
             default_model="grok-5",
             label="grok",
         )
-        task = await _waiting(db_session, TaskStatus.IN_PROGRESS, created_by=user_id)
+        task = await _waiting(db_session, from_status, created_by=user_id)
         await _add_waiting_node(db_session, task, node_type)
         if queued_freeform:
             db_session.add(
@@ -425,24 +430,53 @@ class TestResumeByTurnType:
         assert selected == ([task.id] if resumed else [])
 
 
+def _snapshot(node_type: NodeType) -> str:
+    return encrypt(
+        CommandSnapshot(
+            invocation="/run",
+            raw_arguments="",
+            arguments=[],
+            name="run",
+            node_type=node_type,
+            prompt_template=None,
+            script_language=ScriptLanguage.BASH,
+            script_content="echo ok",
+            docker_image=None,
+            timeout_seconds=60,
+            max_retries=1,
+            retry_base_delay_seconds=0,
+            llm_output_last_n=None,
+            reasoning_effort=None,
+        ).model_dump_json(),
+    )
+
+
 class TestManualRequestNodeType:
     @pytest.mark.parametrize(
-        ("request_type", "node_type", "expected"),
+        ("request_type", "node_type", "snapshot_type", "expected"),
         [
-            (ManualRequestType.FREEFORM_PROMPT, None, NodeType.PLAIN_PROMPT),
-            (ManualRequestType.PARENT_SUMMARY, None, NodeType.PLAIN_PROMPT),
-            (ManualRequestType.LIBRARY_PROMPT, NodeType.SCRIPT, NodeType.SCRIPT),
-            (ManualRequestType.LIBRARY_PROMPT, NodeType.PLAN_PROMPT, NodeType.PLAN_PROMPT),
+            (ManualRequestType.FREEFORM_PROMPT, None, None, NodeType.PLAIN_PROMPT),
+            (ManualRequestType.PARENT_SUMMARY, None, None, NodeType.PLAIN_PROMPT),
+            (ManualRequestType.LIBRARY_PROMPT, NodeType.SCRIPT, None, NodeType.SCRIPT),
+            (ManualRequestType.LIBRARY_PROMPT, NodeType.PLAN_PROMPT, None, NodeType.PLAN_PROMPT),
+            (
+                ManualRequestType.LIBRARY_PROMPT,
+                NodeType.PLAIN_PROMPT,
+                NodeType.SCRIPT,
+                NodeType.SCRIPT,
+            ),
         ],
-        ids=["freeform", "parent_summary", "library_script", "library_plan"],
+        ids=["freeform", "parent_summary", "library_script", "library_plan", "command_snapshot"],
     )
     async def test_type(
         self,
         db_session: AsyncSession,
         request_type: ManualRequestType,
         node_type: NodeType | None,
+        snapshot_type: NodeType | None,
         expected: NodeType,
     ) -> None:
+        """Команда библиотеки выполняется по снимку: тип — из него, а не из текущей ноды."""
         task = await _task(db_session, TaskStatus.IN_PROGRESS)
         node = None if node_type is None else await _add_waiting_node(db_session, task, node_type)
         request = TaskManualRequestQueue(
@@ -453,6 +487,7 @@ class TestManualRequestNodeType:
             requested_by=task.created_by,
             status=ManualRequestStatus.QUEUED,
             requested_at=_NOW,
+            command_snapshot_encrypted=None if snapshot_type is None else _snapshot(snapshot_type),
         )
 
         assert await manual_request_node_type(db_session, request) is expected
