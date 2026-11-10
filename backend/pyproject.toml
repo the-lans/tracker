@@ -6,19 +6,19 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.162.0",
     "uvicorn[standard]==0.54.0",
-    "sqlalchemy[asyncio]==2.1.6",
+    "sqlalchemy[asyncio]==2.1.8",
     "asyncpg==0.32.0",
     "alembic==1.20.1",
-    "celery==5.6.3",
+    "celery==5.7.0",
     # Redis-транспорт Kombu импортирует packaging во время работы.
     "packaging==26.3",
     "redis==8.1.0",
     "structlog==26.1.0",
-    "claude-agent-sdk==0.2.175",
+    "claude-agent-sdk==0.2.178",
     "cryptography==50.0.2",
     "httpx==0.28.1",
     "croniter==6.2.4",
-    "google-auth==2.62.0",
+    "google-auth==2.62.1",
     "requests==2.34.2",
     "pywebpush==2.5.0",
     "asyncssh==2.24.1",
@@ -27,13 +27,13 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest==9.2.0",
-    "pytest-asyncio==1.4.1",
+    "pytest-asyncio==1.4.1.post1",
     "pytest-cov==7.1.0",
     "ruff==0.17.3",
     "mypy==2.4.1",
     # Тесты конфигурации стека читают docker-compose.yml.
     "pyyaml==6.0.3",
-    "types-PyYAML==6.0.12.20261030",
+    "types-PyYAML==6.0.12.20261103",
 ]
 
 [build-system]
