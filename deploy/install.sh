@@ -70,6 +70,8 @@ DEPLOY_STATE_DIR="${INSTALL_DIR}/.deploy"
 # загрузки дампа. Пустая роль без входа заранее; вход и пароль ей задаст
 # entrypoint.
 SFTP_DB_ROLE_SQL='DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '"'"'tracker_sftp'"'"') THEN CREATE ROLE tracker_sftp NOLOGIN; END IF; END $$;'
+# Выполняется после дампа, если есть в копии (services/backup/bundle.py).
+AFTER_RESTORE_SQL="after-restore.sql"
 # Архив -> точка монтирования volume[ -> сервис, по умолчанию backend]
 # (docker-compose.yml).
 RESTORE_ARCHIVES=(
@@ -550,10 +552,13 @@ step_checkout_restore_ref() {
 }
 
 # В пустую БД и до миграций: дамп содержит схему старого сервера, миграции
-# затем лишь доводят её до текущей версии кода.
+# затем лишь доводят её до текущей версии кода. Копия из S3 несёт
+# after-restore.sql — итог запуска бэкапа, во время которого снят дамп.
 step_restore_database() {
   log "Восстановление: дамп БД $(basename "${RESTORE_DUMP}")"
-  { echo "${SFTP_DB_ROLE_SQL}"; gzip -dc "${RESTORE_DUMP}"; } | (cd "${INSTALL_DIR}" \
+  local after_restore="${RESTORE_DIR}/${AFTER_RESTORE_SQL}"
+  [ -f "${after_restore}" ] || after_restore=/dev/null
+  { echo "${SFTP_DB_ROLE_SQL}"; gzip -dc "${RESTORE_DUMP}"; cat "${after_restore}"; } | (cd "${INSTALL_DIR}" \
     && docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"')
 }
 

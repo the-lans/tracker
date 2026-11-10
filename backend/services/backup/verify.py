@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from app_logging.config import get_logger
 from db.models.enums import BackupRunKind, BackupRunStatus
 from services.backup.bundle import (
+    AFTER_RESTORE_SQL_NAME,
     BUNDLE_PREFIX,
     CHECKSUMS_NAME,
     ENV_NAME,
@@ -268,8 +269,11 @@ class TemporaryPostgres:
             *args,
         ]
 
-    async def load(self, dump: Path, staging: Path) -> None:
-        """Как install.sh: роль SFTP-шлюза, затем дамп — psql с ON_ERROR_STOP."""
+    async def load(self, dump: Path, staging: Path, *, after_restore: Path) -> None:
+        """
+        Как install.sh: роль SFTP-шлюза, дамп, затем `after-restore.sql`
+        копии — psql с ON_ERROR_STOP.
+        """
         prelude = staging / "prelude.sql"
         prelude.write_text(SFTP_DB_ROLE_SQL + "\n")
         read_fd, write_fd = os.pipe()
@@ -277,10 +281,11 @@ class TemporaryPostgres:
             producer = await asyncio.create_subprocess_exec(
                 "sh",
                 "-c",
-                'cat "$1" && gzip -dc "$2"',
+                'cat "$1" && gzip -dc "$2" && cat "$3"',
                 "sh",
                 str(prelude),
                 str(dump),
+                str(after_restore),
                 stdout=write_fd,
             )
             consumer = await asyncio.create_subprocess_exec(
@@ -366,6 +371,12 @@ async def compare_database(postgres: TemporaryPostgres, database: dict[str, Any]
     return sum(expected.values())
 
 
+def _after_restore_sql(directory: Path) -> Path:
+    """В копиях первых версий файла нет — как в install.sh, без него."""
+    path = directory / AFTER_RESTORE_SQL_NAME
+    return path if path.is_file() else Path(os.devnull)
+
+
 async def _verify(
     *,
     config: BackupConfig,
@@ -390,7 +401,11 @@ async def _verify(
         user=database["user"],
         database=database["name"],
     ) as postgres:
-        await postgres.load(directory / database["file"], staging)
+        await postgres.load(
+            directory / database["file"],
+            staging,
+            after_restore=_after_restore_sql(directory),
+        )
         rows = await compare_database(postgres, database)
     return stored, {
         "tracker_commit": manifest["tracker_commit"],

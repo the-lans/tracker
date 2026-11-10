@@ -50,6 +50,8 @@ from services.backup.storage import BACKUP_SUFFIX, S3Storage
 from services.notifications import NotificationEvent
 
 if TYPE_CHECKING:
+    import uuid
+
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -152,8 +154,10 @@ async def _make_and_upload(
     storage: S3Storage,
     environment: BackupEnvironment,
     started_at: datetime,
+    run_id: uuid.UUID,
 ) -> _Uploaded:
     staging = environment.staging
+    name = bundle_name(started_at) + BACKUP_SUFFIX
     clear_staging(staging)
     ensure_space(staging, await asyncio.to_thread(required_space, environment.sources))
     await storage.ensure_folder()
@@ -164,11 +168,12 @@ async def _make_and_upload(
             sources=environment.sources,
             config=config,
             archive_options=environment.archive_options,
+            run_id=run_id,
+            object_key=storage.key(name),
         ),
         engine=environment.engine,
         dump_command=environment.dump_command,
     )
-    name = bundle_name(started_at) + BACKUP_SUFFIX
     encrypted = staging / name
     if not config.passphrase:
         raise BackupError("Не задан пароль шифрования")
@@ -211,6 +216,7 @@ async def run_backup(
                     storage=storage,
                     environment=environment,
                     started_at=started_at,
+                    run_id=run.id,
                 )
                 deleted = await rotate(storage, keep=config.retention_count, current=uploaded.name)
             finally:

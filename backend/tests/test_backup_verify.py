@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from db.models.backups import BackupRun
 from db.models.enums import BackupRunKind, BackupRunStatus
 from services.backup import runs as runs_module
-from services.backup.bundle import CHECKSUMS_NAME, MANIFEST_NAME
+from services.backup.bundle import AFTER_RESTORE_SQL_NAME, CHECKSUMS_NAME, MANIFEST_NAME
 from services.backup.crypto_gpg import encrypt_directory
 from services.backup.files import sha256_file
 from services.backup.runner import run_backup
@@ -269,6 +269,26 @@ class TestVerify:
         with pytest.raises(BackupError, match="не загрузился в чистый PostgreSQL"):
             await _verify(db_session, redis_client, storage, environment)
         assert _leftover_containers() == []
+
+    async def test_after_restore_sql_fails(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        client: FakeS3Client,
+        storage: S3Storage,
+        environment: VerifyEnvironment,
+        tmp_path: Path,
+    ) -> None:
+        """Проверка выполняет after-restore.sql, как install.sh --restore."""
+
+        def break_after_restore(bundle: Path) -> None:
+            (bundle / AFTER_RESTORE_SQL_NAME).write_text("UPDATE missing_table SET x = 1;\n")
+            _rewrite_sums(bundle)
+
+        await _replace_copy(client, tmp_path, break_after_restore)
+
+        with pytest.raises(BackupError, match="missing_table"):
+            await _verify(db_session, redis_client, storage, environment)
 
     async def test_row_counts_differ(
         self,

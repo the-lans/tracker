@@ -1,7 +1,14 @@
 """
 Каталог копии (раздел 20.4 ТЗ) — то, что после расшифровки принимает
 `install.sh --restore`: `.env`, дамп `tracker-<UTC>.sql.gz`, `<volume>.tar.gz`,
-а также `manifest.json`, `SHA256SUMS`, `restore.sh` и `RESTORE.md`.
+`after-restore.sql`, а также `manifest.json`, `SHA256SUMS`, `restore.sh` и
+`RESTORE.md`.
+
+Дамп снимается во время запуска бэкапа, поэтому в нём этот запуск и
+периодическая задача `backup_to_s3` ещё «выполняются». `after-restore.sql`
+(его выполняют `install.sh --restore` и еженедельная проверка сразу после
+дампа) записывает им итог самой копии — иначе восстановленный сервер
+показывал бы бэкап незавершённым до следующего запуска.
 
 `manifest.json` описывает копию: коммит трекера, на котором она снята
 (`restore.sh` ставит именно его), версию схемы и число строк каждой таблицы
@@ -14,8 +21,9 @@ import asyncio
 import json
 import os
 import shutil
+import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +45,9 @@ MANIFEST_NAME = "manifest.json"
 CHECKSUMS_NAME = "SHA256SUMS"
 RESTORE_SCRIPT_NAME = "restore.sh"
 RESTORE_GUIDE_NAME = "RESTORE.md"
+AFTER_RESTORE_SQL_NAME = "after-restore.sql"
+# Имя периодической задачи бэкапа — `tasks/celery_app.BACKUP_TO_S3` (тест сверяет).
+BACKUP_PERIODIC_TASK = "backup_to_s3"
 ENV_NAME = ".env"
 BUNDLE_PREFIX = "tracker-backup-"
 TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
@@ -91,6 +102,36 @@ def restore_guide(config: BackupConfig) -> str:
     ):
         text = text.replace(placeholder, value)
     return text
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def after_restore_sql(
+    *,
+    run_id: uuid.UUID,
+    object_key: str,
+    skipped: list[SkippedFile],
+    finished_at: datetime,
+) -> str:
+    """
+    Итог запуска, во время которого снята копия. Только из `running`:
+    повторное выполнение и дамп, где запуска нет, ничего не меняют. Таблицы —
+    со схемой: plain-дамп `pg_dump` очищает `search_path`.
+    """
+    status = "warning" if skipped else "success"
+    skipped_json = json.dumps([item.as_dict() for item in skipped], ensure_ascii=False)
+    finished = _sql_literal(finished_at.isoformat())
+    return (
+        "-- Копия снята во время этого запуска: в дампе он ещё выполняется.\n"
+        f"UPDATE public.backup_runs SET status = {_sql_literal(status)}, finished_at = {finished}, "
+        f"object_key = {_sql_literal(object_key)}, skipped_files = {_sql_literal(skipped_json)}"
+        f" WHERE id = {_sql_literal(str(run_id))} AND status = 'running';\n"
+        "UPDATE public.periodic_tasks SET last_run_status = 'success', "
+        f"last_run_at = {finished} WHERE name = {_sql_literal(BACKUP_PERIODIC_TASK)}"
+        " AND last_run_status = 'running';\n"
+    )
 
 
 def tracker_commit() -> str:
@@ -166,6 +207,9 @@ class BundleRequest:
     sources: BundleSources
     config: BackupConfig
     archive_options: ArchiveOptions
+    # Запуск бэкапа и ключ копии в S3 — для `after-restore.sql`.
+    run_id: uuid.UUID
+    object_key: str
 
 
 async def build_bundle(
@@ -184,6 +228,14 @@ async def build_bundle(
         request.sources,
         directory,
         options=request.archive_options,
+    )
+    (directory / AFTER_RESTORE_SQL_NAME).write_text(
+        after_restore_sql(
+            run_id=request.run_id,
+            object_key=request.object_key,
+            skipped=skipped,
+            finished_at=datetime.now(UTC),
+        ),
     )
     script = directory / RESTORE_SCRIPT_NAME
     script.write_text(restore_script())

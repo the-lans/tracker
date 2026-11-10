@@ -22,6 +22,7 @@ import pytest
 import sqlalchemy as sa
 
 from db.models.enums import TaskStatus
+from services.backup.bundle import AFTER_RESTORE_SQL_NAME
 from services.backup.components import COMPONENTS
 from services.backup.verify import SFTP_DB_ROLE_SQL
 from services.maintenance import MAINTENANCE_KEY
@@ -359,6 +360,9 @@ class TestSharedConstants:
         """Проверка восстановления готовит БД так же, как --restore."""
         assert self._value(stubs, install_dir, "SFTP_DB_ROLE_SQL") == SFTP_DB_ROLE_SQL
 
+    def test_after_restore_sql(self, stubs: Path, install_dir: Path) -> None:
+        assert self._value(stubs, install_dir, "AFTER_RESTORE_SQL") == AFTER_RESTORE_SQL_NAME
+
     def test_queue_periodic_tasks(self, stubs: Path, install_dir: Path) -> None:
         """Откат удаляет ровно периодические задачи воркера очереди."""
         raw = self._value(stubs, install_dir, "QUEUE_PERIODIC_TASKS")
@@ -423,6 +427,29 @@ class TestRestore:
         for archive, service in [("sftp_host_keys", "sftp"), ("cliproxy_data", "cliproxy-init")]:
             [call] = [call for call in docker_calls if f"{archive}.tar.gz" in call]
             assert f"--entrypoint sh {service}" in call
+
+    def test_after_restore_sql_follows_dump(
+        self,
+        tmp_path: Path,
+        stubs: Path,
+        install_dir: Path,
+    ) -> None:
+        """Копия из S3 закрывает запуск бэкапа, во время которого снят дамп."""
+        restore_dir = _make_restore_dir(tmp_path)
+        (restore_dir / AFTER_RESTORE_SQL_NAME).write_text("-- after restore\n")
+
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--restore",
+            str(restore_dir),
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (stubs / "psql-input").read_text() == (
+            f"{SFTP_DB_ROLE_SQL}\n-- fresh dump\n-- after restore\n"
+        )
 
     @pytest.mark.parametrize(
         "missing",

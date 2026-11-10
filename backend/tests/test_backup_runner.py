@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import tempfile
+import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,17 +22,30 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from db.models.backups import BackupRun
-from db.models.enums import BackupRunKind, BackupRunStatus
+from db.models.enums import (
+    BackupRunKind,
+    BackupRunStatus,
+    PeriodicRunStatus,
+    PeriodicScheduleType,
+)
+from db.models.periodic import PeriodicTask
 from services.backup import jobs as backup_jobs
 from services.backup import runner as runner_module
 from services.backup import runs as runs_module
-from services.backup.archive import REASON_LOCKED
-from services.backup.bundle import CHECKSUMS_NAME, MANIFEST_NAME
+from services.backup.archive import REASON_LOCKED, SkippedFile
+from services.backup.bundle import (
+    AFTER_RESTORE_SQL_NAME,
+    BACKUP_PERIODIC_TASK,
+    CHECKSUMS_NAME,
+    MANIFEST_NAME,
+    after_restore_sql,
+)
 from services.backup.components import COMPONENTS
 from services.backup.runner import BackupEnvironment, rotate, run_backup
 from services.backup.runs import BACKUP_LOCK_KEY, BackupError
 from services.backup.settings import BackupSettingsUpdate, update_backup_settings
 from services.notifications import NotificationEvent
+from tasks.celery_app import BACKUP_TO_S3
 from tests.backup_support import (
     CONFIG,
     ENV_CONTENT,
@@ -216,6 +230,125 @@ class TestFullBackup:
         assert not (volumes / "task_repos/RR-1/app/__pycache__").exists()
         assert not (volumes / "claude_sessions/RR-1/cache").exists()
         assert (volumes / "sftp_host_keys/ssh_host_ed25519_key").exists()
+
+
+async def _execute_script(db_session: AsyncSession, sql: str) -> None:
+    """
+    Несколько команд, как их выполняет psql в install.sh: простой протокол
+    asyncpg — в той же транзакции теста.
+    """
+    connection = await db_session.connection()
+    raw = await connection.get_raw_connection()
+    await raw.driver_connection.execute(sql)  # type: ignore[union-attr]
+
+
+def _backup_periodic_task(status: PeriodicRunStatus) -> PeriodicTask:
+    return PeriodicTask(
+        id=uuid.uuid4(),
+        name=BACKUP_PERIODIC_TASK,
+        display_name="Бэкап",
+        description="d",
+        task_path="tasks.periodic.backup_to_s3",
+        schedule_type=PeriodicScheduleType.CRONTAB,
+        crontab_expression="0 0 * * *",
+        last_run_status=status,
+    )
+
+
+async def _reload[T](db_session: AsyncSession, row: T) -> T:
+    db_session.expunge(row)
+    reloaded = await db_session.get(type(row), row.id)  # type: ignore[attr-defined]
+    assert reloaded is not None
+    return reloaded
+
+
+class TestAfterRestore:
+    """
+    Дамп снят во время запуска бэкапа: `after-restore.sql` записывает
+    итог копии этому запуску и периодической задаче.
+    """
+
+    def test_task_name(self) -> None:
+        assert BACKUP_PERIODIC_TASK == BACKUP_TO_S3
+
+    async def test_in_bundle(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        client: FakeS3Client,
+        storage: S3Storage,
+        environment: BackupEnvironment,
+        tmp_path: Path,
+    ) -> None:
+        run = await _backup(db_session, redis_client, storage, environment)
+
+        bundle = decrypt_object(client.objects[f"{FOLDER}/{_NAME}"].body, tmp_path / "out")
+        sql = (bundle / AFTER_RESTORE_SQL_NAME).read_text()
+        assert f"id = '{run.id}'" in sql
+        assert f"object_key = '{FOLDER}/{_NAME}'" in sql
+        assert AFTER_RESTORE_SQL_NAME in (bundle / CHECKSUMS_NAME).read_text()
+
+    @pytest.mark.parametrize(
+        ("skipped", "status"),
+        [
+            ([], BackupRunStatus.SUCCESS),
+            (
+                [SkippedFile(component="task_repos", path="RR-1/it's.txt", reason=REASON_LOCKED)],
+                BackupRunStatus.WARNING,
+            ),
+        ],
+        ids=["success", "skipped"],
+    )
+    async def test_closes_running(
+        self,
+        db_session: AsyncSession,
+        skipped: list[SkippedFile],
+        status: BackupRunStatus,
+    ) -> None:
+        run = BackupRun(id=uuid.uuid4(), kind=BackupRunKind.BACKUP, status=BackupRunStatus.RUNNING)
+        periodic = _backup_periodic_task(PeriodicRunStatus.RUNNING)
+        db_session.add_all([run, periodic])
+        await db_session.commit()
+        sql = after_restore_sql(
+            run_id=run.id,
+            object_key=f"{FOLDER}/{_NAME}",
+            skipped=skipped,
+            finished_at=_STARTED_AT,
+        )
+
+        # Повторное выполнение ничего не меняет.
+        await _execute_script(db_session, sql)
+        await _execute_script(db_session, sql)
+
+        restored = await _reload(db_session, run)
+        assert (restored.status, restored.object_key, restored.finished_at) == (
+            status,
+            f"{FOLDER}/{_NAME}",
+            _STARTED_AT,
+        )
+        assert restored.skipped_files == [item.as_dict() for item in skipped]
+        task = await _reload(db_session, periodic)
+        assert (task.last_run_status, task.last_run_at) == (PeriodicRunStatus.SUCCESS, _STARTED_AT)
+
+    async def test_finished_run_untouched(self, db_session: AsyncSession) -> None:
+        """Дамп, где запуск и задача уже завершены (или их нет), файл не меняет."""
+        run = BackupRun(
+            id=uuid.uuid4(),
+            kind=BackupRunKind.BACKUP,
+            status=BackupRunStatus.FAILED,
+            error_message="сбой",
+        )
+        periodic = _backup_periodic_task(PeriodicRunStatus.FAILED)
+        db_session.add_all([run, periodic])
+        await db_session.commit()
+
+        await _execute_script(
+            db_session,
+            after_restore_sql(run_id=run.id, object_key="k", skipped=[], finished_at=_STARTED_AT),
+        )
+
+        assert (await _reload(db_session, run)).status is BackupRunStatus.FAILED
+        assert (await _reload(db_session, periodic)).last_run_status is PeriodicRunStatus.FAILED
 
 
 class TestRotation:
