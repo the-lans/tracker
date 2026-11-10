@@ -61,6 +61,7 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | cryptography | 50.0.2* (шифрование секретов и токена сессии, раздел 19.4) |
 | google-auth | 2.62.1* (проверка Google id_token, раздел 19.1) |
 | pywebpush | 2.5.0* (Web Push, раздел 18.1) |
+| boto3 | 1.43.127* (выгрузка резервных копий в S3, раздел 20.4) |
 | PostgreSQL | 15+ |
 | pytest / pytest-asyncio / pytest-cov | 9.2.0 / 1.4.1.post1* / 7.1.0* |
 | ruff | 0.17.3 |
@@ -150,6 +151,17 @@ backend/
               обслуживания `maintenance:deploy` на время обновления сервера;
               session_history_migration.py — перенос истории сессий из
               каталогов прежних LLM-аккаунтов (раздел 20.6);
+              backup/ — резервные копии в S3 (раздел 20.4): settings.py —
+              настройки и их проверка, storage.py — клиент S3 с повторами,
+              components.py — состав копии (= архивы install.sh --restore),
+              archive.py — tar.gz volume с пропуском меняющихся файлов,
+              dump.py — pg_dump, crypto_gpg.py — шифрование паролем,
+              bundle.py — каталог копии (manifest.json, SHA256SUMS,
+              after-restore.sql, restore.sh и RESTORE.md из templates/),
+              runner.py — бэкап с ротацией, verify.py — проверка
+              восстановления во временном postgres:15, runs.py — общая
+              блокировка, записи backup_runs и уведомления, jobs.py — запуск
+              из периодических задач;
               nodes/ — выполнение нод (dispatch.py, script.py — Docker-раннер,
               clear_context.py); plan_mode.py — callback разрешений SDK:
               решение по плану, вопросы агента, режимы разрешений (раздел 9);
@@ -177,7 +189,7 @@ backend/
               подставляет учётку прокси, модель и уровень рассуждений
               маршрута задачи (rewrite.py), ответ передаёт потоком
   tasks/     — Celery-приложение и задачи: celery_app.py (include модулей,
-              очередь sessions, DatabaseScheduler), session_worker.py
+              очереди sessions и backups, DatabaseScheduler), session_worker.py
               (долгоживущая сессия задачи), periodic.py / periodic_scheduler.py,
               jira_attachments.py (вложения Jira → артефакты, в фоне),
               async_runner.py — run_with_fresh_pool: асинхронное тело задачи
@@ -207,6 +219,7 @@ backend/
               Redis в Docker, fakes.py — фейки Claude Agent SDK,
               factories.py — общие тестовые записи (автор, LLM-аккаунт, эталонные SSH-ключи),
               cliproxy_support.py — фейк management API LLM-прокси,
+              s3_support.py — фейк S3, backup_support.py — окружение бэкапа,
               git_support.py — локальные bare-репозитории и коммиты для тестов git,
               worker_support.py — обвязка воркера сессии для его тестов и E2E)
 frontend/    — React SPA: дашборд, страница задачи (обзор + диалог),
@@ -241,7 +254,7 @@ deploy/
   cliproxy/  — LLM-прокси: config.template.yaml (обязательные настройки
               трекера) и init.sh — сервис `cliproxy-init`, при каждом старте
               рендерит конфигурацию с ключами из `.env` в volume cliproxy_data
-  backup/    — встроенный сервис резервного копирования PostgreSQL по
+  backup/    — встроенный сервис локальных дампов PostgreSQL по
               расписанию (раздел 20.4): Dockerfile, entrypoint.sh (crond),
               backup.sh (pg_dump + ротация по POSTGRES_BACKUP_RETENTION_DAYS)
   install.sh — единственный скрипт установки по разделу 20.2 ТЗ;
@@ -282,7 +295,8 @@ alembic/
                  templates.uploaded_file_paths, контроль лимитов:
                  статус awaiting_limit и поля ожидания задачи (в т. ч.
                  попытка ждущей ноды), старт окна
-                 и стоимость хода аккаунта, сжатие при смене аккаунта);
+                 и стоимость хода аккаунта, сжатие при смене аккаунта,
+                 бэкап в S3: настройки в system_settings и backup_runs);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
@@ -347,9 +361,10 @@ cd frontend && npm install
 # backend (FastAPI, автоперезагрузка)
 cd backend && uvicorn main:app --reload
 
-# Celery: периодические задачи, сессии задач (своя очередь), планировщик
+# Celery: периодические задачи, сессии задач и бэкапы (свои очереди), планировщик
 cd backend && celery -A tasks.celery_app worker -Q celery -l info
 cd backend && celery -A tasks.celery_app worker -Q sessions -O fair -l info
+cd backend && celery -A tasks.celery_app worker -Q backups -c 1 -l info
 cd backend && celery -A tasks.celery_app beat -l info
 
 # шлюз сессий к LLM-прокси (нужны REDIS_URL, CLIPROXY_URL, CLIPROXY_API_KEY)
