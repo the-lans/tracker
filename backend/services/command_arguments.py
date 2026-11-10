@@ -15,6 +15,8 @@ MAX_COMMAND_LENGTH = 16000
 MAX_COMMAND_NAME_LENGTH = 64
 MAX_ARGUMENT_HINT_LENGTH = 200
 MAX_COMMAND_INPUT_NAME_LENGTH = MAX_COMMAND_NAME_LENGTH + 1
+# `$1` и `$ARGUMENTS[1]` — первый аргумент, как у Bash-скриптов.
+FIRST_ARGUMENT_INDEX = 1
 _POSITIONAL_ARGUMENT_PREFIX = "$ARGUMENTS["
 _ALL_ARGUMENTS_TOKEN = "$ARGUMENTS"
 _COMMAND_NAME = re.compile(rf"[a-z][a-z0-9_-]{{0,{MAX_COMMAND_NAME_LENGTH - 1}}}")
@@ -62,7 +64,15 @@ def parse_invocation(text: str) -> CommandArguments:
     name = normalize_slash_name(match[1])
     if name is None:
         raise ValidationError("Не указано имя команды")
-    raw = match[2] or ""
+    return parse_arguments(match[2] or "", name=name)
+
+
+def parse_arguments(raw: str, *, name: str = "") -> CommandArguments:
+    """
+    Аргументы — текст после имени команды: кавычки и экранирование по правилам
+    shell, без исполнения выражений.
+    """
+    _validate_invocation(raw)
     try:
         values = shlex.split(raw, posix=True)
     except ValueError as exc:
@@ -96,10 +106,11 @@ def _argument_value(match: re.Match[str], arguments: CommandArguments) -> tuple[
         else token[1:]
     )
     digits = digits.lstrip("0") or "0"
-    # Индекс вне диапазона остаётся текстом; огромные числа не преобразуем.
+    # Нумерация с единицы: `$0` и индекс вне диапазона остаются текстом,
+    # огромные числа не преобразуем.
     if len(digits) < len(str(MAX_COMMAND_LENGTH)):
-        index = int(digits)
-        if index < len(arguments.values):
+        index = int(digits) - FIRST_ARGUMENT_INDEX
+        if 0 <= index < len(arguments.values):
             return escapes + arguments.values[index], True
     return escapes + token, False
 

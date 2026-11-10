@@ -56,7 +56,7 @@ function JiraConnectionForm({ profile, serverUrl }: { profile: User; serverUrl: 
           id="jira-token"
           type="password"
           autoComplete="off"
-          placeholder={profile.jira_token_set ? "Сохранён — введите новый, чтобы заменить" : ""}
+          placeholder={profile.jira_token_set ? "Сохранён — ввод заменит" : ""}
           value={token}
           onChange={(event) => setToken(event.target.value)}
           required={!profile.jira_token_set}

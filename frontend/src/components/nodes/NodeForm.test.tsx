@@ -299,4 +299,31 @@ describe("Команды библиотечных промтов", () => {
     await user.click(screen.getByRole("button", {name: "Сохранить"}));
     expect(api.mutations()[0].body).toMatchObject({slash_name: null, argument_hint: null});
   });
+
+  test.for([
+    { title: "команда библиотеки — аргументы уходят в запрос", mode: "library" as Mode, slash: "review", sent: "svc \"two words\"" },
+    { title: "промт без команды — поля аргументов нет", mode: "library" as Mode, slash: null, sent: undefined },
+    { title: "нода пайплайна — поля аргументов нет", mode: "pipeline" as Mode, slash: null, sent: undefined },
+  ])("$title", async ({ mode, slash, sent }, { api }) => {
+    api.respond("POST /templates/preview", { rendered_text: "Проверь svc" });
+    const { user } = renderForm(api, { mode, node: makeNode({
+      pipeline_id: mode === "pipeline" ? "p1" : null,
+      is_library_item: mode === "library",
+      node_type: NodeType.PLAIN_PROMPT,
+      prompt_template: "Проверь $1",
+      slash_name: slash,
+      argument_hint: slash ? "[сервис]" : null,
+    }) });
+
+    const field = screen.queryByLabelText("Аргументы для предпросмотра");
+    expect(field !== null).toBe(sent !== undefined);
+    if (field) {
+      expect(field).toHaveAttribute("placeholder", "[сервис]");
+      await user.type(field, sent ?? "");
+    }
+    await user.click(screen.getByRole("button", { name: "Предпросмотр" }));
+
+    expect(await screen.findByText("Проверь svc")).toBeInTheDocument();
+    expect((api.mutations().at(-1)?.body as { arguments?: string }).arguments).toBe(sent);
+  });
 });

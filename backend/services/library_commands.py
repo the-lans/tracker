@@ -234,10 +234,31 @@ async def render_command(
         raw=snapshot.raw_arguments,
         values=snapshot.arguments,
     )
-    prepared = prepare_arguments(snapshot.prompt_template or "", arguments)
-    rendered = await render_for_task(
-        session, task, prepared.text, last_n=snapshot.llm_output_last_n
+    return await render_with_arguments(
+        session,
+        task=task,
+        template=snapshot.prompt_template or "",
+        arguments=arguments,
+        last_n=snapshot.llm_output_last_n,
     )
+
+
+async def render_with_arguments(
+    session: AsyncSession,
+    *,
+    task: Task | None,
+    template: str,
+    arguments: CommandArguments,
+    last_n: int | None = None,
+) -> RenderedText:
+    """
+    Аргументы подставляются после переменных и повторно не интерпретируются.
+    Без задачи переменные остаются текстом — так показывает предпросмотр библиотеки.
+    """
+    prepared = prepare_arguments(template, arguments)
+    if task is None:
+        return RenderedText.literal(prepared.expand(prepared.text))
+    rendered = await render_for_task(session, task, prepared.text, last_n=last_n)
     return RenderedText(
         text=prepared.expand(rendered.text), display=prepared.expand(rendered.display)
     )

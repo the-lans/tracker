@@ -46,7 +46,7 @@ export function GitlabApiFields({
                 id="git-access-api-token"
                 type="password"
                 autoComplete="new-password"
-                placeholder={tokenSet ? "Сохранён — введите новый, чтобы заменить" : ""}
+                placeholder={tokenSet ? "Сохранён — ввод заменит" : ""}
                 value={value.token}
                 onChange={(event) => onChange({ token: event.target.value })}
               />

@@ -691,6 +691,8 @@ export interface TemplatePreviewRequest {
   node_id?: string | null;
   pipeline_id?: string | null;
   order_index?: number | null;
+  /** Только для scope = "library": аргументы команды, как после /имя; $1 — первый. */
+  arguments?: string | null;
 }
 
 export interface TemplatePreviewResponse {

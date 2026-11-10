@@ -27,6 +27,7 @@
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
   --color-border: var(--border);
+  --color-track: var(--track);
 
   --color-text: var(--text);
   --color-text-2: var(--text-2);

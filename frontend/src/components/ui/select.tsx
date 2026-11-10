@@ -35,7 +35,8 @@ export const SelectContent = forwardRef<
       ref={ref}
       position={position}
       className={cn(
-        "z-50 max-h-72 min-w-[8rem] overflow-y-auto rounded-md border border-border bg-surface p-1 shadow-lg",
+        // Не уже поля и не шире видимой области: пункты не обрезаются и не прилипают к галочке.
+        "z-50 max-h-72 min-w-[max(8rem,var(--radix-select-trigger-width))] max-w-[var(--radix-select-content-available-width)] overflow-y-auto rounded-md border border-border bg-surface p-1 shadow-lg",
         className,
       )}
       {...props}
@@ -53,13 +54,13 @@ export const SelectItem = forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex touch-target cursor-pointer select-none items-center rounded px-3 py-2 text-sm text-text outline-none data-[highlighted]:bg-surface-2 data-[state=checked]:font-bold",
+      "relative flex touch-target cursor-pointer select-none items-center gap-2 rounded px-3 py-2 text-sm text-text outline-none data-[highlighted]:bg-surface-2 data-[state=checked]:font-bold",
       className,
     )}
     {...props}
   >
     <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
-    <SelectPrimitive.ItemIndicator className="ml-auto">
+    <SelectPrimitive.ItemIndicator className="ml-auto shrink-0">
       <Check className="size-4 text-accent" />
     </SelectPrimitive.ItemIndicator>
   </SelectPrimitive.Item>

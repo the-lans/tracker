@@ -219,3 +219,76 @@ class TestCustomTaskNodePreview:
         )
 
         assert response.status_code == status, response.text
+
+
+class TestLibraryPreviewArguments:
+    """Раздел 5.1, 22: предпросмотр промта команды подставляет аргументы, `$1` — первый."""
+
+    @pytest.mark.parametrize(
+        ("text", "arguments", "expected"),
+        [
+            ("$1/$ARGUMENTS[2]: $ARGUMENTS", 'svc "two words"', 'svc/two words: svc "two words"'),
+            ("$0 {{task.title}}", "svc", "$0 {{task.title}}\n\nARGUMENTS: svc"),
+            ("$1", "", "$1"),
+        ],
+    )
+    async def test_without_task(
+        self,
+        authed_client: AsyncClient,
+        text: str,
+        arguments: str,
+        expected: str,
+    ) -> None:
+        response = await authed_client.post(
+            "/templates/preview",
+            json={"text": text, "scope": RenderScope.LIBRARY.value, "arguments": arguments},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["rendered_text"] == expected
+
+    async def test_with_task(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        task = Task(
+            id=uuid.uuid4(),
+            code=f"RR-{uuid.uuid4().hex[:8]}",
+            title="Заголовок",
+            description="",
+            created_by=current_user.id,
+        )
+        db_session.add(task)
+        await db_session.flush()
+
+        response = await authed_client.post(
+            "/templates/preview",
+            json={
+                "text": "{{task.title}}: $1",
+                "scope": RenderScope.LIBRARY.value,
+                "task_id": str(task.id),
+                "arguments": "{{task.code}}",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["rendered_text"] == "Заголовок: {{task.code}}"
+
+    @pytest.mark.parametrize(
+        ("scope", "arguments"),
+        [(RenderScope.FREEFORM, "svc"), (RenderScope.PIPELINE, "svc"), (RenderScope.LIBRARY, "'x")],
+    )
+    async def test_rejected(
+        self,
+        authed_client: AsyncClient,
+        scope: RenderScope,
+        arguments: str,
+    ) -> None:
+        response = await authed_client.post(
+            "/templates/preview",
+            json={"text": "$1", "scope": scope.value, "arguments": arguments},
+        )
+
+        assert response.status_code == 422

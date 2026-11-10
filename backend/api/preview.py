@@ -9,7 +9,9 @@
 без `task_id` эндпоинт лишь проверяет доступность переменных
 (`validate_template_variables`, та же проверка, что и при сохранении) и
 возвращает исходный текст без подстановки. Значения секретных переменных
-показываются замаскированными (раздел 19.4).
+показываются замаскированными (раздел 19.4). Промт команды библиотеки
+показывается с подставленными аргументами из `arguments` — так же, как при
+вызове `/имя аргументы`.
 """
 
 from __future__ import annotations
@@ -24,7 +26,9 @@ from api.schemas import TemplatePreviewRequest, TemplatePreviewResponse
 from db.models.users import User
 from db.session import get_session
 from services.access import get_node_for_user, get_pipeline_for_user, get_task_for_user
+from services.command_arguments import parse_arguments
 from services.errors import ValidationError
+from services.library_commands import render_with_arguments
 from services.manual_queue import render_freeform_prompt
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, load_node_context_history
 from services.pipeline_validation import PipelinePosition, pipeline_position, task_position
@@ -97,6 +101,21 @@ async def preview_template(
             preceding_node_types=position.preceding_node_types,
             current_node_llm_output_last_n=position.llm_output_last_n,
         )
+    if body.arguments is not None:
+        if scope is not RenderScope.LIBRARY:
+            raise ValidationError("Аргументы предпросмотра — только для промтов библиотеки")
+        task = (
+            await get_task_for_user(db_session, body.task_id, user=current_user)
+            if body.task_id is not None
+            else None
+        )
+        rendered = await render_with_arguments(
+            db_session,
+            task=task,
+            template=body.text,
+            arguments=parse_arguments(body.arguments),
+        )
+        return TemplatePreviewResponse(rendered_text=rendered.display)
     if body.task_id is None:
         return TemplatePreviewResponse(rendered_text=body.text)
 

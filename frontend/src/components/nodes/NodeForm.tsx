@@ -144,7 +144,7 @@ export function NodeForm({
             onChange={(event) => setArgumentHint(event.target.value)} />
           <p className="text-small text-text-3">{nodeType === NodeType.SCRIPT
             ? "Bash: $1, $2 и \"$@\"; Python: sys.argv[1:]. Полный текст: TRACKER_COMMAND_ARGUMENTS."
-            : "В промте: $ARGUMENTS — весь текст; $0 или $ARGUMENTS[0] — первый аргумент, $1 — второй."}</p>
+            : "В промте: $ARGUMENTS — весь текст; $1 или $ARGUMENTS[1] — первый аргумент, $2 — второй."}</p>
         </div>
       </>}
       <div>
@@ -186,6 +186,11 @@ export function NodeForm({
           onChange={setPromptTemplate}
           allowNodeVariables={isPipeline}
           previewRequest={previewRequest}
+          argumentHint={
+            !isPipeline && nodeType === NodeType.PLAIN_PROMPT && slashName.trim()
+              ? argumentHint.trim()
+              : undefined
+          }
         />
       )}
 
