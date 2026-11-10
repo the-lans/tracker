@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import pytest
+import sqlalchemy as sa
 from claude_agent_sdk import RateLimitInfo
 
 from db.models.enums import (
@@ -18,13 +19,15 @@ from db.models.enums import (
     NodeLogTriggerType,
     NodeType,
     ReasoningEffort,
+    TaskStatus,
 )
 from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.tasks import Task
 from services import account_router as account_router_module
-from services.account_router import TaskAccountRouter
-from services.llm_routing import NoLlmAccountAvailableError, TurnRoute, read_route
+from services.account_router import ROUTE_LOCK_KEY, TaskAccountRouter
+from services.llm_account_choice import LlmLimitWaitError, NoLlmAccountAvailableError
+from services.llm_routing import TurnRoute, read_route
 from services.notifications import NotificationEvent
 from tests.cliproxy_support import FakeCliproxy
 from tests.factories import make_llm_account, make_task, make_user
@@ -35,6 +38,7 @@ if TYPE_CHECKING:
 
 _NOW = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
 _USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_LIMITED = LlmAccountStatus.RATE_LIMITED
 
 
 class Recorded:
@@ -70,7 +74,6 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> Recorded:
         sink.pushes.append((event, user_id))
 
     monkeypatch.setattr(account_router_module, "write_app_log", app_log)
-    monkeypatch.setattr(account_router_module, "notify_task_event", task_push)
     monkeypatch.setattr("services.llm_account_checks.notify_user_event", user_push)
     monkeypatch.setattr("services.llm_usage.write_app_log", app_log)
     return sink
@@ -82,10 +85,9 @@ class Setup:
         self.fake_cliproxy = fake_cliproxy
         self.owner_id = uuid.uuid4()
 
-    async def owner(self, **thresholds: int) -> uuid.UUID:
+    async def owner(self) -> uuid.UUID:
         user = await make_user(self.db_session)
-        user.llm_switch_threshold_5h_pct = thresholds.get("five_hour", 93)
-        user.llm_switch_threshold_week_pct = thresholds.get("week", 93)
+        user.llm_switch_threshold_5h_pct = 93
         await self.db_session.flush()
         self.owner_id = user.id
         return user.id
@@ -97,6 +99,8 @@ class Setup:
         pct_5h: str | None = None,
         status: LlmAccountStatus = LlmAccountStatus.ACTIVE,
         checked_at: datetime | None = _NOW,
+        resets_in: timedelta | None = None,
+        started_ago: timedelta | None = None,
     ) -> LlmAccount:
         credential = f"{uuid.uuid4().hex}@example.com.json"
         account = await make_llm_account(
@@ -109,16 +113,25 @@ class Setup:
         )
         account.usage_5h_pct = Decimal(pct_5h) if pct_5h else None
         account.usage_checked_at = checked_at
+        account.usage_5h_resets_at = _NOW + resets_in if resets_in is not None else None
+        account.window_started_at = _NOW - started_ago if started_ago is not None else None
+        account.rate_limit_resets_at = _NOW + timedelta(hours=1) if status is _LIMITED else None
         await self.db_session.flush()
         self.fake_cliproxy.add_credential(credential)
         return account
 
-    async def task(self, start: LlmAccount, current: LlmAccount | None = None) -> Task:
+    async def task(
+        self,
+        start: LlmAccount | None,
+        current: LlmAccount | None = None,
+        status: TaskStatus = TaskStatus.IN_PROGRESS,
+    ) -> Task:
         return await make_task(
             self.db_session,
             created_by=self.owner_id,
-            llm_account_id=start.id,
+            llm_account_id=start.id if start else None,
             current_llm_account_id=current.id if current else None,
+            status=status,
         )
 
 
@@ -210,7 +223,9 @@ class TestRoute:
 
         assert (route.account_id, route.switch_reason) == (spare.id, LlmSwitchReason.THRESHOLD_5H)
         await db_session.refresh(task)
+        await db_session.refresh(spare)
         assert task.current_llm_account_id == spare.id
+        assert spare.window_started_at == _NOW
         assert [(entry["message"], entry["context"]) for entry in recorded.app_logs] == [
             (
                 "llm_account_switched",
@@ -325,31 +340,27 @@ class TestRoute:
 
         assert route.account_id == current.id
 
-    async def test_all_above_threshold_pushes_once_an_hour(
+    async def test_all_at_threshold_waits(
         self,
         db_session: AsyncSession,
         redis_client: Redis,
         fake_cliproxy: FakeCliproxy,
         setup: Setup,
-        recorded: Recorded,
     ) -> None:
-        current = await setup.account(pct_5h="99")
-        least = await setup.account(pct_5h="95")
+        current = await setup.account(pct_5h="99", resets_in=timedelta(hours=2))
+        await setup.account(status=_LIMITED)
         task = await setup.task(current, current=current)
-        router = _router(db_session, redis_client, fake_cliproxy, task)
 
-        first = await router.route(effort=None, node_type=None)
-        second = await router.route(effort=None, node_type=None)
+        with pytest.raises(LlmLimitWaitError) as raised:
+            await _router(db_session, redis_client, fake_cliproxy, task).route(
+                effort=None,
+                node_type=None,
+            )
 
-        assert (first.account_id, second.account_id) == (least.id, least.id)
-        assert (first.switch_reason, second.switch_reason) == (
-            LlmSwitchReason.ALL_ABOVE_THRESHOLD,
-            None,
-        )
-        assert recorded.pushes == [(NotificationEvent.LLM_ACCOUNTS_ABOVE_THRESHOLD, task.id)]
-        assert [entry["context"]["reason"] for entry in recorded.app_logs] == [
-            "all_above_threshold",
-        ]
+        assert raised.value.until == _NOW + timedelta(hours=1)
+        assert await read_route(redis_client, task.id) is None
+        await db_session.refresh(task)
+        assert task.current_llm_account_id == current.id
 
     async def test_plan_prompt_skips_unverified_provider(
         self,
@@ -376,8 +387,8 @@ class TestRoute:
         fake_cliproxy: FakeCliproxy,
         setup: Setup,
     ) -> None:
-        limited = await setup.account(status=LlmAccountStatus.RATE_LIMITED)
-        task = await setup.task(limited)
+        disabled = await setup.account(status=LlmAccountStatus.DISABLED)
+        task = await setup.task(disabled)
 
         with pytest.raises(NoLlmAccountAvailableError):
             await _router(db_session, redis_client, fake_cliproxy, task).route(
@@ -399,12 +410,133 @@ class TestRoute:
         await setup.owner()
         await setup.account()
 
+        with pytest.raises(LlmLimitWaitError):
+            await _router(db_session, redis_client, fake_cliproxy, task).route(
+                effort=None,
+                node_type=None,
+            )
+
+
+@pytest.mark.usefixtures("recorded")
+class TestWindows:
+    @pytest.mark.parametrize(
+        ("started_ago", "expected"),
+        [(timedelta(hours=2), "running"), (timedelta(hours=3), "free")],
+        ids=["step_ahead", "step_passed"],
+    )
+    async def test_second_task_staggered(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+        started_ago: timedelta,
+        expected: str,
+    ) -> None:
+        running = await setup.account(started_ago=started_ago)
+        free = await setup.account()
+        await setup.task(running, current=running)
+        await setup.task(None, current=running, status=TaskStatus.PAUSED)
+        task = await setup.task(None)
+        accounts = {"running": running, "free": free}
+
         route = await _router(db_session, redis_client, fake_cliproxy, task).route(
             effort=None,
             node_type=None,
         )
 
-        assert route.account_id == own.id
+        assert route.account_id == accounts[expected].id
+        await db_session.refresh(free)
+        assert free.window_started_at == (_NOW if expected == "free" else None)
+
+    async def test_open_window_not_moved(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+    ) -> None:
+        account = await setup.account()
+        task = await setup.task(account)
+        # Другая задача открыла окно между выбором и записью старта.
+        await db_session.execute(
+            sa.update(LlmAccount)
+            .where(LlmAccount.id == account.id)
+            .values(window_started_at=_NOW - timedelta(minutes=1)),
+        )
+        router = _router(db_session, redis_client, fake_cliproxy, task)
+
+        await router._open_window(account, now=_NOW)
+
+        await db_session.refresh(account)
+        assert account.window_started_at == _NOW - timedelta(minutes=1)
+
+    async def test_lock_released(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+    ) -> None:
+        account = await setup.account()
+        task = await setup.task(account)
+
+        await _router(db_session, redis_client, fake_cliproxy, task).route(
+            effort=None,
+            node_type=None,
+        )
+
+        assert await redis_client.get(ROUTE_LOCK_KEY.format(user_id=setup.owner_id)) is None
+
+    async def test_busy_lock_waited_out(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(account_router_module, "ROUTE_LOCK_WAIT_SECONDS", 0.1)
+        key = ROUTE_LOCK_KEY.format(user_id=setup.owner_id)
+        await redis_client.set(key, "other", ex=60)
+        account = await setup.account()
+        task = await setup.task(account)
+
+        route = await _router(db_session, redis_client, fake_cliproxy, task).route(
+            effort=None,
+            node_type=None,
+        )
+
+        assert route.account_id == account.id
+        assert await redis_client.get(key) in {b"other", "other"}
+
+
+class TestLimitGate:
+    @pytest.mark.parametrize(
+        ("spare_status", "expected"),
+        [(_LIMITED, _NOW + timedelta(hours=1)), (LlmAccountStatus.ACTIVE, None)],
+        ids=["all_blocked", "spare_free"],
+    )
+    async def test_gate(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+        spare_status: LlmAccountStatus,
+        expected: datetime | None,
+    ) -> None:
+        current = await setup.account(pct_5h="95", resets_in=timedelta(hours=3))
+        spare = await setup.account(status=spare_status)
+        task = await setup.task(current, current=current)
+
+        until = await _router(db_session, redis_client, fake_cliproxy, task).limit_gate()
+
+        assert until == expected
+        await db_session.refresh(spare)
+        await db_session.refresh(task)
+        assert (spare.window_started_at, task.current_llm_account_id) == (None, current.id)
+        assert await read_route(redis_client, task.id) is None
 
 
 @pytest.mark.usefixtures("recorded")

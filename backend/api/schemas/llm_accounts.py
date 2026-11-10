@@ -78,7 +78,12 @@ class LlmLoginStatusResponse(BaseModel):
 
 
 class LlmThresholdsUpdateRequest(BaseModel):
-    """Раздел 19.7: пороги переключения аккаунта по окнам лимита, в процентах."""
+    """Раздел 19.7: порог 5-часового окна лимита, в процентах; недельного порога нет."""
 
     five_hour_pct: int = Field(ge=MIN_LLM_SWITCH_THRESHOLD_PCT, le=MAX_LLM_SWITCH_THRESHOLD_PCT)
-    week_pct: int = Field(ge=MIN_LLM_SWITCH_THRESHOLD_PCT, le=MAX_LLM_SWITCH_THRESHOLD_PCT)
+
+
+class LlmCompactUpdateRequest(BaseModel):
+    """Раздел 19.7: «Сжимать контекст при смене LLM-аккаунта»."""
+
+    enabled: bool

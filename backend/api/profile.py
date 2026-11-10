@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.dependencies import get_current_user
 from api.schemas import (
     JiraConnectionUpdateRequest,
+    LlmCompactUpdateRequest,
     LlmThresholdsUpdateRequest,
     SftpConnectionResponse,
     SshKeyUpdateRequest,
@@ -19,7 +20,12 @@ from db.models.users import User
 from db.session import get_session
 from services.jira_import import clear_jira_connection, update_jira_connection
 from services.sftp_connection import SftpConnection, sftp_connection_for
-from services.users import clear_ssh_public_key, set_llm_switch_thresholds, set_ssh_public_key
+from services.users import (
+    clear_ssh_public_key,
+    set_llm_compact_on_switch,
+    set_llm_switch_threshold,
+    set_ssh_public_key,
+)
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -84,10 +90,23 @@ async def update_llm_thresholds(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
-    """Раздел 15.1, 19.7: пороги переключения LLM-аккаунтов, 1..100%."""
-    return await set_llm_switch_thresholds(
+    """Раздел 15.1, 19.7: порог 5-часового окна LLM-аккаунтов, 1..100%."""
+    return await set_llm_switch_threshold(
         db_session,
         user=current_user,
         five_hour_pct=body.five_hour_pct,
-        week_pct=body.week_pct,
+    )
+
+
+@router.put("/llm-compact", response_model=UserResponse)
+async def update_llm_compact(
+    body: LlmCompactUpdateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Раздел 15.1, 19.7: «Сжимать контекст при смене LLM-аккаунта»."""
+    return await set_llm_compact_on_switch(
+        db_session,
+        user=current_user,
+        enabled=body.enabled,
     )

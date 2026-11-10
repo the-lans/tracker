@@ -24,7 +24,7 @@ from clients.claude_agent import (
     build_claude_agent_options,
 )
 from db.models.enums import NodeType, ReasoningEffort
-from services.llm_routing import NoLlmAccountAvailableError
+from services.llm_account_choice import NoLlmAccountAvailableError
 from tests.fakes import (
     FAKE_ROUTE,
     FakeClaudeAgentClient,

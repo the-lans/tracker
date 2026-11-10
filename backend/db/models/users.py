@@ -12,7 +12,7 @@ from db.base import Base
 from db.models.enums import UserRole
 from db.models.mixins import CreatedAtMixin, UUIDPrimaryKeyMixin, pg_enum
 
-# Раздел 19.7: порог расхода окна лимита, после которого задача уходит на следующий аккаунт.
+# Раздел 19.7: порог расхода 5-часового окна, после которого аккаунт задачи не берут.
 DEFAULT_LLM_SWITCH_THRESHOLD_PCT = 93
 MIN_LLM_SWITCH_THRESHOLD_PCT = 1
 MAX_LLM_SWITCH_THRESHOLD_PCT = 100
@@ -29,10 +29,6 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         sa.CheckConstraint(
             f"llm_switch_threshold_5h_pct {_THRESHOLD_RANGE}",
             name="ck_users_llm_switch_threshold_5h_pct",
-        ),
-        sa.CheckConstraint(
-            f"llm_switch_threshold_week_pct {_THRESHOLD_RANGE}",
-            name="ck_users_llm_switch_threshold_week_pct",
         ),
         sa.CheckConstraint(
             f"max_parallel_tasks BETWEEN {MIN_MAX_PARALLEL_TASKS} AND {MAX_MAX_PARALLEL_TASKS}",
@@ -65,10 +61,12 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         default=DEFAULT_LLM_SWITCH_THRESHOLD_PCT,
         server_default=str(DEFAULT_LLM_SWITCH_THRESHOLD_PCT),
     )
-    llm_switch_threshold_week_pct: Mapped[int] = mapped_column(
-        sa.Integer,
-        default=DEFAULT_LLM_SWITCH_THRESHOLD_PCT,
-        server_default=str(DEFAULT_LLM_SWITCH_THRESHOLD_PCT),
+    # Недельного порога нет: `llm_switch_threshold_week_pct` остаётся в БД для
+    # прежней версии (раздел 20.6) и не отображается.
+    llm_compact_on_switch: Mapped[bool] = mapped_column(
+        sa.Boolean,
+        default=True,
+        server_default=sa.true(),
     )
     max_parallel_tasks: Mapped[int] = mapped_column(
         sa.Integer,

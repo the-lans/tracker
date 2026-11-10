@@ -27,7 +27,7 @@ from db.models.llm import LlmAccount
 from services.errors import ExternalServiceError
 from services.llm_account_login import cancel_expired_logins
 from services.llm_accounts import restore_expired_rate_limits
-from services.llm_usage import refresh_account_usage
+from services.llm_usage import refresh_account_usage, turns_since_usage_check
 from services.notifications import NotificationEvent, notify_user_event
 
 if TYPE_CHECKING:
@@ -105,6 +105,7 @@ async def _check_account(
         account,
         auth_index=credential.auth_index,
         now=now,
+        turns=await turns_since_usage_check(db_session, account),
     )
     await db_session.commit()
     if snapshot is not None:

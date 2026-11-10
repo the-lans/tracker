@@ -16,15 +16,22 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+import sqlalchemy as sa
 
 from app_logging.app_logs import write_app_log
 from app_logging.config import get_logger
 from clients.cliproxy import CliproxyManagementClient
 from db.models.enums import AppLogLevel, LlmAccountStatus
 from db.models.llm import LlmAccount
+from db.models.logs import NodeLog
 from services.errors import ExternalServiceError
+from services.llm_account_choice import FIVE_HOUR_WINDOW
 from services.llm_providers import UsageSource, get_provider
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger("llm_usage")
 
@@ -39,6 +46,11 @@ UNKNOWN_RATE_LIMIT_WINDOW = timedelta(hours=1)
 _PCT_QUANTUM = Decimal("0.01")
 _FIVE_HOURS_SECONDS = 5 * 60 * 60
 _WEEK_SECONDS = 7 * 24 * 60 * 60
+# Скользящее среднее стоимости хода: вес нового замера.
+TURN_COST_SMOOTHING = Decimal("0.3")
+# Окно то же, если время сброса сдвинулось не больше чем на столько: у части
+# провайдеров оно вычисляется из «секунд до сброса» и плавает между опросами.
+_SAME_WINDOW_TOLERANCE = timedelta(minutes=5)
 
 
 class UsageFormatError(ValueError):
@@ -204,11 +216,46 @@ def _exhausted_until(snapshot: UsageSnapshot) -> tuple[bool, datetime | None]:
     return bool(exhausted), max(times, default=None)
 
 
-def apply_usage(account: LlmAccount, snapshot: UsageSnapshot, *, now: datetime) -> None:
+def _turn_cost(account: LlmAccount, window: UsageWindow, *, turns: int) -> Decimal | None:
+    """
+    Средняя стоимость хода: прирост расхода того же 5-часового окна с прошлого
+    опроса на число ходов за это время (раздел 19.7).
+    """
+    previous_pct, previous_reset = account.usage_5h_pct, account.usage_5h_resets_at
+    if (
+        turns <= 0
+        or previous_pct is None
+        or previous_reset is None
+        or window.pct is None
+        or window.resets_at is None
+        or abs(window.resets_at - previous_reset) > _SAME_WINDOW_TOLERANCE
+        or window.pct < previous_pct
+    ):
+        return account.turn_cost_pct
+    sample = min((window.pct - previous_pct) / turns, EXHAUSTED_PCT)
+    previous_cost = account.turn_cost_pct
+    if previous_cost is None:
+        return sample.quantize(_PCT_QUANTUM)
+    return (previous_cost + (sample - previous_cost) * TURN_COST_SMOOTHING).quantize(_PCT_QUANTUM)
+
+
+def apply_usage(
+    account: LlmAccount,
+    snapshot: UsageSnapshot,
+    *,
+    now: datetime,
+    turns: int = 0,
+) -> None:
     """
     Сохраняет расход в аккаунт; исчерпанное окно у `active` аккаунта — `rate_limited`
-    до сброса окна (раздел 3.1). Коммит — у вызывающего кода.
+    до сброса окна (раздел 3.1). ``turns`` — ходы аккаунта с прошлого опроса,
+    по ним пересчитывается стоимость хода; окно, открытое трекером, после
+    сброса забывается. Коммит — у вызывающего кода.
     """
+    account.turn_cost_pct = _turn_cost(account, snapshot.five_hour, turns=turns)
+    started_at = account.window_started_at
+    if started_at is not None and started_at + FIVE_HOUR_WINDOW <= now:
+        account.window_started_at = None
     account.usage_5h_pct = snapshot.five_hour.pct
     account.usage_5h_resets_at = snapshot.five_hour.resets_at
     account.usage_week_pct = snapshot.week.pct
@@ -220,12 +267,25 @@ def apply_usage(account: LlmAccount, snapshot: UsageSnapshot, *, now: datetime) 
         account.rate_limit_resets_at = resets_at or now + UNKNOWN_RATE_LIMIT_WINDOW
 
 
+async def turns_since_usage_check(db_session: AsyncSession, account: LlmAccount) -> int:
+    """Ходы аккаунта после прошлого опроса расхода: замер для стоимости хода."""
+    checked_at = account.usage_checked_at
+    if checked_at is None:
+        return 0
+    stmt = sa.select(sa.func.count(NodeLog.id)).where(
+        NodeLog.llm_account_id == account.id,
+        NodeLog.started_at > checked_at,
+    )
+    return int(await db_session.scalar(stmt) or 0)
+
+
 async def refresh_account_usage(
     cliproxy: CliproxyManagementClient,
     account: LlmAccount,
     *,
     auth_index: str,
     now: datetime,
+    turns: int = 0,
 ) -> UsageSnapshot | None:
     """
     Опрашивает расход и сохраняет его в аккаунт (без коммита). `None` — провайдер
@@ -250,5 +310,5 @@ async def refresh_account_usage(
             },
         )
         return None
-    apply_usage(account, snapshot, now=now)
+    apply_usage(account, snapshot, now=now, turns=turns)
     return snapshot

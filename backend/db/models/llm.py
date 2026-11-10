@@ -66,6 +66,10 @@ class LlmAccount(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     usage_5h_resets_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     usage_week_resets_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     usage_checked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Раздел 19.7: окно открыл трекер первым ходом — опрос видит его с задержкой.
+    window_started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Средняя стоимость хода в процентах 5-часового окна — резерв идущих ходов.
+    turn_cost_pct: Mapped[Decimal | None] = mapped_column(USAGE_PCT_TYPE)
     # Раздел 19.2: аккаунт личный — владелец тот, кто его завёл.
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), index=True)
 

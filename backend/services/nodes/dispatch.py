@@ -22,7 +22,8 @@ from db.models.enums import AppLogLevel, NodeLogStatus, NodeType, PermissionMode
 from db.models.logs import NodeLog
 from db.models.tasks import Task
 from services.failure_classification import is_transient_assistant_error
-from services.llm_routing import NoLlmAccountAvailableError, TurnRoute
+from services.llm_account_choice import LlmLimitWaitError, NoLlmAccountAvailableError
+from services.llm_routing import TurnRoute
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.nodes.script import ScriptExecutionResult, run_script_node
 from services.task_artifacts import task_artifacts_dir
@@ -164,8 +165,9 @@ async def execute_llm_node(
 ) -> NodeExecutionOutcome:
     """
     Выполняет `plain_prompt`/`slash_command` — единая точка обращения к сессии
-    (раздел 6.2). Нет ни одного `active` LLM-аккаунта — сбой, временный для
-    ноды пайплайна (раздел 19.7, п. 5): повтор выберет аккаунт заново.
+    (раздел 6.2). Нет доступного LLM-аккаунта или все на пороге после ворот
+    лимита — сбой, временный для ноды пайплайна (раздел 19.7, п. 5): повтор
+    выберет аккаунт заново.
     """
     try:
         turn = await claude_session.send_and_collect_text(
@@ -173,7 +175,7 @@ async def execute_llm_node(
             effort=effort,
             node_type=node_type,
         )
-    except NoLlmAccountAvailableError as exc:
+    except (NoLlmAccountAvailableError, LlmLimitWaitError) as exc:
         return NodeExecutionOutcome(success=False, error_message=exc.message)
     if turn.is_error:
         # Отклонённый вход и лимит временны, только пока у автора есть другой аккаунт.

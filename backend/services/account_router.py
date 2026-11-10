@@ -3,10 +3,13 @@
 
 Перед каждым обращением к сессии воркер спрашивает `TaskAccountRouter.route`:
 роутер обновляет расход прежнего аккаунта задачи, если опрос устарел,
-выбирает аккаунт по порогам автора (`services/llm_routing.choose_account`),
-публикует маршрут для `llm-gateway` и выставляет `tasks.current_llm_account_id`.
-Смена аккаунта пишется событием `llm_account_switched`; если все аккаунты
-выше порога — автору уходит уведомление не чаще раза в час.
+собирает нагрузку аккаунтов автора и выбирает аккаунт правилом
+`services/llm_account_choice.choose_account` под блокировкой
+`llm-route:<user_id>`. Первый ход на свободном аккаунте записывает старт его
+окна (`window_started_at`, compare-and-swap). Затем роутер публикует маршрут
+для `llm-gateway` и выставляет `tasks.current_llm_account_id`; смена аккаунта
+пишется событием `llm_account_switched`. `limit_gate` — та же оценка без
+побочных эффектов: время ожидания сброса, если все аккаунты на пороге.
 
 Ошибка хода, в которой провайдер отклонил вход или исчерпан лимит, переводит
 аккаунт маршрута в `login_required`/`rate_limited` (`report_error`); повтор
@@ -16,12 +19,11 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from redis.exceptions import RedisError
 
 from app_logging.app_logs import write_app_log
 from app_logging.config import get_logger
@@ -29,26 +31,36 @@ from db.models.enums import (
     AppLogLevel,
     LlmAccountStatus,
     LlmSwitchReason,
+    NodeLogStatus,
     NodeType,
     ReasoningEffort,
+    TaskStatus,
 )
 from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.tasks import Task
 from db.models.users import User
+from services.distributed_lock import wait_for_lock
 from services.errors import ExternalServiceError
 from services.llm_account_checks import require_login
-from services.llm_providers import PROVIDERS, get_provider, provider_effort
-from services.llm_routing import (
+from services.llm_account_choice import (
+    FIVE_HOUR_WINDOW,
     AccountChoice,
+    AccountView,
+    ChoiceRequest,
+    LimitWait,
+    LlmLimitWaitError,
     NoLlmAccountAvailableError,
-    SwitchThresholds,
-    TurnRoute,
     choose_account,
-    publish_route,
+    wait_until,
 )
-from services.llm_usage import UNKNOWN_RATE_LIMIT_WINDOW, refresh_account_usage
-from services.notifications import NotificationEvent, notify_task_event
+from services.llm_providers import PROVIDERS, get_provider, provider_effort
+from services.llm_routing import TurnRoute, publish_route
+from services.llm_usage import (
+    UNKNOWN_RATE_LIMIT_WINDOW,
+    refresh_account_usage,
+    turns_since_usage_check,
+)
 
 if TYPE_CHECKING:
     from claude_agent_sdk import RateLimitInfo
@@ -62,9 +74,14 @@ logger = get_logger("account_router")
 _SOURCE = "account_router"
 # Раздел 19.7: перед выбором расход обновляется, если опрос старше минуты.
 USAGE_MAX_AGE = timedelta(seconds=60)
-# Раздел 18.2: «все выше порога» — не чаще раза в час на пользователя.
-ABOVE_THRESHOLD_PUSH_WINDOW_SECONDS = 60 * 60
-_ABOVE_THRESHOLD_PUSH_KEY = "push:window:llm_above_threshold:{user_id}"
+# Раздел 19.7: выбор по одному пользователю — под блокировкой, чтобы
+# параллельные задачи не открыли два окна разом. Выбор занимает доли секунды;
+# не дождавшись, ход выбирает без блокировки, а не падает.
+ROUTE_LOCK_KEY = "llm-route:{user_id}"
+ROUTE_LOCK_TTL_SECONDS = 30
+ROUTE_LOCK_WAIT_SECONDS = 10.0
+# Задачи автора, которым сейчас нужен аккаунт: нагрузка окон и число задач в работе.
+IN_WORK_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.REFINING, TaskStatus.REBASE_CONFLICT)
 _REJECTED = "rejected"
 
 AUTHENTICATION_FAILED = "authentication_failed"
@@ -101,40 +118,79 @@ class TaskAccountRouter:
         *,
         effort: ReasoningEffort | None,
         node_type: NodeType | None,
+        boundary: bool = True,
     ) -> TurnRoute:
         """
-        Маршрут хода: аккаунт, модель и уровень рассуждений. Нет ни одного
-        `active` аккаунта — `NoLlmAccountAvailableError` (п. 5 раздела 19.7).
+        Маршрут хода: аккаунт, модель и уровень рассуждений. Все аккаунты
+        исключены — `NoLlmAccountAvailableError`; все на пороге или
+        исчерпаны — `LlmLimitWaitError` (п. 5 раздела 19.7).
         """
+        task = self._task
+        lock_key = ROUTE_LOCK_KEY.format(user_id=task.created_by)
+        async with wait_for_lock(
+            self._redis,
+            lock_key,
+            ttl_seconds=ROUTE_LOCK_TTL_SECONDS,
+            wait_seconds=ROUTE_LOCK_WAIT_SECONDS,
+        ):
+            views, request = await self._prepare(node_type=node_type, boundary=boundary)
+            choice = choose_account(views, request)
+            if isinstance(choice, LimitWait):
+                raise LlmLimitWaitError(choice.until)
+            if choice.opens_window:
+                await self._open_window(choice.account, now=request.now)
+            previous_id = await self._previous_account_id()
+            switched = previous_id is not None and previous_id != choice.account.id
+            route = _turn_route(
+                choice.account,
+                effort,
+                switch_reason=choice.reason if switched else None,
+            )
+            await publish_route(self._redis, task.id, route)
+            await self._set_current(choice)
+        if switched:
+            assert previous_id is not None
+            await self._log_switch(previous_id, choice)
+        self.route_in_use = route
+        return route
+
+    async def limit_gate(
+        self,
+        *,
+        node_type: NodeType | None = None,
+        boundary: bool = True,
+    ) -> datetime | None:
+        """
+        Ворота лимита перед ходом (раздел 19.7, «Ожидание лимита»): до какого
+        времени ход ждать сброса; None — ход можно начинать. Без выбора и
+        маршрута: окно не открывается, аккаунт задачи не меняется.
+        """
+        views, request = await self._prepare(node_type=node_type, boundary=boundary)
+        return wait_until(views, request)
+
+    async def _prepare(
+        self,
+        *,
+        node_type: NodeType | None,
+        boundary: bool,
+    ) -> tuple[list[AccountView], ChoiceRequest]:
         task = self._task
         await self._db.refresh(task, ["current_llm_account_id", "llm_account_id"])
         accounts = await self._accounts()
         # Расход обновляется у аккаунта, который останется при выборе: текущего или стартового.
         kept_id = task.current_llm_account_id or task.llm_account_id
         await self._refresh_stale_usage(accounts, kept_id)
-        previous_id = await self._previous_account_id()
-        choice = choose_account(
-            accounts,
+        views = await self._views(accounts)
+        request = ChoiceRequest(
+            now=self._clock(),
+            threshold_pct=await self._threshold(),
             current_id=task.current_llm_account_id,
             start_id=task.llm_account_id,
-            thresholds=await self._thresholds(),
             plan_prompt=node_type is NodeType.PLAN_PROMPT,
+            boundary=boundary,
+            tasks_in_work=await self._tasks_in_work(),
         )
-        switched = previous_id is not None and previous_id != choice.account.id
-        route = _turn_route(
-            choice.account,
-            effort,
-            switch_reason=choice.reason if switched else None,
-        )
-        await publish_route(self._redis, task.id, route)
-        await self._set_current(choice)
-        if switched:
-            assert previous_id is not None
-            await self._log_switch(previous_id, choice)
-        if choice.reason is LlmSwitchReason.ALL_ABOVE_THRESHOLD:
-            await self._notify_all_above_threshold()
-        self.route_in_use = route
-        return route
+        return views, request
 
     async def _previous_account_id(self) -> uuid.UUID | None:
         """
@@ -166,13 +222,77 @@ class TaskAccountRouter:
         )
         return list((await self._db.execute(stmt)).scalars())
 
-    async def _thresholds(self) -> SwitchThresholds:
+    async def _threshold(self) -> int:
         author = await self._db.get(User, self._task.created_by)
         assert author is not None
-        return SwitchThresholds(
-            five_hour=author.llm_switch_threshold_5h_pct,
-            week=author.llm_switch_threshold_week_pct,
+        return author.llm_switch_threshold_5h_pct
+
+    async def _views(self, accounts: Sequence[LlmAccount]) -> list[AccountView]:
+        """Нагрузка аккаунтов: задачи в работе на них и идущие ходы других задач."""
+        task = self._task
+        tasks_stmt = (
+            sa.select(Task.current_llm_account_id, sa.func.count(Task.id))
+            .where(
+                Task.created_by == task.created_by,
+                Task.status.in_(IN_WORK_STATUSES),
+                Task.current_llm_account_id.is_not(None),
+            )
+            .group_by(Task.current_llm_account_id)
         )
+        turns_stmt = (
+            sa.select(NodeLog.llm_account_id, sa.func.count(NodeLog.id))
+            .where(
+                NodeLog.status == NodeLogStatus.RUNNING,
+                NodeLog.task_id != task.id,
+                NodeLog.llm_account_id.in_([account.id for account in accounts]),
+            )
+            .group_by(NodeLog.llm_account_id)
+        )
+        tasks = {key: count for key, count in await self._db.execute(tasks_stmt)}
+        turns = {key: count for key, count in await self._db.execute(turns_stmt)}
+        return [
+            AccountView(
+                account,
+                tasks=tasks.get(account.id, 0),
+                running_turns=turns.get(account.id, 0),
+            )
+            for account in accounts
+        ]
+
+    async def _tasks_in_work(self) -> int:
+        """Задачи автора в работе; выбирающая задача — среди них, в каком бы статусе ни была."""
+        task = self._task
+        stmt = sa.select(sa.func.count(Task.id)).where(
+            Task.created_by == task.created_by,
+            Task.status.in_(IN_WORK_STATUSES),
+            Task.id != task.id,
+        )
+        return int(await self._db.scalar(stmt) or 0) + 1
+
+    async def _open_window(self, account: LlmAccount, *, now: datetime) -> None:
+        """
+        Старт 5-часового окна свободного аккаунта: compare-and-swap, чтобы
+        окно, уже открытое другой задачей, не сдвигалось.
+        """
+        opened = await self._db.scalar(
+            sa.update(LlmAccount)
+            .where(
+                LlmAccount.id == account.id,
+                sa.or_(
+                    LlmAccount.window_started_at.is_(None),
+                    LlmAccount.window_started_at <= now - FIVE_HOUR_WINDOW,
+                ),
+            )
+            .values(window_started_at=now)
+            .returning(LlmAccount.id),
+        )
+        await self._db.commit()
+        if opened is not None:
+            logger.info(
+                "llm_window_opened",
+                account_id=str(account.id),
+                task_id=str(self._task.id),
+            )
 
     async def _refresh_stale_usage(
         self,
@@ -190,6 +310,7 @@ class TaskAccountRouter:
             account,
             auth_index=auth_index,
             now=self._clock(),
+            turns=await turns_since_usage_check(self._db, account),
         )
         await self._db.commit()
 
@@ -236,29 +357,6 @@ class TaskAccountRouter:
             context=context,
             task_id=self._task.id,
         )
-
-    async def _notify_all_above_threshold(self) -> None:
-        key = _ABOVE_THRESHOLD_PUSH_KEY.format(user_id=self._task.created_by)
-        try:
-            opened = await self._redis.set(
-                key,
-                "1",
-                nx=True,
-                ex=ABOVE_THRESHOLD_PUSH_WINDOW_SECONDS,
-            )
-        except RedisError:
-            logger.warning("push_window_unavailable", push_event="llm_above_threshold")
-            opened = True
-        if opened:
-            await notify_task_event(
-                self._db,
-                event=NotificationEvent.LLM_ACCOUNTS_ABOVE_THRESHOLD,
-                task=self._task,
-                detail=(
-                    f"{self._task.code}: расход всех LLM-аккаунтов выше порога, "
-                    "работа продолжается на наименее израсходованном"
-                ),
-            )
 
     async def report_error(self, route: TurnRoute, assistant_error: str | None) -> bool | None:
         """
@@ -336,4 +434,4 @@ def _turn_route(
     )
 
 
-__all__ = ["NoLlmAccountAvailableError", "TaskAccountRouter"]
+__all__ = ["LlmLimitWaitError", "NoLlmAccountAvailableError", "TaskAccountRouter"]

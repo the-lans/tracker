@@ -11,6 +11,7 @@ push-уведомления исключается иначе — однокра
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 logger = get_logger("distributed_lock")
 
 DEFAULT_LOCK_TTL_SECONDS = 60
+_LOCK_POLL_SECONDS = 0.05
 
 
 class LockNotAcquiredError(Exception):
@@ -55,11 +57,41 @@ async def acquire_lock(
     try:
         yield
     finally:
-        current = await redis_client.get(key)
-        current_token = current.decode() if isinstance(current, bytes) else current
-        if current_token == token:
-            await redis_client.delete(key)
+        await _release(redis_client, key, token)
         logger.info("distributed_lock_released", key=key)
+
+
+async def _release(redis_client: Redis, key: str, token: str) -> None:
+    current = await redis_client.get(key)
+    current_token = current.decode() if isinstance(current, bytes) else current
+    if current_token == token:
+        await redis_client.delete(key)
+
+
+@asynccontextmanager
+async def wait_for_lock(
+    redis_client: Redis,
+    key: str,
+    *,
+    ttl_seconds: int,
+    wait_seconds: float,
+) -> AsyncIterator[bool]:
+    """
+    `SET NX` с TTL и коротким ожиданием занятой блокировки. Отдаёт, захвачена
+    ли она: по истечении ожидания вызывающий код решает сам, идти ли без неё.
+    """
+    token = str(uuid.uuid4())
+    deadline = asyncio.get_running_loop().time() + wait_seconds
+    while not await redis_client.set(key, token, nx=True, ex=ttl_seconds):
+        if asyncio.get_running_loop().time() >= deadline:
+            logger.warning("distributed_lock_wait_expired", key=key)
+            yield False
+            return
+        await asyncio.sleep(_LOCK_POLL_SECONDS)
+    try:
+        yield True
+    finally:
+        await _release(redis_client, key, token)
 
 
 @asynccontextmanager
