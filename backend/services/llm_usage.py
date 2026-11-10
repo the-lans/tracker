@@ -155,9 +155,9 @@ def _parse_openai(body: Mapping[str, Any]) -> UsageSnapshot:
     secondary = _section(rate_limit, "secondary_window")
     if primary is None and secondary is None:
         raise UsageFormatError("Нет окон primary_window/secondary_window")
-    swapped = (primary or {}).get("limit_window_seconds") == _WEEK_SECONDS or (
-        secondary or {}
-    ).get("limit_window_seconds") == _FIVE_HOURS_SECONDS
+    swapped = (primary or {}).get("limit_window_seconds") == _WEEK_SECONDS or (secondary or {}).get(
+        "limit_window_seconds"
+    ) == _FIVE_HOURS_SECONDS
     five_hour, week = (secondary, primary) if swapped else (primary, secondary)
     return UsageSnapshot(five_hour=_openai_window(five_hour), week=_openai_window(week))
 

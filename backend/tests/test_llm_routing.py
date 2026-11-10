@@ -94,4 +94,3 @@ class TestRoute:
 
     async def test_missing(self, redis_client: Redis) -> None:
         assert await read_route(redis_client, uuid.uuid4()) is None
-

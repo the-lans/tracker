@@ -101,7 +101,6 @@ _REPOSITORY_NAME = "backend"
 _LIMIT_RESET = datetime(2099, 1, 1, 12, 0, tzinfo=UTC)
 
 
-
 async def _make_task(
     db_session: AsyncSession,
     *,
@@ -1019,7 +1018,6 @@ class TestBridgeReconnect:
         assert task.remote_control_status is RemoteControlStatus.DISCONNECTED
         assert await consume_bridge_reconnect(redis_client, task.id) is False
         assert len(worker_env.options) == 1
-
 
     async def test_unavailable_bridge_untouched(
         self,

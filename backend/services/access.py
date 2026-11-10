@@ -27,9 +27,11 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import InstrumentedAttribute
 
+
 class _TaskScoped(Protocol):
     @property
     def task_id(self) -> uuid.UUID: ...
+
 
 OwnedRecord = Task | Pipeline | Node | Template | LlmAccount
 OwnedModel = type[Task] | type[Pipeline] | type[Node] | type[Template] | type[LlmAccount]

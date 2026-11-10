@@ -61,8 +61,6 @@ def _answer(text: str) -> list[Message]:
     return [AssistantMessage(content=[TextBlock(text=text)], model="claude"), make_result_message()]
 
 
-
-
 async def _make_parent(
     db_session: AsyncSession,
     user: User,

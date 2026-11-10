@@ -360,8 +360,10 @@ async def test_fail_task_after_error_fails_task_and_closes_running_logs(
     assert running_log.status is NodeLogStatus.FAILED
     assert running_log.error_message == SESSION_ERROR_MESSAGE
     app_logs = (
-        await db_session.execute(sa.select(AppLog).where(AppLog.task_id == task.id))
-    ).scalars().all()
+        (await db_session.execute(sa.select(AppLog).where(AppLog.task_id == task.id)))
+        .scalars()
+        .all()
+    )
     assert ["SDK упал" in log.message for log in app_logs] == [True]
 
 
@@ -486,4 +488,3 @@ class TestRunAfterReset:
             to_status=TaskStatus.DONE,
         )
         assert updated.status is TaskStatus.DONE
-
