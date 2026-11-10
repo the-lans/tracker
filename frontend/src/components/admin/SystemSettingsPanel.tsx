@@ -10,6 +10,7 @@ import type { SystemSettings } from "@/lib/types";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
 import { IntegrationsCard } from "@/components/admin/IntegrationsCard";
+import { BackupSettingsCard } from "@/components/admin/BackupSettingsCard";
 
 type NumericField =
   | "default_timeout_seconds"
@@ -109,7 +110,7 @@ function SettingsForm({ initial }: { initial: SystemSettings }) {
   );
 }
 
-/** Раздел 15.5: значения по умолчанию для новых нод (уже созданные не меняются), ночное окно и интеграции. */
+/** Раздел 15.5: значения по умолчанию для новых нод (уже созданные не меняются), ночное окно, интеграции и бэкап в S3. */
 export function SystemSettingsPanel() {
   const { data: settings, isLoading } = useSystemSettings();
 
@@ -126,6 +127,7 @@ export function SystemSettingsPanel() {
         {settings && <SettingsForm initial={settings} />}
       </Card>
       <IntegrationsCard />
+      <BackupSettingsCard />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import {
   AppLogLevel,
+  BackupRunStatus,
   NodeLogStatus,
   NodeLogTriggerType,
   NodeType,
@@ -90,6 +91,20 @@ export const PERIODIC_RUN_STATUS_TONE: Record<PeriodicRunStatus, BadgeTone> = {
   [PeriodicRunStatus.SUCCESS]: "success",
   [PeriodicRunStatus.FAILED]: "danger",
   [PeriodicRunStatus.RUNNING]: "info",
+};
+
+export const BACKUP_RUN_STATUS_LABEL: Record<BackupRunStatus, string> = {
+  [BackupRunStatus.RUNNING]: "Выполняется",
+  [BackupRunStatus.SUCCESS]: "Успешно",
+  [BackupRunStatus.WARNING]: "С пропусками",
+  [BackupRunStatus.FAILED]: "Ошибка",
+};
+
+export const BACKUP_RUN_STATUS_TONE: Record<BackupRunStatus, BadgeTone> = {
+  [BackupRunStatus.RUNNING]: "info",
+  [BackupRunStatus.SUCCESS]: "success",
+  [BackupRunStatus.WARNING]: "warning",
+  [BackupRunStatus.FAILED]: "danger",
 };
 
 export const APP_LOG_LEVEL_TONE: Record<AppLogLevel, BadgeTone> = {
