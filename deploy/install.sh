@@ -43,6 +43,11 @@ LIVE_SESSION_STATUSES="'in_progress','paused','plan_review','awaiting_input','re
 # Раздел 20.6: статусы до запуска, которых не знает версия без этой миграции.
 PRE_LAUNCH_STATUSES_MIGRATION="alembic/versions/a3f9d2c71e58_task_queue_statuses.py"
 PRE_LAUNCH_STATUSES_ADDED="'refining','defined','ready','night_worker'"
+# Раздел 20.6: статус awaiting_limit, которого не знает версия без этой
+# миграции. Ждущие лимита задачи возвращаются в её статусы — тем же запросом,
+# что downgrade миграции (_RESTORE_LIMIT_WAITS).
+LIMIT_WAIT_MIGRATION="alembic/versions/e5b81c4d2f97_llm_limit_control.py"
+LIMIT_WAIT_RESET="UPDATE tasks SET status = CASE WHEN limit_wait_from_status::text = 'refining' THEN 'refining'::task_status ELSE 'failed'::task_status END, last_failed_order_index = CASE WHEN limit_wait_from_status::text = 'refining' THEN last_failed_order_index ELSE coalesce(limit_wait_order_index, last_failed_order_index) END WHERE status::text = 'awaiting_limit'"
 # Периодические задачи воркера очереди: прежняя версия их не знает. Новая
 # создаёт их заново сидом (scripts/seed_periodic_tasks.py).
 QUEUE_PERIODIC_TASKS="'dispatch_ready_tasks','dispatch_night_tasks'"
@@ -628,25 +633,32 @@ step_wait_idle() {
   done
 }
 
-# Откат на версию без статусов до запуска (раздел 20.6): прежний код не
-# прочитал бы задачу с незнакомым статусом — такие задачи возвращаются в new,
-# а периодические задачи воркера очереди, которых прежний worker не знает,
-# удаляются. Одной транзакцией, после checkout: если checkout не удался, БД не
-# тронута. Сбой здесь возвращает код на прежний коммит — сервер не изменён.
+# Откат на версию, которая не знает новых статусов задач (раздел 20.6):
+# прежний код не прочитал бы задачу с незнакомым статусом. Ждущие лимита
+# задачи уходят в failed (точка перезапуска — нода, которая ждала) или
+# обратно в refining; статусы до запуска — в new, а периодические задачи
+# воркера очереди, которых прежний worker не знает, удаляются. Одной
+# транзакцией, после checkout: если checkout не удался, БД не тронута. Сбой
+# здесь возвращает код на прежний коммит — сервер не изменён.
 _reset_unknown_task_statuses() {
-  local commit="$1" previous="$2"
-  git -C "${INSTALL_DIR}" cat-file -e "${commit}:${PRE_LAUNCH_STATUSES_MIGRATION}" 2>/dev/null \
-    && return 0
-  log "Обновление: у версии ${commit} нет статусов до запуска — такие задачи возвращаются в new"
-  local query="UPDATE tasks SET status = 'new' WHERE status::text IN (${PRE_LAUNCH_STATUSES_ADDED})"
-  query+="; DELETE FROM periodic_tasks WHERE name IN (${QUEUE_PERIODIC_TASKS})"
+  local commit="$1" previous="$2" query=""
+  if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${LIMIT_WAIT_MIGRATION}" 2>/dev/null; then
+    log "Обновление: у версии ${commit} нет статуса awaiting_limit — ждущие лимита задачи уходят в failed или refining"
+    query="${LIMIT_WAIT_RESET}; "
+  fi
+  if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${PRE_LAUNCH_STATUSES_MIGRATION}" 2>/dev/null; then
+    log "Обновление: у версии ${commit} нет статусов до запуска — такие задачи возвращаются в new"
+    query+="UPDATE tasks SET status = 'new' WHERE status::text IN (${PRE_LAUNCH_STATUSES_ADDED})"
+    query+="; DELETE FROM periodic_tasks WHERE name IN (${QUEUE_PERIODIC_TASKS})"
+  fi
+  [ -n "${query}" ] || return 0
   ( cd "${INSTALL_DIR}" \
     && docker compose exec -T postgres \
       sh -c 'psql -v ON_ERROR_STOP=1 -1 -tA -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "${query}" ) \
     && return 0
   git -C "${INSTALL_DIR}" checkout --detach "${previous}" \
-    || die "не удалось вернуть задачи в статус new, а код остался на ${commit}: верните его вручную (git checkout ${previous})"
-  die_unchanged "не удалось вернуть задачи в статус new перед откатом"
+    || die "не удалось вернуть задачи в статусы прежней версии, а код остался на ${commit}: верните его вручную (git checkout ${previous})"
+  die_unchanged "не удалось вернуть задачи в статусы прежней версии перед откатом"
 }
 
 # Переход на коммит из истории origin/main: вершина ветки или --ref (в том

@@ -50,6 +50,11 @@ async def _enabled_llm_node_names(db_session: AsyncSession, task: Task) -> list[
     return list((await db_session.execute(stmt)).scalars().all())
 
 
+async def task_needs_llm(db_session: AsyncSession, task: Task) -> bool:
+    """Задаче нужна сессия Claude Code: включённые LLM-ноды или пересказ родителя."""
+    return task.use_parent_summary or bool(await _enabled_llm_node_names(db_session, task))
+
+
 async def ensure_llm_account_for_launch(db_session: AsyncSession, task: Task) -> None:
     if task.llm_account_id is not None:
         return

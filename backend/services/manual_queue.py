@@ -40,6 +40,7 @@ from services.distributed_lock import LockNotAcquiredError, acquire_task_operati
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_library_prompt_attachable
 from services.library_commands import load_snapshot, render_command
+from services.limit_wait import LimitGate, check_limit_gate
 from services.manual_admission import ensure_manual_requests_open, lock_manual_task
 from services.node_runs import apply_node_outcome, mark_node_log_stopped, start_node_log
 from services.nodes.dispatch import (
@@ -578,6 +579,7 @@ async def process_manual_queue_once(
     repos_path: Path,
     redis_client: Redis,
     active_node_context: ActiveNodeContext | None = None,
+    limit_gate: LimitGate | None = None,
 ) -> int:
     """Обрабатывает ВСЕ `queued`-запросы FIFO по `requested_at` (раздел 7.3).
 
@@ -587,6 +589,8 @@ async def process_manual_queue_once(
     отдельный запрос защищён распределённой блокировкой (раздел 17.5) —
     если другой процесс уже обрабатывает очередь этой задачи, обработка
     останавливается без ошибки (раздел 17.4: идемпотентность).
+    ``limit_gate`` — ворота лимита перед каждым запросом (раздел 19.7):
+    `LlmLimitWaitError`, а запрос остаётся в `queued` до сброса.
     """
     processed = 0
     stop_guard = StopGuard(redis_client=redis_client, task_id=task.id)
@@ -608,6 +612,7 @@ async def process_manual_queue_once(
         request = await db_session.scalar(stmt)
         if request is None:
             return processed
+        await check_limit_gate(limit_gate)
         try:
             async with acquire_task_operation_lock(
                 redis_client,
@@ -632,8 +637,13 @@ async def process_manual_queue_once(
 
 # Раздел 16.2: сколько запрос может ждать в очереди задачи без живой сессии.
 STALE_QUEUED_REQUEST_AGE = timedelta(minutes=30)
-# Сессия жива или вот-вот начнётся — её очередь обработает воркер.
-_TASK_STATUSES_WITH_LIVE_SESSION = (TaskStatus.QUEUED, *SESSION_ACTIVE_STATUSES)
+# Сессия жива или вот-вот начнётся (в том числе после сброса лимита) — её
+# очередь обработает воркер.
+_TASK_STATUSES_WITH_LIVE_SESSION = (
+    TaskStatus.QUEUED,
+    TaskStatus.AWAITING_LIMIT,
+    *SESSION_ACTIVE_STATUSES,
+)
 
 
 async def expire_stale_manual_queue_requests(

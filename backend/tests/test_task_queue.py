@@ -107,6 +107,33 @@ class TestOccupiedSlots:
 
         assert counts.get(task.created_by, 0) == occupied
 
+    @pytest.mark.parametrize(
+        ("from_status", "launched_manually", "occupied"),
+        [
+            pytest.param(TaskStatus.IN_PROGRESS, False, 1, id="из очереди"),
+            pytest.param(TaskStatus.PAUSED, True, 0, id="вручную без галочки"),
+            pytest.param(TaskStatus.REFINING, False, 0, id="из чата"),
+        ],
+    )
+    async def test_limit_wait(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        from_status: TaskStatus,
+        launched_manually: bool,
+        occupied: int,
+    ) -> None:
+        task = await make_task(
+            db_session,
+            status=TaskStatus.AWAITING_LIMIT,
+            limit_wait_from_status=from_status,
+            launched_manually=launched_manually,
+        )
+
+        counts = await occupied_slots(db_session, redis_client, [task.created_by])
+
+        assert counts.get(task.created_by, 0) == occupied
+
     @pytest.mark.parametrize(("occupies_slot", "occupied"), [(True, 1), (False, 0)])
     async def test_refining_chat(
         self,

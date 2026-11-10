@@ -26,11 +26,12 @@ from db.models.users import User
 from services.autostart import run_scheduled_autostart_check
 from services.distributed_lock import LockNotAcquiredError, acquire_lock
 from services.errors import ConflictError, ServiceUnavailableError, ValidationError
+from services.limit_wait import author_waits_for_limit
 from services.maintenance import maintenance_active
 from services.notifications import NotificationEvent, notify_task_event
 from services.session_heartbeat import is_session_alive
 from services.system_settings import get_system_settings
-from services.task_launch import ensure_task_launchable
+from services.task_launch import ensure_task_launchable, task_needs_llm
 from services.task_queue import QUEUE_ORDER, night_window_active, occupied_slots
 from services.task_status import QUEUE_STATUSES, SESSION_ACTIVE_STATUSES, transition_task_status
 
@@ -57,6 +58,8 @@ _DAY_STATUSES = frozenset({TaskStatus.READY})
 class DispatchResult:
     launched_task_ids: list[uuid.UUID] = field(default_factory=list)
     failed_task_ids: list[uuid.UUID] = field(default_factory=list)
+    # Раздел 19.7: задачи с LLM ждут в очереди, пока у автора идёт ожидание лимита.
+    limit_waiting_task_ids: list[uuid.UUID] = field(default_factory=list)
     # Другой проход уже идёт или идёт обновление сервера — ничего не сделано.
     skipped: bool = False
 
@@ -187,13 +190,20 @@ async def _dispatch_round_robin(
 ) -> None:
     """
     По одной задаче каждого пользователя за круг, пока есть слоты и процессы.
+    Пока у автора идёт ожидание лимита, его задачи с LLM остаются в очереди
+    без отказа (раздел 14.4, 19.7).
     """
     active = deque(user_id for user_id in queues if free_slots[user_id] > 0)
+    waiting = {user_id: await author_waits_for_limit(db_session, user_id) for user_id in active}
     while active and free_processes > 0:
         user_id = active.popleft()
         queue = queues[user_id]
         while queue:
-            if await _launch(db_session, redis_client, task=queue.popleft(), result=result):
+            task = queue.popleft()
+            if waiting[user_id] is not None and await task_needs_llm(db_session, task):
+                result.limit_waiting_task_ids.append(task.id)
+                continue
+            if await _launch(db_session, redis_client, task=task, result=result):
                 free_slots[user_id] -= 1
                 free_processes -= 1
                 break
@@ -267,6 +277,7 @@ async def _dispatch_locked(
         "task_dispatch_finished",
         launched=len(result.launched_task_ids),
         failed=len(result.failed_task_ids),
+        limit_waiting=len(result.limit_waiting_task_ids),
         night_window=in_window,
     )
 

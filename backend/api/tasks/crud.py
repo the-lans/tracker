@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.dependencies import get_current_user
 from api.schemas import (
     AwaitingDecisionCountResponse,
+    LlmLimitResponse,
     QueueSummaryResponse,
     TaskCreateRequest,
     TaskDuplicateRequest,
@@ -30,6 +31,7 @@ from db.models.users import User
 from db.session import get_session
 from services.access import owner_filter
 from services.jira_import import jira_issue_url, mark_attachment_copy_pending, validate_issue_key
+from services.limit_wait import author_waits_for_limit
 from services.redis_connection import redis_connection
 from services.session_context import list_active_sessions
 from services.task_creation import RepositoryAttachment, TaskDraft
@@ -232,6 +234,15 @@ async def get_queue_summary(
         ready=summary.ready,
         night_worker=summary.night_worker,
     )
+
+
+@router.get("/llm-limit", response_model=LlmLimitResponse)
+async def get_llm_limit(
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> LlmLimitResponse:
+    """Раздел 15.2: идёт ли у пользователя ожидание лимита — подсказка у «Выполнить»."""
+    return LlmLimitResponse(wait_until=await author_waits_for_limit(db_session, current_user.id))
 
 
 @router.get("/{task_id}", response_model=TaskResponse)

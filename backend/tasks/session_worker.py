@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,6 +41,8 @@ from services.claude_config import (
     session_config_dir,
 )
 from services.errors import ConflictError
+from services.limit_wait import LimitGate, check_limit_gate, enter_limit_wait, leave_limit_wait
+from services.llm_account_choice import LlmLimitWaitError
 from services.llm_routing import llm_session_token
 from services.maintenance import maintenance_active
 from services.manual_admission import close_manual_requests, ensure_manual_requests_drained
@@ -148,6 +151,7 @@ def run_task_session(
     continuation: bool = False,
     chat_only: bool = False,
     queued_only: bool = False,
+    limit_resume: bool = False,
 ) -> None:
     """``start_after_order_index`` — ноды с ``order_index`` не больше него
     не выполняются (продолжение после `clear_context`, перезапуск после
@@ -155,7 +159,10 @@ def run_task_session(
     таск передал сессию этому после `clear_context` (раздел 11.5).
     ``chat_only`` — чат в «Уточняется» (раздел 14.4): только ручные запросы,
     без пайплайна и без смены статуса. ``queued_only`` — повторяемая доставка
-    воркера очереди: разрешён захват только из `queued`, без перезапуска `failed`."""
+    воркера очереди: разрешён захват только из `queued`, без перезапуска `failed`.
+    ``limit_resume`` — продолжение после сброса лимита (раздел 19.7): задача
+    из `awaiting_limit` возвращается в прежний статус и продолжает с той же
+    ноды в той же сессии."""
     run_with_fresh_pool(
         _run_task_session_async(
             uuid.UUID(task_id),
@@ -163,6 +170,7 @@ def run_task_session(
             continuation=continuation,
             chat_only=chat_only,
             queued_only=queued_only,
+            limit_resume=limit_resume,
         ),
     )
 
@@ -225,6 +233,10 @@ class _SessionControl:
     recovery_client_factory: Callable[[str], ClaudeAgentClientProtocol]
     # Раздел 3.1: без LLM-аккаунта процесса Claude Code нет вовсе.
     has_llm: bool = True
+    # Раздел 19.7: ворота лимита перед ходом; None — задача без LLM.
+    limit_gate: LimitGate | None = None
+    # Продолжение после сброса лимита задачи, ждавшей на паузе: сначала — пауза.
+    resume_paused: bool = False
 
     async def recover_session(self) -> None:
         session_id = self.claude_session.session_id or self.task.session_id
@@ -241,6 +253,7 @@ class _SessionControl:
             repos_path=self.workspace,
             redis_client=self.redis_client,
             active_node_context=self.active_node_context,
+            limit_gate=self.limit_gate,
         )
 
     async def resolve_rebase_conflict_if_any(self, *, resume_status: TaskStatus) -> bool:
@@ -266,6 +279,7 @@ class _SessionControl:
             # Конфликт разбирает агент (раздел 14) — без LLM-аккаунта некому.
             logger.info("rebase_conflict_without_llm", task_id=str(self.task.id))
             return False
+        await check_limit_gate(self.limit_gate)
         logger.info("rebase_conflict_resolution_started", task_id=str(self.task.id))
         if not await resolve_rebase_conflict(
             self.db_session,
@@ -354,7 +368,12 @@ class _SessionControl:
         logger.info("task_paused_after_node", task_id=str(self.task.id))
         return await self._stay_paused()
 
-    async def _stay_paused(self) -> CheckpointDecision:
+    async def stay_paused_after_limit_wait(self) -> CheckpointDecision:
+        """Задача ждала лимита на паузе и вернулась в `paused` — пауза продолжается."""
+        self.resume_paused = False
+        return await self._stay_paused(already_paused=True)
+
+    async def _stay_paused(self, *, already_paused: bool = False) -> CheckpointDecision:
         """
         Раздел 14.2 «Приостановить»: сессия удерживается, ручные запросы
         выполняются, пайплайн ждёт «Продолжить» или «Остановить».
@@ -363,7 +382,10 @@ class _SessionControl:
         `rebase_conflict` — тогда compare-and-swap перехода проигрывает, и
         цикл сначала разбирает конфликт, а затем повторяет переход.
         """
-        while not await self._try_transition(TaskStatus.IN_PROGRESS, TaskStatus.PAUSED):
+        while not already_paused and not await self._try_transition(
+            TaskStatus.IN_PROGRESS,
+            TaskStatus.PAUSED,
+        ):
             if not await self.resolve_rebase_conflict_if_any(resume_status=TaskStatus.IN_PROGRESS):
                 return CheckpointDecision.STOP
         logger.info("task_paused", task_id=str(self.task.id))
@@ -452,6 +474,7 @@ def _defer_until_maintenance_ends(
     *,
     chat_only: bool = False,
     queued_only: bool = False,
+    limit_resume: bool = False,
 ) -> None:
     """
     Раздел 20.6: во время обновления задача не берётся из очереди — таск
@@ -465,8 +488,67 @@ def _defer_until_maintenance_ends(
             "continuation": False,
             "chat_only": chat_only,
             **({"queued_only": True} if queued_only else {}),
+            **({"limit_resume": True} if limit_resume else {}),
         },
         countdown=MAINTENANCE_RETRY_SECONDS,
+    )
+
+
+def _schedule_limit_resume(task_id: uuid.UUID, until: datetime) -> None:
+    """
+    Раздел 19.7: продолжение в момент сброса. Потерянную или повторную
+    доставку страхует и гасит `check_llm_account_limits` и compare-and-swap.
+    """
+    run_task_session.apply_async(args=[str(task_id)], kwargs={"limit_resume": True}, eta=until)
+
+
+async def _persist_session_id(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    session: ClaudeCodeSession,
+) -> None:
+    """Продолжение — `resume` той же сессии: её `session_id` сохраняется до выхода."""
+    if session.session_id is not None and session.session_id != task.session_id:
+        await db_session.execute(
+            sa.update(Task).where(Task.id == task.id).values(session_id=session.session_id),
+        )
+        await db_session.commit()
+        await db_session.refresh(task, ["session_id"])
+
+
+async def _wait_for_limit(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    until: datetime,
+    redis_client: Redis,
+) -> None:
+    """
+    Раздел 19.7 «Ожидание лимита»: задача уходит в `awaiting_limit`, процесс
+    воркера освобождается. Нажатое заодно «Остановить» — остановка вместо
+    ожидания, «Приостановить» — пауза после сброса.
+    """
+    command = await read_task_control(redis_client, task.id)
+    if command is not TaskControlCommand.STOP:
+        paused = command is TaskControlCommand.PAUSE and await consume_task_control(
+            redis_client,
+            task.id,
+            TaskControlCommand.PAUSE,
+        )
+        if await enter_limit_wait(
+            db_session,
+            task=task,
+            until=until,
+            redis_client=redis_client,
+            paused=paused,
+        ):
+            _schedule_limit_resume(task.id, until)
+            return
+    await _fail_task(
+        db_session,
+        task,
+        failed_order_index=await first_unfinished_order_index(db_session, task.id),
     )
 
 
@@ -477,10 +559,14 @@ async def _run_task_session_async(
     continuation: bool,
     chat_only: bool = False,
     queued_only: bool = False,
+    limit_resume: bool = False,
 ) -> None:
     with bind_task_context(task_id):
         if chat_only:
             await _run_chat_in_context(task_id)
+            return
+        if limit_resume:
+            await _resume_after_limit_in_context(task_id)
             return
         await _run_task_session_in_context(
             task_id,
@@ -522,7 +608,11 @@ async def _run_chat_in_context(task_id: uuid.UUID) -> None:
 
 
 async def _run_owned_chat(db_session: AsyncSession, *, task: Task, redis_client: Redis) -> bool:
-    """`False` — проход чата прервался ошибкой или командой остановки."""
+    """
+    `False` — проход чата прервался ошибкой, командой остановки или ушёл
+    ждать сброса лимита.
+    """
+    wait: LlmLimitWaitError | None = None
     try:
         # Чат после возврата из failed — новый запуск: прежняя команда stop
         # не должна блокировать очередь сообщений и порождать повторные проходы.
@@ -545,6 +635,8 @@ async def _run_owned_chat(db_session: AsyncSession, *, task: Task, redis_client:
                     ),
                 ),
             )
+    except LlmLimitWaitError as exc:
+        wait = exc
     except Exception as exc:
         # Раздел 14.4: сбой чата закрывает запрос с ошибкой, задача остаётся
         # в `refining` — в `failed` она не переходит.
@@ -553,7 +645,18 @@ async def _run_owned_chat(db_session: AsyncSession, *, task: Task, redis_client:
         return False
     finally:
         await finish_chat(db_session, task_id=task.id)
-    return await read_task_control(redis_client, task.id) is not TaskControlCommand.STOP
+    stopped = await read_task_control(redis_client, task.id) is TaskControlCommand.STOP
+    if wait is None:
+        return not stopped
+    # Остановленный чат не ждёт: запросы остаются в очереди «Уточняется».
+    if not stopped and await enter_limit_wait(
+        db_session,
+        task=task,
+        until=wait.until,
+        redis_client=redis_client,
+    ):
+        _schedule_limit_resume(task.id, wait.until)
+    return False
 
 
 async def _run_chat(
@@ -600,15 +703,56 @@ async def _run_chat(
             repos_path=workspace,
             redis_client=redis_client,
             active_node_context=active_node_context,
+            limit_gate=lane.router.limit_gate,
         )
     finally:
         # Раздел 14.4: «Выполнить» продолжит ту же сессию — и после сбоя хода.
-        if session.session_id is not None and session.session_id != task.session_id:
-            await db_session.execute(
-                sa.update(Task).where(Task.id == task.id).values(session_id=session.session_id),
-            )
-            await db_session.commit()
+        await _persist_session_id(db_session, task=task, session=session)
         await _disconnect_quietly(session)
+
+
+async def _resume_after_limit_in_context(task_id: uuid.UUID) -> None:
+    """
+    Раздел 19.7: сброс лимита наступил — под пульсом сессии задача
+    compare-and-swap возвращается в прежний статус и продолжает с той же
+    ноды в той же сессии. Чат «Уточняется» продолжает новый проход чата.
+    Повторная доставка, увидевшая другой статус, ничего не меняет.
+    """
+    async with async_session_factory() as db_session, redis_connection() as redis_client:
+        task = await db_session.get(Task, task_id)
+        if task is None or task.status is not TaskStatus.AWAITING_LIMIT:
+            return
+        if await maintenance_active(redis_client):
+            _defer_until_maintenance_ends(task_id, None, limit_resume=True)
+            return
+        try:
+            async with keep_session_heartbeat(
+                redis_client,
+                task_id,
+                acquire_timeout=SESSION_OWNER_WAIT_SECONDS,
+            ):
+                resume = await leave_limit_wait(db_session, task=task)
+                if resume is None:
+                    return
+                # Раздел 14.4: ожидание кончилось — очередь автора снова запускается.
+                wake_task_dispatcher()
+                if resume.status is not TaskStatus.REFINING:
+                    start_after = None if resume.order_index is None else resume.order_index - 1
+                    await _run_owned_session(
+                        db_session,
+                        task=task,
+                        redis_client=redis_client,
+                        start_after_order_index=start_after,
+                        continuation=True,
+                        resume_paused=resume.status is TaskStatus.PAUSED,
+                    )
+                    return
+        except SessionAlreadyOwnedError:
+            logger.info("task_session_already_owned", task_id=str(task_id))
+            return
+        # Чат продолжает новый проход — уже после снятия пульса.
+        if await chat_has_pending_requests(db_session, task_id=task_id):
+            run_task_session.delay(str(task_id), chat_only=True)
 
 
 async def _run_task_session_in_context(
@@ -668,6 +812,7 @@ async def _run_owned_session(
     redis_client: Redis,
     start_after_order_index: int | None,
     continuation: bool,
+    resume_paused: bool = False,
 ) -> None:
     try:
         if not continuation:
@@ -691,6 +836,7 @@ async def _run_owned_session(
                     ),
                 ),
                 start_after_order_index=start_after_order_index,
+                resume_paused=resume_paused,
             )
     except Exception as exc:
         # Раздел 17.3: любая ошибка сессии переводит задачу в `failed`,
@@ -903,6 +1049,7 @@ async def _run_claimed_task(
     redis_client: Redis,
     lane: _LlmLane,
     start_after_order_index: int | None,
+    resume_paused: bool = False,
 ) -> None:
     repos_root = resolve_repos_root()
     workspace = await prepare_task_workspace(db_session, task=task, repos_root=repos_root)
@@ -969,6 +1116,8 @@ async def _run_claimed_task(
             enable_remote_control=enable_remote_control,
         ),
         has_llm=make_client.has_llm,
+        limit_gate=lane.router.limit_gate if make_client.has_llm else None,
+        resume_paused=resume_paused,
     )
     await session.connect()
     if enable_remote_control:
@@ -980,6 +1129,11 @@ async def _run_claimed_task(
             parent_summary=parent_summary,
             start_after_order_index=start_after_order_index,
         )
+    except LlmLimitWaitError as wait:
+        await _persist_session_id(db_session, task=task, session=session)
+        await _disconnect_quietly(session)
+        await _wait_for_limit(db_session, task=task, until=wait.until, redis_client=redis_client)
+        return
     except BaseException:
         await _disconnect_quietly(session)
         raise
@@ -1034,6 +1188,16 @@ async def _run_connected_session(
     # продолжение после `clear_context`), — до первой же ноды.
     if not await control.resolve_rebase_conflict_if_any(resume_status=TaskStatus.IN_PROGRESS):
         return None, False
+    if (
+        control.resume_paused
+        and await control.stay_paused_after_limit_wait() is CheckpointDecision.STOP
+    ):
+        resume_index = 0 if start_after_order_index is None else start_after_order_index + 1
+        return PipelineRunOutcome(
+            completed=False,
+            failed_order_index=resume_index,
+            stopped=True,
+        ), True
     outcome = await run_pipeline(
         db_session,
         task=task,
@@ -1045,6 +1209,7 @@ async def _run_connected_session(
         pause_after_node=control.pause_after_node,
         stop_guard=StopGuard(redis_client=control.redis_client, task_id=task.id),
         recover_session=control.recover_session,
+        limit_gate=control.limit_gate,
     )
     if not outcome.completed:
         return outcome, True

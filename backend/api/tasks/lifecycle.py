@@ -21,6 +21,7 @@ from db.session import get_session
 from services.access import get_pipeline_for_user
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_pipeline_attachable
+from services.limit_wait import pause_limit_wait, stop_limit_wait
 from services.redis_connection import redis_connection
 from services.refining_chat import CHAT_BUSY_MESSAGE
 from services.remote_control import start_bridge_reconnect
@@ -204,13 +205,18 @@ async def pause_task(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     """Раздел 14.2 «Приостановить»: текущая нода дорабатывает, следующая
-    не начинается — статус `paused` выставит воркер, владеющий сессией."""
+    не начинается — статус `paused` выставит воркер, владеющий сессией. У
+    задачи в ожидании лимита воркера нет: после сброса она встанет на паузу."""
     task = await get_task_or_404(db_session, task_id, current_user)
     require_status(
         task,
-        frozenset({TaskStatus.IN_PROGRESS}),
+        frozenset({TaskStatus.IN_PROGRESS, TaskStatus.AWAITING_LIMIT}),
         "Приостановить можно только выполняющуюся задачу",
     )
+    if task.status is TaskStatus.AWAITING_LIMIT:
+        if not await pause_limit_wait(db_session, task_id=task_id):
+            raise ConflictError("Эту задачу в ожидании лимита приостановить нельзя")
+        return
     await _send_task_control(task_id, TaskControlCommand.PAUSE)
 
 
@@ -232,13 +238,18 @@ async def stop_task(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     """Раздел 14.2 «Остановить»: текущее обращение к сессии прерывается,
-    задача переходит в `failed` и перезапускается штатной кнопкой."""
+    задача переходит в `failed` и перезапускается штатной кнопкой. Ждущую
+    лимита задачу останавливает сам API — воркера у неё нет (правило 16)."""
     task = await get_task_or_404(db_session, task_id, current_user)
     require_status(
         task,
-        frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
+        frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.AWAITING_LIMIT}),
         "Остановить можно только выполняющуюся или приостановленную задачу",
     )
+    if task.status is TaskStatus.AWAITING_LIMIT:
+        await stop_limit_wait(db_session, task=task)
+        wake_task_dispatcher()
+        return
     await _send_task_control(task_id, TaskControlCommand.STOP)
 
 

@@ -116,6 +116,9 @@ class TaskResponse(BaseModel):
     scheduled_start_at: datetime | None
     auto_start_enabled: bool
     last_failed_order_index: int | None
+    # Раздел 19.7: ожидание сброса лимита LLM-аккаунтов (`awaiting_limit`).
+    limit_wait_from_status: TaskStatus | None = None
+    limit_wait_until: datetime | None = None
     repo_cleaned_at: datetime | None
     queue_priority: int
     ready_at: datetime | None
@@ -134,6 +137,12 @@ class TaskStatusChangeRequest(BaseModel):
     """Раздел 14.1: ручная смена статуса — только в статус до запуска."""
 
     to_status: TaskStatus
+
+
+class LlmLimitResponse(BaseModel):
+    """Раздел 15.2: ближайший сброс, которого ждут задачи пользователя; None — ожидания нет."""
+
+    wait_until: datetime | None
 
 
 class QueueSummaryResponse(BaseModel):

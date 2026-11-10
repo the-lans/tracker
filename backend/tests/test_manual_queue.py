@@ -446,7 +446,13 @@ class TestExpireStaleRequests:
 
     @pytest.mark.parametrize(
         "status",
-        [TaskStatus.QUEUED, TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.AWAITING_INPUT],
+        [
+            TaskStatus.QUEUED,
+            TaskStatus.IN_PROGRESS,
+            TaskStatus.PAUSED,
+            TaskStatus.AWAITING_INPUT,
+            TaskStatus.AWAITING_LIMIT,
+        ],
     )
     async def test_live_session_keeps_request(
         self,
