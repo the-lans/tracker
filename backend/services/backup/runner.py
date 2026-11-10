@@ -41,6 +41,7 @@ from services.backup.runs import (
     BACKUP_LOCK_WAIT_SECONDS,
     BackupError,
     backup_lock,
+    close_interrupted_runs,
     fail_run,
     failure_message,
     finish_run,
@@ -63,7 +64,8 @@ logger = get_logger("backup_runner")
 # Архивы ≈ данные, зашифрованная копия ≈ архивы: нужно вдвое больше данных
 # и запас на временные файлы чтения.
 SPACE_FACTOR = 2.2
-SPACE_MARGIN_BYTES = 512 * 1024 * 1024
+_MEBIBYTE = 1024 * 1024
+SPACE_MARGIN_BYTES = 512 * _MEBIBYTE
 _MARKDOWN_TYPE = "text/markdown; charset=utf-8"
 _SHELL_TYPE = "text/x-shellscript; charset=utf-8"
 _APP_LOG_SOURCE = "backup.s3"
@@ -104,8 +106,8 @@ def ensure_space(staging: Path, required: int) -> None:
     free = shutil.disk_usage(staging).free
     if free < required:
         raise BackupError(
-            f"Недостаточно места для копии: нужно {required // 2**20} МиБ, "
-            f"свободно {free // 2**20} МиБ",
+            f"Недостаточно места для копии: нужно {required // _MEBIBYTE} МиБ, "
+            f"свободно {free // _MEBIBYTE} МиБ",
         )
 
 
@@ -210,6 +212,7 @@ async def run_backup(
     run = await start_run(db_session, kind=BackupRunKind.BACKUP)
     try:
         async with backup_lock(redis_client, wait_seconds=environment.lock_wait_seconds):
+            await close_interrupted_runs(db_session, current=run)
             try:
                 uploaded = await _make_and_upload(
                     config=config,

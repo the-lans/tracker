@@ -25,6 +25,7 @@ from pathlib import Path
 from tempfile import SpooledTemporaryFile
 
 from app_logging.config import get_logger
+from services.backup.files import READ_CHUNK_BYTES
 
 logger = get_logger("backup_archive")
 
@@ -123,7 +124,7 @@ class _DirectoryArchiver:
             dir=str(self._options.spool_dir) if self._options.spool_dir else None,
         )
         with path.open("rb") as source:
-            while chunk := source.read(1024 * 1024):
+            while chunk := source.read(READ_CHUNK_BYTES):
                 spool.write(chunk)
         after = os.lstat(path)
         unchanged = (before.st_size, before.st_mtime_ns) == (

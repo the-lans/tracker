@@ -522,6 +522,80 @@ class TestFailures:
         assert "password" not in (run.error_message or "")
 
 
+async def _add_run(
+    db_session: AsyncSession,
+    *,
+    kind: BackupRunKind,
+    status: BackupRunStatus,
+    started_at: datetime,
+) -> BackupRun:
+    run = BackupRun(id=uuid.uuid4(), kind=kind, status=status, started_at=started_at)
+    db_session.add(run)
+    await db_session.commit()
+    return run
+
+
+class TestInterruptedRuns:
+    """Запуск, чей процесс убили, закрывает следующий запуск под блокировкой."""
+
+    @pytest.mark.parametrize("kind", [BackupRunKind.BACKUP, BackupRunKind.VERIFY])
+    async def test_closed_by_next_backup(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        storage: S3Storage,
+        environment: BackupEnvironment,
+        monkeypatch: pytest.MonkeyPatch,
+        kind: BackupRunKind,
+    ) -> None:
+        orphan = await _add_run(
+            db_session,
+            kind=kind,
+            status=BackupRunStatus.RUNNING,
+            started_at=datetime(2020, 1, 1, tzinfo=UTC),
+        )
+        monkeypatch.setattr(runner_module, "required_space", lambda _sources: 10**18)
+
+        with pytest.raises(BackupError, match="Недостаточно места"):
+            await _backup(db_session, redis_client, storage, environment)
+
+        await db_session.refresh(orphan)
+        assert orphan.status is BackupRunStatus.FAILED
+        assert orphan.error_message == runs_module.INTERRUPTED_MESSAGE
+        assert orphan.finished_at is not None
+
+    async def test_later_and_finished_untouched(self, db_session: AsyncSession) -> None:
+        current = await _add_run(
+            db_session,
+            kind=BackupRunKind.BACKUP,
+            status=BackupRunStatus.RUNNING,
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        waiting = await _add_run(
+            db_session,
+            kind=BackupRunKind.VERIFY,
+            status=BackupRunStatus.RUNNING,
+            started_at=datetime(2026, 2, 1, tzinfo=UTC),
+        )
+        finished = await _add_run(
+            db_session,
+            kind=BackupRunKind.BACKUP,
+            status=BackupRunStatus.SUCCESS,
+            started_at=datetime(2020, 1, 1, tzinfo=UTC),
+        )
+
+        closed = await runs_module.close_interrupted_runs(db_session, current=current)
+
+        assert closed == 0
+        for run in (current, waiting, finished):
+            await db_session.refresh(run)
+        assert [current.status, waiting.status, finished.status] == [
+            BackupRunStatus.RUNNING,
+            BackupRunStatus.RUNNING,
+            BackupRunStatus.SUCCESS,
+        ]
+
+
 class TestSkippedFiles:
     async def test_warning(
         self,

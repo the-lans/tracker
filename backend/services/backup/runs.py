@@ -38,6 +38,7 @@ BACKUP_LOCK_TTL_SECONDS = 6 * 60 * 60
 BACKUP_LOCK_WAIT_SECONDS = 3 * 60 * 60
 _LOCK_POLL_SECONDS = 15.0
 RUNS_KEPT_PER_KIND = 100
+INTERRUPTED_MESSAGE = "Запуск прерван: воркер бэкапа перезапустился до завершения"
 
 
 class BackupError(Exception):
@@ -62,6 +63,34 @@ async def backup_lock(
         if not acquired:
             raise BackupError("Предыдущий бэкап или проверка ещё не закончились")
         yield
+
+
+async def close_interrupted_runs(db_session: AsyncSession, *, current: BackupRun) -> int:
+    """
+    Под блокировкой бэкапа другой запуск идти не может: `running` у записей,
+    начатых раньше этой, — след процесса, убитого посреди работы (перезапуск
+    воркера при обновлении сервера). Без этого карточка показывала бы его
+    выполняющимся. Начатые позже ещё ждут блокировку — их не трогаем.
+    """
+    result = await db_session.execute(
+        sa.update(BackupRun)
+        .where(
+            BackupRun.status == BackupRunStatus.RUNNING,
+            BackupRun.started_at
+            < sa.select(BackupRun.started_at).where(BackupRun.id == current.id).scalar_subquery(),
+        )
+        .values(
+            status=BackupRunStatus.FAILED,
+            finished_at=datetime.now(UTC),
+            error_message=INTERRUPTED_MESSAGE,
+        )
+        .execution_options(synchronize_session=False),
+    )
+    await db_session.commit()
+    closed = int(result.rowcount or 0)  # type: ignore[attr-defined]
+    if closed:
+        logger.warning("backup_interrupted_runs_closed", count=closed)
+    return closed
 
 
 async def start_run(db_session: AsyncSession, *, kind: BackupRunKind) -> BackupRun:

@@ -36,12 +36,13 @@ from services.backup.bundle import (
     RESTORE_SCRIPT_NAME,
 )
 from services.backup.crypto_gpg import decrypt_to_directory
-from services.backup.files import sha256_file
+from services.backup.files import READ_CHUNK_BYTES, sha256_file
 from services.backup.runner import SPACE_MARGIN_BYTES, clear_staging, ensure_space
 from services.backup.runs import (
     BACKUP_LOCK_WAIT_SECONDS,
     BackupError,
     backup_lock,
+    close_interrupted_runs,
     fail_run,
     failure_message,
     finish_run,
@@ -160,7 +161,7 @@ def count_archive_files(path: Path) -> int:
             if member.isreg():
                 stream = tar.extractfile(member)
                 if stream is not None:
-                    while stream.read(1024 * 1024):
+                    while stream.read(READ_CHUNK_BYTES):
                         pass
                 files += 1
     return files
@@ -215,7 +216,13 @@ class TemporaryPostgres:
         if code != 0:
             raise BackupError(f"Не удалось запустить PostgreSQL проверки: {stderr.strip()}")
         self._container = stdout.strip()
-        await self._wait_ready()
+        try:
+            await self._wait_ready()
+        except BaseException:
+            # Исключение в __aenter__ не вызывает __aexit__: контейнер не должен
+            # жить до следующей проверки.
+            await self.__aexit__()
+            raise
         return self
 
     async def __aexit__(self, *_: object) -> None:
@@ -307,11 +314,13 @@ class TemporaryPostgres:
             producer.kill()
             raise BackupError("Дамп не загрузился за отведённое время") from exc
         await producer.wait()
-        if producer.returncode != 0:
-            raise BackupError("Дамп не распаковывается (gzip)")
+        # Сначала psql: остановившись на ошибке, он закрывает канал, и
+        # распаковка тоже падает — но причина в SQL, а не в архиве.
         if consumer.returncode != 0:
             tail = stderr.decode(errors="replace").strip()[-_ERROR_TAIL_CHARS:]
             raise BackupError(f"Дамп не загрузился в чистый PostgreSQL: {tail}")
+        if producer.returncode != 0:
+            raise BackupError("Дамп не распаковывается (gzip)")
 
     async def query(self, sql: str) -> list[str]:
         code, stdout, stderr = await _run(*self._psql("-tA", "-c", sql))
@@ -430,6 +439,7 @@ async def run_verify(
     run = await start_run(db_session, kind=BackupRunKind.VERIFY)
     try:
         async with backup_lock(redis_client, wait_seconds=environment.lock_wait_seconds):
+            await close_interrupted_runs(db_session, current=run)
             try:
                 stored, details = await _verify(
                     config=config,

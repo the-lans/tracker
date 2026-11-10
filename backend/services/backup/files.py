@@ -6,13 +6,13 @@ import hashlib
 import os
 from pathlib import Path
 
-_CHUNK_BYTES = 1024 * 1024
+READ_CHUNK_BYTES = 1024 * 1024
 
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
-        while chunk := stream.read(_CHUNK_BYTES):
+        while chunk := stream.read(READ_CHUNK_BYTES):
             digest.update(chunk)
     return digest.hexdigest()
 

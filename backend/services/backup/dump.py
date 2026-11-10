@@ -34,6 +34,7 @@ logger = get_logger("backup_dump")
 DUMP_ATTEMPTS = 3
 DUMP_RETRY_DELAY_SECONDS = 30.0
 _PG_DUMP_ARGS = ("--format=plain", "--no-privileges")
+_DEFAULT_PG_PORT = 5432
 
 
 class DumpError(Exception):
@@ -63,7 +64,7 @@ def pg_dump_command(url: URL) -> DumpCommandFactory:
     """pg_dump образа backend; параметры подключения — через окружение `PG*`, не argv."""
     env = {
         "PGHOST": url.host or "localhost",
-        "PGPORT": str(url.port or 5432),
+        "PGPORT": str(url.port or _DEFAULT_PG_PORT),
         "PGUSER": url.username or "",
         "PGPASSWORD": url.password or "",
         "PGDATABASE": url.database or "",

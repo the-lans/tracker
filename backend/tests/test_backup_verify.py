@@ -10,6 +10,7 @@ import gzip
 import json
 import os
 import subprocess
+import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -270,6 +271,51 @@ class TestVerify:
             await _verify(db_session, redis_client, storage, environment)
         assert _leftover_containers() == []
 
+    async def test_sql_error_before_gzip(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        client: FakeS3Client,
+        storage: S3Storage,
+        environment: VerifyEnvironment,
+        tmp_path: Path,
+    ) -> None:
+        """
+        psql остановился на первой строке и закрыл канал — распаковка тоже
+        падает, но причина в SQL.
+        """
+
+        def break_dump_early(bundle: Path) -> None:
+            manifest = json.loads((bundle / MANIFEST_NAME).read_text())
+            dump = bundle / manifest["database"]["file"]
+            text = gzip.decompress(dump.read_bytes()).decode()
+            padding = "-- padding\n" * 500_000
+            broken = "SELECT * FROM missing_table;\n" + text + padding
+            dump.write_bytes(gzip.compress(broken.encode()))
+            _rewrite_sums(bundle)
+
+        await _replace_copy(client, tmp_path, break_dump_early)
+
+        with pytest.raises(BackupError, match="не загрузился в чистый PostgreSQL.*missing_table"):
+            await _verify(db_session, redis_client, storage, environment)
+
+    async def test_postgres_not_ready_removed(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        storage: S3Storage,
+        environment: VerifyEnvironment,
+    ) -> None:
+        with pytest.raises(BackupError, match="не запустился вовремя"):
+            await _verify(
+                db_session,
+                redis_client,
+                storage,
+                replace(environment, ready_timeout_seconds=0),
+            )
+
+        assert _leftover_containers() == []
+
     async def test_after_restore_sql_fails(
         self,
         db_session: AsyncSession,
@@ -322,3 +368,26 @@ class TestNothingToVerify:
     ) -> None:
         with pytest.raises(BackupError, match="нет ни одной копии"):
             await _verify(db_session, redis_client, storage, environment)
+
+    async def test_closes_interrupted_backup(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        storage: S3Storage,
+        environment: VerifyEnvironment,
+    ) -> None:
+        orphan = BackupRun(
+            id=uuid.uuid4(),
+            kind=BackupRunKind.BACKUP,
+            status=BackupRunStatus.RUNNING,
+            started_at=datetime(2020, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(orphan)
+        await db_session.commit()
+
+        with pytest.raises(BackupError, match="нет ни одной копии"):
+            await _verify(db_session, redis_client, storage, environment)
+
+        await db_session.refresh(orphan)
+        assert orphan.status is BackupRunStatus.FAILED
+        assert orphan.error_message == runs_module.INTERRUPTED_MESSAGE
