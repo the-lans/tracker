@@ -11,12 +11,25 @@ import {
   useStartTask,
   useResumeTask,
   useStopTask,
+  useLlmLimit,
 } from "@/hooks/useTasks";
 import { toastError } from "@/lib/errors";
+import { launchWaitHint } from "@/lib/llmAccounts";
 import { cn } from "@/lib/utils";
 import { TaskStatus, type Task } from "@/lib/types";
 import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
 import { isPreLaunch } from "@/lib/taskStatusTransitions";
+
+/** Раздел 19.7: из ожидания лимита на паузу встаёт только выполнявшаяся задача. */
+const PAUSABLE_LIMIT_WAIT_FROM: (TaskStatus | null | undefined)[] = [
+  TaskStatus.IN_PROGRESS,
+  TaskStatus.REBASE_CONFLICT,
+];
+
+const STOP_DESCRIPTION =
+  "Текущее обращение к сессии будет прервано, задача перейдёт в статус «Ошибка». Продолжить можно кнопкой «Перезапустить с текущей ноды».";
+const STOP_CHAT_WAIT_DESCRIPTION =
+  "Ожидание лимита прекратится, задача останется в статусе «Уточняется».";
 
 /** Раздел 14.2: действия пользователя, доступные в текущем статусе задачи. */
 export function TaskControlButtons({ task }: { task: Task }) {
@@ -27,7 +40,15 @@ export function TaskControlButtons({ task }: { task: Task }) {
   const cancelTask = useCancelQueuedTask(task.id);
   const restartTask = useRestartTask(task.id);
   const startTask = useStartTask(task.id);
-  const canStop = task.status === TaskStatus.IN_PROGRESS || task.status === TaskStatus.PAUSED;
+  const limitWait = task.status === TaskStatus.AWAITING_LIMIT;
+  const canPause =
+    task.status === TaskStatus.IN_PROGRESS ||
+    (limitWait && PAUSABLE_LIMIT_WAIT_FROM.includes(task.limit_wait_from_status));
+  const canStop = task.status === TaskStatus.IN_PROGRESS || task.status === TaskStatus.PAUSED || limitWait;
+  const chatWait = limitWait && task.limit_wait_from_status === TaskStatus.REFINING;
+  const preLaunch = isPreLaunch(task.status);
+  const { data: llmLimit } = useLlmLimit(preLaunch);
+  const launchWaitUntil = preLaunch ? llmLimit?.wait_until : null;
 
   function handleStop() {
     stopTask.mutate(undefined, {
@@ -42,7 +63,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
       {/* Раздел 14.2: запуск новой задачи — прямо со страницы, где её настраивают. */}
-      {isPreLaunch(task.status) && (
+      {preLaunch && (
         <button
           type="button"
           className={cn(HEADER_BUTTON, task.pipeline_id && "border-accent bg-accent text-on-accent")}
@@ -78,7 +99,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
           <ButtonLabel>Отменить запуск</ButtonLabel>
         </button>
       )}
-      {task.status === TaskStatus.IN_PROGRESS && (
+      {canPause && (
         <button
           type="button"
           className={HEADER_BUTTON}
@@ -87,7 +108,8 @@ export function TaskControlButtons({ task }: { task: Task }) {
           disabled={pauseTask.isPending}
           onClick={() =>
             pauseTask.mutate(undefined, {
-              onSuccess: () => toast.success("Пауза наступит после текущей ноды"),
+              onSuccess: () =>
+                toast.success(limitWait ? "После сброса лимита задача встанет на паузу" : "Пауза наступит после текущей ноды"),
               onError: toastError("Не удалось приостановить задачу"),
             })
           }
@@ -146,12 +168,17 @@ export function TaskControlButtons({ task }: { task: Task }) {
       )}
 
       <TaskLifecycleActions task={task} />
+      {launchWaitUntil && (
+        <p className="basis-full text-right text-caption text-warning-text">
+          {launchWaitHint(launchWaitUntil)}
+        </p>
+      )}
 
       <ConfirmDialog
         open={stopConfirmOpen}
         onOpenChange={setStopConfirmOpen}
         title="Остановить задачу?"
-        description="Текущее обращение к сессии будет прервано, задача перейдёт в статус «Ошибка». Продолжить можно кнопкой «Перезапустить с текущей ноды»."
+        description={chatWait ? STOP_CHAT_WAIT_DESCRIPTION : STOP_DESCRIPTION}
         confirmLabel="Остановить"
         danger
         pending={stopTask.isPending}

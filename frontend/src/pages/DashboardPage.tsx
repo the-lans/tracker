@@ -19,7 +19,7 @@ const FILTERS: { key: FilterKey; label: string; statuses: readonly TaskStatus[] 
   { key: "all", label: "Все", statuses: null },
   { key: "pre_launch", label: "До запуска", statuses: PRE_LAUNCH_STATUSES },
   { key: "queue", label: "В очереди", statuses: QUEUE_STATUSES },
-  { key: "in_progress", label: "В работе", statuses: [TaskStatus.IN_PROGRESS, TaskStatus.PAUSED] },
+  { key: "in_progress", label: "В работе", statuses: [TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.AWAITING_LIMIT] },
   {
     key: "awaiting",
     label: "Ждут решения",

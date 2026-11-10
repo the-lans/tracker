@@ -7,6 +7,7 @@ import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteBu
 import { EditButton } from "@/components/common/actions/EditButton";
 import { ReorderButton } from "@/components/common/actions/ReorderButton";
 import { OwnerLabel } from "@/components/common/avatar/OwnerLabel";
+import { LlmLimitStateBadge } from "@/components/llmAccounts/LlmLimitStateBadge";
 import { LlmUsageMeter } from "@/components/llmAccounts/LlmUsageMeter";
 import { useDeleteLlmAccount, useUpdateLlmAccount } from "@/hooks/useLlmAccounts";
 import { errorMessage } from "@/lib/errors";
@@ -20,7 +21,8 @@ import { formatDateTime, formatRelativeShort } from "@/lib/utils";
 
 /**
  * Раздел 15.1: строка аккаунта в порядке переключения — провайдер, модель,
- * уровень, статус, расход окон с временем сброса и последним опросом.
+ * уровень, статус и состояние лимита, расход окон с временем сброса и
+ * последним опросом; порог есть только у 5-часового окна (раздел 19.7).
  */
 export function LlmAccountRow({
   account,
@@ -33,7 +35,7 @@ export function LlmAccountRow({
 }: {
   account: LlmAccount;
   provider?: LlmProvider;
-  thresholds?: Pick<User, "llm_switch_threshold_5h_pct" | "llm_switch_threshold_week_pct">;
+  thresholds?: Pick<User, "llm_switch_threshold_5h_pct">;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   onEdit: () => void;
@@ -66,6 +68,7 @@ export function LlmAccountRow({
           <Badge tone={LLM_ACCOUNT_STATUS_TONE[account.status]}>
             {LLM_ACCOUNT_STATUS_LABEL[account.status]}
           </Badge>
+          <LlmLimitStateBadge account={account} />
         </div>
         <div className="text-meta text-text-2">
           {provider?.label ?? account.provider} · {account.default_model ?? "модель не выбрана"} ·{" "}
@@ -90,7 +93,6 @@ export function LlmAccountRow({
             label="Неделя"
             pct={account.usage_week_pct}
             resetsAt={account.usage_week_resets_at}
-            threshold={thresholds?.llm_switch_threshold_week_pct}
           />
           <span className="col-span-2 text-caption text-text-3">
             опрос: {formatRelativeShort(account.usage_checked_at)}

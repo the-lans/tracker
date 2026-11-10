@@ -3,7 +3,8 @@ import { Play } from "lucide-react";
 import { toast } from "sonner";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { TASK_STATUS_META } from "@/components/tasks/taskStatusMeta";
-import { useStartTask } from "@/hooks/useTasks";
+import { useLlmLimit, useStartTask } from "@/hooks/useTasks";
+import { launchWaitHint } from "@/lib/llmAccounts";
 import { formatRelativeShort } from "@/lib/utils";
 import { errorMessage } from "@/lib/errors";
 import { TaskStatus, type Task } from "@/lib/types";
@@ -16,6 +17,13 @@ const DEFAULT_QUEUE_PRIORITY = 100;
 export function TaskCard({ task }: { task: Task }) {
   const meta = TASK_STATUS_META[task.status];
   const startTask = useStartTask(task.id);
+  const preLaunch = isPreLaunch(task.status);
+  const { data: llmLimit } = useLlmLimit(preLaunch);
+  const launchTitle = !task.pipeline_id
+    ? "Сначала выберите пайплайн на странице задачи"
+    : llmLimit?.wait_until
+      ? launchWaitHint(llmLimit.wait_until)
+      : "Запустить задачу";
 
   const subtitle =
     isPreLaunch(task.status) && !task.pipeline_id
@@ -56,12 +64,12 @@ export function TaskCard({ task }: { task: Task }) {
       <OwnerLabel ownerId={task.created_by} />
       <div className="mt-0.5 flex items-center gap-2 border-t border-border pt-2.5">
         <span className="text-xs font-bold text-text-2">{formatRelativeShort(task.updated_at)}</span>
-        {isPreLaunch(task.status) && (
+        {preLaunch && (
           <button
             type="button"
             className="ml-auto flex touch-target size-[30px] items-center justify-center rounded-[9px] border border-accent-border bg-accent-tint text-accent disabled:opacity-50"
             aria-label="Запустить задачу"
-            title={task.pipeline_id ? "Запустить задачу" : "Сначала выберите пайплайн на странице задачи"}
+            title={launchTitle}
             disabled={!task.pipeline_id || task.chat_active || startTask.isPending}
             onClick={(event) => {
               event.preventDefault();

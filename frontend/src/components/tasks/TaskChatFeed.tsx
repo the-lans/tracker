@@ -4,7 +4,7 @@ import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { NodeLogEntry } from "@/components/tasks/NodeLogEntry";
 import { Composer } from "@/components/tasks/Composer";
 import { Button } from "@/components/ui/button";
-import { useLlmAccounts } from "@/hooks/useLlmAccounts";
+import { useLlmAccounts, useLlmAvailable } from "@/hooks/useLlmAccounts";
 import { useTaskOutputStream } from "@/hooks/useTaskStatusSocket";
 import { useTaskLibraryPrompts, useTaskNodes } from "@/hooks/useTasks";
 import { cn } from "@/lib/utils";
@@ -43,14 +43,15 @@ function emptyFeedKind(status: TaskStatus): EmptyFeedKind {
 export function TaskChatFeed({
   taskId,
   taskStatus,
-  hasLlmAccount,
+  ownerId,
   manualRequestsClosed = false,
   nodeLogs,
   header,
 }: {
   taskId: string;
   taskStatus: TaskStatus;
-  hasLlmAccount: boolean;
+  /** Автор задачи — его LLM-аккаунты выполняют промты (раздел 19.2). */
+  ownerId: string;
   manualRequestsClosed?: boolean;
   nodeLogs: NodeLog[];
   header: ReactNode;
@@ -69,6 +70,7 @@ export function TaskChatFeed({
     ...(taskNodes ?? []).map((node): [string, NodeType] => [node.node_id, node.node_type]),
   ]);
   const { data: llmAccounts } = useLlmAccounts();
+  const llmAvailable = useLlmAvailable(ownerId);
   const accountLabels = new Map((llmAccounts ?? []).map((account) => [account.id, account.label]));
   const feedRef = useRef<HTMLDivElement>(null);
   const previousLength = useRef(0);
@@ -120,7 +122,7 @@ export function TaskChatFeed({
         ))}
       </div>
 
-      <Composer taskId={taskId} taskStatus={taskStatus} hasLlmAccount={hasLlmAccount} manualRequestsClosed={manualRequestsClosed} />
+      <Composer taskId={taskId} taskStatus={taskStatus} llmAvailable={llmAvailable} manualRequestsClosed={manualRequestsClosed} />
     </div>
   );
 }

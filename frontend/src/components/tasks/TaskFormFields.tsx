@@ -6,7 +6,7 @@ import { useLlmAccounts } from "@/hooks/useLlmAccounts";
 import { useAuth } from "@/hooks/useAuth";
 import type { TaskFormValues } from "@/components/tasks/taskForm.types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
-import { startAccountOptions } from "@/lib/llmAccounts";
+import { AUTO_ACCOUNT, AUTO_ACCOUNT_LABEL, startAccountOptions } from "@/lib/llmAccounts";
 
 const WHITESPACE_RE = /\s/;
 
@@ -88,16 +88,20 @@ export function TaskFormFields({
         />
       </div>
       <div>
-        <Label htmlFor="task-llm-account">LLM-аккаунт</Label>
+        <Label htmlFor="task-llm-account">Стартовый LLM-аккаунт</Label>
         <div className="mb-1 text-meta text-text-3">
-          Нужен для нод с промтами, слэш-командами и планированием; задаче из одних скриптов не
-          нужен.
+          Необязателен: «Автоматически» — аккаунт выберет трекер. LLM нужен нодам с промтами,
+          слэш-командами и планированием; задаче из одних скриптов не нужен.
         </div>
-        <Select value={value.llmAccountId} onValueChange={(llmAccountId) => onChange({ llmAccountId })}>
+        <Select
+          value={value.llmAccountId || AUTO_ACCOUNT}
+          onValueChange={(choice) => onChange({ llmAccountId: choice === AUTO_ACCOUNT ? "" : choice })}
+        >
           <SelectTrigger id="task-llm-account">
-            <SelectValue placeholder="Выберите аккаунт" />
+            <SelectValue />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value={AUTO_ACCOUNT}>{AUTO_ACCOUNT_LABEL}</SelectItem>
             {(llmAccounts ?? []).map((account) => (
               <SelectItem key={account.id} value={account.id}>
                 {account.label}
@@ -118,8 +122,8 @@ export function TaskFormFields({
           </div>
         )}
         <div className="mt-1 text-meta text-text-3">
-          С этого аккаунта задача начнёт работу; дальше аккаунт переключается автоматически по
-          порогам из профиля.
+          С выбранного аккаунта задача начнёт работу, если его окно лимита свободно или запущено;
+          дальше аккаунт выбирается автоматически.
         </div>
       </div>
       <div>

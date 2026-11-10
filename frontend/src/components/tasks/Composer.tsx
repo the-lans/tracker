@@ -7,27 +7,29 @@ import { useManualQueue, useSubmitFreeformPrompt, useStopManualRequest } from "@
 import { useCommandPreview, useRunTaskCommand, useTaskCommands, type TaskCommand } from "@/hooks/useTaskCommands";
 import { ApiError } from "@/lib/apiClient";
 import { useTemplatePreview } from "@/hooks/useTemplates";
-import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
+import { MANUAL_REQUEST_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { errorMessage } from "@/lib/errors";
+import { NO_LLM_ACCOUNT } from "@/lib/llmAccounts";
 import { ManualRequestStatus, ManualRequestType, TaskStatus } from "@/lib/types";
 import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
 /** Раздел 8, 15.2: свободный параметризованный промт — отдельно от поля
  * ответа на awaiting_input/plan_review (см. `DecisionWidget`). Не привязан к
  * конкретному статусу, но принимается, только пока сессия задачи активна
- * (раздел 8.2), а до запуска — в чате «Уточняется» (раздел 14.4); при занятой сессии запрос ждёт в очереди — индикатор
+ * (раздел 8.2) или задача ждёт лимита (раздел 19.7), а до запуска — в чате
+ * «Уточняется» (раздел 14.4); при занятой сессии запрос ждёт в очереди — индикатор
  * «В очереди» рядом с полем. Предпросмотр (раздел 8.2) показывает текст
  * после подстановки переменных — ровно тот, что уйдёт в сессию. */
 export function Composer({
   taskId,
   taskStatus,
-  hasLlmAccount,
+  llmAvailable,
   manualRequestsClosed = false,
 }: {
   taskId: string;
   taskStatus: TaskStatus;
-  /** Раздел 3.1: без LLM-аккаунта свободный промт выполнить некому. */
-  hasLlmAccount: boolean;
+  /** Раздел 3.1, 19.7: у автора есть рабочий LLM-аккаунт — без него свободный промт выполнить некому. */
+  llmAvailable: boolean;
   manualRequestsClosed?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -47,9 +49,8 @@ export function Composer({
   const submitFreeform = useSubmitFreeformPrompt(taskId);
   const preview = useTemplatePreview();
   const { data: queue } = useManualQueue(taskId);
-  const sessionActive = SESSION_ACTIVE_STATUSES.includes(taskStatus);
   const refining = taskStatus === TaskStatus.REFINING;
-  const acceptsRequests = sessionActive || refining;
+  const acceptsRequests = MANUAL_REQUEST_STATUSES.includes(taskStatus) || refining;
   const queuedFreeform = (queue ?? []).filter(
     (request) =>
       (request.request_type === ManualRequestType.FREEFORM_PROMPT || request.command_name) &&
@@ -108,7 +109,7 @@ export function Composer({
       });
       return;
     }
-    if (!hasLlmAccount) return;
+    if (!llmAvailable) return;
     submitFreeform.mutate(text.trim(), {
       onSuccess: () => {
         toast.success("Промт поставлен в очередь");
@@ -138,7 +139,7 @@ export function Composer({
           В очереди: {queuedFreeform}
         </div>
       )}
-      {manualRequestsClosed && sessionActive ? (
+      {manualRequestsClosed && acceptsRequests ? (
         <p className="rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
           Задача завершается — приём новых промтов и команд закрыт
         </p>
@@ -147,15 +148,15 @@ export function Composer({
           <MessageSquarePlus className="size-3.5 shrink-0" />
           Переведите задачу в «Уточняется», чтобы обсудить её с агентом
         </div>
-      ) : refining && !hasLlmAccount ? (
+      ) : refining && !llmAvailable ? (
         <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
           <MessageSquarePlus className="size-3.5 shrink-0" />
-          Чат с агентом ведёт LLM — выберите стартовый LLM-аккаунт задачи
+          {NO_LLM_ACCOUNT} — войдите в аккаунт на странице «LLM-аккаунты», чтобы обсудить задачу с агентом
         </div>
-      ) : !hasLlmAccount && !acceptsRequests ? (
+      ) : !llmAvailable && !acceptsRequests ? (
         <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
           <MessageSquarePlus className="size-3.5 shrink-0" />
-          У задачи нет LLM-аккаунта — свободный промт выполнить некому
+          {NO_LLM_ACCOUNT} — свободный промт выполнить некому
         </div>
       ) : !acceptsRequests ? (
         <div className="flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
@@ -181,7 +182,7 @@ export function Composer({
               {previewText}
             </div>
           )}
-          {!hasLlmAccount && <p className="text-small text-text-3">Без LLM-аккаунта доступны только команды-скрипты.</p>}
+          {!llmAvailable && <p className="text-small text-text-3">{NO_LLM_ACCOUNT} — доступны только команды-скрипты.</p>}
           {showCommands && <div id="task-command-options" role="listbox" aria-label="Команды библиотеки"
             className="max-h-60 overflow-y-auto rounded-md border border-border bg-surface">
             {commandsError && <p className="p-3 text-small text-text-3">Не удалось загрузить команды. Можно повторить поиск или отправку.</p>}
@@ -196,7 +197,7 @@ export function Composer({
             </button>)}
             {commands.length === 50 && <p className="p-3 text-small text-text-3">Показаны первые 50 команд. Уточните имя.</p>}
           </div>}
-          {unknownCommand && hasLlmAccount && <Button variant="secondary" onClick={() => handleSend(true)}
+          {unknownCommand && llmAvailable && <Button variant="secondary" onClick={() => handleSend(true)}
             disabled={submitFreeform.isPending}>Отправить напрямую агенту</Button>}
           <div className="flex items-end gap-2">
             <Textarea
@@ -227,7 +228,7 @@ export function Composer({
               size="icon"
               variant="secondary"
               aria-label="Предпросмотр подстановки"
-              disabled={!text.trim() || preview.isPending || commandPreview.isPending || (!isCommand && !hasLlmAccount)}
+              disabled={!text.trim() || preview.isPending || commandPreview.isPending || (!isCommand && !llmAvailable)}
               onClick={handlePreview}
             >
               <Eye className="size-4" />
@@ -235,7 +236,7 @@ export function Composer({
             <Button
               size="icon"
               aria-label="Отправить"
-              disabled={!text.trim() || submitFreeform.isPending || runCommand.isPending || (!isCommand && !hasLlmAccount)}
+              disabled={!text.trim() || submitFreeform.isPending || runCommand.isPending || (!isCommand && !llmAvailable)}
               onClick={() => handleSend()}
             >
               <Send className="size-4" />

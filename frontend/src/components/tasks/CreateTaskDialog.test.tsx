@@ -148,9 +148,10 @@ describe("CreateTaskDialog", () => {
         ]);
         const { user } = renderDialog(api, makeCurrentUser({ role }));
 
-        await user.click(screen.getByRole("combobox", { name: "LLM-аккаунт" }));
+        await user.click(screen.getByRole("combobox", { name: "Стартовый LLM-аккаунт" }));
 
         expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+          "Автоматически",
           "Мой Claude",
         ]);
       },
@@ -165,12 +166,29 @@ describe("CreateTaskDialog", () => {
       ]);
       const { user } = renderDialog(api);
 
-      await user.click(screen.getByRole("combobox", { name: "LLM-аккаунт" }));
+      await user.click(screen.getByRole("combobox", { name: "Стартовый LLM-аккаунт" }));
 
       expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+        "Автоматически",
         "Claude — основной",
         "Claude — запасной",
       ]);
+    });
+
+    test("по умолчанию «Автоматически», выбор аккаунта и возврат к автоматическому", async ({ api }) => {
+      api.respond("GET /llm-accounts", [makeLlmAccount({ id: "a1", label: "Claude — основной" })]);
+      const { user } = renderDialog(api);
+      const field = screen.getByRole("combobox", { name: "Стартовый LLM-аккаунт" });
+
+      await vi.waitFor(() => expect(field).toHaveTextContent("Автоматически"));
+      await user.click(field);
+      await user.click(await screen.findByRole("option", { name: "Claude — основной" }));
+      await user.click(field);
+      await user.click(await screen.findByRole("option", { name: "Автоматически" }));
+      await fillRequired(user);
+      await user.click(screen.getByRole("button", { name: "Создать" }));
+
+      expect(createRequest(api)?.body).toMatchObject({ llm_account_id: null });
     });
 
     test("нет активных аккаунтов — подсказка войти или включить", async ({ api }) => {

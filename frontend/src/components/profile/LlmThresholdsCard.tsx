@@ -13,55 +13,35 @@ import type { User } from "@/lib/types";
 const MIN_PCT = 1;
 const MAX_PCT = 100;
 
-function ThresholdField({
-  id,
-  label,
-  value,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="flex-1">
-      <Label htmlFor={id}>{label}</Label>
-      <Input
-        id={id}
-        type="number"
-        min={MIN_PCT}
-        max={MAX_PCT}
-        step={1}
-        required
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </div>
-  );
-}
-
-function LlmThresholdsForm({ profile }: { profile: User }) {
+function LlmThresholdForm({ profile }: { profile: User }) {
   const [fiveHour, setFiveHour] = useState(String(profile.llm_switch_threshold_5h_pct));
-  const [week, setWeek] = useState(String(profile.llm_switch_threshold_week_pct));
   const update = useUpdateLlmThresholds();
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     update.mutate(
-      { five_hour_pct: Number(fiveHour), week_pct: Number(week) },
+      { five_hour_pct: Number(fiveHour) },
       {
-        onSuccess: () => toast.success("Пороги переключения сохранены"),
-        onError: toastError("Не удалось сохранить пороги"),
+        onSuccess: () => toast.success("Порог сохранён"),
+        onError: toastError("Не удалось сохранить порог"),
       },
     );
   }
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-      <div className="flex gap-3">
-        <ThresholdField id="threshold-5h" label="5-часовое окно, %" value={fiveHour} onChange={setFiveHour} />
-        <ThresholdField id="threshold-week" label="Недельное окно, %" value={week} onChange={setWeek} />
+      <div className="max-w-60">
+        <Label htmlFor="threshold-5h">5-часовое окно, %</Label>
+        <Input
+          id="threshold-5h"
+          type="number"
+          min={MIN_PCT}
+          max={MAX_PCT}
+          step={1}
+          required
+          value={fiveHour}
+          onChange={(event) => setFiveHour(event.target.value)}
+        />
       </div>
       <Button type="submit" className="self-start" disabled={update.isPending}>
         Сохранить
@@ -71,8 +51,8 @@ function LlmThresholdsForm({ profile }: { profile: User }) {
 }
 
 /**
- * Раздел 15.1, 19.7: расход окна лимита, на котором задача переходит на
- * следующий LLM-аккаунт по порядку.
+ * Раздел 15.1, 19.7: порог расхода 5-часового окна, который аккаунт не
+ * переступает; неделя учитывается расходом и временем сброса, без порога.
  */
 export function LlmThresholdsCard() {
   const { data: profile, isLoading } = useProfile();
@@ -80,15 +60,15 @@ export function LlmThresholdsCard() {
   return (
     <Card>
       <CardTitle>
-        <span>Переключение LLM-аккаунтов</span>
+        <span>Порог LLM-аккаунтов</span>
       </CardTitle>
       <div className="mb-3 text-small text-text-3">
-        Когда расход окна лимита текущего аккаунта доходит до порога, следующее обращение задачи
-        уходит на следующий аккаунт по порядку. Если все аккаунты выше порога, работа продолжается
-        на наименее израсходованном.
+        Задачи распределяются по аккаунтам так, чтобы 5-часовые окна лимита стартовали по очереди,
+        а расход окна не переступал порог. Если все аккаунты на пороге, задача ждёт ближайшего
+        сброса в статусе «Ждёт лимита».
       </div>
       {isLoading && <LoadingState />}
-      {profile && <LlmThresholdsForm profile={profile} />}
+      {profile && <LlmThresholdForm profile={profile} />}
     </Card>
   );
 }

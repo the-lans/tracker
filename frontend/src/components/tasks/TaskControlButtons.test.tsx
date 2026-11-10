@@ -43,6 +43,7 @@ describe("TaskControlButtons", () => {
       { status: TaskStatus.PLAN_REVIEW, expected: [] },
       { status: TaskStatus.AWAITING_INPUT, expected: [] },
       { status: TaskStatus.REBASE_CONFLICT, expected: [] },
+      { status: TaskStatus.AWAITING_LIMIT, expected: [Button.STOP] },
       {
         status: TaskStatus.FAILED,
         expected: [Button.RESTART, Button.CLEAR_CONTEXT, Button.CLEANUP],
@@ -61,6 +62,17 @@ describe("TaskControlButtons", () => {
       renderButtons({ status: TaskStatus.REFINING, ...fields });
 
       expect(screen.getByRole("button", { name: Button.START })).toBeDisabled();
+    });
+
+    test.for([
+      { from: TaskStatus.IN_PROGRESS, expected: [Button.PAUSE, Button.STOP] },
+      { from: TaskStatus.REBASE_CONFLICT, expected: [Button.PAUSE, Button.STOP] },
+      { from: TaskStatus.PAUSED, expected: [Button.STOP] },
+      { from: TaskStatus.REFINING, expected: [Button.STOP] },
+    ])("ждёт лимита из $from", ({ from, expected }) => {
+      renderButtons({ status: TaskStatus.AWAITING_LIMIT, limit_wait_from_status: from });
+
+      expect(visibleButtons()).toEqual(expected);
     });
 
     test.for([TaskStatus.FAILED, TaskStatus.DONE])(
@@ -96,6 +108,7 @@ describe("TaskControlButtons", () => {
     const CONFIRMED_ACTIONS = [
       { status: TaskStatus.IN_PROGRESS, button: Button.STOP, confirm: "Остановить", action: "stop" },
       { status: TaskStatus.PAUSED, button: Button.STOP, confirm: "Остановить", action: "stop" },
+      { status: TaskStatus.AWAITING_LIMIT, button: Button.STOP, confirm: "Остановить", action: "stop" },
       {
         status: TaskStatus.FAILED,
         button: Button.CLEAR_CONTEXT,
@@ -150,8 +163,9 @@ describe("TaskControlButtons", () => {
     test.for([
       { status: TaskStatus.NEW, button: Button.START, action: "start", text: "Задача поставлена в очередь" },
       { status: TaskStatus.IN_PROGRESS, button: Button.PAUSE, action: "pause", text: "Пауза наступит после текущей ноды" },
+      { status: TaskStatus.AWAITING_LIMIT, button: Button.PAUSE, action: "pause", text: "После сброса лимита задача встанет на паузу" },
     ])("$status: успех «$button» подтверждается уведомлением", async ({ status, button, text }, { toasts }) => {
-      const { user } = renderButtons({ status });
+      const { user } = renderButtons({ status, limit_wait_from_status: TaskStatus.IN_PROGRESS });
 
       await user.click(screen.getByRole("button", { name: button }));
 
@@ -177,6 +191,47 @@ describe("TaskControlButtons", () => {
 
       expect(screen.getByRole("button", { name: Button.START })).toBeDisabled();
       expect(api.mutations()).toHaveLength(1);
+    });
+  });
+
+  describe("ожидание лимита", () => {
+    const HINT = /Все LLM-аккаунты на пороге — задача начнёт работу в/;
+
+    test.for([
+      { status: TaskStatus.NEW, waitUntil: "2026-11-10T18:40:00Z", shown: true },
+      { status: TaskStatus.NEW, waitUntil: null, shown: false },
+      { status: TaskStatus.FAILED, waitUntil: "2026-11-10T18:40:00Z", shown: false },
+    ])("$status, ожидание до $waitUntil — подсказка у запуска: $shown", async ({ status, waitUntil, shown }, { api }) => {
+      api.respond("GET /tasks/llm-limit", { wait_until: waitUntil });
+      renderButtons({ status });
+
+      const asked = () => api.requests.some((request) => request.path === "/tasks/llm-limit");
+      if (shown) expect(await screen.findByText(HINT)).toBeInTheDocument();
+      else expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+      await expect.poll(asked).toBe(status === TaskStatus.NEW);
+    });
+
+    test("после запуска подсказки нет, хотя ожидание ещё в кеше", async ({ api }) => {
+      api.respond("GET /tasks/llm-limit", { wait_until: "2026-11-10T18:40:00Z" });
+      const { rerender } = renderButtons({ status: TaskStatus.NEW });
+      expect(await screen.findByText(HINT)).toBeInTheDocument();
+
+      rerender(<TaskControlButtons task={makeTask({ status: TaskStatus.IN_PROGRESS })} />);
+
+      expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+    });
+
+    test("остановка ожидания чата оставляет «Уточняется»", async () => {
+      const { user } = renderButtons({
+        status: TaskStatus.AWAITING_LIMIT,
+        limit_wait_from_status: TaskStatus.REFINING,
+      });
+
+      await user.click(screen.getByRole("button", { name: Button.STOP }));
+
+      expect(screen.getByRole("dialog")).toHaveTextContent(
+        "Ожидание лимита прекратится, задача останется в статусе «Уточняется».",
+      );
     });
   });
 });

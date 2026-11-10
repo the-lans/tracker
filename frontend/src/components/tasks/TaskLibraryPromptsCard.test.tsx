@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect } from "vitest";
 import { TaskLibraryPromptsCard } from "@/components/tasks/TaskLibraryPromptsCard";
 import {
@@ -9,15 +9,15 @@ import {
   type Task,
   type TaskLibraryPromptItem,
 } from "@/lib/types";
-import { makeLibraryPrompt, makeNode, makeTask } from "@/test/factories";
+import { makeLibraryPrompt, makeLlmAccount, makeNode, makeTask } from "@/test/factories";
 import type { MockedApi } from "@/test/apiMock";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
 const PROMPTS_PATH = "/tasks/t1/library-prompts";
 const NO_SESSION = "Сессия задачи не активна";
-const NO_LLM_ACCOUNT = "У задачи нет LLM-аккаунта — доступны только скрипты";
-const CHAT_NEEDS_LLM = "Чат с агентом ведёт LLM — выберите LLM-аккаунт";
+const NO_LLM_ACCOUNT = "Нет доступного LLM-аккаунта — доступны только скрипты";
+const CHAT_NEEDS_LLM = "Нет доступного LLM-аккаунта — чат с агентом ведёт LLM";
 
 const libraryNodes: NodeItem[] = [
   makeNode({ id: "l1", pipeline_id: null, name: "Ревью безопасности", is_library_item: true }),
@@ -28,8 +28,10 @@ function renderCard(
   api: MockedApi,
   prompts: TaskLibraryPromptItem[],
   task: Partial<Task> = { status: TaskStatus.IN_PROGRESS },
+  accounts = [makeLlmAccount()],
 ) {
   api.respond(`GET ${PROMPTS_PATH}`, prompts);
+  api.respond("GET /llm-accounts", accounts);
   return renderWithProviders(
     <TaskLibraryPromptsCard task={makeTask(task)} libraryNodes={libraryNodes} />,
   );
@@ -46,6 +48,7 @@ describe("TaskLibraryPromptsCard", () => {
       { status: TaskStatus.PLAN_REVIEW, llm: "acc1", type: NodeType.PLAIN_PROMPT, reason: null },
       { status: TaskStatus.AWAITING_INPUT, llm: "acc1", type: NodeType.SCRIPT, reason: null },
       { status: TaskStatus.REBASE_CONFLICT, llm: "acc1", type: NodeType.PLAIN_PROMPT, reason: null },
+      { status: TaskStatus.AWAITING_LIMIT, llm: "acc1", type: NodeType.PLAIN_PROMPT, reason: null },
       { status: TaskStatus.IN_PROGRESS, llm: null, type: NodeType.SCRIPT, reason: null },
       { status: TaskStatus.IN_PROGRESS, llm: null, type: NodeType.PLAIN_PROMPT, reason: NO_LLM_ACCOUNT },
       { status: TaskStatus.IN_PROGRESS, llm: null, type: NodeType.SLASH_COMMAND, reason: NO_LLM_ACCOUNT },
@@ -58,14 +61,14 @@ describe("TaskLibraryPromptsCard", () => {
       { status: TaskStatus.FAILED, llm: "acc1", type: NodeType.PLAIN_PROMPT, reason: NO_SESSION },
       { status: TaskStatus.DONE, llm: null, type: NodeType.SCRIPT, reason: NO_SESSION },
     ])(
-      "$status, аккаунт $llm, $type → $reason",
+      "$status, аккаунт автора $llm, $type → $reason",
       async ({ status, llm, type, reason }, { api }) => {
-        renderCard(api, [makeLibraryPrompt({ node_type: type })], { status, llm_account_id: llm });
+        renderCard(api, [makeLibraryPrompt({ node_type: type })], { status }, llm ? [makeLlmAccount({ id: llm })] : []);
 
         const button = await runButton();
 
+        await waitFor(() => expect(button).toHaveAttribute("title", reason ?? "Выполнить"));
         expect(button).toHaveProperty("disabled", reason !== null);
-        expect(button).toHaveAttribute("title", reason ?? "Выполнить");
       },
     );
 
