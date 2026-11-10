@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import uuid
+from datetime import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
@@ -33,7 +34,7 @@ from db.models.settings import (  # noqa: E402
 )
 from db.session import async_session_factory  # noqa: E402
 from services.periodic_tasks import NIGHT_DISPATCH_TASK  # noqa: E402
-from services.task_queue import night_window_cron  # noqa: E402
+from services.task_queue import moscow_cron, night_window_cron  # noqa: E402
 
 configure_logging()
 logger = get_logger("seed_periodic_tasks")
@@ -42,12 +43,17 @@ _MINUTE = 60
 _HOUR = 60 * _MINUTE
 _DAY = 24 * _HOUR
 _WEEK = 7 * _DAY
+_SUNDAY = 0
 
 # Расписание ночного воркера выводится из начала ночного окна (раздел 16.2).
 _NIGHT_SCHEDULE = None
+# Раздел 20.4: бэкап — ежедневно в 03:00 МСК, проверка — в воскресенье в 02:00 МСК.
+_BACKUP_SCHEDULE = moscow_cron(time(3, 0))
+_VERIFY_SCHEDULE = moscow_cron(time(2, 0), weekday=_SUNDAY)
 
-# (name, display_name, description, task_path, interval_seconds | _NIGHT_SCHEDULE)
-_SEED_TASKS: list[tuple[str, str, str, str, int | None]] = [
+# (name, display_name, description, task_path, расписание): число — интервал
+# в секундах, строка — crontab по UTC, _NIGHT_SCHEDULE — от ночного окна.
+_SEED_TASKS: list[tuple[str, str, str, str, int | str | None]] = [
     (
         "check_scheduled_tasks_for_autostart",
         "Автозапуск запланированных задач",
@@ -163,7 +169,31 @@ _SEED_TASKS: list[tuple[str, str, str, str, int | None]] = [
         "tasks.periodic.expire_stale_manual_queue_requests",
         15 * _MINUTE,
     ),
+    (
+        "backup_to_s3",
+        "Резервное копирование в S3",
+        "Полная зашифрованная копия сервера в S3 (БД, файлы задач, данные агентов, .env) "
+        "с ротацией; настройки — в системных настройках",
+        "tasks.periodic.backup_to_s3",
+        _BACKUP_SCHEDULE,
+    ),
+    (
+        "verify_s3_backup",
+        "Проверка восстановления из S3",
+        "Скачивает последнюю копию, проверяет контрольные суммы и архивы, восстанавливает "
+        "дамп во временный PostgreSQL и сверяет таблицы",
+        "tasks.periodic.verify_s3_backup",
+        _VERIFY_SCHEDULE,
+    ),
 ]
+
+
+async def _crontab(db_session: AsyncSession, schedule: int | str | None) -> str | None:
+    if isinstance(schedule, int):
+        return None
+    if isinstance(schedule, str):
+        return schedule
+    return await _night_crontab(db_session)
 
 
 async def _night_crontab(db_session: AsyncSession) -> str:
@@ -175,7 +205,7 @@ async def _night_crontab(db_session: AsyncSession) -> str:
 async def _seed() -> None:
     async with async_session_factory() as db_session:
         created = 0
-        for name, display_name, description, task_path, interval_seconds in _SEED_TASKS:
+        for name, display_name, description, task_path, schedule in _SEED_TASKS:
             existing = await db_session.scalar(
                 sa.select(PeriodicTask).where(PeriodicTask.name == name),
             )
@@ -192,13 +222,11 @@ async def _seed() -> None:
                     task_path=task_path,
                     schedule_type=(
                         PeriodicScheduleType.INTERVAL
-                        if interval_seconds is not None
+                        if isinstance(schedule, int)
                         else PeriodicScheduleType.CRONTAB
                     ),
-                    interval_seconds=interval_seconds,
-                    crontab_expression=(
-                        None if interval_seconds is not None else await _night_crontab(db_session)
-                    ),
+                    interval_seconds=schedule if isinstance(schedule, int) else None,
+                    crontab_expression=await _crontab(db_session, schedule),
                     is_enabled=True,
                     # Создано системой при установке (раздел 3.1).
                     updated_by=None,

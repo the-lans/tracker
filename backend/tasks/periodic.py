@@ -35,6 +35,7 @@ from db.models.tasks import Task, TaskRepository
 from db.session import async_session_factory
 from services import gitlab_sync, maintenance_tasks, users
 from services.autostart import run_scheduled_autostart_check
+from services.backup.jobs import backup_job, verify_job
 from services.limit_wait import limit_waits_to_resume
 from services.llm_account_checks import check_llm_accounts
 from services.log_rotation import resolve_archive_root, rotate_node_logs
@@ -45,7 +46,13 @@ from services.redis_connection import redis_connection
 from services.remote_control import check_session_bridges
 from services.task_dispatcher import dispatch_queued_tasks, pending_queue_session_ids
 from tasks.async_runner import run_with_fresh_pool
-from tasks.celery_app import DISPATCH_READY_TASKS, celery_app, wake_task_dispatcher
+from tasks.celery_app import (
+    BACKUP_TO_S3,
+    DISPATCH_READY_TASKS,
+    VERIFY_S3_BACKUP,
+    celery_app,
+    wake_task_dispatcher,
+)
 from tasks.session_worker import run_task_session
 
 if TYPE_CHECKING:
@@ -348,3 +355,23 @@ def expire_stale_manual_queue_requests_task() -> None:
         logger.info("manual_queue_requests_expired", count=len(expired))
 
     _run_periodic("expire_stale_manual_queue_requests", body)
+
+
+@celery_app.task(name=BACKUP_TO_S3)
+def backup_to_s3() -> None:
+    """Раздел 20.4: ежедневный бэкап в S3 — сервис `backup-worker`, очередь `backups`."""
+
+    async def body(db_session: AsyncSession) -> None:
+        await backup_job(db_session, now=datetime.now(UTC))
+
+    _run_periodic(BACKUP_TO_S3, body)
+
+
+@celery_app.task(name=VERIFY_S3_BACKUP)
+def verify_s3_backup() -> None:
+    """Раздел 20.4: еженедельная проверка восстановления последней копии."""
+
+    async def body(db_session: AsyncSession) -> None:
+        await verify_job(db_session)
+
+    _run_periodic(VERIFY_S3_BACKUP, body)

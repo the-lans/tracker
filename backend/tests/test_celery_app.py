@@ -64,6 +64,11 @@ class TestConfig:
     def test_beat_reads_schedule_from_database(self, worker_view: dict[str, Any]) -> None:
         assert worker_view["beat_scheduler"] == "tasks.periodic_scheduler:DatabaseScheduler"
 
-    def test_sessions_have_own_queue(self, worker_view: dict[str, Any]) -> None:
-        assert worker_view["routes"] == {"run_task_session": {"queue": "sessions"}}
+    def test_long_tasks_have_own_queues(self, worker_view: dict[str, Any]) -> None:
+        """Сессии и бэкапы не занимают процессы общей очереди `celery`."""
+        assert worker_view["routes"] == {
+            "run_task_session": {"queue": "sessions"},
+            "backup_to_s3": {"queue": "backups"},
+            "verify_s3_backup": {"queue": "backups"},
+        }
         assert worker_view["prefetch"] == 1

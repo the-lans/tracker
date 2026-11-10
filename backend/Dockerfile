@@ -5,8 +5,21 @@ FROM python:3.12-slim
 # git и ssh — клонирование и пуш репозиториев задачи по deploy-ключу
 # (services/git_ops.py), клиент Docker — script-ноды и уборка их контейнеров
 # через docker.sock хоста (раздел 11.4, 16.2, 20.5).
+# Бэкап в S3 (раздел 20.4, services/backup/): gpg шифрует архив, pg_dump
+# снимает дамп. Клиент — той же major-версии, что сервер (postgres:15): дамп
+# pg_dump 17 из Debian содержит SET transaction_timeout, который PostgreSQL 15
+# не знает, и восстановление с ON_ERROR_STOP падает.
+ARG POSTGRES_CLIENT_MAJOR=15
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git openssh-client \
+    && apt-get install -y --no-install-recommends git openssh-client gnupg ca-certificates curl \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && . /etc/os-release \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends "postgresql-client-${POSTGRES_CLIENT_MAJOR}" \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=docker:27.5.1-cli /usr/local/bin/docker /usr/local/bin/docker
 

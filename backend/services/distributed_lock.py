@@ -75,6 +75,7 @@ async def wait_for_lock(
     *,
     ttl_seconds: int,
     wait_seconds: float,
+    poll_seconds: float = _LOCK_POLL_SECONDS,
 ) -> AsyncIterator[bool]:
     """
     `SET NX` с TTL и коротким ожиданием занятой блокировки. Отдаёт, захвачена
@@ -87,7 +88,7 @@ async def wait_for_lock(
             logger.warning("distributed_lock_wait_expired", key=key)
             yield False
             return
-        await asyncio.sleep(_LOCK_POLL_SECONDS)
+        await asyncio.sleep(poll_seconds)
     try:
         yield True
     finally:

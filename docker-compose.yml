@@ -225,6 +225,37 @@ services:
         "--concurrency", "${SESSION_WORKER_CONCURRENCY:-4}", "-l", "info",
       ]
 
+  # Раздел 20.4, 20.5: бэкап в S3 и еженедельная проверка восстановления —
+  # своя очередь `backups`, один процесс: бэкап идёт десятки минут и не
+  # должен занимать `worker`. Данные всех volume и .env сервера — только для
+  # чтения и только здесь; docker.sock — для временного PostgreSQL проверки.
+  backup-worker:
+    <<: *worker
+    command:
+      [
+        "celery", "-A", "tasks.celery_app", "worker", "-Q", "backups",
+        "--concurrency", "1", "-l", "info",
+      ]
+    environment:
+      <<: *backend_env
+      BACKUP_SOURCE_ROOT: /data/backup-src
+      BACKUP_STAGING_DIR: /data/backup-staging
+    volumes:
+      - task_repos:/data/backup-src/task_repos:ro
+      - user_files:/data/backup-src/user_files:ro
+      - log_archive:/data/backup-src/log_archive:ro
+      - claude_sessions:/data/backup-src/claude_sessions:ro
+      - cliproxy_data:/data/backup-src/cliproxy_data:ro
+      - claude_accounts:/data/backup-src/claude_accounts:ro
+      - sftp_host_keys:/data/backup-src/sftp_host_keys:ro
+      # Каталог с .env сервера, а не сам файл: install.sh правит .env через
+      # `sed -i` (новый файл), а смонтированный файл остался бы прежним.
+      # Другой каталог — если compose запускают не из каталога установки
+      # (стенд QA).
+      - ${TRACKER_ENV_DIR:-.}:/data/backup-src/env:ro
+      - backup_staging:/data/backup-staging
+      - /var/run/docker.sock:/var/run/docker.sock
+
   beat:
     build:
       context: .
@@ -353,6 +384,8 @@ volumes:
   caddy_data:
   caddy_config:
   postgres_backups:
+  # Раздел 20.4: промежуточные файлы бэкапа в S3; очищается после каждого запуска.
+  backup_staging:
 
 networks:
   # Раздел 19.3, 19.7: сеть контейнеров сессий — без выхода к сервисам

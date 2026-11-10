@@ -77,3 +77,24 @@ class TestSeed:
             async with async_session_factory() as session:
                 await session.execute(sa.delete(PeriodicTask).where(PeriodicTask.name.in_(names)))
                 await session.commit()
+
+
+class TestBackupSchedules:
+    async def test_moscow_night(self, run_migrations: None) -> None:
+        """Раздел 20.4: бэкап — 03:00 МСК ежедневно, проверка — вс 02:00 МСК (crontab по UTC)."""
+        seed = _load_seed_module()
+        names = ["backup_to_s3", "verify_s3_backup"]
+        try:
+            await seed._seed()
+
+            rows = {row.name: row for row in await _seeded_rows(names)}
+            assert {name: row.crontab_expression for name, row in rows.items()} == {
+                "backup_to_s3": "0 0 * * *",
+                "verify_s3_backup": "0 23 * * 6",
+            }
+            assert {row.schedule_type for row in rows.values()} == {PeriodicScheduleType.CRONTAB}
+            assert rows["backup_to_s3"].task_path == "tasks.periodic.backup_to_s3"
+        finally:
+            async with async_session_factory() as session:
+                await session.execute(sa.delete(PeriodicTask).where(PeriodicTask.name.in_(names)))
+                await session.commit()

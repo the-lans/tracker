@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
@@ -42,7 +42,9 @@ logger = get_logger("task_queue")
 
 # Раздел 3.1 `system_settings.night_window_*`: ночное окно задаётся по Москве.
 NIGHT_WINDOW_TIMEZONE = ZoneInfo("Europe/Moscow")
-_NIGHT_WINDOW_REFERENCE_DATE = date(2000, 1, 1)
+# Воскресенье: от него отсчитывается день недели crontab.
+_CRON_REFERENCE_SUNDAY = date(2000, 1, 2)
+_DAYS_IN_WEEK = 7
 
 # Статусы, в которых задача занимает слот, если её запустил воркер очереди
 # или у неё стоит галочка `occupies_slot`. `failed` слот не освобождает:
@@ -190,14 +192,22 @@ def night_window_active(now: datetime, *, start: time, end: time) -> bool:
     return moment >= start or moment < end
 
 
-def night_window_cron(start: time) -> str:
+def moscow_cron(at: time, *, weekday: int | None = None) -> str:
     """
-    Crontab по UTC (расписание Beat — `timezone="UTC"`) для начала ночного окна.
+    Crontab по UTC (расписание Beat — `timezone="UTC"`) для времени по Москве;
+    `weekday` — день недели crontab (0 — воскресенье), `None` — каждый день.
+    Сдвиг через полночь переносит и день недели.
     """
     # Московское время без перехода на летнее: сдвиг одинаков в любой день.
-    local = datetime.combine(_NIGHT_WINDOW_REFERENCE_DATE, start, tzinfo=NIGHT_WINDOW_TIMEZONE)
-    utc = local.astimezone(UTC)
-    return f"{utc.minute} {utc.hour} * * *"
+    day = _CRON_REFERENCE_SUNDAY + timedelta(days=weekday or 0)
+    utc = datetime.combine(day, at, tzinfo=NIGHT_WINDOW_TIMEZONE).astimezone(UTC)
+    day_of_week = "*" if weekday is None else str(utc.isoweekday() % _DAYS_IN_WEEK)
+    return f"{utc.minute} {utc.hour} * * {day_of_week}"
+
+
+def night_window_cron(start: time) -> str:
+    """Crontab по UTC для начала ночного окна."""
+    return moscow_cron(start)
 
 
 def validate_night_window(*, start: time, end: time) -> None:

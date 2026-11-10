@@ -17,6 +17,7 @@ from services.refining_chat import start_chat
 from services.session_heartbeat import beat
 from services.task_queue import (
     change_task_status_manually,
+    moscow_cron,
     night_window_active,
     night_window_cron,
     occupied_slots,
@@ -65,6 +66,18 @@ class TestNightWindow:
     )
     def test_cron(self, start: time, cron: str) -> None:
         assert night_window_cron(start) == cron
+
+    @pytest.mark.parametrize(
+        ("at", "weekday", "cron"),
+        [
+            pytest.param(time(3, 0), None, "0 0 * * *", id="бэкап каждый день"),
+            pytest.param(time(2, 0), 0, "0 23 * * 6", id="воскресенье на субботу UTC"),
+            pytest.param(time(5, 0), 0, "0 2 * * 0", id="тот же день"),
+            pytest.param(time(1, 30), 1, "30 22 * * 0", id="понедельник на воскресенье"),
+        ],
+    )
+    def test_moscow_cron(self, at: time, weekday: int | None, cron: str) -> None:
+        assert moscow_cron(at, weekday=weekday) == cron
 
     def test_equal_bounds_rejected(self) -> None:
         with pytest.raises(ValidationError):
