@@ -58,6 +58,10 @@ CONTAINER_DEADLINE_LABEL = "tracker.deadline"
 # Запас на остановку по таймауту самой ноды (`docker stop`) сверх `timeout_seconds`.
 _DEADLINE_MARGIN_SECONDS = 120
 _DEFAULT_CPU_LIMIT = "1.0"
+# Остановка после отмены: `docker stop` повторяется, пока не завершится клиент
+# `docker run`. Пауза между попытками больше, чем `docker stop` ждёт SIGTERM.
+_STOP_ATTEMPTS = 3
+_STOP_WAIT_SECONDS = 15.0
 
 
 class ScriptExecutionResult:
@@ -202,7 +206,7 @@ async def _communicate_until_deadline(
     except asyncio.CancelledError:
         # Кнопка «Остановить» (раздел 7.3, 14.2) отменяет корутину ноды —
         # контейнер при этом не должен продолжать работу в фоне.
-        await asyncio.shield(_force_stop_container(container_name))
+        await asyncio.shield(_stop_until_exited(process, container_name=container_name))
         logger.info("script_node_stopped", image=image)
         raise
     return stdout, stderr, False
@@ -220,6 +224,27 @@ async def task_mount_args(repos_path: Path, artifacts_path: Path | None) -> list
 
 def _env_args(env: Mapping[str, str]) -> list[str]:
     return [arg for key in sorted(env) for arg in ("-e", f"{key}={env[key]}")]
+
+
+async def _stop_until_exited(
+    process: asyncio.subprocess.Process,
+    *,
+    container_name: str,
+) -> None:
+    """
+    `docker stop`, пока не завершится клиент `docker run` (с ``--rm`` он
+    выходит вместе с контейнером). Отмена могла прийти, когда контейнер ещё
+    создавался или не запустился: тогда первый `docker stop` ничего не
+    останавливает, а контейнер стартует следом.
+    """
+    for _ in range(_STOP_ATTEMPTS):
+        await _force_stop_container(container_name)
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=_STOP_WAIT_SECONDS)
+        except TimeoutError:
+            continue
+        return
+    logger.warning("script_container_not_stopped", container_name=container_name)
 
 
 async def _force_stop_container(container_name: str) -> None:
