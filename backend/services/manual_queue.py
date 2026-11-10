@@ -57,7 +57,7 @@ from services.parent_summary import run_parent_summary_request
 from services.pipeline_orchestrator import StopGuard, run_node_execution
 from services.system_settings import resolve_runner_image
 from services.task_control import clear_manual_stop, is_manual_stop_requested
-from services.task_launch import requires_llm_account
+from services.task_launch import ensure_llm_for_request, requires_llm_account
 from services.task_status import SESSION_ACTIVE_STATUSES
 from services.template_context import RenderedText, render_for_task
 from services.templating import (
@@ -116,13 +116,6 @@ async def attach_library_prompt(
     return task_library_prompt
 
 
-async def _ensure_task_has_llm_account(db_session: AsyncSession, task_id: uuid.UUID) -> None:
-    """Раздел 3.1: без LLM-аккаунта сессии Claude Code у задачи нет."""
-    task = await db_session.get(Task, task_id)
-    if task is not None and task.llm_account_id is None:
-        raise ValidationError("Промт выполняет LLM — выберите у задачи LLM-аккаунт")
-
-
 def _add_queued_request(
     db_session: AsyncSession,
     *,
@@ -159,8 +152,7 @@ async def enqueue_library_prompt_run(
     ensure_manual_requests_open(task)
     if node.node_type in LIBRARY_FORBIDDEN_NODE_TYPES:
         raise ValidationError(f"Тип ноды {node.node_type} недопустим для библиотеки промтов")
-    if requires_llm_account(node):
-        await _ensure_task_has_llm_account(db_session, task_library_prompt.task_id)
+    await ensure_llm_for_request(db_session, task, needs_llm=requires_llm_account(node))
     request = _add_queued_request(
         db_session,
         task_id=task_library_prompt.task_id,
@@ -189,8 +181,8 @@ async def enqueue_freeform_prompt_run(
     # здесь же, до постановки в очередь, а не только на предпросмотре.
     task = await lock_manual_task(db_session, task_id)
     validate_template_variables(raw_prompt_text, scope=RenderScope.FREEFORM)
-    await _ensure_task_has_llm_account(db_session, task_id)
     ensure_manual_requests_open(task)
+    await ensure_llm_for_request(db_session, task, needs_llm=True)
     request = _add_queued_request(
         db_session,
         task_id=task_id,

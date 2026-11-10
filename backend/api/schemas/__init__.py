@@ -28,6 +28,7 @@ from api.schemas.env_variables import (
 )
 from api.schemas.llm_accounts import (
     LlmAccountCreateRequest,
+    LlmAccountFields,
     LlmAccountOrderRequest,
     LlmAccountResponse,
     LlmAccountUpdateRequest,
@@ -133,6 +134,7 @@ __all__ = [
     "LibraryUsageResponse",
     "LlmAccountCreateRequest",
     "LlmAccountOrderRequest",
+    "LlmAccountFields",
     "LlmAccountResponse",
     "LlmAccountUpdateRequest",
     "LlmLoginCallbackRequest",

@@ -19,6 +19,7 @@ Celery-таска на весь активный жизненный цикл с�
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -42,7 +43,7 @@ if TYPE_CHECKING:
     from claude_agent_sdk.types import PermissionMode as SdkPermissionMode
 
     from db.models.enums import NodeType, ReasoningEffort
-    from services.llm_routing import TurnRoute
+    from services.llm_routing import TurnPlan, TurnRoute
 
 logger = get_logger("claude_agent")
 
@@ -67,6 +68,8 @@ _TEXT_BLOCK = "text"
 # Текстовые блоки хода — отдельные реплики агента (до и после вызова
 # инструмента): в ответе они идут абзацами, а не сливаются в одну строку.
 TEXT_BLOCK_SEPARATOR = "\n\n"
+# Раздел 19.7, «Сжатие контекста»: слэш-команда CLI, уходит буквально (правило 2).
+COMPACT_COMMAND = "/compact"
 
 # Получатель фрагментов ответа по мере генерации (раздел 15.2).
 TextDeltaHandler = Callable[[str], Awaitable[None]]
@@ -94,12 +97,16 @@ class TurnRouter(Protocol):
     выбирается перед каждым ходом, ошибка хода сообщается аккаунту маршрута.
     """
 
-    async def route(
+    async def plan_turn(
         self,
         *,
         effort: ReasoningEffort | None,
         node_type: NodeType | None,
-    ) -> TurnRoute: ...
+        boundary: bool,
+        has_history: bool,
+    ) -> TurnPlan: ...
+
+    async def finish_compaction(self, plan: TurnPlan, *, succeeded: bool) -> None: ...
 
     async def report_error(self, route: TurnRoute, assistant_error: str | None) -> bool | None: ...
 
@@ -462,6 +469,7 @@ class ClaudeCodeSession:
         *,
         effort: ReasoningEffort | None = None,
         node_type: NodeType | None = None,
+        boundary: bool = True,
     ) -> SessionTurnResult:
         """Отправляет промт, дожидается ответа целиком, возвращает итог одним объектом.
 
@@ -470,10 +478,12 @@ class ClaudeCodeSession:
         вызов (ручной промт, следующая нода) не начался параллельно.
         Аккаунт хода (раздел 19.7) выбирается под тем же мьютексом до
         отправки и внутри хода не меняется; ``effort`` — уровень рассуждений
-        ноды (None — аккаунта), ``node_type`` — тип ноды для выбора аккаунта.
+        ноды (None — аккаунта), ``node_type`` — тип ноды для выбора аккаунта,
+        ``boundary`` — ход начинает ноду, её повтор или ручной запрос: только
+        на границе аккаунт меняется со сжатием контекста `/compact`.
         """
         async with self._lock:
-            route = await self._route(effort=effort, node_type=node_type)
+            route = await self._route(effort=effort, node_type=node_type, boundary=boundary)
             logger.info("session_query_started", prompt_length=len(prompt))
             self._turn_open = True
             try:
@@ -529,12 +539,56 @@ class ClaudeCodeSession:
         *,
         effort: ReasoningEffort | None,
         node_type: NodeType | None,
+        boundary: bool,
     ) -> TurnRoute | None:
         self.turn_route = None
         if self._router is None or not self._runs_cli:
             return None
-        self.turn_route = await self._router.route(effort=effort, node_type=node_type)
+        plan = await self._router.plan_turn(
+            effort=effort,
+            node_type=node_type,
+            boundary=boundary,
+            has_history=self._session_id is not None,
+        )
+        self.turn_route = plan.route
+        if plan.compact_with is not None:
+            compacted = await self._compact(plan.compact_with)
+            await self._router.finish_compaction(plan, succeeded=compacted)
+            self.turn_route = dataclasses.replace(plan.route, context_compacted=compacted)
         return self.turn_route
+
+    async def _compact(self, route: TurnRoute) -> bool:
+        """
+        Служебный ход `/compact` перед ходом на новом аккаунте (раздел 19.7):
+        ответ не транслируется и в `node_logs` не пишется. Ошибка хода
+        сообщается аккаунту сжатия, а ход на новом аккаунте всё равно идёт.
+        """
+        assert self._router is not None
+        logger.info("session_compaction_started", account_id=str(route.account_id))
+        self._turn_open = True
+        self._turn_text_parts = []
+        result: ResultMessage | None = None
+        assistant_error: str | None = None
+        try:
+            await self._client.query(COMPACT_COMMAND)
+            async for message in self._client.receive_response():
+                if isinstance(message, AssistantMessage) and message.error is not None:
+                    assistant_error = message.error
+                if isinstance(message, ResultMessage):
+                    result = message
+        except ClaudeSDKError:
+            self._turn_open = False
+            raise
+        self._turn_open = False
+        if result is None:
+            logger.warning("session_compaction_without_result")
+            return False
+        self._session_id = result.session_id
+        if result.is_error:
+            logger.warning("session_compaction_failed", assistant_error=assistant_error)
+            await self._router.report_error(route, assistant_error)
+            return False
+        return True
 
     async def _forward_text_delta(self, message: StreamEvent) -> None:
         if self._on_text_delta is None:

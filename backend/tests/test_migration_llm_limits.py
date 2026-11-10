@@ -22,6 +22,7 @@ _NEW_COLUMNS = {
     "window_started_at",
     "turn_cost_pct",
     "llm_compact_on_switch",
+    "llm_context_compacted",
 }
 
 
@@ -59,7 +60,7 @@ async def _columns(engine: AsyncEngine) -> set[str]:
         rows = await connection.execute(
             sa.text(
                 "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name IN ('tasks', 'llm_accounts', 'users')",
+                "WHERE table_name IN ('tasks', 'llm_accounts', 'users', 'node_logs')",
             ),
         )
         return set(rows.scalars())

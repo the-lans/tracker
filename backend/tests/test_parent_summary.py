@@ -31,6 +31,8 @@ from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task, TaskParentSummary
 from db.models.users import User
+from services.account_router import TaskAccountRouter
+from services.llm_routing import TurnPlan
 from services.manual_queue import process_manual_queue_once
 from services.parent_summary import DELIVERY_INSTRUCTION, deny_all_tools
 from services.task_control import TaskControlCommand, request_task_control
@@ -303,6 +305,38 @@ class TestIdleParent:
         assert parent_log.trigger_type is NodeLogTriggerType.SUMMARY_FOR_CHILD
         await db_session.refresh(child)
         assert child.status is TaskStatus.DONE
+
+    async def test_summary_turns_keep_account(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Раздел 19.7: пересказ родителя — не граница хода, сжатия при нём нет."""
+        boundaries: list[bool] = []
+        plan_turn = TaskAccountRouter.plan_turn
+
+        async def record(router: TaskAccountRouter, **kwargs: Any) -> TurnPlan:
+            boundaries.append(kwargs["boundary"])
+            return await plan_turn(router, **kwargs)
+
+        monkeypatch.setattr(TaskAccountRouter, "plan_turn", record)
+        user = await make_user(db_session)
+        parent = await _make_parent(
+            db_session,
+            user,
+            status=TaskStatus.DONE,
+            session_id="sess-parent",
+        )
+        child = await _make_child(db_session, user, parent)
+        worker_env.queued_clients = [FakeClaudeAgentClient(messages_per_query=[_answer(_SUMMARY)])]
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=[_answer("Принято"), [make_result_message()]],
+        )
+
+        await _run_child(child)
+
+        assert boundaries == [False, False, True]
 
     async def test_delivery_turn_without_tools(
         self,

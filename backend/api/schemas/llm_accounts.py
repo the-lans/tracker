@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from clients.cliproxy import OAuthState
 from db.models.enums import LlmAccountStatus, ReasoningEffort
 from db.models.users import MAX_LLM_SWITCH_THRESHOLD_PCT, MIN_LLM_SWITCH_THRESHOLD_PCT
+from services.llm_account_choice import LimitState
 
 _LABEL_MAX_LENGTH = 200
 _REDIRECT_URL_MAX_LENGTH = 4096
@@ -42,7 +43,9 @@ class LlmAccountOrderRequest(BaseModel):
     account_ids: list[uuid.UUID]
 
 
-class LlmAccountResponse(BaseModel):
+class LlmAccountFields(BaseModel):
+    """Поля записи `llm_accounts`, которые видит пользователь."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -60,6 +63,16 @@ class LlmAccountResponse(BaseModel):
     usage_week_resets_at: datetime | None
     usage_checked_at: datetime | None
     created_by: uuid.UUID
+
+
+class LlmAccountResponse(LlmAccountFields):
+    """Раздел 15.1: аккаунт и его состояние лимита для бейджа."""
+
+    limit_state: LimitState
+    # Когда состояние кончится: сброс окна или недели; None — не ограничено.
+    limit_state_until: datetime | None
+    # Задачи в работе, которые сейчас идут на этом аккаунте.
+    active_tasks: int
 
 
 class LlmLoginStartResponse(BaseModel):

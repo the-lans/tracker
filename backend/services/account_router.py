@@ -11,6 +11,12 @@
 пишется событием `llm_account_switched`. `limit_gate` — та же оценка без
 побочных эффектов: время ожидания сброса, если все аккаунты на пороге.
 
+`plan_turn` к маршруту добавляет маршрут сжатия контекста: на границе хода
+при смене аккаунта, если у задачи есть история сессии и автор не выключил
+сжатие, сессия сначала выполняет `/compact` на прежнем аккаунте (недоступен —
+на новом), а `finish_compaction` пишет событие `llm_context_compacted` и
+публикует маршрут самого хода.
+
 Ошибка хода, в которой провайдер отклонил вход или исчерпан лимит, переводит
 аккаунт маршрута в `login_required`/`rate_limited` (`report_error`); повтор
 ноды выберет аккаунт заново.
@@ -48,14 +54,16 @@ from services.llm_account_choice import (
     AccountChoice,
     AccountView,
     ChoiceRequest,
+    LimitState,
     LimitWait,
     LlmLimitWaitError,
     NoLlmAccountAvailableError,
     choose_account,
+    limit_state,
     wait_until,
 )
 from services.llm_providers import PROVIDERS, get_provider, provider_effort
-from services.llm_routing import TurnRoute, publish_route
+from services.llm_routing import TurnPlan, TurnRoute, publish_route
 from services.llm_usage import (
     UNKNOWN_RATE_LIMIT_WINDOW,
     refresh_account_usage,
@@ -83,6 +91,8 @@ ROUTE_LOCK_WAIT_SECONDS = 10.0
 # Задачи автора, которым сейчас нужен аккаунт: нагрузка окон и число задач в работе.
 IN_WORK_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.REFINING, TaskStatus.REBASE_CONFLICT)
 _REJECTED = "rejected"
+# Сжатие выполнит прежний аккаунт и на пороге, но не исключённый или исчерпанный.
+_CANNOT_COMPACT = (LimitState.EXCLUDED, LimitState.EXHAUSTED)
 
 AUTHENTICATION_FAILED = "authentication_failed"
 RATE_LIMIT = "rate_limit"
@@ -125,6 +135,67 @@ class TaskAccountRouter:
         исключены — `NoLlmAccountAvailableError`; все на пороге или
         исчерпаны — `LlmLimitWaitError` (п. 5 раздела 19.7).
         """
+        route, _ = await self._route(effort=effort, node_type=node_type, boundary=boundary)
+        return route
+
+    async def plan_turn(
+        self,
+        *,
+        effort: ReasoningEffort | None,
+        node_type: NodeType | None,
+        boundary: bool = True,
+        has_history: bool = False,
+    ) -> TurnPlan:
+        """
+        Маршрут хода и маршрут сжатия контекста перед ним. ``has_history`` —
+        сессия уже отвечала в этом процессе; иначе история узнаётся по
+        `tasks.session_id`. Опубликован маршрут первого хода: сжатия, если
+        оно нужно, иначе самого хода.
+        """
+        route, previous_id = await self._route(
+            effort=effort,
+            node_type=node_type,
+            boundary=boundary,
+        )
+        if route.switch_reason is None or previous_id is None or not boundary:
+            return TurnPlan(route=route)
+        if not await self._compacts(has_history=has_history):
+            return TurnPlan(route=route)
+        compact_with = await self._compaction_route(previous_id, effort) or route
+        if compact_with != route:
+            await publish_route(self._redis, self._task.id, compact_with)
+        self.route_in_use = compact_with
+        return TurnPlan(route=route, compact_with=compact_with)
+
+    async def finish_compaction(self, plan: TurnPlan, *, succeeded: bool) -> None:
+        """Сжатие выполнено: событие `llm_context_compacted` и маршрут самого хода."""
+        compact_with = plan.compact_with
+        assert compact_with is not None
+        if compact_with != plan.route:
+            await publish_route(self._redis, self._task.id, plan.route)
+        self.route_in_use = plan.route
+        context = {
+            "account_id": str(compact_with.account_id),
+            "to_account_id": str(plan.route.account_id),
+            "succeeded": succeeded,
+        }
+        logger.info("llm_context_compacted", task_id=str(self._task.id), **context)
+        await write_app_log(
+            level=AppLogLevel.INFO if succeeded else AppLogLevel.WARNING,
+            source=_SOURCE,
+            message="llm_context_compacted",
+            context=context,
+            task_id=self._task.id,
+        )
+
+    async def _route(
+        self,
+        *,
+        effort: ReasoningEffort | None,
+        node_type: NodeType | None,
+        boundary: bool,
+    ) -> tuple[TurnRoute, uuid.UUID | None]:
+        """Маршрут хода и аккаунт предыдущего обращения задачи."""
         task = self._task
         lock_key = ROUTE_LOCK_KEY.format(user_id=task.created_by)
         async with wait_for_lock(
@@ -152,7 +223,37 @@ class TaskAccountRouter:
             assert previous_id is not None
             await self._log_switch(previous_id, choice)
         self.route_in_use = route
-        return route
+        return route, previous_id
+
+    async def _compacts(self, *, has_history: bool) -> bool:
+        """Сжимать ли контекст: включено у автора и у сессии есть история."""
+        task = self._task
+        author = await self._db.get(User, task.created_by)
+        if author is None or not author.llm_compact_on_switch:
+            return False
+        await self._db.refresh(task, ["session_id"])
+        return has_history or task.session_id is not None
+
+    async def _compaction_route(
+        self,
+        previous_id: uuid.UUID,
+        effort: ReasoningEffort | None,
+    ) -> TurnRoute | None:
+        """
+        Маршрут сжатия на прежнем аккаунте; None — он не может выполнить ход:
+        исключён (нет входа, выключен, без модели) или исчерпан.
+        """
+        account = await self._db.get(LlmAccount, previous_id, populate_existing=True)
+        if account is None:
+            return None
+        state = limit_state(
+            AccountView(account),
+            threshold_pct=await self._threshold(),
+            now=self._clock(),
+        )
+        if state.state in _CANNOT_COMPACT:
+            return None
+        return _turn_route(account, effort, switch_reason=None)
 
     async def limit_gate(
         self,

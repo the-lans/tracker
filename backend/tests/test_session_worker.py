@@ -23,7 +23,7 @@ from claude_agent_sdk import ClaudeAgentOptions, PermissionResultAllow, ProcessE
 from claude_agent_sdk.types import ToolPermissionContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from clients.claude_agent import REMOTE_CONTROL_EXTRA_ARG
+from clients.claude_agent import COMPACT_COMMAND, REMOTE_CONTROL_EXTRA_ARG
 from db.models.enums import (
     LlmAccountStatus,
     LlmSwitchReason,
@@ -46,6 +46,7 @@ from db.models.pipelines import Node, TaskNode
 from db.models.prompts import TaskManualRequestQueue
 from db.models.repositories import Repository, Template, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
+from db.models.users import User
 from services import gitlab_sync
 from services import task_status as task_status_module
 from services.account_router import TaskAccountRouter
@@ -91,6 +92,8 @@ from tests.worker_support import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from claude_agent_sdk import Message
     from redis.asyncio import Redis
 
@@ -1103,6 +1106,11 @@ class TestSessionContainer:
         assert await resolve_session_token(redis_client, token) is None
 
 
+def _compactions(logs: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Аккаунты, на которых сжат контекст (событие `llm_context_compacted`)."""
+    return [entry["account_id"] for entry in logs if entry["event"] == "llm_context_compacted"]
+
+
 class TestAccountSwitching:
     """
     Раздел 19.7, сценарий 13 раздела 21.2: аккаунт выбирается перед каждым
@@ -1138,12 +1146,25 @@ class TestAccountSwitching:
         rows = await db_session.execute(stmt)
         return [(row.llm_account_id, row.llm_switch_reason) for row in rows]
 
+    async def _compacted(self, db_session: AsyncSession, task: Task) -> list[bool]:
+        stmt = (
+            sa.select(NodeLog.llm_context_compacted)
+            .where(NodeLog.task_id == task.id)
+            .order_by(NodeLog.started_at)
+        )
+        return list((await db_session.execute(stmt)).scalars())
+
+    @pytest.mark.parametrize("compact", [True, False], ids=["compact", "no_compact"])
     async def test_threshold_switches_next_node(
         self,
         db_session: AsyncSession,
         worker_env: WorkerEnv,
+        compact: bool,
     ) -> None:
         task, start, spare = await self._task_with_spare(db_session, nodes=2)
+        author = await db_session.get(User, task.created_by)
+        assert author is not None
+        author.llm_compact_on_switch = compact
         queries = 0
 
         async def exhaust_start_after_first_turn() -> None:
@@ -1155,11 +1176,12 @@ class TestAccountSwitching:
                 await db_session.flush()
 
         worker_env.client = FakeClaudeAgentClient(
-            messages_per_query=_results(2),
+            messages_per_query=_results(3),
             on_query=exhaust_start_after_first_turn,
         )
 
-        await _run_worker(task)
+        with structlog.testing.capture_logs() as logs:
+            await _run_worker(task)
 
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
@@ -1169,6 +1191,11 @@ class TestAccountSwitching:
         ]
         assert task.current_llm_account_id == spare.id
         assert len(worker_env.options) == 1
+        # Сжатие — на прежнем аккаунте: на пороге он ещё может выполнить ход.
+        compact_turns = [COMPACT_COMMAND] if compact else []
+        assert worker_env.client.queries == ["шаг 0", *compact_turns, "шаг 1"]
+        assert await self._compacted(db_session, task) == [False, compact]
+        assert _compactions(logs) == ([str(start.id)] if compact else [])
 
     async def test_limit_mid_turn_retried_on_other_account(
         self,
@@ -1183,17 +1210,39 @@ class TestAccountSwitching:
         worker_env.client = FakeClaudeAgentClient(
             messages_per_query=[
                 [make_assistant_error("rate_limit"), make_result_message(is_error=True)],
-                [make_result_message(session_id="sess-worker")],
+                *_results(2),
             ],
         )
 
-        await _run_worker(task)
+        with structlog.testing.capture_logs() as logs:
+            await _run_worker(task)
 
         await db_session.refresh(task)
         await db_session.refresh(start)
         assert task.status is TaskStatus.DONE
         assert await self._attempts(db_session, task) == [start.id, spare.id]
         assert start.status is LlmAccountStatus.RATE_LIMITED
+        # Прежний аккаунт исчерпан — контекст сжимает новый.
+        assert worker_env.client.queries == ["шаг 0", COMPACT_COMMAND, "шаг 0"]
+        assert _compactions(logs) == [str(spare.id)]
+
+    async def test_automatic_account_without_start(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Раздел 3.1: пустой стартовый аккаунт — первый ход на аккаунте автора."""
+        task, start, _ = await self._task_with_spare(db_session, nodes=1)
+        task.llm_account_id = None
+        await db_session.flush()
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        await _run_worker(task)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert worker_env.client.queries == ["шаг 0"]
+        assert await self._attempts(db_session, task) == [start.id]
 
     async def test_no_account_fails_node(
         self,

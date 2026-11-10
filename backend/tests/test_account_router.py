@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from claude_agent_sdk import RateLimitInfo
 
 from db.models.enums import (
+    AppLogLevel,
     LlmAccountStatus,
     LlmSwitchReason,
     NodeLogStatus,
@@ -24,6 +25,7 @@ from db.models.enums import (
 from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.tasks import Task
+from db.models.users import User
 from services import account_router as account_router_module
 from services.account_router import ROUTE_LOCK_KEY, TaskAccountRouter
 from services.llm_account_choice import LlmLimitWaitError, NoLlmAccountAvailableError
@@ -509,6 +511,155 @@ class TestWindows:
 
         assert route.account_id == account.id
         assert await redis_client.get(key) in {b"other", "other"}
+
+
+@pytest.mark.usefixtures("recorded")
+class TestCompaction:
+    """Раздел 19.7, «Сжатие контекста»: `/compact` перед ходом на новом аккаунте."""
+
+    async def _switching(
+        self,
+        setup: Setup,
+        *,
+        previous_status: LlmAccountStatus = LlmAccountStatus.ACTIVE,
+        session_id: str | None = "sess-1",
+        compact: bool = True,
+    ) -> tuple[Task, LlmAccount, LlmAccount]:
+        previous = await setup.account(
+            pct_5h="95",
+            resets_in=timedelta(hours=1),
+            status=previous_status,
+        )
+        spare = await setup.account()
+        task = await setup.task(previous, current=previous)
+        task.session_id = session_id
+        author = await setup.db_session.get(User, setup.owner_id)
+        assert author is not None
+        author.llm_compact_on_switch = compact
+        await setup.db_session.flush()
+        return task, previous, spare
+
+    @pytest.mark.parametrize(
+        ("succeeded", "level"),
+        [(True, AppLogLevel.INFO), (False, AppLogLevel.WARNING)],
+    )
+    async def test_on_previous_account(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+        recorded: Recorded,
+        succeeded: bool,
+        level: AppLogLevel,
+    ) -> None:
+        task, previous, spare = await self._switching(setup)
+        router = _router(db_session, redis_client, fake_cliproxy, task)
+
+        plan = await router.plan_turn(effort=None, node_type=None)
+
+        assert plan.route.account_id == spare.id
+        assert plan.compact_with is not None
+        assert (plan.compact_with.account_id, plan.compact_with.switch_reason) == (
+            previous.id,
+            None,
+        )
+        assert await read_route(redis_client, task.id) == plan.compact_with
+        assert router.route_in_use == plan.compact_with
+
+        await router.finish_compaction(plan, succeeded=succeeded)
+
+        assert await read_route(redis_client, task.id) == plan.route
+        assert router.route_in_use == plan.route
+        [log] = [
+            entry for entry in recorded.app_logs if entry["message"] == "llm_context_compacted"
+        ]
+        assert log["level"] is level
+        assert log["context"] == {
+            "account_id": str(previous.id),
+            "to_account_id": str(spare.id),
+            "succeeded": succeeded,
+        }
+
+    @pytest.mark.parametrize(
+        "previous_status",
+        [LlmAccountStatus.RATE_LIMITED, LlmAccountStatus.LOGIN_REQUIRED],
+    )
+    async def test_previous_unavailable_compacts_on_new(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+        previous_status: LlmAccountStatus,
+    ) -> None:
+        task, _, spare = await self._switching(setup, previous_status=previous_status)
+        router = _router(db_session, redis_client, fake_cliproxy, task)
+
+        plan = await router.plan_turn(effort=None, node_type=None)
+        await router.finish_compaction(plan, succeeded=True)
+
+        assert plan.compact_with == plan.route
+        assert plan.route.account_id == spare.id
+        assert await read_route(redis_client, task.id) == plan.route
+
+    @pytest.mark.parametrize(
+        ("compact", "boundary", "session_id", "has_history", "compacts"),
+        [
+            (True, True, "sess-1", False, True),
+            (True, True, None, True, True),
+            (True, True, None, False, False),
+            (False, True, "sess-1", True, False),
+            (True, False, "sess-1", True, False),
+        ],
+        ids=["session_id", "history_in_process", "no_history", "disabled", "not_boundary"],
+    )
+    async def test_conditions(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+        compact: bool,
+        boundary: bool,
+        session_id: str | None,
+        has_history: bool,
+        compacts: bool,
+    ) -> None:
+        task, _, spare = await self._switching(setup, session_id=session_id, compact=compact)
+        router = _router(db_session, redis_client, fake_cliproxy, task)
+
+        plan = await router.plan_turn(
+            effort=None,
+            node_type=None,
+            boundary=boundary,
+            has_history=has_history,
+        )
+
+        assert plan.route.account_id == spare.id
+        assert (plan.compact_with is not None) is compacts
+        if not compacts:
+            assert await read_route(redis_client, task.id) == plan.route
+
+    async def test_same_account_not_compacted(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+    ) -> None:
+        current = await setup.account(pct_5h="10", resets_in=timedelta(hours=1))
+        task = await setup.task(current, current=current)
+        task.session_id = "sess-1"
+        await db_session.flush()
+
+        plan = await _router(db_session, redis_client, fake_cliproxy, task).plan_turn(
+            effort=None,
+            node_type=None,
+            has_history=True,
+        )
+
+        assert (plan.route.account_id, plan.compact_with) == (current.id, None)
 
 
 class TestLimitGate:

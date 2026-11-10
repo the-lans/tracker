@@ -162,18 +162,21 @@ async def execute_llm_node(
     *,
     effort: ReasoningEffort | None = None,
     node_type: NodeType | None = None,
+    boundary: bool = True,
 ) -> NodeExecutionOutcome:
     """
     Выполняет `plain_prompt`/`slash_command` — единая точка обращения к сессии
     (раздел 6.2). Нет доступного LLM-аккаунта или все на пороге после ворот
     лимита — сбой, временный для ноды пайплайна (раздел 19.7, п. 5): повтор
-    выберет аккаунт заново.
+    выберет аккаунт заново. ``boundary`` — ход начинает ноду, её повтор или
+    ручной запрос (раздел 19.7): только тогда аккаунт меняется со сжатием.
     """
     try:
         turn = await claude_session.send_and_collect_text(
             prompt,
             effort=effort,
             node_type=node_type,
+            boundary=boundary,
         )
     except (NoLlmAccountAvailableError, LlmLimitWaitError) as exc:
         return NodeExecutionOutcome(success=False, error_message=exc.message)
@@ -235,6 +238,7 @@ async def execute_llm_node_with_timeout(
     timeout_seconds: float,
     effort: ReasoningEffort | None = None,
     node_type: NodeType | None = None,
+    boundary: bool = True,
 ) -> NodeExecutionOutcome:
     """Раздел 3.1: `timeout_seconds` применяется одинаково к нодам пайплайна
     и к запускам из библиотеки, для ЛЮБОГО типа ноды — включая LLM-ноды, не
@@ -244,7 +248,13 @@ async def execute_llm_node_with_timeout(
     """
     try:
         return await _run_within_active_time(
-            execute_llm_node(claude_session, prompt, effort=effort, node_type=node_type),
+            execute_llm_node(
+                claude_session,
+                prompt,
+                effort=effort,
+                node_type=node_type,
+                boundary=boundary,
+            ),
             timeout_seconds=timeout_seconds,
             clock=claude_session.user_wait_clock,
         )

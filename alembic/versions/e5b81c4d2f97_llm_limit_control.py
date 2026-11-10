@@ -1,6 +1,7 @@
 """
 Контроль лимитов LLM-аккаунтов (раздел 19.7): ожидание сброса лимита,
-момент старта 5-часового окна, стоимость хода и сжатие контекста.
+момент старта 5-часового окна, стоимость хода, сжатие контекста и отметка
+о сжатии в `node_logs`.
 
 Только добавление (раздел 20.6): прежняя версия новых столбцов не читает, а
 задачи в `awaiting_limit` откат переводит в `failed`/`refining` до перехода
@@ -47,6 +48,10 @@ def upgrade() -> None:
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
         "llm_compact_on_switch boolean NOT NULL DEFAULT true"
     )
+    op.execute(
+        "ALTER TABLE node_logs ADD COLUMN IF NOT EXISTS "
+        "llm_context_compacted boolean NOT NULL DEFAULT false"
+    )
 
 
 def downgrade() -> None:
@@ -54,6 +59,7 @@ def downgrade() -> None:
     # уходят в статусы прежней версии (как откат в `deploy/install.sh`),
     # значения остаются в типах.
     op.execute(_RESTORE_LIMIT_WAITS)
+    op.execute("ALTER TABLE node_logs DROP COLUMN IF EXISTS llm_context_compacted")
     op.execute("ALTER TABLE users DROP COLUMN IF EXISTS llm_compact_on_switch")
     op.execute("ALTER TABLE llm_accounts DROP COLUMN IF EXISTS turn_cost_pct")
     op.execute("ALTER TABLE llm_accounts DROP COLUMN IF EXISTS window_started_at")

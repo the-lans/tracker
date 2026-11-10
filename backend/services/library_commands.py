@@ -33,6 +33,7 @@ from services.crypto import decrypt, encrypt
 from services.errors import ConflictError, NotFoundError, ValidationError
 from services.manual_admission import ensure_manual_requests_open
 from services.system_settings import resolve_runner_image
+from services.task_launch import ensure_llm_for_request
 from services.template_context import RenderedText, render_for_task
 
 if TYPE_CHECKING:
@@ -158,8 +159,11 @@ async def enqueue_command(
     ensure_manual_requests_open(task)
     node = await _find_command(session, owner_id=task.created_by, invocation=invocation, lock=True)
     arguments = parse_invocation(invocation)
-    if node.node_type is NodeType.PLAIN_PROMPT and task.llm_account_id is None:
-        raise ValidationError("Для текстового промта выберите LLM-аккаунт задачи")
+    await ensure_llm_for_request(
+        session,
+        task,
+        needs_llm=node.node_type is NodeType.PLAIN_PROMPT,
+    )
     snapshot = await snapshot_command(
         session, node=node, invocation=invocation, arguments=arguments
     )

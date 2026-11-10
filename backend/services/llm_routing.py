@@ -56,6 +56,8 @@ class TurnRoute:
     provider_effort: ReasoningEffort
     # Почему аккаунт сменился по сравнению с прежним обращением; None — не сменился.
     switch_reason: LlmSwitchReason | None = None
+    # Перед ходом контекст сессии сжат командой `/compact` (смена аккаунта).
+    context_compacted: bool = False
 
     def to_json(self) -> str:
         return json.dumps({**asdict(self), "account_id": str(self.account_id)})
@@ -71,6 +73,18 @@ class TurnRoute:
             provider_effort=ReasoningEffort(data["provider_effort"]),
             switch_reason=_optional_reason(data.get("switch_reason")),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class TurnPlan:
+    """
+    Маршрут хода и маршрут сжатия контекста перед ним (раздел 19.7, «Сжатие
+    контекста»): `/compact` выполняется на ``compact_with`` — прежнем
+    аккаунте или, если он недоступен, на новом; None — сжатие не нужно.
+    """
+
+    route: TurnRoute
+    compact_with: TurnRoute | None = None
 
 
 def _optional_reason(raw: str | None) -> LlmSwitchReason | None:

@@ -91,6 +91,7 @@ from services.task_control import (
     consume_task_control,
     read_task_control,
 )
+from services.task_launch import task_uses_llm
 from services.task_signal import wait_for_task_signal
 from services.task_status import (
     fail_task_after_error,
@@ -969,20 +970,17 @@ class _SessionClientFactory:
     """
     Клиент сессии задачи: новый процесс CLI в контейнере сессии (раздел
     19.3) — при старте, переподключении моста и восстановлении после сбоя;
-    без LLM-аккаунта — офлайн-клиент (задача только из скриптов).
+    без LLM — офлайн-клиент (`services/task_launch.task_uses_llm`).
     """
 
     task: Task
+    has_llm: bool
     workspace: Path
     artifacts_dir: Path
     config_dir: Path
     mcp_servers: dict[str, McpServerConfig]
     can_use_tool: CanUseTool
     cli_env: dict[str, str]
-
-    @property
-    def has_llm(self) -> bool:
-        return self.task.llm_account_id is not None
 
     def __call__(
         self,
@@ -1017,7 +1015,7 @@ async def _build_client_factory(
 ) -> _SessionClientFactory:
     config_dir = session_config_dir(task.code)
     artifacts_dir = task_artifacts_dir(task.code)
-    has_llm = task.llm_account_id is not None
+    has_llm = await task_uses_llm(db_session, task)
     cli_env = (
         await build_session_cli_env(
             task_id=task.id,
@@ -1033,6 +1031,7 @@ async def _build_client_factory(
     ensure_history_retention(str(config_dir), days=history_retention_days())
     return _SessionClientFactory(
         task=task,
+        has_llm=has_llm,
         workspace=workspace,
         artifacts_dir=artifacts_dir,
         config_dir=config_dir,

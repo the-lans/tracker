@@ -252,6 +252,8 @@ async def _run_summary_turn(
         claude_session,
         prompt,
         timeout_seconds=timeout_seconds,
+        # Пересказ — не граница хода: аккаунт без нужды не меняется (раздел 19.7).
+        boundary=False,
     )
     node_log.finished_at = datetime.now(UTC)
     node_log.llm_output_text = outcome.llm_output_text
@@ -374,6 +376,7 @@ async def deliver_parent_summary(
             claude_session,
             message,
             timeout_seconds=timeout_seconds,
+            boundary=False,
         )
         node_log.llm_output_text = outcome.llm_output_text
         node_log.error_message = outcome.error_message

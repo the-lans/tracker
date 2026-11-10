@@ -195,6 +195,7 @@ class NodeLogResponse(BaseModel):
     llm_model: str | None
     reasoning_effort: ReasoningEffort | None
     llm_switch_reason: LlmSwitchReason | None
+    llm_context_compacted: bool
     status: NodeLogStatus
     pending_question: str | None
     pending_plan_text: str | None

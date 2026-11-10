@@ -24,7 +24,7 @@ from claude_agent_sdk.types import AssistantMessageError, RateLimitStatus
 
 from db.models.enums import NodeType, ReasoningEffort
 from services.llm_account_choice import NoLlmAccountAvailableError
-from services.llm_routing import TurnRoute
+from services.llm_routing import TurnPlan, TurnRoute
 
 if TYPE_CHECKING:
     import pytest
@@ -190,7 +190,8 @@ FAKE_ROUTE = TurnRoute(
 class FakeTurnRouter:
     """
     Двойник `TurnRouter` (`services/account_router.py`): всегда один маршрут;
-    ``available=False`` — у автора нет ни одного `active` аккаунта.
+    ``available=False`` — у автора нет ни одного `active` аккаунта;
+    ``compact_with`` — маршрут сжатия контекста перед каждым ходом.
     """
 
     def __init__(
@@ -199,23 +200,34 @@ class FakeTurnRouter:
         *,
         transient: bool | None = None,
         available: bool = True,
+        compact_with: TurnRoute | None = None,
     ) -> None:
         self.route_value = route
         self.transient = transient
         self.available = available
+        self.compact_with = compact_with
         self.routed: list[tuple[ReasoningEffort | None, NodeType | None]] = []
+        self.boundaries: list[tuple[bool, bool]] = []
+        self.compactions: list[bool] = []
         self.errors: list[tuple[TurnRoute, str | None]] = []
 
-    async def route(
+    async def plan_turn(
         self,
         *,
         effort: ReasoningEffort | None,
         node_type: NodeType | None,
-    ) -> TurnRoute:
+        boundary: bool,
+        has_history: bool,
+    ) -> TurnPlan:
         self.routed.append((effort, node_type))
+        self.boundaries.append((boundary, has_history))
         if not self.available:
             raise NoLlmAccountAvailableError
-        return self.route_value
+        return TurnPlan(route=self.route_value, compact_with=self.compact_with)
+
+    async def finish_compaction(self, plan: TurnPlan, *, succeeded: bool) -> None:
+        assert plan.compact_with is not None
+        self.compactions.append(succeeded)
 
     async def report_error(self, route: TurnRoute, assistant_error: str | None) -> bool | None:
         self.errors.append((route, assistant_error))

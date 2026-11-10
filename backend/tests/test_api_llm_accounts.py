@@ -102,6 +102,27 @@ class TestList:
 
         assert ids == [str(first.id), str(second.id)]
 
+    async def test_limit_state(
+        self,
+        authed_client: AsyncClient,
+        current_user: User,
+        db_session: AsyncSession,
+    ) -> None:
+        """Раздел 15.1: бейдж состояния — состояние, сброс и задачи на аккаунте."""
+        account = await make_llm_account(db_session, owner_id=current_user.id)
+        account.window_started_at = datetime.now(UTC)
+        await _task(
+            db_session,
+            current_user.id,
+            status=TaskStatus.IN_PROGRESS,
+            current_llm_account_id=account.id,
+        )
+
+        [item] = (await authed_client.get("/llm-accounts")).json()
+
+        assert (item["limit_state"], item["active_tasks"]) == ("running", 1)
+        assert item["limit_state_until"] is not None
+
     async def test_admin_sees_all(
         self,
         admin_client: AsyncClient,

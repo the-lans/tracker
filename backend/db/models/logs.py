@@ -60,6 +60,12 @@ class NodeLog(UUIDPrimaryKeyMixin, Base):
     llm_switch_reason: Mapped[LlmSwitchReason | None] = mapped_column(
         pg_enum(LlmSwitchReason, name="llm_switch_reason"),
     )
+    # Раздел 19.7: перед обращением контекст сессии сжат `/compact` при смене аккаунта.
+    llm_context_compacted: Mapped[bool] = mapped_column(
+        sa.Boolean,
+        default=False,
+        server_default=sa.false(),
+    )
     status: Mapped[NodeLogStatus] = mapped_column(
         pg_enum(NodeLogStatus, name="node_log_status"),
         default=NodeLogStatus.PENDING,
