@@ -593,7 +593,8 @@ run_install() {
   log "Установка завершена"
 }
 
-# Seed не нужен: пользователи, allowlist и periodic_tasks уже в дампе.
+# Пользователи и allowlist уже в дампе. Сид периодических задач — как при
+# обновлении: дамп прежней версии не знает задач, добавленных позже.
 run_restore() {
   step_checkout_restore_ref
   step_restore_env
@@ -603,6 +604,7 @@ run_restore() {
   step_restore_database
   step_restore_volumes
   step_run_migrations
+  _seed_periodic_tasks
   step_migrate_sessions
   step_start_app_services
   step_wait_tls

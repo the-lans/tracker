@@ -401,12 +401,15 @@ class TestRestore:
                 "claude_accounts.tar.gz",
                 "sftp_host_keys.tar.gz",
                 "docker compose run --rm backend alembic upgrade head",
+                # Дамп прежней версии не знает новых периодических задач.
+                "seed_periodic_tasks.py",
                 "migrate_claude_sessions.py",
                 "docker compose up -d cliproxy llm-gateway backend worker session-worker"
                 " backup-worker beat sftp frontend caddy backup",
             ],
         )
-        assert not any("seed_" in call for call in docker_calls)
+        # Администратор и allowlist — из дампа.
+        assert not any("seed_admin" in call for call in docker_calls)
         # Роль SFTP-шлюза — до дампа: в нём есть права на неё (раздел 20.4).
         assert (stubs / "psql-input").read_text() == f"{SFTP_DB_ROLE_SQL}\n-- fresh dump\n"
         assert not any("checkout" in call for call in _calls(stubs))
