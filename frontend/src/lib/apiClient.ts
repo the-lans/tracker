@@ -58,7 +58,7 @@ function isApiErrorBody(value: unknown): value is ApiErrorBody {
 const HTTP_UNAUTHORIZED = 401;
 
 async function errorOf(response: Response, token: string | null): Promise<ApiError> {
-  if (response.status === HTTP_UNAUTHORIZED && token !== null) {
+  if (response.status === HTTP_UNAUTHORIZED) {
     expireStoredSession(token);
   }
   const text = await response.text();

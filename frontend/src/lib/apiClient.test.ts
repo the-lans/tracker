@@ -106,16 +106,19 @@ describe("apiClient", () => {
 
   describe("отвергнутый токен", () => {
     it.for([
-      { name: "401 — сессия сброшена", status: 401, storedAfterRequest: TOKEN, expired: true },
-      { name: "401 после нового входа — новая сессия цела", status: 401, storedAfterRequest: "new-token", expired: false },
-      { name: "403 — сессия цела", status: 403, storedAfterRequest: TOKEN, expired: false },
-    ])("$name", async ({ status, storedAfterRequest, expired }) => {
+      { name: "401 — сессия сброшена", status: 401, sent: TOKEN, storedAfter: TOKEN, expired: true },
+      { name: "401 после нового входа — новая сессия цела", status: 401, sent: TOKEN, storedAfter: "new-token", expired: false },
+      { name: "401 без токена — сессию сбросила другая вкладка", status: 401, sent: null, storedAfter: null, expired: true },
+      { name: "401, пока другая вкладка сбрасывала сессию", status: 401, sent: TOKEN, storedAfter: null, expired: true },
+      { name: "403 — сессия цела", status: 403, sent: TOKEN, storedAfter: TOKEN, expired: false },
+    ])("$name", async ({ status, sent, storedAfter, expired }) => {
+      writeStoredSession(sent === null ? null : { token: sent, user: makeCurrentUser() });
       const listener = vi.fn();
       const unsubscribe = onSessionExpired(listener);
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => {
-          writeStoredSession({ token: storedAfterRequest, user: makeCurrentUser() });
+          writeStoredSession(storedAfter === null ? null : { token: storedAfter, user: makeCurrentUser() });
           return json(status, { error: { code: "unauthorized", message: "Токен сессии истёк" } });
         }),
       );
@@ -123,7 +126,7 @@ describe("apiClient", () => {
       await expect(api.get("/llm-accounts")).rejects.toMatchObject({ status });
 
       unsubscribe();
-      expect(getStoredToken()).toBe(expired ? null : storedAfterRequest);
+      expect(getStoredToken()).toBe(expired ? null : storedAfter);
       expect(listener).toHaveBeenCalledTimes(expired ? 1 : 0);
     });
 

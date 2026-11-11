@@ -38,4 +38,19 @@ describe("AuthProvider", () => {
 
     expect(screen.getByText(page)).toBeInTheDocument();
   });
+
+  test.for([
+    { name: "выход в другой вкладке — страница входа", key: "tracker.session", page: "Страница входа" },
+    { name: "очистка хранилища — страница входа", key: null, page: "Страница входа" },
+    { name: "чужой ключ — сессия цела", key: "tracker.theme", page: "LLM-аккаунты" },
+  ])("$name", ({ key, page }) => {
+    writeStoredSession({ token: TOKEN, user: makeCurrentUser() });
+    renderApp();
+
+    // Другая вкладка удалила сессию: в этой вкладке приходит только событие.
+    writeStoredSession(null);
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key })));
+
+    expect(screen.getByText(page)).toBeInTheDocument();
+  });
 });

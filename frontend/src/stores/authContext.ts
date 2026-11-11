@@ -48,11 +48,13 @@ export function getStoredToken(): string | null {
 
 /**
  * Сервер отверг токен (401: истёк, подписан прежним ключом, пользователь
- * заблокирован). Сессия сбрасывается, только если её не сменил новый вход,
- * пока шёл запрос со старым токеном.
+ * заблокирован) или запрос ушёл без токена, потому что сессию уже сбросила
+ * другая вкладка. Сессия сбрасывается, только если её не сменил новый вход,
+ * пока шёл запрос.
  */
-export function expireStoredSession(token: string): void {
-  if (getStoredToken() !== token) return;
+export function expireStoredSession(token: string | null): void {
+  const stored = getStoredToken();
+  if (stored !== null && stored !== token) return;
   writeStoredSession(null);
   window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
 }
@@ -61,4 +63,16 @@ export function expireStoredSession(token: string): void {
 export function onSessionExpired(listener: () => void): () => void {
   window.addEventListener(SESSION_EXPIRED_EVENT, listener);
   return () => window.removeEventListener(SESSION_EXPIRED_EVENT, listener);
+}
+
+/**
+ * Вход и выход в другой вкладке: событие `storage` приходит только во вкладки,
+ * которые запись не делали. `key === null` — хранилище очищено целиком.
+ */
+export function onStoredSessionChange(listener: () => void): () => void {
+  const handler = (event: StorageEvent) => {
+    if (event.key === STORAGE_KEY || event.key === null) listener();
+  };
+  window.addEventListener("storage", handler);
+  return () => window.removeEventListener("storage", handler);
 }
