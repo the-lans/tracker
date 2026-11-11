@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AuthContext,
+  onSessionExpired,
   readStoredSession,
   writeStoredSession,
   type AuthContextValue,
@@ -19,6 +20,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeStoredSession(null);
     setSession(null);
   }, []);
+
+  // Отвергнутый сервером токен — на страницу входа, а не пустые списки.
+  useEffect(() => onSessionExpired(() => setSession(null)), []);
 
   const value = useMemo<AuthContextValue>(
     () => ({

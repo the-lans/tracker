@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError, wsAuthMessage, wsUrl } from "@/lib/apiClient";
 import { errorMessage } from "@/lib/errors";
-import { writeStoredSession } from "@/stores/authContext";
+import { getStoredToken, onSessionExpired, writeStoredSession } from "@/stores/authContext";
 import { makeCurrentUser } from "@/test/factories";
 
 const TOKEN = "session-token-123";
@@ -101,6 +101,38 @@ describe("apiClient", () => {
       ["не ошибка", "строка"],
     ])("%s — запасной текст", (_case, error) => {
       expect(errorMessage(error, "Не удалось сохранить")).toBe("Не удалось сохранить");
+    });
+  });
+
+  describe("отвергнутый токен", () => {
+    it.for([
+      { name: "401 — сессия сброшена", status: 401, storedAfterRequest: TOKEN, expired: true },
+      { name: "401 после нового входа — новая сессия цела", status: 401, storedAfterRequest: "new-token", expired: false },
+      { name: "403 — сессия цела", status: 403, storedAfterRequest: TOKEN, expired: false },
+    ])("$name", async ({ status, storedAfterRequest, expired }) => {
+      const listener = vi.fn();
+      const unsubscribe = onSessionExpired(listener);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          writeStoredSession({ token: storedAfterRequest, user: makeCurrentUser() });
+          return json(status, { error: { code: "unauthorized", message: "Токен сессии истёк" } });
+        }),
+      );
+
+      await expect(api.get("/llm-accounts")).rejects.toMatchObject({ status });
+
+      unsubscribe();
+      expect(getStoredToken()).toBe(expired ? null : storedAfterRequest);
+      expect(listener).toHaveBeenCalledTimes(expired ? 1 : 0);
+    });
+
+    it("файл: 401 тоже сбрасывает сессию", async () => {
+      stubFetch(json(401, { error: { code: "unauthorized", message: "Токен сессии истёк" } }));
+
+      await expect(api.getBlob("/tasks/t1/artifacts/report.csv")).rejects.toBeInstanceOf(ApiError);
+
+      expect(getStoredToken()).toBeNull();
     });
   });
 

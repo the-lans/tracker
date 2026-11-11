@@ -2,6 +2,7 @@ import { createContext } from "react";
 import type { CurrentUser } from "@/lib/types";
 
 const STORAGE_KEY = "tracker.session";
+const SESSION_EXPIRED_EVENT = "tracker:session-expired";
 
 export interface StoredSession {
   token: string;
@@ -43,4 +44,21 @@ export function writeStoredSession(session: StoredSession | null): void {
 
 export function getStoredToken(): string | null {
   return readStoredSession()?.token ?? null;
+}
+
+/**
+ * Сервер отверг токен (401: истёк, подписан прежним ключом, пользователь
+ * заблокирован). Сессия сбрасывается, только если её не сменил новый вход,
+ * пока шёл запрос со старым токеном.
+ */
+export function expireStoredSession(token: string): void {
+  if (getStoredToken() !== token) return;
+  writeStoredSession(null);
+  window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+}
+
+/** Подписка на сброс сессии из `expireStoredSession`; возвращает отписку. */
+export function onSessionExpired(listener: () => void): () => void {
+  window.addEventListener(SESSION_EXPIRED_EVENT, listener);
+  return () => window.removeEventListener(SESSION_EXPIRED_EVENT, listener);
 }
