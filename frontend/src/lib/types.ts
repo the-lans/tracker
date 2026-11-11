@@ -691,6 +691,8 @@ export interface TemplatePreviewRequest {
   node_id?: string | null;
   pipeline_id?: string | null;
   order_index?: number | null;
+  /** Только для scope = "library": аргументы команды, как после /имя; $1 — первый. */
+  arguments?: string | null;
 }
 
 export interface TemplatePreviewResponse {
@@ -908,6 +910,66 @@ export interface Integrations {
 }
 
 export type IntegrationsUpdate = Integrations;
+
+/** Раздел 20.4: итог бэкапа в S3 или проверки восстановления. */
+export const BackupRunStatus = {
+  RUNNING: "running",
+  SUCCESS: "success",
+  WARNING: "warning",
+  FAILED: "failed",
+} as const;
+export type BackupRunStatus = (typeof BackupRunStatus)[keyof typeof BackupRunStatus];
+
+/** Файл, который бэкап пропустил: занят или менялся всё время чтения. */
+export interface BackupSkippedFile {
+  component: string;
+  path: string;
+  reason: string;
+}
+
+export interface BackupRun {
+  status: BackupRunStatus;
+  started_at: string;
+  finished_at: string | null;
+  object_key: string | null;
+  size_bytes: number | null;
+  skipped_files: BackupSkippedFile[];
+  error_message: string | null;
+}
+
+/** Раздел 15.5: настройки бэкапа в S3; секреты не возвращаются — только признак «задан». */
+export interface BackupSettings {
+  enabled: boolean;
+  endpoint: string | null;
+  region: string | null;
+  bucket: string | null;
+  access_key: string | null;
+  secret_key_set: boolean;
+  folder: string;
+  retention_count: number;
+  passphrase_set: boolean;
+  last_backup: BackupRun | null;
+  last_verify: BackupRun | null;
+}
+
+/** `secret_key` и `passphrase`: `null` — оставить сохранённые. */
+export interface BackupSettingsUpdate {
+  enabled: boolean;
+  endpoint: string | null;
+  region: string | null;
+  bucket: string | null;
+  access_key: string | null;
+  secret_key: string | null;
+  folder: string;
+  retention_count: number;
+  passphrase: string | null;
+}
+
+/** «Проверить подключение»: запись, чтение и папка в S3 по сохранённым настройкам. */
+export interface BackupConnectionCheck {
+  ok: boolean;
+  message: string;
+}
 
 /** Раздел 15.5: в скольких задачах используется промт библиотеки. */
 export interface LibraryUsage {

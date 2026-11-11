@@ -210,3 +210,18 @@ class PeriodicRunStatus(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"
     RUNNING = "running"
+
+
+class BackupRunKind(StrEnum):
+    """Раздел 20.4: бэкап в S3 или еженедельная проверка восстановления."""
+
+    BACKUP = "backup"
+    VERIFY = "verify"
+
+
+class BackupRunStatus(StrEnum):
+    RUNNING = "running"
+    SUCCESS = "success"
+    # Бэкап загружен, но часть файлов пропущена (заняты или менялись).
+    WARNING = "warning"
+    FAILED = "failed"

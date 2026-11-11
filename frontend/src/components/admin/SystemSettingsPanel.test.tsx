@@ -2,6 +2,7 @@ import { fireEvent, screen, within } from "@testing-library/react";
 import { describe, expect } from "vitest";
 import { SystemSettingsPanel } from "@/components/admin/SystemSettingsPanel";
 import type { MockedApi } from "@/test/apiMock";
+import { makeBackupSettings } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
@@ -16,6 +17,7 @@ const SETTINGS = {
 async function renderPanel(api: MockedApi) {
   api.respond("GET /system-settings", SETTINGS);
   api.respond("GET /system-settings/integrations", { jira_url: null });
+  api.respond("GET /system-settings/backup", makeBackupSettings());
   const view = renderWithProviders(<SystemSettingsPanel />);
   await screen.findByLabelText("Начало");
   return view;

@@ -61,7 +61,7 @@ describe("JiraConnectionCard", () => {
 
       expect(field).toHaveValue("");
       expect(field).toHaveAttribute("type", "password");
-      expect(field).toHaveAttribute("placeholder", "Сохранён — введите новый, чтобы заменить");
+      expect(field).toHaveAttribute("placeholder", "Сохранён — ввод заменит");
       await user.click(saveButton());
 
       expect(api.mutations()).toEqual([

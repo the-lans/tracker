@@ -76,6 +76,10 @@ from api.schemas.repositories import (
     TemplateUpdateRequest,
 )
 from api.schemas.system_settings import (
+    BackupConnectionCheckResponse,
+    BackupRunResponse,
+    BackupSettingsResponse,
+    BackupSettingsUpdateRequest,
     IntegrationsResponse,
     IntegrationsUpdateRequest,
     LibraryUsageResponse,
@@ -116,6 +120,10 @@ __all__ = [
     "AppLogResponse",
     "ArtifactResponse",
     "AwaitingDecisionCountResponse",
+    "BackupConnectionCheckResponse",
+    "BackupRunResponse",
+    "BackupSettingsResponse",
+    "BackupSettingsUpdateRequest",
     "BindPipelineRequest",
     "DecisionRequest",
     "EnvVariableCreateRequest",

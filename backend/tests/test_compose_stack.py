@@ -1,6 +1,7 @@
 """
 Стек docker-compose: LLM-прокси, шлюз и сеть сессий (разделы 19.3, 19.4,
-19.7, 20.3 ТЗ) и рендер конфигурации прокси `deploy/cliproxy/init.sh`.
+19.7, 20.3 ТЗ), воркер бэкапа (раздел 20.4, 20.5) и рендер конфигурации
+прокси `deploy/cliproxy/init.sh`.
 """
 
 from __future__ import annotations
@@ -11,6 +12,9 @@ from typing import Any
 
 import pytest
 import yaml
+
+from services.backup.components import COMPONENTS
+from tasks.celery_app import BACKUP_TO_S3, BACKUPS_QUEUE, VERIFY_S3_BACKUP, celery_app
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _COMPOSE = REPO_ROOT / "docker-compose.yml"
@@ -28,6 +32,43 @@ def _volume_names(service: dict[str, Any]) -> set[str]:
     return {str(volume).split(":")[0] for volume in service.get("volumes", [])}
 
 
+class TestBackupWorker:
+    def test_own_queue_one_process(self, compose: dict[str, Any]) -> None:
+        command = compose["services"]["backup-worker"]["command"]
+        assert command[command.index("-Q") + 1] == BACKUPS_QUEUE
+        assert command[command.index("--concurrency") + 1] == "1"
+
+    def test_tasks_routed(self) -> None:
+        routes = celery_app.conf.task_routes
+        assert {routes[name]["queue"] for name in (BACKUP_TO_S3, VERIFY_S3_BACKUP)} == {
+            BACKUPS_QUEUE,
+        }
+
+    def test_all_components_read_only(self, compose: dict[str, Any]) -> None:
+        volumes = compose["services"]["backup-worker"]["volumes"]
+        mounted = {
+            str(volume).split(":/data/backup-src/")[1].split(":")[0]: str(volume)
+            for volume in volumes
+            if ":/data/backup-src/" in str(volume)
+        }
+        assert set(mounted) == {component.name for component in COMPONENTS} | {"env"}
+        assert all(volume.endswith(":ro") for volume in mounted.values())
+
+
+class TestBackendImages:
+    def test_know_their_commit(self, compose: dict[str, Any]) -> None:
+        """Коммит образа — версия в /api/health и в manifest.json копии (раздел 20.4)."""
+        built = {
+            name: service["build"]
+            for name, service in compose["services"].items()
+            if service.get("build", {}).get("dockerfile") == "backend/Dockerfile"
+        }
+        assert {"backend", "backup-worker", "worker", "beat", "sftp"} <= set(built)
+        assert {
+            name: build.get("args", {}).get("GIT_SHA") for name, build in built.items()
+        } == dict.fromkeys(built, "${GIT_SHA:-unknown}")
+
+
 class TestLlmProxy:
     def test_proxy_not_published(self, compose: dict[str, Any]) -> None:
         assert "ports" not in compose["services"]["cliproxy"]
@@ -42,13 +83,16 @@ class TestLlmProxy:
         assert environment["CLIPROXY_VERSION"] == "${CLIPROXY_VERSION}"
 
     def test_tokens_only_in_proxy(self, compose: dict[str, Any]) -> None:
-        """Раздел 19.4: volume с токенами OAuth — только у прокси и его init."""
+        """
+        Раздел 19.4: volume с токенами OAuth — только у прокси и его init, и
+        для чтения у воркера бэкапа (раздел 20.4: копия шифруется).
+        """
         owners = {
             name
             for name, service in compose["services"].items()
             if "cliproxy_data" in _volume_names(service)
         }
-        assert owners == {"cliproxy", "cliproxy-init"}
+        assert owners == {"cliproxy", "cliproxy-init", "backup-worker"}
 
     def test_proxy_waits_for_config(self, compose: dict[str, Any]) -> None:
         depends = compose["services"]["cliproxy"]["depends_on"]

@@ -50,7 +50,7 @@ async def command_node(db_session: AsyncSession, current_user: User) -> Node:
         name="Ревью",
         description="Проверить изменения",
         node_type=NodeType.PLAIN_PROMPT,
-        prompt_template="Проверь $0. $ARGUMENTS",
+        prompt_template="Проверь $1. $ARGUMENTS",
         slash_name="review",
         is_library_item=True,
     )
@@ -64,13 +64,15 @@ class TestArguments:
         ("template", "raw", "expected"),
         [
             ("$ARGUMENTS", 'service "two words"', 'service "two words"'),
-            ("$0/$1/$ARGUMENTS[1]", 'service "two words"', "service/two words/two words"),
+            ("$1/$2/$ARGUMENTS[2]", 'service "two words"', "service/two words/two words"),
+            ("$01/$ARGUMENTS[1]", "one", "one/one"),
+            ("$0/$ARGUMENTS[0]", "one", "$0/$ARGUMENTS[0]\n\nARGUMENTS: one"),
             ("$2", "one", "$2\n\nARGUMENTS: one"),
             ("hello", "one", "hello\n\nARGUMENTS: one"),
-            (r"\$0", "one", "$0\n\nARGUMENTS: one"),
-            (r"\\$0", "one", r"\\one"),
-            ("$0", '"$ARGUMENTS {{task.title}}"', "$ARGUMENTS {{task.title}}"),
-            ("$0", '""', ""),
+            (r"\$1", "one", "$1\n\nARGUMENTS: one"),
+            (r"\\$1", "one", r"\\one"),
+            ("$1", '"$ARGUMENTS {{task.title}}"', "$ARGUMENTS {{task.title}}"),
+            ("$1", '""', ""),
             ("$ARGUMENTS", "", ""),
         ],
     )
@@ -96,7 +98,7 @@ class TestCommandAPI:
             name="Review",
             description="Review changes",
             node_type="plain_prompt",
-            prompt_template="Check $0",
+            prompt_template="Check $1",
             slash_name="/ReView",
             argument_hint="[service]",
         )
@@ -305,7 +307,7 @@ class TestCommandExecution:
         command_task: Task,
         command_node: Node,
     ) -> None:
-        command_node.prompt_template = "{{task.title}} {{env.TOKEN}} $0"
+        command_node.prompt_template = "{{task.title}} {{env.TOKEN}} $1"
         variable = EnvVariable(
             key="TOKEN",
             value_encrypted=encrypt("OLD"),

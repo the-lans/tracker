@@ -20,6 +20,11 @@ from celery import Celery, signals
 from app_logging.config import configure_logging
 
 SESSIONS_QUEUE = "sessions"
+# Раздел 20.4, 20.5: бэкап в S3 и проверка восстановления идут десятки минут —
+# в своей очереди сервиса `backup-worker`, не занимая процессы `worker`.
+BACKUPS_QUEUE = "backups"
+BACKUP_TO_S3 = "backup_to_s3"
+VERIFY_S3_BACKUP = "verify_s3_backup"
 # Раздел 14.4: дневной проход воркера очереди — и по расписанию, и внеочередной.
 DISPATCH_READY_TASKS = "dispatch_ready_tasks"
 # Раздел 17.4: сообщение, которое воркер взял, но не подтвердил (отложенное
@@ -43,7 +48,11 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
-    task_routes={"run_task_session": {"queue": SESSIONS_QUEUE}},
+    task_routes={
+        "run_task_session": {"queue": SESSIONS_QUEUE},
+        BACKUP_TO_S3: {"queue": BACKUPS_QUEUE},
+        VERIFY_S3_BACKUP: {"queue": BACKUPS_QUEUE},
+    },
     # Долгие задачи: процесс не резервирует следующие сообщения, пока занят.
     worker_prefetch_multiplier=1,
     broker_transport_options={"visibility_timeout": BROKER_VISIBILITY_TIMEOUT_SECONDS},

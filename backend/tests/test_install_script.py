@@ -22,6 +22,9 @@ import pytest
 import sqlalchemy as sa
 
 from db.models.enums import TaskStatus
+from services.backup.bundle import AFTER_RESTORE_SQL_NAME
+from services.backup.components import COMPONENTS
+from services.backup.verify import SFTP_DB_ROLE_SQL
 from services.maintenance import MAINTENANCE_KEY
 from services.periodic_tasks import NIGHT_DISPATCH_TASK
 from services.task_status import SESSION_ACTIVE_STATUSES
@@ -332,6 +335,34 @@ class TestSharedConstants:
         assert restore is not None
         assert query == "".join(re.findall(r'"(.*?)"', restore.group(1)))
 
+    def test_backup_components(self, stubs: Path, install_dir: Path) -> None:
+        """Архивы копии в S3 — ровно те, что распаковывает --restore (раздел 20.4)."""
+        printed = {
+            variable: _run_bash(
+                f'source "{_INSTALL_SCRIPT}" && printf "%s\\n" "${{{variable}[@]}}"',
+                stubs=stubs,
+                install_dir=install_dir,
+            ).stdout.split()
+            for variable in ("RESTORE_ARCHIVES", "RESTORE_OPTIONAL_ARCHIVES")
+        }
+        names = {
+            variable: {mapping.split(":")[0] for mapping in mappings}
+            for variable, mappings in printed.items()
+        }
+        assert names["RESTORE_ARCHIVES"] == {
+            component.name for component in COMPONENTS if component.required
+        }
+        assert names["RESTORE_OPTIONAL_ARCHIVES"] == {
+            component.name for component in COMPONENTS if not component.required
+        }
+
+    def test_sftp_role_prelude(self, stubs: Path, install_dir: Path) -> None:
+        """Проверка восстановления готовит БД так же, как --restore."""
+        assert self._value(stubs, install_dir, "SFTP_DB_ROLE_SQL") == SFTP_DB_ROLE_SQL
+
+    def test_after_restore_sql(self, stubs: Path, install_dir: Path) -> None:
+        assert self._value(stubs, install_dir, "AFTER_RESTORE_SQL") == AFTER_RESTORE_SQL_NAME
+
     def test_queue_periodic_tasks(self, stubs: Path, install_dir: Path) -> None:
         """Откат удаляет ровно периодические задачи воркера очереди."""
         raw = self._value(stubs, install_dir, "QUEUE_PERIODIC_TASKS")
@@ -374,13 +405,18 @@ class TestRestore:
                 "claude_accounts.tar.gz",
                 "sftp_host_keys.tar.gz",
                 "docker compose run --rm backend alembic upgrade head",
+                # Дамп прежней версии не знает новых периодических задач.
+                "seed_periodic_tasks.py",
                 "migrate_claude_sessions.py",
-                "docker compose up -d cliproxy llm-gateway backend worker session-worker beat sftp"
-                " frontend caddy backup",
+                "docker compose up -d cliproxy llm-gateway backend worker session-worker"
+                " backup-worker beat sftp frontend caddy backup",
             ],
         )
-        assert not any("seed_" in call for call in docker_calls)
-        assert (stubs / "psql-input").read_text() == "-- fresh dump\n"
+        # Администратор и allowlist — из дампа.
+        assert not any("seed_admin" in call for call in docker_calls)
+        # Роль SFTP-шлюза — до дампа: в нём есть права на неё (раздел 20.4).
+        assert (stubs / "psql-input").read_text() == f"{SFTP_DB_ROLE_SQL}\n-- fresh dump\n"
+        assert not any("checkout" in call for call in _calls(stubs))
         # Ключи старого сервера сохранены; пароль роли шлюза и ключи прокси
         # .env прежней версии не знал — они дописаны.
         env = _env(install_dir)
@@ -391,6 +427,29 @@ class TestRestore:
         for archive, service in [("sftp_host_keys", "sftp"), ("cliproxy_data", "cliproxy-init")]:
             [call] = [call for call in docker_calls if f"{archive}.tar.gz" in call]
             assert f"--entrypoint sh {service}" in call
+
+    def test_after_restore_sql_follows_dump(
+        self,
+        tmp_path: Path,
+        stubs: Path,
+        install_dir: Path,
+    ) -> None:
+        """Копия из S3 закрывает запуск бэкапа, во время которого снят дамп."""
+        restore_dir = _make_restore_dir(tmp_path)
+        (restore_dir / AFTER_RESTORE_SQL_NAME).write_text("-- after restore\n")
+
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--restore",
+            str(restore_dir),
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (stubs / "psql-input").read_text() == (
+            f"{SFTP_DB_ROLE_SQL}\n-- fresh dump\n-- after restore\n"
+        )
 
     @pytest.mark.parametrize(
         "missing",
@@ -445,6 +504,48 @@ class TestRestore:
         assert any("log_archive.tar.gz" in call for call in docker_calls)
         assert not any(archive in call for call in docker_calls)
 
+    def test_ref(self, tmp_path: Path, stubs: Path, install_dir: Path) -> None:
+        """Копия из S3 восстанавливается на той версии кода, на которой снята."""
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--restore",
+            str(_make_restore_dir(tmp_path)),
+            "--ref",
+            "abc1234",
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        _assert_in_order(
+            _calls(stubs),
+            [
+                "fetch origin",
+                "rev-parse --verify --quiet abc1234^{commit}",
+                "merge-base --is-ancestor",
+                f"checkout --detach {_TARGET_SHA}",
+                "docker compose build",
+                "docker compose exec -T postgres",
+            ],
+        )
+
+    def test_ref_outside_main(self, tmp_path: Path, stubs: Path, install_dir: Path) -> None:
+        (stubs / "not-ancestor").touch()
+
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--restore",
+            str(_make_restore_dir(tmp_path)),
+            "--ref",
+            "abc1234",
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode != 0
+        assert "origin/main" in result.stdout
+        assert not any(call.startswith("docker compose build") for call in _calls(stubs))
+
     def test_unknown_argument(self, stubs: Path, install_dir: Path) -> None:
         result = _run_bash(
             f'exec bash "{_INSTALL_SCRIPT}" "$@"',
@@ -495,7 +596,8 @@ class TestUpdate:
                 "alembic upgrade head",
                 "seed_periodic_tasks.py",
                 "migrate_claude_sessions.py",
-                "docker compose up -d cliproxy llm-gateway backend worker session-worker beat sftp",
+                "docker compose up -d cliproxy llm-gateway backend worker session-worker"
+                " backup-worker beat sftp",
                 "redis-cli DEL maintenance:deploy",
             ],
         )

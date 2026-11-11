@@ -14,7 +14,11 @@ from db.models.enums import (
     ReasoningEffort,
     ScriptLanguage,
 )
-from services.command_arguments import MAX_ARGUMENT_HINT_LENGTH, MAX_COMMAND_INPUT_NAME_LENGTH
+from services.command_arguments import (
+    MAX_ARGUMENT_HINT_LENGTH,
+    MAX_COMMAND_INPUT_NAME_LENGTH,
+    MAX_COMMAND_LENGTH,
+)
 
 
 class PipelineCreateRequest(BaseModel):
@@ -129,6 +133,9 @@ class TemplatePreviewRequest(BaseModel):
     node_id: uuid.UUID | None = None
     pipeline_id: uuid.UUID | None = None
     order_index: int | None = Field(default=None, ge=0)
+    # Только для `scope = library`: аргументы команды, как их пишут после `/имя`;
+    # `$1` и `$ARGUMENTS[1]` — первый.
+    arguments: str | None = Field(default=None, max_length=MAX_COMMAND_LENGTH)
 
 
 class TemplatePreviewResponse(BaseModel):

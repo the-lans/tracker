@@ -1,4 +1,5 @@
 import {
+  BackupRunStatus,
   LibraryPromptRunStatus,
   LlmAccountStatus,
   LlmLimitState,
@@ -11,6 +12,8 @@ import {
   RemoteControlStatus,
   TaskStatus,
   UserRole,
+  type BackupRun,
+  type BackupSettings,
   type CurrentUser,
   type LlmAccount,
   type LlmProvider,
@@ -235,6 +238,37 @@ export function makeTemplate(overrides: Partial<Template> = {}): Template {
     uploaded_file_paths: [],
     mcp_server_ids: [],
     created_by: "u1",
+    ...overrides,
+  };
+}
+
+export function makeBackupRun(overrides: Partial<BackupRun> = {}): BackupRun {
+  return {
+    status: BackupRunStatus.SUCCESS,
+    started_at: "2026-11-11T00:00:00Z",
+    finished_at: "2026-11-11T00:05:00Z",
+    object_key: "Tracker/tracker-backup-20261111T000000Z.tar.gpg",
+    size_bytes: 3 * 1024 * 1024,
+    skipped_files: [],
+    error_message: null,
+    ...overrides,
+  };
+}
+
+/** Настройки бэкапа в S3: всё заполнено, секреты сохранены, запусков ещё не было. */
+export function makeBackupSettings(overrides: Partial<BackupSettings> = {}): BackupSettings {
+  return {
+    enabled: true,
+    endpoint: "https://s3.example.com",
+    region: "ru-1",
+    bucket: "tracker-backups",
+    access_key: "AKEXAMPLE",
+    secret_key_set: true,
+    folder: "Tracker",
+    retention_count: 7,
+    passphrase_set: true,
+    last_backup: null,
+    last_verify: null,
     ...overrides,
   };
 }

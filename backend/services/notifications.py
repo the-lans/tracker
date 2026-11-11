@@ -57,6 +57,9 @@ class NotificationEvent(StrEnum):
     LLM_LOGIN_REQUIRED = "llm_login_required"
     # Раздел 19.7: все аккаунты автора на пороге — задача ждёт сброса лимита.
     LLM_LIMIT_WAIT = "llm_limit_wait"
+    # Раздел 20.4: сбой бэкапа в S3 или проверки восстановления — администраторам.
+    BACKUP_FAILED = "backup_failed"
+    BACKUP_VERIFY_FAILED = "backup_verify_failed"
 
 
 _TITLES: dict[NotificationEvent, str] = {
@@ -74,6 +77,8 @@ _TITLES: dict[NotificationEvent, str] = {
     NotificationEvent.STALE_SSH_KEY: "SSH-ключ давно не использовался",
     NotificationEvent.LLM_LOGIN_REQUIRED: "LLM-аккаунту нужен повторный вход",
     NotificationEvent.LLM_LIMIT_WAIT: "Задача ждёт сброса лимита LLM-аккаунтов",
+    NotificationEvent.BACKUP_FAILED: "Резервное копирование в S3 не удалось",
+    NotificationEvent.BACKUP_VERIFY_FAILED: "Проверка резервной копии не прошла",
 }
 
 

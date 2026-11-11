@@ -2,22 +2,26 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
 import { JIRA_SERVER_KEY } from "@/hooks/useProfile";
-import type {
-  ActiveCeleryTask,
-  AllowedEmail,
-  AppLog,
-  AppLogLevel,
-  Integrations,
-  IntegrationsUpdate,
-  LibraryUsage,
-  NodeLogStatus,
-  NodeRun,
-  PeriodicTask,
-  PeriodicTaskUpdateRequest,
-  ProxyState,
-  SystemSettings,
-  User,
-  UserUpdateRequest,
+import {
+  BackupRunStatus,
+  type ActiveCeleryTask,
+  type AllowedEmail,
+  type BackupConnectionCheck,
+  type BackupSettings,
+  type BackupSettingsUpdate,
+  type AppLog,
+  type AppLogLevel,
+  type Integrations,
+  type IntegrationsUpdate,
+  type LibraryUsage,
+  type NodeLogStatus,
+  type NodeRun,
+  type PeriodicTask,
+  type PeriodicTaskUpdateRequest,
+  type ProxyState,
+  type SystemSettings,
+  type User,
+  type UserUpdateRequest,
 } from "@/lib/types";
 
 const USERS_KEY = ["admin", "users"] as const;
@@ -168,6 +172,39 @@ export function useUpdateIntegrations() {
       queryClient.setQueryData(INTEGRATIONS_KEY, integrations);
       void queryClient.invalidateQueries({ queryKey: JIRA_SERVER_KEY });
     },
+  });
+}
+
+const BACKUP_SETTINGS_KEY = ["admin", "backup-settings"] as const;
+export const BACKUP_RUNNING_POLL_MS = 10_000;
+
+function backupRunning(settings: BackupSettings | undefined): boolean {
+  return [settings?.last_backup, settings?.last_verify].some((run) => run?.status === BackupRunStatus.RUNNING);
+}
+
+/** Раздел 15.5, 20.4: настройки бэкапа в S3 и итоги последних запусков. */
+export function useBackupSettings() {
+  return useQuery({
+    queryKey: BACKUP_SETTINGS_KEY,
+    queryFn: () => api.get<BackupSettings>("/system-settings/backup"),
+    // Пока бэкап или проверка идут, итог появится без перезагрузки страницы.
+    refetchInterval: (query) => (backupRunning(query.state.data) ? BACKUP_RUNNING_POLL_MS : false),
+  });
+}
+
+export function useUpdateBackupSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BackupSettingsUpdate) =>
+      api.put<BackupSettings>("/system-settings/backup", body),
+    onSuccess: (settings) => queryClient.setQueryData(BACKUP_SETTINGS_KEY, settings),
+  });
+}
+
+/** Проверяются сохранённые настройки — как их возьмёт ночной бэкап. */
+export function useCheckBackupConnection() {
+  return useMutation({
+    mutationFn: () => api.post<BackupConnectionCheck>("/system-settings/backup/check"),
   });
 }
 

@@ -7,7 +7,9 @@
 #     20.4, docs/migration.md): в каталоге .env, дамп БД *.sql.gz,
 #     task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz и необязательные
 #     claude_sessions.tar.gz, cliproxy_data.tar.gz, claude_accounts.tar.gz,
-#     sftp_host_keys.tar.gz со старого сервера
+#     sftp_host_keys.tar.gz со старого сервера; --ref <коммит> — версия кода,
+#     на которой сняты архивы (restore.sh копии в S3 передаёт коммит из
+#     manifest.json), без него — вершина origin/main
 #   deploy/install.sh --update [--ref <коммит>] [--wait-idle <минуты>] —
 #     обновление установленного сервера (раздел 20.6): флаг обслуживания,
 #     ожидание живых сессий, переход на коммит из origin/main, пересборка
@@ -33,7 +35,8 @@ RESTORE_DIR=""
 RESTORE_DUMP=""
 # --update: обновление уже установленного сервера.
 UPDATE_MODE=""
-# --ref: коммит из истории origin/main вместо её вершины (в том числе откат).
+# --ref: коммит из истории origin/main вместо её вершины (в том числе откат);
+# при --restore — версия кода, на которой снята копия.
 UPDATE_REF=""
 # --wait-idle: сколько минут ждать завершения живых сессий.
 WAIT_IDLE_MINUTES=""
@@ -62,6 +65,13 @@ MAINTENANCE_TTL_MARGIN_SECONDS=3600
 MAINTENANCE_SET=""
 # .deploy/previous_ref — коммит до обновления, цель отката (раздел 20.7).
 DEPLOY_STATE_DIR="${INSTALL_DIR}/.deploy"
+# Роль SFTP-шлюза: права на неё есть в дампе прежнего сервера, а создаёт её
+# entrypoint backend (sftp_gateway/db_role.py) только при старте — после
+# загрузки дампа. Пустая роль без входа заранее; вход и пароль ей задаст
+# entrypoint.
+SFTP_DB_ROLE_SQL='DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '"'"'tracker_sftp'"'"') THEN CREATE ROLE tracker_sftp NOLOGIN; END IF; END $$;'
+# Выполняется после дампа, если есть в копии (services/backup/bundle.py).
+AFTER_RESTORE_SQL="after-restore.sql"
 # Архив -> точка монтирования volume[ -> сервис, по умолчанию backend]
 # (docker-compose.yml).
 RESTORE_ARCHIVES=(
@@ -97,7 +107,7 @@ die_unchanged() {
 }
 
 usage() {
-  echo "Использование: $0 [--restore <каталог с .env, *.sql.gz и архивами volume> | --update [--ref <коммит>] [--wait-idle <минуты>]]"
+  echo "Использование: $0 [--restore <каталог с .env, *.sql.gz и архивами volume> [--ref <коммит>] | --update [--ref <коммит>] [--wait-idle <минуты>]]"
 }
 
 parse_args() {
@@ -142,8 +152,13 @@ parse_args() {
 }
 
 _validate_update_options() {
-  if [ -z "${UPDATE_MODE}" ] && { [ -n "${UPDATE_REF}" ] || [ -n "${WAIT_IDLE_MINUTES}" ]; }; then
-    log "--ref и --wait-idle применяются только с --update"
+  if [ -z "${UPDATE_MODE}" ] && [ -n "${WAIT_IDLE_MINUTES}" ]; then
+    log "--wait-idle применяется только с --update"
+    usage
+    exit 2
+  fi
+  if [ -z "${UPDATE_MODE}" ] && [ -z "${RESTORE_DIR}" ] && [ -n "${UPDATE_REF}" ]; then
+    log "--ref применяется только с --update или --restore"
     usage
     exit 2
   fi
@@ -464,10 +479,10 @@ _seed_periodic_tasks() {
 
 # Шаг 9: старт прикладных сервисов
 step_start_app_services() {
-  log "Шаг 9/11: запуск cliproxy, llm-gateway, backend, worker, session-worker, beat, sftp, frontend, caddy, backup"
+  log "Шаг 9/11: запуск cliproxy, llm-gateway, backend, worker, session-worker, backup-worker, beat, sftp, frontend, caddy, backup"
   # cliproxy-init (конфигурация прокси с ключами из .env) запускается как зависимость cliproxy.
   ( cd "${INSTALL_DIR}" \
-    && docker compose up -d cliproxy llm-gateway backend worker session-worker beat sftp frontend caddy backup )
+    && docker compose up -d cliproxy llm-gateway backend worker session-worker backup-worker beat sftp frontend caddy backup )
 }
 
 # Шаг 10: получение TLS-сертификата — выполняется автоматически Caddy
@@ -521,11 +536,29 @@ step_restore_env() {
   cp "${RESTORE_DIR}/.env" "${ENV_FILE}"
 }
 
+# Версия кода, на которой снята копия: схема дампа и данные volume — её.
+# Коммит должен входить в историю origin/main, как у --update --ref.
+step_checkout_restore_ref() {
+  [ -n "${UPDATE_REF}" ] || return 0
+  local commit
+  log "Восстановление: переход на коммит копии ${UPDATE_REF}"
+  git -C "${INSTALL_DIR}" fetch origin || die "не удалось получить код из origin"
+  commit="$(git -C "${INSTALL_DIR}" rev-parse --verify --quiet "${UPDATE_REF}^{commit}")" \
+    || die "коммит ${UPDATE_REF} не найден"
+  git -C "${INSTALL_DIR}" merge-base --is-ancestor "${commit}" origin/main \
+    || die "коммит ${commit} не входит в историю origin/main"
+  git -C "${INSTALL_DIR}" checkout --detach "${commit}" \
+    || die "переход на ${commit} мешают локальные правки"
+}
+
 # В пустую БД и до миграций: дамп содержит схему старого сервера, миграции
-# затем лишь доводят её до текущей версии кода.
+# затем лишь доводят её до текущей версии кода. Копия из S3 несёт
+# after-restore.sql — итог запуска бэкапа, во время которого снят дамп.
 step_restore_database() {
   log "Восстановление: дамп БД $(basename "${RESTORE_DUMP}")"
-  gzip -dc "${RESTORE_DUMP}" | (cd "${INSTALL_DIR}" \
+  local after_restore="${RESTORE_DIR}/${AFTER_RESTORE_SQL}"
+  [ -f "${after_restore}" ] || after_restore=/dev/null
+  { echo "${SFTP_DB_ROLE_SQL}"; gzip -dc "${RESTORE_DUMP}"; cat "${after_restore}"; } | (cd "${INSTALL_DIR}" \
     && docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"')
 }
 
@@ -565,8 +598,10 @@ run_install() {
   log "Установка завершена"
 }
 
-# Seed не нужен: пользователи, allowlist и periodic_tasks уже в дампе.
+# Пользователи и allowlist уже в дампе. Сид периодических задач — как при
+# обновлении: дамп прежней версии не знает задач, добавленных позже.
 run_restore() {
+  step_checkout_restore_ref
   step_restore_env
   step_prepare_env_for_build
   step_build_images
@@ -574,6 +609,7 @@ run_restore() {
   step_restore_database
   step_restore_volumes
   step_run_migrations
+  _seed_periodic_tasks
   step_migrate_sessions
   step_start_app_services
   step_wait_tls

@@ -23,7 +23,7 @@ export function LlmUsageMeter({
           {value === null ? "—" : `${value}%`}
         </span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
+      <div className="h-1.5 overflow-hidden rounded-full bg-track">
         <div
           className={cn("h-full rounded-full", above ? "bg-warning" : "bg-accent")}
           style={{ width: `${Math.min(100, value ?? 0)}%` }}
