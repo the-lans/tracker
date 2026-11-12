@@ -34,7 +34,7 @@ from services.errors import ConflictError, NotFoundError, ValidationError
 from services.manual_admission import ensure_manual_requests_open
 from services.system_settings import resolve_runner_image
 from services.task_launch import ensure_llm_for_request
-from services.template_context import RenderedText, render_for_task
+from services.template_context import RenderedText, render_for_task, render_node_guide_url
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -258,11 +258,13 @@ async def render_with_arguments(
 ) -> RenderedText:
     """
     Аргументы подставляются после переменных и повторно не интерпретируются.
-    Без задачи переменные остаются текстом — так показывает предпросмотр библиотеки.
+    Без задачи переменные, кроме ``{{node.guide_url}}``, остаются текстом —
+    так показывает предпросмотр библиотеки.
     """
     if task is None:
         prepared = prepare_arguments(template, arguments)
-        return RenderedText.literal(prepared.expand(prepared.text))
+        text = render_node_guide_url(prepared.text, node_guide_url)
+        return RenderedText.literal(prepared.expand(text))
     return await render_for_task(
         session,
         task,

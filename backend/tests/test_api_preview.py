@@ -292,3 +292,41 @@ class TestLibraryPreviewArguments:
         )
 
         assert response.status_code == 422
+
+
+class TestGuideUrlWithoutTask:
+    """Раздел 5: ``{{node.guide_url}}`` известен из формы — подставляется и без задачи."""
+
+    GUIDE = "https://wiki.example.com/display/QA/Guide"
+    TASK_GUIDE = "{{task.guide_url}}"
+
+    @pytest.mark.parametrize(
+        ("scope", "text", "extra", "expected"),
+        [
+            (RenderScope.LIBRARY, f"{{{{ node.guide_url }}}} | {TASK_GUIDE}", {}, f"{GUIDE} | {TASK_GUIDE}"),
+            (RenderScope.PIPELINE, f"{{{{node.guide_url}}}} | {TASK_GUIDE}", {}, f"{GUIDE} | {TASK_GUIDE}"),
+            (
+                RenderScope.LIBRARY,
+                "{{node.guide_url}} | $1",
+                {"arguments": "{{node.guide_url}}"},
+                f"{GUIDE} | {{{{node.guide_url}}}}",
+            ),
+            (RenderScope.LIBRARY, "гайд: {{node.guide_url}}", {"guide_url": None}, "гайд: "),
+        ],
+        ids=["library", "pipeline", "arguments-not-rendered", "no-guide"],
+    )
+    async def test_substituted(
+        self,
+        authed_client: AsyncClient,
+        scope: RenderScope,
+        text: str,
+        extra: dict[str, str | None],
+        expected: str,
+    ) -> None:
+        response = await authed_client.post(
+            "/templates/preview",
+            json={"text": text, "scope": scope.value, "guide_url": self.GUIDE, **extra},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["rendered_text"] == expected

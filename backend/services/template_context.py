@@ -275,6 +275,21 @@ class RenderedText:
         return cls(text=text, display=text)
 
 
+def render_node_guide_url(template: str, node_guide_url: str | None) -> str:
+    """
+    Подставляет только ``{{node.guide_url}}``: его значение известно и без
+    задачи (предпросмотр формы ноды или промта библиотеки), остальные
+    переменные остаются текстом.
+    """
+
+    def _substitute(match: re.Match[str]) -> str:
+        if (match.group(1), match.group(2)) == ("node", NODE_GUIDE_URL):
+            return _stringify(node_guide_url)
+        return match.group(0)
+
+    return VARIABLE_PATTERN.sub(_substitute, template)
+
+
 async def render_for_task(
     session: AsyncSession,
     task: Task,
