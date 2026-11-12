@@ -802,6 +802,7 @@ class TestPrepareEnv:
         env = _env(install_dir)
         assert (env["CLIPROXY_API_KEY"], env["CLIPROXY_VERSION"]) == ("keep", "v8.0.48")
         assert env["GIT_SHA"] == _PREVIOUS_SHA
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", env["DEPLOYED_AT"])
         assert env["CLIPROXY_MANAGEMENT_KEY"].isalnum()
         assert len(env["CLIPROXY_MANAGEMENT_KEY"]) == 64
 

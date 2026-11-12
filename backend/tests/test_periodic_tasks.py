@@ -6,6 +6,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.enums import PeriodicRunStatus, PeriodicScheduleType, UserRole
+from db.models.events import Event
 from db.models.logs import AppLog
 from db.models.periodic import PeriodicTask
 from db.models.users import User
@@ -127,7 +128,7 @@ class TestRunningStatus:
     """
     Раздел 3.1, 15.5: пока тело периодической задачи выполняется, её статус —
     `running`, потом — итог запуска. Обёртка коммитит своей сессией, поэтому
-    запись удаляется вручную.
+    запись, её логи и событие сбоя удаляются вручную.
     """
 
     @pytest.mark.parametrize(
@@ -176,6 +177,7 @@ class TestRunningStatus:
         finally:
             async with async_session_factory() as session:
                 await session.execute(sa.delete(AppLog).where(AppLog.source == f"periodic.{name}"))
+                await session.execute(sa.delete(Event).where(Event.body.startswith(f"{name}:")))
                 await session.execute(sa.delete(PeriodicTask).where(PeriodicTask.name == name))
                 await session.commit()
 

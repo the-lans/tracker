@@ -77,10 +77,22 @@ class TestLlmProxy:
         context = compose["services"]["cliproxy"]["build"]["context"]
         assert context == "https://github.com/router-for-me/CLIProxyAPI.git#${CLIPROXY_VERSION}"
 
-    def test_backend_knows_proxy_version(self, compose: dict[str, Any]) -> None:
-        # Админка «LLM-прокси» показывает версию из окружения backend (раздел 15.5).
-        environment = compose["services"]["backend"]["environment"]
-        assert environment["CLIPROXY_VERSION"] == "${CLIPROXY_VERSION}"
+    @pytest.mark.parametrize(
+        ("variable", "value"),
+        [
+            # Админка «LLM-прокси» показывает версию из окружения backend (раздел 15.5).
+            ("CLIPROXY_VERSION", "${CLIPROXY_VERSION}"),
+            # «Мониторинг» показывает время развёртывания (раздел 15.5).
+            ("DEPLOYED_AT", "${DEPLOYED_AT:-}"),
+        ],
+    )
+    def test_backend_environment(
+        self,
+        compose: dict[str, Any],
+        variable: str,
+        value: str,
+    ) -> None:
+        assert compose["services"]["backend"]["environment"][variable] == value
 
     def test_tokens_only_in_proxy(self, compose: dict[str, Any]) -> None:
         """

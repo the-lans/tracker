@@ -79,12 +79,10 @@ def environment(tmp_path: Path) -> VerifyEnvironment:
 def notifications(monkeypatch: pytest.MonkeyPatch) -> list[NotificationEvent]:
     sent: list[NotificationEvent] = []
 
-    async def record(
-        _session: object, *, event: NotificationEvent, user_id: object, detail: str
-    ) -> None:
+    async def record(_session: object, *, event: NotificationEvent, detail: str) -> None:
         sent.append(event)
 
-    monkeypatch.setattr(runs_module, "notify_user_event", record)
+    monkeypatch.setattr(runs_module, "notify_admins", record)
     return sent
 
 
@@ -163,10 +161,12 @@ class TestVerify:
         redis_client: Redis,
         storage: S3Storage,
         environment: VerifyEnvironment,
+        notifications: list[NotificationEvent],
     ) -> None:
         run = await _verify(db_session, redis_client, storage, environment)
 
         assert run.status is BackupRunStatus.SUCCESS
+        assert notifications[-1] is NotificationEvent.BACKUP_VERIFIED
         assert run.object_key == _KEY
         assert run.details["tables"] > 20
         assert {item["name"] for item in run.details["components"]} >= {

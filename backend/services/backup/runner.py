@@ -42,9 +42,9 @@ from services.backup.runs import (
     BackupError,
     backup_lock,
     close_interrupted_runs,
+    complete_run,
     fail_run,
     failure_message,
-    finish_run,
     start_run,
 )
 from services.backup.storage import BACKUP_SUFFIX, S3Storage
@@ -189,6 +189,16 @@ async def _make_and_upload(
     return _Uploaded(name=name, size=size, sha256=digest, manifest=bundle.manifest)
 
 
+_BYTES_IN_MEGABYTE = 1024 * 1024
+
+
+def _success_detail(name: str, size: int, *, skipped_count: int) -> str:
+    detail = f"Копия {name}, {size / _BYTES_IN_MEGABYTE:.1f} МБ"
+    if skipped_count:
+        detail += f"; пропущено файлов: {skipped_count}"
+    return detail
+
+
 def _details(manifest: dict[str, Any], deleted: list[str]) -> dict[str, Any]:
     return {
         "tracker_commit": manifest["tracker_commit"],
@@ -230,10 +240,12 @@ async def run_backup(
         raise BackupError(message) from exc
     skipped = uploaded.manifest["skipped_files"]
     status = BackupRunStatus.WARNING if skipped else BackupRunStatus.SUCCESS
-    await finish_run(
+    await complete_run(
         db_session,
         run,
         status=status,
+        event=NotificationEvent.BACKUP_SUCCEEDED,
+        detail=_success_detail(uploaded.name, uploaded.size, skipped_count=len(skipped)),
         object_key=storage.key(uploaded.name),
         size_bytes=uploaded.size,
         sha256=uploaded.sha256,

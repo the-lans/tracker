@@ -328,7 +328,8 @@ _generate_cliproxy_key() {
 
 # Перед каждой сборкой, во всех режимах: секреты, которых не знал .env
 # прежней версии, версия прокси из репозитория (обновление прокси — смена
-# версии в .env.example) и коммит сборки для /api/health (раздел 20.7).
+# версии в .env.example), коммит сборки для /api/health (раздел 20.7) и
+# время развёртывания для страницы «Мониторинг» (раздел 15.5).
 step_prepare_env_for_build() {
   _ensure_env_value SFTP_DB_PASSWORD "$(_generate_sftp_db_password)"
   _ensure_env_value CLIPROXY_API_KEY "$(_generate_cliproxy_key)"
@@ -338,6 +339,7 @@ step_prepare_env_for_build() {
   [ -n "${cliproxy_version}" ] || die "в ${ENV_EXAMPLE} не задана CLIPROXY_VERSION"
   _put_env_value CLIPROXY_VERSION "${cliproxy_version}"
   _put_env_value GIT_SHA "$(git -C "${INSTALL_DIR}" rev-parse HEAD)"
+  _put_env_value DEPLOYED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 
 # Шаг 3: генерация .env из .env.example — все секреты через openssl rand

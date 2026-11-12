@@ -159,6 +159,9 @@ services:
       # Раздел 14.4: воркер очереди не запускает больше задач, чем процессов
       # воркера сессий (session-worker, `--concurrency`).
       SESSION_WORKER_CONCURRENCY: ${SESSION_WORKER_CONCURRENCY:-4}
+      # Раздел 15.5: время развёртывания на странице «Мониторинг» — его пишет
+      # install.sh; коммит (GIT_SHA) приходит в образ build-arg'ом.
+      DEPLOYED_AT: ${DEPLOYED_AT:-}
     volumes:
       - task_repos:/data/repos
       - user_files:/data/user-files

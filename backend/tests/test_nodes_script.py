@@ -422,3 +422,20 @@ class TestArtifactsInContainer:
 
         assert result.exit_code == 0, result.stderr
         assert (artifacts_path / "report.txt").read_text() == "готово"
+
+
+class TestLabels:
+    def test_task_code_label(self, tmp_path: Path) -> None:
+        repos_path = tmp_path / "RR-42"
+
+        args = script_module._docker_run_args(
+            container_name="tracker-node-x",
+            image="tracker-runner-bash:latest",
+            script_path=repos_path / "s.sh",
+            repos_path=repos_path,
+            timeout_seconds=60,
+            task_mounts=[],
+            env={},
+        )
+
+        assert f"{script_module.NODE_TASK_CODE_LABEL}=RR-42" in args

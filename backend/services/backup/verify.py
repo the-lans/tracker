@@ -43,9 +43,9 @@ from services.backup.runs import (
     BackupError,
     backup_lock,
     close_interrupted_runs,
+    complete_run,
     fail_run,
     failure_message,
-    finish_run,
     start_run,
 )
 from services.backup.storage import S3Storage, StoredObject
@@ -457,10 +457,12 @@ async def run_verify(
             event=NotificationEvent.BACKUP_VERIFY_FAILED,
         )
         raise BackupError(message) from exc
-    await finish_run(
+    await complete_run(
         db_session,
         run,
         status=BackupRunStatus.SUCCESS,
+        event=NotificationEvent.BACKUP_VERIFIED,
+        detail=f"Копия {stored.key} восстанавливается: дамп и архивы проверены",
         object_key=stored.key,
         size_bytes=stored.size,
         sha256=stored.sha256,

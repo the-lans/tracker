@@ -15,6 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.auth import router as auth_router
 from api.env_variables import router as env_variables_router
+from api.events import router as events_router
 from api.git_credentials import router as git_credentials_router
 from api.jira import router as jira_router
 from api.llm_accounts import router as llm_accounts_router
@@ -38,6 +39,7 @@ from app_logging.config import configure_logging, get_logger
 from db.models.enums import AppLogLevel
 from db.session import engine
 from services.errors import AppError, ValidationError
+from services.server_status import UNKNOWN_VERSION, VERSION_ENV
 from ws.tasks import router as ws_router
 
 configure_logging()
@@ -83,6 +85,7 @@ app.include_router(monitoring_router)
 app.include_router(system_settings_router)
 app.include_router(push_router)
 app.include_router(jira_router)
+app.include_router(events_router)
 app.include_router(ws_router)
 
 
@@ -188,12 +191,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-# Раздел 20.7: коммит образа (build-arg GIT_SHA) — по нему развёртывание
-# проверяет, что сервер отвечает новой версией.
-_VERSION_ENV = "GIT_SHA"
-_UNKNOWN_VERSION = "unknown"
-
-
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "version": os.environ.get(_VERSION_ENV) or _UNKNOWN_VERSION}
+    """Раздел 20.7: по коммиту образа развёртывание проверяет новую версию."""
+    return {"status": "ok", "version": os.environ.get(VERSION_ENV) or UNKNOWN_VERSION}

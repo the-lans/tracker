@@ -55,6 +55,8 @@ _DEFAULT_MEMORY_LIMIT = "512m"
 # По имени `purge_orphaned_docker_containers` находит контейнеры script-нод.
 NODE_CONTAINER_PREFIX = "tracker-node-"
 CONTAINER_DEADLINE_LABEL = "tracker.deadline"
+# Раздел 15.5: мониторинг показывает, чьей задачи контейнер ноды.
+NODE_TASK_CODE_LABEL = "tracker.task_code"
 # Запас на остановку по таймауту самой ноды (`docker stop`) сверх `timeout_seconds`.
 _DEADLINE_MARGIN_SECONDS = 120
 _DEFAULT_CPU_LIMIT = "1.0"
@@ -165,7 +167,8 @@ def _docker_run_args(
     arguments: tuple[str, ...] = (),
 ) -> list[str]:
     """
-    Правило 4: без сети и привилегий, с лимитами и меткой дедлайна для уборки.
+    Правило 4: без сети и привилегий, с лимитами; метки — дедлайн для уборки
+    и код задачи для мониторинга.
     """
     return [
         "docker",
@@ -179,6 +182,9 @@ def _docker_run_args(
         f"--cpus={_DEFAULT_CPU_LIMIT}",
         "--label",
         f"{CONTAINER_DEADLINE_LABEL}={container_deadline(timeout_seconds)}",
+        "--label",
+        # Каталог репозиториев задачи назван её кодом (`task_workspace.task_root`).
+        f"{NODE_TASK_CODE_LABEL}={repos_path.name}",
         *task_mounts,
         *_env_args(env),
         "-w",

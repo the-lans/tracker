@@ -99,12 +99,10 @@ def environment(tmp_path: Path, engine: AsyncEngine) -> BackupEnvironment:
 def notifications(monkeypatch: pytest.MonkeyPatch) -> list[tuple[NotificationEvent, str]]:
     sent: list[tuple[NotificationEvent, str]] = []
 
-    async def record(
-        _session: object, *, event: NotificationEvent, user_id: object, detail: str
-    ) -> None:
+    async def record(_session: object, *, event: NotificationEvent, detail: str) -> None:
         sent.append((event, detail))
 
-    monkeypatch.setattr(runs_module, "notify_user_event", record)
+    monkeypatch.setattr(runs_module, "notify_admins", record)
     return sent
 
 
@@ -146,10 +144,14 @@ class TestFullBackup:
         storage: S3Storage,
         environment: BackupEnvironment,
         tmp_path: Path,
+        notifications: list[tuple[NotificationEvent, str]],
     ) -> None:
         run = await _backup(db_session, redis_client, storage, environment)
 
         assert run.status is BackupRunStatus.SUCCESS
+        [(event, detail)] = notifications
+        assert event is NotificationEvent.BACKUP_SUCCEEDED
+        assert detail.startswith(f"Копия {_NAME}, ") and detail.endswith(" МБ")
         assert run.object_key == f"{FOLDER}/{_NAME}"
         blob = client.objects[f"{FOLDER}/{_NAME}"]
         assert blob.metadata["sha256"] == run.sha256

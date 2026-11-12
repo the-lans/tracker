@@ -55,7 +55,7 @@ from redis.asyncio import Redis  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine  # noqa: E402
 from sqlalchemy.orm import Session, SessionTransaction  # noqa: E402
 
-from services import maintenance_tasks  # noqa: E402
+from services import container_monitor  # noqa: E402
 from tests.cliproxy_support import FakeCliproxy  # noqa: E402
 from tests.worker_support import WorkerEnv, install_worker_env  # noqa: E402
 
@@ -450,6 +450,6 @@ def container_prefixes(monkeypatch: pytest.MonkeyPatch) -> ContainerPrefixes:
         node=f"tracker-node-test-{run_id}-",
         session=f"tracker-session-test-{run_id}-",
     )
-    monkeypatch.setattr(maintenance_tasks, "NODE_CONTAINER_PREFIX", prefixes.node)
-    monkeypatch.setattr(maintenance_tasks, "SESSION_CONTAINER_PREFIX", prefixes.session)
+    monkeypatch.setattr(container_monitor, "NODE_CONTAINER_PREFIX", prefixes.node)
+    monkeypatch.setattr(container_monitor, "SESSION_CONTAINER_PREFIX", prefixes.session)
     return prefixes
