@@ -210,7 +210,7 @@ class TestPeriodicOutcome:
         db_session.add(
             PeriodicTask(
                 name=name,
-                display_name=name,
+                display_name=f"Проверка {name}",
                 description="d",
                 task_path=f"tasks.periodic.{name}",
                 schedule_type=PeriodicScheduleType.INTERVAL,
@@ -241,7 +241,7 @@ class TestPeriodicOutcome:
 
         assert (event.event_type, event.body) == (
             "periodic_task_failed",
-            "check_example: нет связи",
+            "Проверка check_example: нет связи",
         )
 
     @pytest.mark.usefixtures("same_session", "pushed")

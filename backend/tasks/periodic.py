@@ -116,7 +116,7 @@ async def _run_periodic_async(name: str, body: Callable[[AsyncSession], Awaitabl
         if name not in _OWN_EVENT_TASKS:
             await notify_periodic_outcome(
                 db_session,
-                name=name,
+                title=periodic_task.display_name,
                 previous=previous_status,
                 current=status,
                 error=error,

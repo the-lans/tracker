@@ -179,7 +179,7 @@ def outcome_event(
 async def notify_periodic_outcome(
     db_session: AsyncSession,
     *,
-    name: str,
+    title: str,
     previous: PeriodicRunStatus | None,
     current: PeriodicRunStatus,
     error: str | None = None,
@@ -187,5 +187,5 @@ async def notify_periodic_outcome(
     event = outcome_event(previous, current)
     if event is None:
         return
-    detail = name if not error else f"{name}: {error[:_EVENT_ERROR_MAX_LENGTH]}"
+    detail = title if not error else f"{title}: {error[:_EVENT_ERROR_MAX_LENGTH]}"
     await notify_admins(db_session, event=event, detail=detail)
