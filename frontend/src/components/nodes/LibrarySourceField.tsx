@@ -131,8 +131,8 @@ export function LibrarySourceField({
               onChange={(event) => onChange({ ...value, arguments: event.target.value })}
             />
             <p className="mt-1 text-small text-text-3">
-              Как после /имя в чате: в промте — $ARGUMENTS и $1, $2…; скрипту — позиционные
-              аргументы и TRACKER_COMMAND_ARGUMENTS.
+              Как после /имя в чате: в промте — $ARGUMENTS и $1, $2…; слэш-команде — через
+              пробел после неё; скрипту — позиционные аргументы и TRACKER_COMMAND_ARGUMENTS.
             </p>
           </div>
         </>

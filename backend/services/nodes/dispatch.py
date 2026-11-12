@@ -53,13 +53,14 @@ async def resolve_node_prompt(
     ``slash_command``: `command_invocation` буквально, БЕЗ шаблонизатора
     (раздел 4) — единственная ветка, минующая `render_for_task`.
     ``arguments`` — аргументы промта библиотеки, на который ссылается нода
-    пайплайна (раздел 7.6).
+    пайплайна (раздел 7.6); слэш-команде они дописываются через пробел, как
+    при вызове `/имя аргументы`, и тоже не шаблонизируются.
     """
     if node.node_type is NodeType.SLASH_COMMAND:
         if node.command_invocation is None:
             message = "У ноды slash_command не заполнен command_invocation"
             raise ValueError(message)
-        return RenderedText.literal(node.command_invocation)
+        return RenderedText.literal(_with_arguments(node.command_invocation, arguments))
 
     if node.prompt_template is None:
         message = f"У ноды {node.node_type} не заполнен prompt_template"
@@ -73,6 +74,12 @@ async def resolve_node_prompt(
         node_guide_url=node_guide_url(node),
         arguments=arguments,
     )
+
+
+def _with_arguments(invocation: str, arguments: CommandArguments | None) -> str:
+    if arguments is None or not arguments.raw.strip():
+        return invocation
+    return f"{invocation} {arguments.raw.strip()}"
 
 
 def node_guide_url(node: Node) -> str | None:

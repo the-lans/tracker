@@ -43,6 +43,9 @@ logger = get_logger("library_commands")
 COMMAND_TYPES = (NodeType.PLAIN_PROMPT, NodeType.SCRIPT)
 
 
+_GUIDE_FIELD = {"guide_url"}
+
+
 class CommandSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
     invocation: str
@@ -61,6 +64,14 @@ class CommandSnapshot(BaseModel):
     reasoning_effort: ReasoningEffort | None
     # `{{node.guide_url}}` команды; у снимков, сделанных до появления поля, — нет.
     guide_url: str | None = None
+
+    def to_json(self) -> str:
+        """
+        Пустой гайд в снимок не пишется: прежняя версия (раздел 20.6) читает
+        снимок без лишних полей (`extra="forbid"`) и иначе не выполнила бы
+        команду, поставленную в очередь до отката.
+        """
+        return self.model_dump_json(exclude=_GUIDE_FIELD if self.guide_url is None else None)
 
     def to_node(self, request: TaskManualRequestQueue) -> Node:
         return Node(
@@ -178,7 +189,7 @@ async def enqueue_command(
         command_name=node.slash_name,
         command_revision=node.revision,
         client_request_id=client_request_id,
-        command_snapshot_encrypted=encrypt(snapshot.model_dump_json()),
+        command_snapshot_encrypted=encrypt(snapshot.to_json()),
     )
     session.add(request)
     await session.commit()

@@ -63,6 +63,8 @@ QUEUE_PERIODIC_TASKS="'dispatch_ready_tasks','dispatch_night_tasks'"
 # downgrade миграции (_RESTORE_LIBRARY_CONTENT, _RESTORE_GUIDE_URL).
 LIBRARY_LINKS_MIGRATION="alembic/versions/c4e7a2b9d518_events_and_library_links.py"
 LIBRARY_CONTENT_RESET="UPDATE nodes SET prompt_template = library_items.prompt_template, command_invocation = library_items.command_invocation, script_language = library_items.script_language, script_content = library_items.script_content, docker_image = library_items.docker_image, guide_url = library_items.guide_url FROM nodes AS library_items WHERE nodes.library_node_id = library_items.id"
+# Периодическая задача замера места на диске: прежний worker её не знает.
+MONITORING_PERIODIC_TASKS="'measure_volume_usage'"
 GUIDE_URL_RESET="UPDATE nodes SET prompt_template = regexp_replace(prompt_template, '[{][{][[:space:]]*node[.]guide_url[[:space:]]*[}][}]', coalesce(guide_url, ''), 'g') WHERE prompt_template LIKE '%node.guide_url%'"
 # Флаг обслуживания (services/maintenance.py::MAINTENANCE_KEY): запуск задач
 # отвечает 503, воркер не берёт задачи из queued. TTL — срок ожидания плюс
@@ -689,8 +691,8 @@ step_wait_idle() {
 # прежний код не прочитал бы задачу с незнакомым статусом. Ждущие лимита
 # задачи уходят в failed (точка перезапуска — нода, которая ждала) или
 # обратно в refining; статусы до запуска — в new, а периодические задачи
-# воркера очереди, которых прежний worker не знает, удаляются; ноды со
-# ссылкой на библиотеку получают копию её промта. Одной
+# воркера очереди и замера диска, которых прежний worker не знает,
+# удаляются; ноды со ссылкой на библиотеку получают копию её промта. Одной
 # транзакцией, после checkout: если checkout не удался, БД не тронута. Сбой
 # здесь возвращает код на прежний коммит — сервер не изменён.
 _reset_unknown_task_statuses() {
@@ -705,8 +707,9 @@ _reset_unknown_task_statuses() {
     query+="; DELETE FROM periodic_tasks WHERE name IN (${QUEUE_PERIODIC_TASKS}); "
   fi
   if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${LIBRARY_LINKS_MIGRATION}" 2>/dev/null; then
-    log "Обновление: у версии ${commit} нет ссылок на библиотеку — ноды получают копию промта, {{node.guide_url}} — гайд ноды"
+    log "Обновление: у версии ${commit} нет ссылок на библиотеку и замера диска — ноды получают копию промта, {{node.guide_url}} — гайд ноды"
     query+="${LIBRARY_CONTENT_RESET}; ${GUIDE_URL_RESET}"
+    query+="; DELETE FROM periodic_tasks WHERE name IN (${MONITORING_PERIODIC_TASKS})"
   fi
   [ -n "${query}" ] || return 0
   ( cd "${INSTALL_DIR}" \

@@ -1143,6 +1143,45 @@ class TestLibraryLink:
             4,
         )
 
+    @pytest.mark.parametrize(
+        ("arguments", "sent"),
+        [
+            ("--fast 'модуль оплаты'", "/review src --fast 'модуль оплаты'"),
+            (None, "/review src"),
+        ],
+        ids=["с-аргументами", "без-аргументов"],
+    )
+    async def test_slash_command_gets_arguments(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        arguments: str | None,
+        sent: str,
+    ) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        source = await self._library_item(
+            db_session,
+            task,
+            node_type=NodeType.SLASH_COMMAND,
+            command_invocation="/review src",
+        )
+        await _add_node(
+            db_session,
+            task,
+            order_index=0,
+            node_type=NodeType.SLASH_COMMAND,
+            library_node_id=source.id,
+            library_arguments=arguments,
+        )
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+
+        outcome = await run_pipeline(
+            db_session, task=task, claude_session=ClaudeCodeSession(fake), repos_path=tmp_path
+        )
+
+        assert outcome.completed is True
+        assert fake.queries == [sent]
+
     async def test_script_gets_arguments(self, db_session: AsyncSession, tmp_path: Path) -> None:
         task = await _make_task_with_pipeline(db_session)
         source = await self._library_item(

@@ -29,6 +29,7 @@ from services.maintenance import MAINTENANCE_KEY
 from services.periodic_tasks import NIGHT_DISPATCH_TASK
 from services.task_status import SESSION_ACTIVE_STATUSES
 from tasks.celery_app import DISPATCH_READY_TASKS
+from tasks.periodic import measure_volume_usage
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -368,6 +369,12 @@ class TestSharedConstants:
 
     def test_after_restore_sql(self, stubs: Path, install_dir: Path) -> None:
         assert self._value(stubs, install_dir, "AFTER_RESTORE_SQL") == AFTER_RESTORE_SQL_NAME
+
+    def test_monitoring_periodic_tasks(self, stubs: Path, install_dir: Path) -> None:
+        """Откат удаляет периодическую задачу, которой нет у версии без мониторинга."""
+        raw = self._value(stubs, install_dir, "MONITORING_PERIODIC_TASKS")
+        names = {item.strip("'") for item in raw.split(",")}
+        assert names == {measure_volume_usage.name}
 
     def test_queue_periodic_tasks(self, stubs: Path, install_dir: Path) -> None:
         """Откат удаляет ровно периодические задачи воркера очереди."""
@@ -716,6 +723,7 @@ class TestUpdate:
         reset = resets_seen[0] if resets_seen else ""
         assert ("FROM nodes AS library_items" in reset) is library_reset
         assert ("node[.]guide_url" in reset) is library_reset
+        assert ("WHERE name IN ('measure_volume_usage')" in reset) is library_reset
         assert ("WHERE status::text = 'awaiting_limit'" in reset) is limit_reset
         assert ("UPDATE node_logs SET llm_switch_reason" in reset) is limit_reset
         assert ("UPDATE tasks SET status = 'new'" in reset) is pre_launch_reset
