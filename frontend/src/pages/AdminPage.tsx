@@ -6,7 +6,6 @@ import { SystemSettingsPanel } from "@/components/admin/SystemSettingsPanel";
 import { McpServersPanel } from "@/components/admin/McpServersPanel";
 import { LlmProxyPanel } from "@/components/admin/LlmProxyPanel";
 import { PeriodicTasksPanel } from "@/components/admin/PeriodicTasksPanel";
-import { MonitoringPanel } from "@/components/admin/MonitoringPanel";
 import { PromptLibraryPanel } from "@/components/admin/PromptLibraryPanel";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 
@@ -23,7 +22,6 @@ export function AdminPage() {
             <TabsTrigger value="mcp">MCP-серверы</TabsTrigger>
             <TabsTrigger value="llm-proxy">LLM-прокси</TabsTrigger>
             <TabsTrigger value="periodic">Периодические задачи</TabsTrigger>
-            <TabsTrigger value="monitoring">Мониторинг</TabsTrigger>
             <TabsTrigger value="library">Библиотека промтов</TabsTrigger>
           </TabsList>
           <TabsContent value="users">
@@ -41,9 +39,6 @@ export function AdminPage() {
           </TabsContent>
           <TabsContent value="periodic">
             <PeriodicTasksPanel />
-          </TabsContent>
-          <TabsContent value="monitoring">
-            <MonitoringPanel />
           </TabsContent>
           <TabsContent value="library">
             <PromptLibraryPanel />

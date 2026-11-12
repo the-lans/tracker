@@ -353,7 +353,10 @@ class TestLlmUsage:
         body = response.json()
         assert body["switches_24h"] == 3
         rows = {row["label"]: row for row in body["accounts"] if row["owner_email"] == owner.email}
-        assert (rows["Основной"]["usage_5h_pct"], rows["Основной"]["usage_week_pct"]) == (42.5, 10)
+        assert (
+            float(rows["Основной"]["usage_5h_pct"]),
+            float(rows["Основной"]["usage_week_pct"]),
+        ) == (42.5, 10)
         assert (rows["Основной"]["switches_to_24h"], rows["Запасной"]["switches_to_24h"]) == (1, 2)
 
 

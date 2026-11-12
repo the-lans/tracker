@@ -614,6 +614,10 @@ export interface NodeItem {
   reasoning_effort: ReasoningEffort | null;
   is_archived: boolean;
   created_by: string;
+  /** Раздел 7.6: нода пайплайна выполняет этот промт библиотеки (текст, скрипт и гайд — его). */
+  library_node_id?: string | null;
+  /** Аргументы промта библиотеки — как после `/имя` в чате. */
+  library_arguments?: string | null;
 }
 
 export interface NodeCreateRequest {
@@ -637,6 +641,9 @@ export interface NodeCreateRequest {
   is_skipped?: boolean;
   llm_output_last_n?: number | null;
   reasoning_effort?: ReasoningEffort | null;
+  /** `null` — свой текст ноды, без ссылки на библиотеку. */
+  library_node_id?: string | null;
+  library_arguments?: string | null;
 }
 
 export type NodeUpdateRequest = Partial<NodeCreateRequest> & { is_archived?: boolean };
@@ -693,6 +700,8 @@ export interface TemplatePreviewRequest {
   order_index?: number | null;
   /** Только для scope = "library": аргументы команды, как после /имя; $1 — первый. */
   arguments?: string | null;
+  /** Гайд ноды для {{node.guide_url}} (раздел 5). */
+  guide_url?: string | null;
 }
 
 export interface TemplatePreviewResponse {

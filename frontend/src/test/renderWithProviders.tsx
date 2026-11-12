@@ -28,13 +28,17 @@ export function renderHookWithClient<TResult, TProps>(
   return { ...renderHook(hook, { wrapper, initialProps }), queryClient };
 }
 
-/** ``currentUser: null`` — пользователь не вошёл (страница входа); ``login`` — вход, который проверяет тест. */
+/**
+ * ``currentUser: null`` — пользователь не вошёл (страница входа); ``login`` — вход,
+ * который проверяет тест; ``path`` — адрес, открытый в роутере.
+ */
 export function renderWithProviders(
   ui: ReactElement,
   {
     currentUser = makeCurrentUser(),
     login = () => {},
-  }: { currentUser?: CurrentUser | null; login?: AuthContextValue["login"] } = {},
+    path = "/",
+  }: { currentUser?: CurrentUser | null; login?: AuthContextValue["login"]; path?: string } = {},
 ) {
   const queryClient = createTestQueryClient();
   const auth: AuthContextValue = {
@@ -47,7 +51,7 @@ export function renderWithProviders(
   const wrap = (element: ReactElement) => (
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={auth}>
-        <MemoryRouter>{element}</MemoryRouter>
+        <MemoryRouter initialEntries={[path]}>{element}</MemoryRouter>
       </AuthContext.Provider>
     </QueryClientProvider>
   );

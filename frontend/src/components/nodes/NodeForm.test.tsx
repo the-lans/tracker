@@ -23,6 +23,7 @@ function renderForm(
     <NodeForm
       mode={mode}
       pipelineId={mode === "pipeline" ? "p1" : undefined}
+      pipelineOwnerId={mode === "pipeline" ? "u1" : undefined}
       orderIndex={2}
       node={node}
       onSaved={onSaved}
@@ -111,6 +112,8 @@ describe("NodeForm", () => {
         script_language: ScriptLanguage.PYTHON,
         script_content: "pytest -q",
         guide_url: null,
+        library_node_id: null,
+        library_arguments: null,
         timeout_seconds: null,
         max_retries: null,
         retry_base_delay_seconds: null,
@@ -325,5 +328,177 @@ describe("Команды библиотечных промтов", () => {
 
     expect(await screen.findByText("Проверь svc")).toBeInTheDocument();
     expect((api.mutations().at(-1)?.body as { arguments?: string }).arguments).toBe(sent);
+  });
+});
+
+describe("гайд", () => {
+  test.for([
+    { mode: "pipeline" as Mode, label: "Обычный промт", shown: true },
+    { mode: "pipeline" as Mode, label: "Режим планирования", shown: false },
+    { mode: "pipeline" as Mode, label: "Слэш-команда", shown: false },
+    { mode: "pipeline" as Mode, label: "Скрипт", shown: false },
+    { mode: "library" as Mode, label: "Обычный промт", shown: true },
+    { mode: "library" as Mode, label: "Скрипт", shown: false },
+  ])("$mode, «$label» → поле гайда: $shown", async ({ mode, label, shown }, { api }) => {
+    const { user } = renderForm(api, { mode });
+
+    await chooseType(user, label);
+
+    expect(screen.queryByLabelText("Гайд (URL Confluence)") !== null).toBe(shown);
+    expect(screen.queryAllByText(/\{\{node\.guide_url\}\}/).length > 0).toBe(shown);
+  });
+
+  test("у не-промта гайд не отправляется, даже если был введён", async ({ api }) => {
+    const { user } = renderForm(api);
+
+    await user.type(screen.getByLabelText("Название"), "Сборка");
+    await user.type(screen.getByLabelText("Гайд (URL Confluence)"), "https://wiki.example.com/x");
+    await chooseType(user, "Скрипт");
+    await user.click(save());
+
+    expect(savedBody(api)).toMatchObject({ node_type: NodeType.SCRIPT, guide_url: null });
+  });
+
+  test("предпросмотр получает гайд промта", async ({ api }) => {
+    api.respond("POST /templates/preview", { rendered_text: "ok" });
+    const { user } = renderForm(api);
+
+    await user.type(screen.getByLabelText("Текст промта"), "См. гайд");
+    await user.type(screen.getByLabelText("Гайд (URL Confluence)"), "https://wiki.example.com/g");
+    await user.click(screen.getByRole("button", { name: /Предпросмотр/ }));
+
+    await expect
+      .poll(() => api.requests.find((request) => request.path === "/templates/preview")?.body)
+      .toMatchObject({ guide_url: "https://wiki.example.com/g" });
+  });
+});
+
+describe("промт из библиотеки", () => {
+  const review = makeNode({
+    id: "lib-review",
+    pipeline_id: null,
+    order_index: null,
+    is_library_item: true,
+    name: "Ревью",
+    slash_name: "review",
+    argument_hint: "[сервис]",
+    description: "Проверяет diff",
+    prompt_template: "Проверь $1",
+    guide_url: "https://wiki.example.com/review",
+    revision: 3,
+  });
+  const library = [
+    review,
+    makeNode({ id: "lib-lint", pipeline_id: null, is_library_item: true, name: "Линт", node_type: NodeType.SCRIPT, script_language: ScriptLanguage.BASH, script_content: "ruff check" }),
+    makeNode({ id: "lib-old", pipeline_id: null, is_library_item: true, name: "Старый", is_archived: true }),
+    makeNode({ id: "lib-alien", pipeline_id: null, is_library_item: true, name: "Чужой", created_by: "u2" }),
+  ];
+
+  async function chooseLibrary(user: ReturnType<typeof renderForm>["user"], item: string) {
+    await user.click(screen.getByRole("combobox", { name: "Содержимое ноды" }));
+    await user.click(await screen.findByRole("option", { name: "Промт из библиотеки" }));
+    await user.click(screen.getByRole("combobox", { name: "Промт библиотеки" }));
+    await user.click(await screen.findByRole("option", { name: item }));
+  }
+
+  test("в списке — промты автора пайплайна без архивных", async ({ api }) => {
+    api.respond("GET /nodes", library);
+    const { user } = renderForm(api);
+
+    await user.click(screen.getByRole("combobox", { name: "Содержимое ноды" }));
+    await user.click(await screen.findByRole("option", { name: "Промт из библиотеки" }));
+    await user.click(screen.getByRole("combobox", { name: "Промт библиотеки" }));
+
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "Ревью (/review)",
+      "Линт",
+    ]);
+  });
+
+  test("выбор скрывает свои поля и показывает промт; уходит ссылка с аргументами", async ({ api }) => {
+    api.respond("GET /nodes", library);
+    const { user } = renderForm(api);
+
+    await user.type(screen.getByLabelText("Название"), "Ревью сервиса");
+    await chooseLibrary(user, "Ревью (/review)");
+    await user.type(screen.getByLabelText("Аргументы"), "billing");
+
+    expect(screen.queryByLabelText("Тип ноды")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Текст промта")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Гайд (URL Confluence)")).not.toBeInTheDocument();
+    expect(screen.getByText("Проверь $1")).toBeInTheDocument();
+    expect(screen.getByText(/версия 3/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Аргументы")).toHaveAttribute("placeholder", "[сервис]");
+
+    await user.click(save());
+
+    expect(savedBody(api)).toMatchObject({
+      node_type: NodeType.PLAIN_PROMPT,
+      library_node_id: "lib-review",
+      library_arguments: "billing",
+      prompt_template: null,
+      guide_url: null,
+    });
+  });
+
+  test("тип ноды — тип выбранного промта", async ({ api }) => {
+    api.respond("GET /nodes", library);
+    const { user } = renderForm(api);
+
+    await user.type(screen.getByLabelText("Название"), "Линт");
+    await chooseLibrary(user, "Линт");
+    await user.click(save());
+
+    expect(savedBody(api)).toMatchObject({
+      node_type: NodeType.SCRIPT,
+      library_node_id: "lib-lint",
+      library_arguments: null,
+      reasoning_effort: null,
+    });
+  });
+
+  test("без выбранного промта сохранить нельзя", async ({ api }) => {
+    api.respond("GET /nodes", library);
+    const { user } = renderForm(api);
+
+    await user.type(screen.getByLabelText("Название"), "Ревью");
+    await user.click(screen.getByRole("combobox", { name: "Содержимое ноды" }));
+    await user.click(await screen.findByRole("option", { name: "Промт из библиотеки" }));
+
+    expect(save()).toHaveProperty("disabled", true);
+  });
+
+  test("архивный промт остаётся у ноды, которая на него ссылается", async ({ api }) => {
+    api.respond("GET /nodes", library);
+    renderForm(api, {
+      node: makeNode({ id: "n5", library_node_id: "lib-old", library_arguments: "x", prompt_template: null }),
+    });
+
+    expect(await screen.findByText("в архиве")).toBeInTheDocument();
+    expect(screen.getByLabelText("Аргументы")).toHaveValue("x");
+  });
+
+  test("«Свой текст» снимает ссылку", async ({ api }) => {
+    api.respond("GET /nodes", library);
+    const { user } = renderForm(api, {
+      node: makeNode({ id: "n5", library_node_id: "lib-review", prompt_template: null }),
+    });
+
+    await user.click(screen.getByRole("combobox", { name: "Содержимое ноды" }));
+    await user.click(await screen.findByRole("option", { name: "Свой текст" }));
+    await user.type(screen.getByLabelText("Текст промта"), "Свой");
+    await user.click(save());
+
+    expect(savedBody(api)).toMatchObject({
+      library_node_id: null,
+      library_arguments: null,
+      prompt_template: "Свой",
+    });
+  });
+
+  test("в библиотеке выбора источника нет", ({ api }) => {
+    renderForm(api, { mode: "library" });
+
+    expect(screen.queryByLabelText("Содержимое ноды")).not.toBeInTheDocument();
   });
 });

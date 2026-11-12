@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -147,8 +148,8 @@ class AccountUsageResponse(BaseModel):
     provider: str
     owner_email: str
     status: LlmAccountStatus
-    usage_5h_pct: float | None
-    usage_week_pct: float | None
+    usage_5h_pct: Decimal | None
+    usage_week_pct: Decimal | None
     usage_5h_resets_at: datetime | None
     usage_week_resets_at: datetime | None
     usage_checked_at: datetime | None

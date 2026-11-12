@@ -10,12 +10,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DialogFooter } from "@/components/ui/dialog";
+import { LibrarySourceField } from "@/components/nodes/LibrarySourceField";
 import { NodeEffortField } from "@/components/nodes/NodeEffortField";
 import { NodeExecutionFields } from "@/components/nodes/NodeExecutionFields";
 import { PromptTemplateField } from "@/components/nodes/PromptTemplateField";
 import { ScriptFields } from "@/components/nodes/ScriptFields";
 import { SlashCommandField } from "@/components/nodes/SlashCommandField";
-import type { NodeExecutionValues } from "@/components/nodes/nodeForm.types";
+import {
+  NodeSource,
+  type LibrarySourceValue,
+  type NodeExecutionValues,
+} from "@/components/nodes/nodeForm.types";
 import { useCreateNode, useUpdateNode } from "@/hooks/useNodes";
 import { toastError } from "@/lib/errors";
 import {
@@ -42,6 +47,7 @@ const EFFORT_TYPES: readonly NodeType[] = [
 export function NodeForm({
   mode,
   pipelineId,
+  pipelineOwnerId,
   orderIndex,
   node,
   onSaved,
@@ -49,6 +55,8 @@ export function NodeForm({
 }: {
   mode: "pipeline" | "library";
   pipelineId?: string;
+  /** Автор пайплайна: нода ссылается только на его библиотеку (раздел 7.6). */
+  pipelineOwnerId?: string;
   orderIndex?: number;
   node?: NodeItem;
   onSaved: () => void;
@@ -79,10 +87,21 @@ export function NodeForm({
     isSkipped: node?.is_skipped ?? false,
   });
 
+  const [librarySource, setLibrarySource] = useState<LibrarySourceValue>({
+    source: node?.library_node_id ? NodeSource.LIBRARY : NodeSource.OWN,
+    libraryNodeId: node?.library_node_id ?? null,
+    libraryNodeType: node?.library_node_id ? node.node_type : null,
+    arguments: node?.library_arguments ?? "",
+  });
+
   const isPipeline = mode === "pipeline";
   const availableTypes = isPipeline ? PIPELINE_ONLY_TYPES : LIBRARY_ALLOWED_TYPES;
+  const linked = isPipeline && librarySource.source === NodeSource.LIBRARY;
+  const effectiveType = linked ? (librarySource.libraryNodeType ?? nodeType) : nodeType;
+  const withGuide = !linked && nodeType === NodeType.PLAIN_PROMPT;
 
   function previewRequest(): TemplatePreviewRequest {
+    const guide = withGuide ? { guide_url: guideUrl || null } : {};
     return isPipeline
       ? {
           text: promptTemplate,
@@ -90,8 +109,34 @@ export function NodeForm({
           node_id: node?.id ?? null,
           pipeline_id: pipelineId ?? null,
           order_index: orderIndex ?? node?.order_index ?? null,
+          ...guide,
         }
-      : { text: promptTemplate, scope: "library" };
+      : { text: promptTemplate, scope: "library", ...guide };
+  }
+
+  /** Содержимое ноды: своё или ссылка на промт библиотеки (поля содержимого тогда пусты). */
+  function contentFields() {
+    if (linked) {
+      return {
+        node_type: effectiveType,
+        prompt_template: null,
+        command_invocation: null,
+        script_language: null,
+        script_content: null,
+        guide_url: null,
+        library_node_id: librarySource.libraryNodeId,
+        library_arguments: librarySource.arguments.trim() || null,
+      };
+    }
+    return {
+      node_type: nodeType,
+      prompt_template: PROMPT_TYPES.includes(nodeType) ? promptTemplate : null,
+      command_invocation: nodeType === NodeType.SLASH_COMMAND ? commandInvocation : null,
+      script_language: nodeType === NodeType.SCRIPT ? scriptLanguage : null,
+      script_content: nodeType === NodeType.SCRIPT ? scriptContent : null,
+      guide_url: withGuide ? guideUrl || null : null,
+      ...(isPipeline ? { library_node_id: null, library_arguments: null } : {}),
+    };
   }
 
   function handleSave() {
@@ -100,21 +145,16 @@ export function NodeForm({
       order_index: isPipeline ? (orderIndex ?? node?.order_index ?? 0) : null,
       name,
       description: description || null,
-      node_type: nodeType,
       ...(!isPipeline && (nodeType === NodeType.PLAIN_PROMPT || nodeType === NodeType.SCRIPT) && (slashName.trim() || node?.slash_name) ? {
         slash_name: slashName.trim() || null,
         argument_hint: slashName.trim() ? argumentHint.trim() || null : null,
       } : {}),
-      prompt_template: PROMPT_TYPES.includes(nodeType) ? promptTemplate : null,
-      command_invocation: nodeType === NodeType.SLASH_COMMAND ? commandInvocation : null,
-      script_language: nodeType === NodeType.SCRIPT ? scriptLanguage : null,
-      script_content: nodeType === NodeType.SCRIPT ? scriptContent : null,
-      guide_url: guideUrl || null,
+      ...contentFields(),
       timeout_seconds: execution.timeoutSeconds,
       max_retries: isPipeline ? execution.maxRetries : undefined,
       retry_base_delay_seconds: isPipeline ? execution.retryBaseDelaySeconds : undefined,
       is_skipped: isPipeline ? execution.isSkipped : false,
-      reasoning_effort: EFFORT_TYPES.includes(nodeType) ? effort : null,
+      reasoning_effort: EFFORT_TYPES.includes(effectiveType) ? effort : null,
     };
     const callbacks = { onSuccess: onSaved, onError: toastError("Не удалось сохранить ноду") };
     if (node) {
@@ -158,61 +198,74 @@ export function NodeForm({
           onChange={(e) => setDescription(e.target.value)}
         />
       </div>
-      <div>
-        <Label htmlFor="node-type">Тип ноды</Label>
-        <Select value={nodeType} onValueChange={(v) => setNodeType(v as NodeType)}>
-          <SelectTrigger id="node-type">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {availableTypes.map((type) => (
-              <SelectItem key={type} value={type}>
-                {NODE_TYPE_LABEL[type]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {nodeType === NodeType.PLAN_PROMPT && (
-        <div className="rounded-md border border-info-tint bg-info-tint px-3 py-2 text-note text-info-text">
-          Нода доступна только внутри пайплайна и не может быть сохранена как элемент библиотеки.
+      {isPipeline && (
+        <LibrarySourceField
+          ownerId={pipelineOwnerId ?? node?.created_by}
+          value={librarySource}
+          onChange={setLibrarySource}
+        />
+      )}
+      {!linked && <>
+        <div>
+          <Label htmlFor="node-type">Тип ноды</Label>
+          <Select value={nodeType} onValueChange={(v) => setNodeType(v as NodeType)}>
+            <SelectTrigger id="node-type">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {availableTypes.map((type) => (
+                <SelectItem key={type} value={type}>
+                  {NODE_TYPE_LABEL[type]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-      )}
 
-      {PROMPT_TYPES.includes(nodeType) && (
-        <PromptTemplateField
-          value={promptTemplate}
-          onChange={setPromptTemplate}
-          allowNodeVariables={isPipeline}
-          previewRequest={previewRequest}
-          argumentHint={
-            !isPipeline && nodeType === NodeType.PLAIN_PROMPT && slashName.trim()
-              ? argumentHint.trim()
-              : undefined
-          }
-        />
-      )}
+        {nodeType === NodeType.PLAN_PROMPT && (
+          <div className="rounded-md border border-info-tint bg-info-tint px-3 py-2 text-note text-info-text">
+            Нода доступна только внутри пайплайна и не может быть сохранена как элемент библиотеки.
+          </div>
+        )}
 
-      {nodeType === NodeType.SLASH_COMMAND && (
-        <SlashCommandField value={commandInvocation} onChange={setCommandInvocation} />
-      )}
+        {PROMPT_TYPES.includes(nodeType) && (
+          <PromptTemplateField
+            value={promptTemplate}
+            onChange={setPromptTemplate}
+            allowNodeVariables={isPipeline}
+            withGuideVariable={nodeType === NodeType.PLAIN_PROMPT}
+            previewRequest={previewRequest}
+            argumentHint={
+              !isPipeline && nodeType === NodeType.PLAIN_PROMPT && slashName.trim()
+                ? argumentHint.trim()
+                : undefined
+            }
+          />
+        )}
 
-      {nodeType === NodeType.SCRIPT && (
-        <ScriptFields
-          language={scriptLanguage}
-          content={scriptContent}
-          onLanguageChange={setScriptLanguage}
-          onContentChange={setScriptContent}
-        />
-      )}
+        {nodeType === NodeType.SLASH_COMMAND && (
+          <SlashCommandField value={commandInvocation} onChange={setCommandInvocation} />
+        )}
 
-      <div>
-        <Label htmlFor="node-guide">Гайд (URL Confluence)</Label>
-        <Input id="node-guide" value={guideUrl} onChange={(e) => setGuideUrl(e.target.value)} />
-      </div>
+        {nodeType === NodeType.SCRIPT && (
+          <ScriptFields
+            language={scriptLanguage}
+            content={scriptContent}
+            onLanguageChange={setScriptLanguage}
+            onContentChange={setScriptContent}
+          />
+        )}
 
-      {EFFORT_TYPES.includes(nodeType) && (
+        {withGuide && (
+          <div>
+            <Label htmlFor="node-guide">Гайд (URL Confluence)</Label>
+            <Input id="node-guide" value={guideUrl} onChange={(e) => setGuideUrl(e.target.value)} />
+            <p className="mt-1 text-small text-text-3">В тексте промта — {"{{node.guide_url}}"}.</p>
+          </div>
+        )}
+      </>}
+
+      {EFFORT_TYPES.includes(effectiveType) && (
         <NodeEffortField id="node-effort" value={effort} onChange={setEffort} />
       )}
 
@@ -229,7 +282,12 @@ export function NodeForm({
         <Button
           type="button"
           onClick={handleSave}
-          disabled={!name || (mode === "library" && !node && !description.trim()) || isPending}
+          disabled={
+            !name ||
+            (mode === "library" && !node && !description.trim()) ||
+            (linked && !librarySource.libraryNodeId) ||
+            isPending
+          }
         >
           Сохранить
         </Button>

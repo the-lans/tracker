@@ -133,3 +133,16 @@ export function formatFileSize(bytes: number): string {
   const digits = fileSizeDigits(value, unit);
   return `${value.toLocaleString("ru-RU", { maximumFractionDigits: digits })} ${FILE_SIZE_UNITS[unit]}`;
 }
+
+const SECONDS_PER_HOUR = 3600;
+
+/** Длительность словами: 45 → «45 с», 200 → «3 мин 20 с», 3900 → «1 ч 5 мин». */
+export function formatDuration(totalSeconds: number): string {
+  const seconds = Math.round(totalSeconds);
+  if (seconds < SECONDS_PER_MINUTE) return `${seconds} с`;
+  const hours = Math.floor(seconds / SECONDS_PER_HOUR);
+  const minutes = Math.floor((seconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
+  if (hours > 0) return minutes > 0 ? `${hours} ч ${minutes} мин` : `${hours} ч`;
+  const rest = seconds % SECONDS_PER_MINUTE;
+  return rest > 0 ? `${minutes} мин ${rest} с` : `${minutes} мин`;
+}
