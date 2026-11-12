@@ -40,7 +40,8 @@ class TaskRepositoryAttachRequest(BaseModel):
 
     repository_id: uuid.UUID
     role: RepositoryRole
-    base_branch: str = "main"
+    # Не задана — ветка по умолчанию репозитория (`repositories.default_branch`).
+    base_branch: str | None = None
 
 
 class TaskDuplicateRequest(BaseModel):

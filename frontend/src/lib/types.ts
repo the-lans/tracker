@@ -655,14 +655,27 @@ export interface Repository {
   id: string;
   name: string;
   git_url: string;
+  /** Базовая ветка, которую форма задачи подставляет при выборе репозитория. */
+  default_branch: string;
   default_template_id: string | null;
 }
 
 export interface RepositoryCreateRequest {
   name: string;
   git_url: string;
+  default_branch?: string;
   default_template_id?: string | null;
   git_credential_id?: string | null;
+}
+
+/** Раздел 3.1: адрес и доступ из формы репозитория — её можно ещё не сохранять. */
+export interface RepositoryDefaultBranchRequest {
+  git_url: string;
+  git_credential_id: string | null;
+}
+
+export interface RepositoryDefaultBranchResponse {
+  default_branch: string;
 }
 
 export type RepositoryUpdateRequest = Partial<RepositoryCreateRequest>;

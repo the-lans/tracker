@@ -76,6 +76,8 @@ from api.schemas.pipelines import (
 )
 from api.schemas.repositories import (
     RepositoryCreateRequest,
+    RepositoryDefaultBranchRequest,
+    RepositoryDefaultBranchResponse,
     RepositoryResponse,
     RepositoryUpdateRequest,
     TemplateCreateRequest,
@@ -184,6 +186,8 @@ __all__ = [
     "PushSubscriptionKeys",
     "PushSubscriptionRequest",
     "RepositoryCreateRequest",
+    "RepositoryDefaultBranchRequest",
+    "RepositoryDefaultBranchResponse",
     "RepositoryResponse",
     "RepositoryUpdateRequest",
     "ServerOverviewResponse",

@@ -11,6 +11,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from db.base import Base
 from db.models.mixins import JsonValue, UUIDPrimaryKeyMixin
 
+# Раздел 3.1: базовая ветка задач репозитория, пока её не задали иначе.
+DEFAULT_REPOSITORY_BRANCH = "master"
+
 
 class GitCredential(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "git_credentials"
@@ -32,6 +35,12 @@ class Repository(UUIDPrimaryKeyMixin, Base):
 
     name: Mapped[str] = mapped_column(sa.String)
     git_url: Mapped[str] = mapped_column(sa.String)
+    # Базовая ветка, которую форма задачи подставляет при выборе репозитория.
+    default_branch: Mapped[str] = mapped_column(
+        sa.String,
+        default=DEFAULT_REPOSITORY_BRANCH,
+        server_default=DEFAULT_REPOSITORY_BRANCH,
+    )
     default_template_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("templates.id"))
     git_credential_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("git_credentials.id"))
     git_credential: Mapped[GitCredential | None] = relationship(lazy="selectin")

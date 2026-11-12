@@ -119,6 +119,8 @@ async def _make_repository(db_session: AsyncSession, origin: Path) -> Repository
     return await make_repository(
         db_session,
         git_url=str(origin),
+        # Задача берёт базовую ветку из репозитория: в тестовом origin — `main`.
+        default_branch="main",
     )
 
 

@@ -3,7 +3,7 @@ import { describe, expect, vi } from "vitest";
 import { CreateTaskDialog } from "@/components/tasks/CreateTaskDialog";
 import { LlmAccountStatus, UserRole, type JiraIssueDraft } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
-import { makeCurrentUser, makeLlmAccount, makeTask, makeUser } from "@/test/factories";
+import { makeCurrentUser, makeLlmAccount, makeRepository, makeTask, makeUser } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
@@ -84,21 +84,33 @@ describe("CreateTaskDialog", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
+    test("базовая ветка по умолчанию — из настроек репозитория", async ({ api }) => {
+      api.respond("GET /repositories", [makeRepository({ default_branch: "develop" })]);
+      const { user } = renderDialog(api);
+
+      await fillRequired(user);
+      await user.click(await screen.findByRole("checkbox", { name: "web-app" }));
+
+      expect(screen.getByLabelText("Базовая ветка")).toHaveValue("develop");
+      await user.click(screen.getByRole("button", { name: "Создать" }));
+      expect(createRequest(api)?.body).toMatchObject({
+        repositories: [{ repository_id: "r1", role: "read_write", base_branch: "develop" }],
+      });
+    });
+
     test("выбранный репозиторий уходит с ролью и базовой веткой", async ({ api }) => {
-      api.respond("GET /repositories", [
-        { id: "r1", name: "web-app", git_url: "git@gitlab.example.com:shop/web-app.git", default_template_id: null },
-      ]);
+      api.respond("GET /repositories", [makeRepository()]);
       const { user } = renderDialog(api);
 
       await fillRequired(user);
       await user.click(await screen.findByRole("checkbox", { name: "web-app" }));
       const branch = screen.getByLabelText("Базовая ветка");
       await user.clear(branch);
-      await user.type(branch, "develop");
+      await user.type(branch, "release/1.2");
       await user.click(screen.getByRole("button", { name: "Создать" }));
 
       expect(createRequest(api)?.body).toMatchObject({
-        repositories: [{ repository_id: "r1", role: "read_write", base_branch: "develop" }],
+        repositories: [{ repository_id: "r1", role: "read_write", base_branch: "release/1.2" }],
       });
     });
 

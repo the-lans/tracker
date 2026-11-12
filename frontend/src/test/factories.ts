@@ -21,6 +21,7 @@ import {
   type NodeItem,
   type NodeLog,
   type PendingOption,
+  type Repository,
   type Task,
   type TaskLibraryPromptItem,
   type TaskNodeItem,
@@ -238,6 +239,18 @@ export function makeTemplate(overrides: Partial<Template> = {}): Template {
     uploaded_file_paths: [],
     mcp_server_ids: [],
     created_by: "u1",
+    ...overrides,
+  };
+}
+
+export function makeRepository(overrides: Partial<Repository> = {}): Repository {
+  return {
+    id: "r1",
+    name: "web-app",
+    git_url: "git@gitlab.example.com:shop/web-app.git",
+    default_branch: "master",
+    default_template_id: null,
+    git_credential_id: "cred1",
     ...overrides,
   };
 }

@@ -11,7 +11,7 @@ from db.models.enums import LlmAccountStatus, NodeLogStatus, NodeLogTriggerType,
 from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.pipelines import Pipeline
-from db.models.repositories import GitCredential, Repository
+from db.models.repositories import DEFAULT_REPOSITORY_BRANCH, GitCredential, Repository
 from db.models.tasks import Task
 from db.models.users import User
 from services.crypto import encrypt
@@ -140,12 +140,14 @@ def build_repository(
     *,
     name: str = "backend",
     git_url: str = "git@example.com:x.git",
+    default_branch: str = DEFAULT_REPOSITORY_BRANCH,
 ) -> Repository:
     """Репозиторий без записи в БД (для git-тестов без сессии)."""
     return Repository(
         id=uuid.uuid4(),
         name=name,
         git_url=git_url,
+        default_branch=default_branch,
     )
 
 

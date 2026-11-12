@@ -194,6 +194,8 @@ async def _repository(db_session: AsyncSession, deploy_key: str) -> None:
         Repository(
             name=validate_repository_name(REPOSITORY_NAME),
             git_url=validate_git_url(GIT_URL),
+            # stand.sh создаёт репозиторий стенда с веткой main.
+            default_branch="main",
             git_credential=credential,
         ),
     )

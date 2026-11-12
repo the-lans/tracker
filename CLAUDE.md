@@ -319,7 +319,7 @@ alembic/
                  и стоимость хода аккаунта, сжатие при смене аккаунта,
                  бэкап в S3: настройки в system_settings и backup_runs,
                  таблица events, nodes.library_node_id и library_arguments,
-                 индекс app_logs.created_at);
+                 индекс app_logs.created_at, repositories.default_branch);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/

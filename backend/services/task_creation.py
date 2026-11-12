@@ -30,7 +30,8 @@ if TYPE_CHECKING:
 class RepositoryAttachment:
     repository_id: uuid.UUID
     role: RepositoryRole
-    base_branch: str
+    # `None` — ветка по умолчанию репозитория (раздел 3.1).
+    base_branch: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +50,7 @@ class TaskDraft:
 
 async def _ensure_exists(
     db_session: AsyncSession,
-    model: type[Repository] | type[Task],
+    model: type[Task],
     entity_id: uuid.UUID,
     label: str,
 ) -> None:
@@ -57,20 +58,31 @@ async def _ensure_exists(
         raise NotFoundError(f"{label} {entity_id} не найден")
 
 
+async def _get_repository(db_session: AsyncSession, repository_id: uuid.UUID) -> Repository:
+    repository = await db_session.get(Repository, repository_id)
+    if repository is None:
+        raise NotFoundError(f"Репозиторий {repository_id} не найден")
+    return repository
+
+
 async def _validate_draft(
     db_session: AsyncSession,
     draft: TaskDraft,
     *,
     created_by: uuid.UUID,
-) -> None:
+) -> dict[uuid.UUID, Repository]:
+    """Проверяет черновик задачи; возвращает её репозитории по id."""
     validate_task_code(draft.code)
     for attached in draft.repositories:
-        validate_branch_name(attached.base_branch)
+        if attached.base_branch is not None:
+            validate_branch_name(attached.base_branch)
     repository_ids = [attached.repository_id for attached in draft.repositories]
     if len(set(repository_ids)) != len(repository_ids):
         raise ValidationError("Репозиторий указан у задачи больше одного раза")
-    for repository_id in repository_ids:
-        await _ensure_exists(db_session, Repository, repository_id, "Репозиторий")
+    repositories = {
+        repository_id: await _get_repository(db_session, repository_id)
+        for repository_id in repository_ids
+    }
     if draft.llm_account_id is not None:
         # Раздел 19.2: только аккаунт автора — и при дублировании задачи.
         await ensure_llm_account_of_owner(
@@ -85,6 +97,7 @@ async def _validate_draft(
         await _ensure_exists(db_session, Task, draft.parent_task_id, "Родительская задача")
     if await _code_is_taken(db_session, draft.code):
         raise _code_taken(draft.code)
+    return repositories
 
 
 async def _code_is_taken(db_session: AsyncSession, code: str) -> bool:
@@ -121,7 +134,7 @@ async def add_task_with_repositories(
     Добавляет задачу и её репозитории в сессию БД без коммита — вызывающий
     код может дописать связанные данные в ту же транзакцию.
     """
-    await _validate_draft(db_session, draft, created_by=created_by)
+    repositories = await _validate_draft(db_session, draft, created_by=created_by)
     task = Task(
         id=uuid.uuid4(),
         code=draft.code,
@@ -136,13 +149,14 @@ async def add_task_with_repositories(
     )
     await _flush_task(db_session, task)
     for attached in draft.repositories:
+        repository = repositories[attached.repository_id]
         db_session.add(
             TaskRepository(
                 task_id=task.id,
                 repository_id=attached.repository_id,
                 role=attached.role,
                 branch_name=build_branch_name(draft.code),
-                base_branch=attached.base_branch,
+                base_branch=attached.base_branch or repository.default_branch,
             ),
         )
     await db_session.flush()

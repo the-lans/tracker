@@ -21,10 +21,12 @@ import pytest
 from db.models.enums import RepositoryRole
 from db.models.repositories import Repository
 from db.models.tasks import TaskRepository
-from services.errors import ExternalServiceError
+from services.errors import ExternalServiceError, ValidationError
 from services.git_ops import (
     RebaseConflictError,
+    _parse_head_branch,
     clone_task_repository,
+    fetch_default_branch,
     is_rebased_onto_base,
     push_task_repository,
     rebase_onto_base_branch,
@@ -365,3 +367,35 @@ class TestUntrustedWorkingCopy:
         assert "core.repositoryformatversion=0" in config
         assert "filter.evil" not in config
         assert "gpg.program" not in config
+
+
+class TestFetchDefaultBranch:
+    @pytest.mark.parametrize("branch", ["master", "main", "release/2026"])
+    async def test_head_branch_of_server(self, tmp_path: Path, branch: str) -> None:
+        origin = init_bare_origin(tmp_path, branch=branch)
+
+        assert await fetch_default_branch(_make_repository(git_url=str(origin))) == branch
+
+    async def test_empty_repository(self, tmp_path: Path) -> None:
+        origin = tmp_path / "empty.git"
+        run("git", "init", "--bare", str(origin), cwd=tmp_path)
+
+        with pytest.raises(ValidationError, match="ветку по умолчанию"):
+            await fetch_default_branch(_make_repository(git_url=str(origin)))
+
+    async def test_unreachable_repository(self, tmp_path: Path) -> None:
+        with pytest.raises(ValidationError, match="отказал в доступе"):
+            await fetch_default_branch(_make_repository(git_url=str(tmp_path / "missing.git")))
+
+    @pytest.mark.parametrize(
+        ("listing", "expected"),
+        [
+            ("ref: refs/heads/develop\tHEAD\nabc123\tHEAD\n", "develop"),
+            ("abc123\tHEAD\n", None),
+            ("ref: refs/heads/main\trefs/remotes/origin/HEAD\n", None),
+            ("ref: refs/tags/v1\tHEAD\n", None),
+            ("", None),
+        ],
+    )
+    def test_parse_listing(self, listing: str, expected: str | None) -> None:
+        assert _parse_head_branch(listing) == expected

@@ -1,7 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { api } from "@/lib/apiClient";
-import type { Repository, RepositoryCreateRequest, RepositoryUpdateRequest } from "@/lib/types";
+import type {
+  Repository,
+  RepositoryCreateRequest,
+  RepositoryDefaultBranchRequest,
+  RepositoryDefaultBranchResponse,
+  RepositoryUpdateRequest,
+} from "@/lib/types";
 
 const KEY = ["repositories"] as const;
 
@@ -28,4 +34,12 @@ export function useDeleteRepository() {
     (repositoryId: string) => api.delete(`/repositories/${repositoryId}`),
     [KEY],
   );
+}
+
+/** Раздел 3.1: ветка по умолчанию с git-сервера — по адресу и доступу из формы. */
+export function useRemoteDefaultBranch() {
+  return useMutation({
+    mutationFn: (body: RepositoryDefaultBranchRequest) =>
+      api.post<RepositoryDefaultBranchResponse>("/repositories/default-branch", body),
+  });
 }

@@ -12,18 +12,29 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user
-from api.schemas import RepositoryCreateRequest, RepositoryResponse, RepositoryUpdateRequest
+from api.schemas import (
+    RepositoryCreateRequest,
+    RepositoryDefaultBranchRequest,
+    RepositoryDefaultBranchResponse,
+    RepositoryResponse,
+    RepositoryUpdateRequest,
+)
 from db.models.repositories import Repository
 from db.models.users import User
 from db.session import get_session
 from services.access import get_or_404, get_template_for_user
 from services.git_credentials import resolve_credential
+from services.git_ops import fetch_default_branch
 from services.integrity import (
     commit_or_conflict,
     ensure_repository_deletable,
     ensure_repository_renamable,
 )
-from services.repository_validation import validate_git_url, validate_repository_name
+from services.repository_validation import (
+    validate_branch_name,
+    validate_git_url,
+    validate_repository_name,
+)
 
 router = APIRouter(prefix="/repositories", tags=["repositories"])
 
@@ -50,12 +61,29 @@ async def create_repository(
         id=uuid.uuid4(),
         name=validate_repository_name(body.name),
         git_url=validate_git_url(body.git_url),
+        default_branch=validate_branch_name(body.default_branch),
         default_template_id=body.default_template_id,
         git_credential_id=body.git_credential_id,
     )
     db_session.add(repository)
     await db_session.commit()
     return repository
+
+
+@router.post("/default-branch", response_model=RepositoryDefaultBranchResponse)
+async def get_remote_default_branch(
+    body: RepositoryDefaultBranchRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> RepositoryDefaultBranchResponse:
+    """
+    Раздел 3.1: ветка по умолчанию с git-сервера — для кнопки в форме
+    репозитория, поэтому по адресу и доступу из формы, а не из БД.
+    """
+    git_url = validate_git_url(body.git_url)
+    credential = await resolve_credential(db_session, body.git_credential_id, git_url)
+    branch = await fetch_default_branch(Repository(git_url=git_url, git_credential=credential))
+    return RepositoryDefaultBranchResponse(default_branch=branch)
 
 
 @router.get("", response_model=list[RepositoryResponse])
@@ -89,6 +117,8 @@ async def update_repository(
         repository.name = validate_repository_name(body.name)
     if body.git_url is not None:
         repository.git_url = validate_git_url(body.git_url)
+    if body.default_branch is not None:
+        repository.default_branch = validate_branch_name(body.default_branch)
     if (
         "default_template_id" in body.model_fields_set
         and body.default_template_id != repository.default_template_id
