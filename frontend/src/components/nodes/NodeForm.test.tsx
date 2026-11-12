@@ -48,12 +48,13 @@ describe("NodeForm", () => {
       { type: NodeType.PLAN_PROMPT, label: "Режим планирования", field: "Текст промта" },
       { type: NodeType.SLASH_COMMAND, label: "Слэш-команда", field: "Слэш-команда" },
       { type: NodeType.SCRIPT, label: "Скрипт", field: "Содержимое скрипта" },
+      { type: "library_prompt", label: "Промт из библиотеки", field: "Промт библиотеки" },
     ])("$type → поле «$field», чужих полей нет", async ({ label, field }, { api }) => {
       const { user } = renderForm(api);
 
       await chooseType(user, label);
 
-      const all = ["Текст промта", "Слэш-команда", "Содержимое скрипта"];
+      const all = ["Текст промта", "Слэш-команда", "Содержимое скрипта", "Промт библиотеки"];
       for (const name of all) {
         expect(screen.queryByLabelText(name) !== null).toBe(name === field);
       }
@@ -395,8 +396,7 @@ describe("промт из библиотеки", () => {
   ];
 
   async function chooseLibrary(user: ReturnType<typeof renderForm>["user"], item: string) {
-    await user.click(screen.getByRole("combobox", { name: "Содержимое ноды" }));
-    await user.click(await screen.findByRole("option", { name: "Промт из библиотеки" }));
+    await chooseType(user, "Промт из библиотеки");
     await user.click(screen.getByRole("combobox", { name: "Промт библиотеки" }));
     await user.click(await screen.findByRole("option", { name: item }));
   }
@@ -405,8 +405,7 @@ describe("промт из библиотеки", () => {
     api.respond("GET /nodes", library);
     const { user } = renderForm(api);
 
-    await user.click(screen.getByRole("combobox", { name: "Содержимое ноды" }));
-    await user.click(await screen.findByRole("option", { name: "Промт из библиотеки" }));
+    await chooseType(user, "Промт из библиотеки");
     await user.click(screen.getByRole("combobox", { name: "Промт библиотеки" }));
 
     expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
@@ -423,7 +422,7 @@ describe("промт из библиотеки", () => {
     await chooseLibrary(user, "Ревью (/review)");
     await user.type(screen.getByLabelText("Аргументы"), "billing");
 
-    expect(screen.queryByLabelText("Тип ноды")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Тип ноды" })).toHaveTextContent("Промт из библиотеки");
     expect(screen.queryByLabelText("Текст промта")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Гайд (URL Confluence)")).not.toBeInTheDocument();
     expect(screen.getByText("Проверь $1")).toBeInTheDocument();
@@ -462,8 +461,7 @@ describe("промт из библиотеки", () => {
     const { user } = renderForm(api);
 
     await user.type(screen.getByLabelText("Название"), "Ревью");
-    await user.click(screen.getByRole("combobox", { name: "Содержимое ноды" }));
-    await user.click(await screen.findByRole("option", { name: "Промт из библиотеки" }));
+    await chooseType(user, "Промт из библиотеки");
 
     expect(save()).toHaveProperty("disabled", true);
   });
@@ -475,17 +473,17 @@ describe("промт из библиотеки", () => {
     });
 
     expect(await screen.findByText("в архиве")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Тип ноды" })).toHaveTextContent("Промт из библиотеки");
     expect(screen.getByLabelText("Аргументы")).toHaveValue("x");
   });
 
-  test("«Свой текст» снимает ссылку", async ({ api }) => {
+  test("другой тип ноды снимает ссылку", async ({ api }) => {
     api.respond("GET /nodes", library);
     const { user } = renderForm(api, {
       node: makeNode({ id: "n5", library_node_id: "lib-review", prompt_template: null }),
     });
 
-    await user.click(screen.getByRole("combobox", { name: "Содержимое ноды" }));
-    await user.click(await screen.findByRole("option", { name: "Свой текст" }));
+    await chooseType(user, "Обычный промт");
     await user.type(screen.getByLabelText("Текст промта"), "Свой");
     await user.click(save());
 
@@ -496,9 +494,11 @@ describe("промт из библиотеки", () => {
     });
   });
 
-  test("в библиотеке выбора источника нет", ({ api }) => {
-    renderForm(api, { mode: "library" });
+  test("в пайплайне — последний тип в списке", async ({ api }) => {
+    const { user } = renderForm(api);
 
-    expect(screen.queryByLabelText("Содержимое ноды")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Тип ноды" }));
+
+    expect((await screen.findAllByRole("option")).at(-1)).toHaveTextContent("Промт из библиотеки");
   });
 });

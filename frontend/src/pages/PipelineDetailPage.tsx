@@ -8,7 +8,7 @@ import { LibraryLinkLabel } from "@/components/nodes/LibraryLinkLabel";
 import { NodeForm } from "@/components/nodes/NodeForm";
 import { NodeReorderButton } from "@/components/nodes/NodeReorderButton";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
-import { NODE_TYPE_LABEL } from "@/lib/labels";
+import { LIBRARY_PROMPT_LABEL, NODE_TYPE_LABEL } from "@/lib/labels";
 import { usePipeline, usePipelineNodes } from "@/hooks/usePipelines";
 import { useDeleteNode, useNodes } from "@/hooks/useNodes";
 import { errorMessage } from "@/lib/errors";
@@ -58,7 +58,7 @@ export function PipelineDetailPage() {
               <button className="min-h-11 min-w-0 flex-1 basis-40 text-left" onClick={() => setDialogNode(node)}>
                 <div className="truncate font-bold" title={node.name}>{node.name}</div>
                 <div className="text-caption font-bold uppercase text-text-3">
-                  {NODE_TYPE_LABEL[node.node_type]}
+                  {node.library_node_id ? LIBRARY_PROMPT_LABEL : NODE_TYPE_LABEL[node.node_type]}
                 </div>
                 {node.library_node_id && (
                   <LibraryLinkLabel

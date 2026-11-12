@@ -8,15 +8,14 @@ export interface NodeExecutionValues {
   isSkipped: boolean;
 }
 
-/** Раздел 7.6: содержимое ноды пайплайна — своё или из промта библиотеки. */
-export const NodeSource = {
-  OWN: "own",
-  LIBRARY: "library",
-} as const;
-export type NodeSource = (typeof NodeSource)[keyof typeof NodeSource];
+/**
+ * Раздел 7.6: «Промт из библиотеки» — тип в форме ноды пайплайна. Нода
+ * хранит ссылку на промт и получает его тип, своего `node_type` для ссылки нет.
+ */
+export const LIBRARY_PROMPT_TYPE = "library_prompt";
+export type NodeFormType = NodeType | typeof LIBRARY_PROMPT_TYPE;
 
-export interface LibrarySourceValue {
-  source: NodeSource;
+export interface LibraryLinkValue {
   libraryNodeId: string | null;
   /** Тип выбранного промта — его получит нода пайплайна. */
   libraryNodeType: NodeType | null;

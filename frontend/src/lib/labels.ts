@@ -126,6 +126,9 @@ export const NODE_TYPE_LABEL: Record<NodeType, string> = {
   [NodeType.PLAN_PROMPT]: "Режим планирования",
 };
 
+/** Раздел 7.6: тип ноды пайплайна, которая выполняет промт библиотеки. */
+export const LIBRARY_PROMPT_LABEL = "Промт из библиотеки";
+
 /** Раздел 13.4: источник записи истории — для фильтров и таблицы «Логи». */
 export const NODE_LOG_TRIGGER_LABEL: Record<NodeLogTriggerType, string> = {
   [NodeLogTriggerType.PIPELINE]: "Пайплайн",
