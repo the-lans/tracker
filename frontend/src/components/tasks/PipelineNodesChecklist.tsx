@@ -1,6 +1,6 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
-import { NODE_TYPE_LABEL } from "@/lib/labels";
+import { nodeTypeLabel } from "@/lib/labels";
 import type { NodeItem } from "@/lib/types";
 
 /** Раздел 13.1, 15.2: ноды выбираемого пайплайна в порядке выполнения, у
@@ -32,7 +32,7 @@ export function PipelineNodesChecklist({
           <NodeTypeIcon type={node.node_type} className="size-[15px] shrink-0 text-text-2" />
           <div className="flex-1 truncate text-note font-bold" title={node.name}>{node.name}</div>
           <div className="text-caption font-bold uppercase tracking-wide text-text-3">
-            {NODE_TYPE_LABEL[node.node_type]}
+            {nodeTypeLabel(node)}
           </div>
         </label>
       ))}

@@ -14,6 +14,7 @@ import {
   RemoteControlStatus,
   RepositoryRole,
   UserRole,
+  type NodeItem,
 } from "@/lib/types";
 import { EventCategory } from "@/lib/events.types";
 import { ContainerKind, ServerDependency, StatsPeriod, VolumeName } from "@/lib/monitoring.types";
@@ -128,6 +129,11 @@ export const NODE_TYPE_LABEL: Record<NodeType, string> = {
 
 /** Раздел 7.6: тип ноды пайплайна, которая выполняет промт библиотеки. */
 export const LIBRARY_PROMPT_LABEL = "Промт из библиотеки";
+
+/** Тип ноды в списках: нода со ссылкой на библиотеку — «Промт из библиотеки» (раздел 7.6). */
+export function nodeTypeLabel(node: Pick<NodeItem, "node_type" | "library_node_id">): string {
+  return node.library_node_id ? LIBRARY_PROMPT_LABEL : NODE_TYPE_LABEL[node.node_type];
+}
 
 /** Раздел 13.4: источник записи истории — для фильтров и таблицы «Логи». */
 export const NODE_LOG_TRIGGER_LABEL: Record<NodeLogTriggerType, string> = {
