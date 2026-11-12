@@ -124,7 +124,7 @@ export function TaskCustomNodeForm({
         </div>
       )}
       <div>
-        <Label htmlFor="custom-node-name">Название</Label>
+        <Label htmlFor="custom-node-name" required>Название</Label>
         <Input
           id="custom-node-name"
           value={name}

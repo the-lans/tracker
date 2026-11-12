@@ -87,7 +87,7 @@ export function TemplateForm({
     <>
       <div className="flex flex-col gap-3">
         <div>
-          <Label htmlFor="tpl-name">Название</Label>
+          <Label htmlFor="tpl-name" required>Название</Label>
           <Input id="tpl-name" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
 

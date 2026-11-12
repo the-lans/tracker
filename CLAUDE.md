@@ -241,7 +241,8 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               src/lib/push.ts, раздел 18.1); Dockerfile + nginx.conf —
               продовый образ (сборка на Node, раздача nginx с SPA-фолбэком
               на index.html для клиентских маршрутов). Общие элементы — по
-              типам: components/ui (примитивы), components/common/{actions,
+              типам: components/ui (примитивы; `Label required` — красная «*»
+              обязательного поля), components/common/{actions,
               avatar,dialogs,feedback,filters,inputs,navigation,typography},
               components/layout; повторяющиеся механики — общими
               компонентами: navigation/PageTabs (вкладки страницы в `?tab=`,

@@ -74,11 +74,11 @@ export function RepositoryForm({
     <>
       <div className="flex flex-col gap-3">
         <div>
-          <Label htmlFor="repo-name">Название</Label>
+          <Label htmlFor="repo-name" required>Название</Label>
           <Input id="repo-name" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div>
-          <Label htmlFor="repo-url">Git URL</Label>
+          <Label htmlFor="repo-url" required>Git URL</Label>
           <Input
             id="repo-url"
             placeholder="git@gitlab.example.com:group/project.git"

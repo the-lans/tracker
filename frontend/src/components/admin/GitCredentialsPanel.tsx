@@ -37,7 +37,7 @@ function CredentialForm({ credential, onSaved }: { credential?: GitCredential; o
   const save = useSaveGitCredential(credential?.id);
   return <>
     <div className="flex flex-col gap-3">
-      <div><Label htmlFor="git-access-name">Название</Label>
+      <div><Label htmlFor="git-access-name" required>Название</Label>
         <Input id="git-access-name" value={name} onChange={(e) => setName(e.target.value)} /></div>
       <div><Label htmlFor="git-access-kind">Тип доступа</Label>
         <Select value={kind} onValueChange={(v) => setKind(v as GitCredential["kind"])}>
@@ -45,12 +45,12 @@ function CredentialForm({ credential, onSaved }: { credential?: GitCredential; o
           <SelectContent><SelectItem value="https_token">HTTPS-токен</SelectItem>
             <SelectItem value="ssh_key">SSH-ключ</SelectItem></SelectContent>
         </Select></div>
-      <div><Label htmlFor="git-access-host">Git-хост</Label>
+      <div><Label htmlFor="git-access-host" required>Git-хост</Label>
         <Input id="git-access-host" placeholder="gitlab.example.com" value={host} onChange={(e) => setHost(e.target.value)} /></div>
-      {kind === "https_token" && <div><Label htmlFor="git-access-user">Логин HTTPS</Label>
+      {kind === "https_token" && <div><Label htmlFor="git-access-user" required>Логин HTTPS</Label>
         <Input id="git-access-user" value={username} onChange={(e) => setUsername(e.target.value)} />
         <p className="text-small text-text-3">Для персонального токена GitLab: oauth2.</p></div>}
-      <div><Label htmlFor="git-access-secret">{kind === "ssh_key" ? "Приватный SSH-ключ без пароля" : "Токен"}</Label>
+      <div><Label htmlFor="git-access-secret" required={!credential}>{kind === "ssh_key" ? "Приватный SSH-ключ без пароля" : "Токен"}</Label>
         <div className="relative">
         {kind === "ssh_key" && showSecret ?
           <textarea id="git-access-secret" className="w-full rounded-md border border-border bg-surface p-2 pr-12 font-mono text-small"

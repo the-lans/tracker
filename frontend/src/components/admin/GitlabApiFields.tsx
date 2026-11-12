@@ -41,7 +41,7 @@ export function GitlabApiFields({
           )}
           {ownToken && (
             <div>
-              <Label htmlFor="git-access-api-token">Токен GitLab API</Label>
+              <Label htmlFor="git-access-api-token" required={!tokenSet}>Токен GitLab API</Label>
               <Input
                 id="git-access-api-token"
                 type="password"

@@ -36,7 +36,7 @@ export function ScriptFields({
         </Select>
       </div>
       <div>
-        <Label htmlFor="node-script">Содержимое скрипта</Label>
+        <Label htmlFor="node-script" required>Содержимое скрипта</Label>
         <Textarea
           id="node-script"
           rows={6}

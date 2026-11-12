@@ -46,7 +46,7 @@ export function PromptTemplateField({
 
   return (
     <div>
-      <Label htmlFor="node-prompt">Текст промта</Label>
+      <Label htmlFor="node-prompt" required>Текст промта</Label>
       <Textarea
         id="node-prompt"
         rows={5}

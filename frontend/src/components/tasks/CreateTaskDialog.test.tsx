@@ -41,6 +41,19 @@ async function fillRequired(user: ReturnType<typeof renderDialog>["user"], code 
 }
 
 describe("CreateTaskDialog", () => {
+  test.for([
+    { field: "Код задачи", required: true },
+    { field: "Название", required: true },
+    { field: "Описание", required: true },
+    { field: "Гайд (URL Confluence)", required: false },
+    { field: "Стартовый LLM-аккаунт", required: false },
+  ])("«$field» — обязательное: $required", ({ field, required }, { api }) => {
+    renderDialog(api);
+
+    const label = screen.getByText(field, { selector: "label" });
+    expect(label.hasAttribute("data-required")).toBe(required);
+  });
+
   describe("создание", () => {
     test("необязательные поля уходят как null, задача без LLM-аккаунта допустима", async ({ api }) => {
       const { user, onOpenChange } = renderDialog(api);

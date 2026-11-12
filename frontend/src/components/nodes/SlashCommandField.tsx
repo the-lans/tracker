@@ -11,7 +11,7 @@ export function SlashCommandField({
 }) {
   return (
     <div>
-      <Label htmlFor="node-command">Слэш-команда</Label>
+      <Label htmlFor="node-command" required>Слэш-команда</Label>
       <Input
         id="node-command"
         placeholder="/code-review ultra"

@@ -120,7 +120,7 @@ export function LlmAccountLoginDialog({
             </div>
           )}
           <div>
-            <Label htmlFor="llm-redirect">Адрес после входа</Label>
+            <Label htmlFor="llm-redirect" required>Адрес после входа</Label>
             <Input
               id="llm-redirect"
               placeholder="http://localhost:…/callback?code=…"

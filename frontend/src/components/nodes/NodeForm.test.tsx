@@ -288,8 +288,8 @@ describe("Команды библиотечных промтов", () => {
   test("сохраняет имя команды и подсказку", async ({ api }) => {
     const { user } = renderForm(api, { mode: "library" });
     await user.type(screen.getByLabelText("Название"), "Ревью");
-    await user.type(screen.getByLabelText("Описание (обязательно)"), "Проверить изменения");
-    await user.type(screen.getByLabelText("Slash-команда (необязательно)"), "/review");
+    await user.type(screen.getByLabelText("Описание"), "Проверить изменения");
+    await user.type(screen.getByLabelText("Slash-команда"), "/review");
     await user.type(screen.getByLabelText("Подсказка аргументов"), "[[сервис]");
     await user.click(screen.getByRole("button", {name: "Сохранить"}));
     expect(api.mutations()[0].body).toMatchObject({slash_name: "/review", argument_hint: "[сервис]"});
@@ -299,7 +299,7 @@ describe("Команды библиотечных промтов", () => {
     const { user } = renderForm(api, { mode: "library", node: makeNode({
       pipeline_id: null, is_library_item: true, slash_name: "review", argument_hint: "[сервис]",
     }) });
-    await user.clear(screen.getByLabelText("Slash-команда (необязательно)"));
+    await user.clear(screen.getByLabelText("Slash-команда"));
     await user.click(screen.getByRole("button", {name: "Сохранить"}));
     expect(api.mutations()[0].body).toMatchObject({slash_name: null, argument_hint: null});
   });

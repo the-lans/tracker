@@ -57,12 +57,12 @@ export function LlmAccountForm({
     <>
       <div className="flex flex-col gap-3">
         <div>
-          <Label htmlFor="llm-label">Пометка</Label>
+          <Label htmlFor="llm-label" required>Пометка</Label>
           <Input id="llm-label" value={label} onChange={(e) => setLabel(e.target.value)} />
         </div>
         {!account && (
           <div>
-            <Label htmlFor="llm-provider">Провайдер</Label>
+            <Label htmlFor="llm-provider" required>Провайдер</Label>
             <Select value={provider} onValueChange={setProvider}>
               <SelectTrigger id="llm-provider">
                 <SelectValue placeholder="Выберите провайдера" />

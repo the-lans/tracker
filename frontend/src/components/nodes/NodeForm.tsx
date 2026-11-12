@@ -158,11 +158,11 @@ export function NodeForm({
   return (
     <div className="flex flex-col gap-3">
       <div>
-        <Label htmlFor="node-name">Название</Label>
+        <Label htmlFor="node-name" required>Название</Label>
         <Input id="node-name" value={name} onChange={(e) => setName(e.target.value)} />
       </div>
       {!isPipeline && (nodeType === NodeType.PLAIN_PROMPT || nodeType === NodeType.SCRIPT) && <>
-        <div><Label htmlFor="node-slash-name">Slash-команда (необязательно)</Label>
+        <div><Label htmlFor="node-slash-name">Slash-команда</Label>
           <Input id="node-slash-name" placeholder="/review" maxLength={65}
             value={slashName} onChange={(event) => setSlashName(event.target.value)} />
           <p className="text-small text-text-3">Доступна во всех ваших задачах. Имеет приоритет над одноимённой командой агента.</p>
@@ -177,8 +177,8 @@ export function NodeForm({
         </div>
       </>}
       <div>
-        <Label htmlFor="node-description">
-          Описание{mode === "library" ? " (обязательно)" : ""}
+        <Label htmlFor="node-description" required={mode === "library"}>
+          Описание
         </Label>
         <Textarea
           id="node-description"
