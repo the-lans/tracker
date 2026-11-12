@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { BookOpen, Plus } from "lucide-react";
-import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -10,8 +9,7 @@ import { NodeForm } from "@/components/nodes/NodeForm";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { NODE_TYPE_LABEL } from "@/lib/labels";
 import { useDeleteNode, useNodes, useUpdateNode } from "@/hooks/useNodes";
-import { ApiError } from "@/lib/apiClient";
-import { errorMessage, toastError } from "@/lib/errors";
+import { toastError } from "@/lib/errors";
 import type { NodeItem } from "@/lib/types";
 import { ArchiveToggleButton } from "@/components/common/actions/ArchiveToggleButton";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
@@ -38,13 +36,6 @@ function LibraryArchiveToggle({ node }: { node: NodeItem }) {
       }
     />
   );
-}
-
-function deleteErrorMessage(error: unknown): string {
-  if (error instanceof ApiError && error.status === 409) {
-    return "Промт используется задачей — доступна только архивация";
-  }
-  return errorMessage(error, "Не удалось удалить");
 }
 
 export function LibraryPage() {
@@ -90,7 +81,7 @@ export function LibraryPage() {
                 pending={deleteNode.isPending}
                 onConfirm={() =>
                   deleteNode.mutate(node.id, {
-                    onError: (error) => toast.error(deleteErrorMessage(error)),
+                    onError: toastError("Не удалось удалить"),
                   })}
               />
             </Card>

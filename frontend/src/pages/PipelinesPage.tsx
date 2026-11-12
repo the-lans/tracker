@@ -22,7 +22,6 @@ import {
   usePipelines,
   useUpdatePipeline,
 } from "@/hooks/usePipelines";
-import { ApiError } from "@/lib/apiClient";
 import { errorMessage, toastError } from "@/lib/errors";
 import type { Pipeline } from "@/lib/types";
 import { ArchiveToggleButton } from "@/components/common/actions/ArchiveToggleButton";
@@ -72,15 +71,8 @@ export function PipelinesPage() {
   }
 
   function handleDelete(id: string) {
-    deletePipeline.mutate(id, {
-      onError: (error) => {
-        const message =
-          error instanceof ApiError && error.status === 409
-            ? "Пайплайн используется задачей — доступна только архивация"
-            : "Не удалось удалить пайплайн";
-        toast.error(message);
-      },
-    });
+    // Причину запрета (409) называет сервер: задача, нода другого пайплайна и т. п.
+    deletePipeline.mutate(id, { onError: toastError("Не удалось удалить пайплайн") });
   }
 
   return (
