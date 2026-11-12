@@ -571,6 +571,9 @@ class TestUpdate:
                 GIT_SHA=_PREVIOUS_SHA,
             ),
         )
+        # Скрипт «полученного» коммита: заглушка git не меняет файлы.
+        (install_dir / "deploy").mkdir()
+        shutil.copy(_INSTALL_SCRIPT, install_dir / "deploy" / "install.sh")
 
     def test_steps_in_order(self, stubs: Path, install_dir: Path) -> None:
         result = _update(stubs, install_dir)
@@ -608,6 +611,43 @@ class TestUpdate:
         assert (env["GIT_SHA"], env["CLIPROXY_VERSION"]) == (_TARGET_SHA, "v8.0.48")
         assert len(env["CLIPROXY_API_KEY"]) == 64
         assert (install_dir / ".env").read_text().count("SFTP_DB_PASSWORD=") == 1
+        previous_ref = install_dir / ".deploy" / "previous_ref"
+        assert previous_ref.read_text().strip() == _PREVIOUS_SHA
+        assert sum("fetch origin" in call for call in calls) == 1
+        assert "продолжает install.sh новой версии" in result.stdout
+
+    @pytest.mark.parametrize(
+        ("marker", "resumed"),
+        [
+            pytest.param("# TRACKER_UPDATE_FETCHED", True, id="новая версия продолжает"),
+            pytest.param("", False, id="версия без продолжения"),
+        ],
+    )
+    def test_fetched_script(
+        self,
+        stubs: Path,
+        install_dir: Path,
+        marker: str,
+        resumed: bool,
+    ) -> None:
+        # Имя флага собирается по частям, чтобы метку содержал только marker.
+        _write_executable(
+            install_dir / "deploy" / "install.sh",
+            f"#!/bin/sh\n{marker}\n"
+            'eval "resume=\\${TRACKER_UPDATE_""FETCHED:-}"\n'
+            'echo "fetched $* resume=$resume" >> "$STUB_LOG"\n',
+        )
+
+        result = _update(stubs, install_dir, "--ref", "abc1234")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        calls = _calls(stubs)
+        fetched = [call for call in calls if call.startswith("fetched")]
+        assert fetched == (["fetched --update --ref abc1234 resume=1"] if resumed else [])
+        assert any("compose build" in call for call in calls) is not resumed
+        # Флаг обслуживания снимает уже продолжившая версия.
+        assert any("redis-cli DEL" in call for call in calls) is not resumed
+        _assert_in_order(calls, ["checkout --detach", "fetched" if resumed else "compose build"])
         previous_ref = install_dir / ".deploy" / "previous_ref"
         assert previous_ref.read_text().strip() == _PREVIOUS_SHA
 

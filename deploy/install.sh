@@ -100,6 +100,10 @@ die() {
 # --update прерван до перехода на новый код: сервер не изменён, откатывать
 # нечего (deploy/ci_deploy.sh и .github/workflows/deploy.yml, раздел 20.7).
 EXIT_UNCHANGED=3
+# --update после перехода на новый коммит продолжается его версией скрипта:
+# процесс получает этот флаг и пропускает уже выполненные шаги.
+UPDATE_RESUME_FLAG="TRACKER_UPDATE_FETCHED"
+SCRIPT_ARGS=()
 
 die_unchanged() {
   log "Ошибка: $* — сервер не изменён"
@@ -729,12 +733,26 @@ step_dump_database() {
 # Образы раннеров и tracker-session не входят в docker-compose.yml — без
 # пересборки здесь сессии и script-ноды остались бы на старых образах или
 # не нашли бы новый (раздел 19.3).
+# Новые сервисы и шаги версии применяются в том же обновлении, а не со
+# следующим. Версия без продолжения (откат на старый коммит) начала бы
+# обновление заново и затёрла бы previous_ref — тогда продолжает текущая.
+_resume_with_fetched_script() {
+  local fetched="${INSTALL_DIR}/deploy/install.sh"
+  grep -q "${UPDATE_RESUME_FLAG}" "${fetched}" 2>/dev/null || return 0
+  log "Обновление: продолжает install.sh новой версии"
+  export "${UPDATE_RESUME_FLAG}=1"
+  exec bash "${fetched}" "${SCRIPT_ARGS[@]}"
+}
+
 run_update() {
   trap _clear_maintenance_flag EXIT
-  step_start_infra
-  _set_maintenance_flag
-  step_wait_idle
-  step_fetch_code
+  if [ -z "${!UPDATE_RESUME_FLAG:-}" ]; then
+    step_start_infra
+    _set_maintenance_flag
+    step_wait_idle
+    step_fetch_code
+    _resume_with_fetched_script
+  fi
   step_prepare_env_for_build
   step_build_images
   step_start_infra
@@ -750,6 +768,7 @@ run_update() {
 }
 
 main() {
+  SCRIPT_ARGS=("$@")
   parse_args "$@"
   if [ -n "${RESTORE_DIR}" ]; then
     validate_restore_dir

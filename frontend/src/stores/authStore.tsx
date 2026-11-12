@@ -1,6 +1,8 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AuthContext,
+  onSessionExpired,
+  onStoredSessionChange,
   readStoredSession,
   writeStoredSession,
   type AuthContextValue,
@@ -19,6 +21,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeStoredSession(null);
     setSession(null);
   }, []);
+
+  // Отвергнутый сервером токен — на страницу входа, а не пустые списки.
+  useEffect(() => onSessionExpired(() => setSession(null)), []);
+  // Вход и выход в другой вкладке меняют сессию и здесь.
+  useEffect(() => onStoredSessionChange(() => setSession(readStoredSession())), []);
 
   const value = useMemo<AuthContextValue>(
     () => ({

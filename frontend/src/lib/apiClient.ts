@@ -1,4 +1,4 @@
-import { getStoredToken } from "@/stores/authContext";
+import { expireStoredSession, getStoredToken } from "@/stores/authContext";
 import type { ApiErrorBody } from "@/lib/types";
 
 /**
@@ -44,8 +44,7 @@ function buildUrl(path: string, params?: Record<string, QueryParamValue>): strin
   return `${url.pathname}${url.search}`;
 }
 
-function authHeaders(): Record<string, string> {
-  const token = getStoredToken();
+function authHeaders(token: string | null): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -56,7 +55,12 @@ function isApiErrorBody(value: unknown): value is ApiErrorBody {
   return typeof error === "object" && error !== null && "message" in error;
 }
 
-async function errorOf(response: Response): Promise<ApiError> {
+const HTTP_UNAUTHORIZED = 401;
+
+async function errorOf(response: Response, token: string | null): Promise<ApiError> {
+  if (response.status === HTTP_UNAUTHORIZED) {
+    expireStoredSession(token);
+  }
   const text = await response.text();
   let body: ApiErrorBody | null = null;
   try {
@@ -69,7 +73,8 @@ async function errorOf(response: Response): Promise<ApiError> {
 }
 
 async function request<TResponse>(path: string, options: RequestOptions = {}): Promise<TResponse> {
-  const headers = authHeaders();
+  const token = getStoredToken();
+  const headers = authHeaders(token);
   let body: BodyInit | undefined;
   if (options.body instanceof Blob) {
     // Раздел 14.3: файл артефакта уходит телом запроса как есть.
@@ -87,7 +92,7 @@ async function request<TResponse>(path: string, options: RequestOptions = {}): P
   });
 
   if (!response.ok) {
-    throw await errorOf(response);
+    throw await errorOf(response, token);
   }
   if (response.status === 204) {
     return undefined as TResponse;
@@ -99,9 +104,10 @@ async function request<TResponse>(path: string, options: RequestOptions = {}): P
 
 /** Файл целиком (скачивание артефакта): авторизация — тем же токеном, что у API. */
 async function getBlob(path: string): Promise<Blob> {
-  const response = await fetch(buildUrl(path), { headers: authHeaders() });
+  const token = getStoredToken();
+  const response = await fetch(buildUrl(path), { headers: authHeaders(token) });
   if (!response.ok) {
-    throw await errorOf(response);
+    throw await errorOf(response, token);
   }
   return response.blob();
 }
