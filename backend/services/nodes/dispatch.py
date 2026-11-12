@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from db.models.pipelines import Node
+    from services.command_arguments import CommandArguments
 
 
 async def resolve_node_prompt(
@@ -45,11 +46,14 @@ async def resolve_node_prompt(
     node: Node,
     task: Task,
     history: NodeContextHistory = EMPTY_NODE_CONTEXT_HISTORY,
+    arguments: CommandArguments | None = None,
 ) -> RenderedText:
     """Возвращает итоговый текст для отправки в сессию и его показываемый вид.
 
     ``slash_command``: `command_invocation` буквально, БЕЗ шаблонизатора
     (раздел 4) — единственная ветка, минующая `render_for_task`.
+    ``arguments`` — аргументы промта библиотеки, на который ссылается нода
+    пайплайна (раздел 7.6).
     """
     if node.node_type is NodeType.SLASH_COMMAND:
         if node.command_invocation is None:
@@ -66,7 +70,14 @@ async def resolve_node_prompt(
         node.prompt_template,
         history=history,
         last_n=node.llm_output_last_n,
+        node_guide_url=node_guide_url(node),
+        arguments=arguments,
     )
+
+
+def node_guide_url(node: Node) -> str | None:
+    """Раздел 5: `{{node.guide_url}}` — гайд «Обычного промта»; у прочих типов поля нет."""
+    return node.guide_url if node.node_type is NodeType.PLAIN_PROMPT else None
 
 
 async def resolve_node_prompt_or_none(
@@ -75,11 +86,18 @@ async def resolve_node_prompt_or_none(
     node: Node,
     task: Task,
     history: NodeContextHistory = EMPTY_NODE_CONTEXT_HISTORY,
+    arguments: CommandArguments | None = None,
 ) -> RenderedText | None:
     """`None` для `script`-нод (у них нет промта); иначе — `resolve_node_prompt`."""
     if node.node_type is NodeType.SCRIPT:
         return None
-    return await resolve_node_prompt(db_session, node=node, task=task, history=history)
+    return await resolve_node_prompt(
+        db_session,
+        node=node,
+        task=task,
+        history=history,
+        arguments=arguments,
+    )
 
 
 def logged_prompt(node: Node, prompt: RenderedText | None) -> str | None:

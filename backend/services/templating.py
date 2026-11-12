@@ -74,6 +74,12 @@ NODE_FIELD_REQUIRED_PRECEDING_TYPES: dict[str, frozenset[NodeType]] = {
     _PLAN_TEXT: frozenset({NodeType.PLAN_PROMPT}),
 }
 
+# {{node.guide_url}} — поле САМОЙ ноды (раздел 5): позиция в пайплайне не
+# нужна, поэтому переменная доступна и промту библиотеки, но не свободному
+# вводу — у него нет своей ноды.
+NODE_GUIDE_URL = "guide_url"
+NODE_SELF_FIELDS = frozenset({NODE_GUIDE_URL})
+
 
 class RenderScope(StrEnum):
     """Три места ввода параметризованного текста (раздел 5.1)."""
@@ -125,6 +131,12 @@ def _validate_node_variable(
     preceding_node_types: Sequence[NodeType],
     current_node_llm_output_last_n: int | None,
 ) -> None:
+    if field in NODE_SELF_FIELDS:
+        if scope is RenderScope.FREEFORM:
+            raise ValidationError(
+                f"{{{{node.{field}}}}} недоступна в свободном поле ввода: у текста нет своей ноды",
+            )
+        return
     if scope is not RenderScope.PIPELINE:
         raise ValidationError(
             "{{node.*}} недоступны в библиотеке промтов и свободном поле ввода "

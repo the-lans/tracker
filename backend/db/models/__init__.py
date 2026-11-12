@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from db.models.backups import BackupRun
 from db.models.env_vars import EnvVariable, TaskEnvVariable
+from db.models.events import Event
 from db.models.llm import LlmAccount
 from db.models.logs import AppLog, NodeLog
 from db.models.mcp import McpServer
@@ -33,6 +34,7 @@ __all__ = [
     "AppLog",
     "BackupRun",
     "EnvVariable",
+    "Event",
     "LlmAccount",
     "McpServer",
     "Node",

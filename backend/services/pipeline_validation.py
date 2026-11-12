@@ -38,6 +38,12 @@ REASONING_EFFORT_NODE_TYPES = frozenset(
 type OrderedNodes = list[tuple[int | None, Node]]
 
 
+def drop_unused_guide(node: Node) -> None:
+    """Раздел 3.1, 5: гайд (`{{node.guide_url}}`) есть только у «Обычного промта»."""
+    if node.node_type is not NodeType.PLAIN_PROMPT:
+        node.guide_url = None
+
+
 def validate_node_shape(node: Node, *, check_description: bool = True) -> None:
     """
     Ограничения одной ноды, не зависящие от соседей по пайплайну.

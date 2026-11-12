@@ -142,3 +142,15 @@ class TestIsSlashCommandText:
     )
     def test_detects_leading_slash(self, text: str, expected: bool) -> None:
         assert is_slash_command_text(text) is expected
+
+
+class TestNodeGuideUrl:
+    """`{{node.guide_url}}` — поле самой ноды: позиция в пайплайне не нужна."""
+
+    @pytest.mark.parametrize("scope", [RenderScope.PIPELINE, RenderScope.LIBRARY])
+    def test_allowed_without_preceding_nodes(self, scope: RenderScope) -> None:
+        validate_template_variables("Гайд: {{node.guide_url}}", scope=scope)
+
+    def test_forbidden_in_freeform(self) -> None:
+        with pytest.raises(ValidationError, match="свободном поле"):
+            validate_template_variables("{{node.guide_url}}", scope=RenderScope.FREEFORM)

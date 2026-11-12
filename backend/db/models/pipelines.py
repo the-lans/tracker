@@ -54,6 +54,10 @@ class Node(UUIDPrimaryKeyMixin, Base):
             "OR (NOT is_library_item AND num_nonnulls(pipeline_id, task_id) = 1)",
             name="ck_nodes_is_library_item_matches_pipeline_id",
         ),
+        sa.CheckConstraint(
+            "library_node_id IS NULL OR pipeline_id IS NOT NULL",
+            name="ck_nodes_library_node_id_pipeline_only",
+        ),
     )
 
     slash_name: Mapped[str | None] = mapped_column(sa.String(64))
@@ -94,6 +98,14 @@ class Node(UUIDPrimaryKeyMixin, Base):
     )
     # Раздел 3.1, 3.2: архивация системного промта библиотеки.
     is_archived: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    # Раздел 7.6: нода пайплайна, выполняющая промт библиотеки — текст, скрипт
+    # и гайд берутся из него при каждом запуске, параметры выполнения — свои.
+    library_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("nodes.id"),
+        index=True,
+    )
+    # Строка аргументов команды библиотеки — как после `/имя` в чате.
+    library_arguments: Mapped[str | None] = mapped_column(sa.String)
     # Раздел 19.2: у ноды пайплайна — автор пайплайна, у промта библиотеки —
     # тот, кто его создал; доступ к любой ноде проверяется по этому полю.
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), index=True)

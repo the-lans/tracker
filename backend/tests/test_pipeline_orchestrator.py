@@ -1082,3 +1082,92 @@ class TestCustomTaskNode:
                 from_status=TaskStatus.IN_PROGRESS,
                 to_status=TaskStatus.DONE,
             )
+
+
+class TestLibraryLink:
+    """Раздел 7.6: нода выполняет текущую версию промта библиотеки со своими аргументами."""
+
+    async def _library_item(self, db_session: AsyncSession, task: Task, **fields: object) -> Node:
+        node = Node(
+            created_by=task.created_by,
+            name="Ревью",
+            description="d",
+            is_library_item=True,
+            revision=3,
+            **fields,
+        )
+        db_session.add(node)
+        await db_session.flush()
+        return node
+
+    async def test_prompt_uses_current_text_and_arguments(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        source = await self._library_item(
+            db_session,
+            task,
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="старый текст",
+            guide_url="https://wiki.example.com/g",
+        )
+        await _add_node(
+            db_session,
+            task,
+            order_index=0,
+            node_type=NodeType.PLAIN_PROMPT,
+            library_node_id=source.id,
+            library_arguments="'модуль оплаты'",
+        )
+        # Правка в библиотеке мимо карты объектов сессии — как из другого запроса.
+        await db_session.execute(
+            sa.update(Node)
+            .where(Node.id == source.id)
+            .values(prompt_template="Проверь $1 по {{node.guide_url}}", revision=4)
+            .execution_options(synchronize_session=False),
+        )
+        session = ClaudeCodeSession(
+            FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        )
+
+        outcome = await run_pipeline(
+            db_session, task=task, claude_session=session, repos_path=tmp_path
+        )
+
+        assert outcome.completed is True
+        logs = await _node_logs_for(db_session, task.id)
+        assert (logs[0].rendered_prompt, logs[0].command_revision) == (
+            "Проверь модуль оплаты по https://wiki.example.com/g",
+            4,
+        )
+
+    async def test_script_gets_arguments(self, db_session: AsyncSession, tmp_path: Path) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        source = await self._library_item(
+            db_session,
+            task,
+            node_type=NodeType.SCRIPT,
+            script_language=ScriptLanguage.PYTHON,
+            script_content=(
+                "import os, sys\nprint(sys.argv[1:], os.environ['TRACKER_COMMAND_ARGUMENTS'])"
+            ),
+        )
+        await _add_node(
+            db_session,
+            task,
+            order_index=0,
+            node_type=NodeType.SCRIPT,
+            library_node_id=source.id,
+            library_arguments="'a b' c",
+        )
+        session = ClaudeCodeSession(FakeClaudeAgentClient(messages_per_query=[]))
+
+        outcome = await run_pipeline(
+            db_session, task=task, claude_session=session, repos_path=tmp_path
+        )
+
+        assert outcome.completed is True
+        logs = await _node_logs_for(db_session, task.id)
+        assert (logs[0].script_stdout or "").strip() == "['a b', 'c'] 'a b' c"

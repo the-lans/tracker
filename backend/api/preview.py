@@ -114,6 +114,7 @@ async def preview_template(
             task=task,
             template=body.text,
             arguments=parse_arguments(body.arguments),
+            node_guide_url=body.guide_url,
         )
         return TemplatePreviewResponse(rendered_text=rendered.display)
     if body.task_id is None:
@@ -137,5 +138,6 @@ async def preview_template(
         body.text,
         history=history,
         last_n=position.llm_output_last_n,
+        node_guide_url=body.guide_url,
     )
     return TemplatePreviewResponse(rendered_text=rendered_text.display)

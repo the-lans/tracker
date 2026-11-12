@@ -59,6 +59,8 @@ class CommandSnapshot(BaseModel):
     retry_base_delay_seconds: int
     llm_output_last_n: int | None
     reasoning_effort: ReasoningEffort | None
+    # `{{node.guide_url}}` команды; у снимков, сделанных до появления поля, — нет.
+    guide_url: str | None = None
 
     def to_node(self, request: TaskManualRequestQueue) -> Node:
         return Node(
@@ -212,6 +214,7 @@ async def snapshot_command(
         retry_base_delay_seconds=node.retry_base_delay_seconds,
         llm_output_last_n=node.llm_output_last_n,
         reasoning_effort=node.reasoning_effort,
+        guide_url=node.guide_url,
     )
 
 
@@ -240,6 +243,7 @@ async def render_command(
         template=snapshot.prompt_template or "",
         arguments=arguments,
         last_n=snapshot.llm_output_last_n,
+        node_guide_url=snapshot.guide_url,
     )
 
 
@@ -250,17 +254,22 @@ async def render_with_arguments(
     template: str,
     arguments: CommandArguments,
     last_n: int | None = None,
+    node_guide_url: str | None = None,
 ) -> RenderedText:
     """
     Аргументы подставляются после переменных и повторно не интерпретируются.
     Без задачи переменные остаются текстом — так показывает предпросмотр библиотеки.
     """
-    prepared = prepare_arguments(template, arguments)
     if task is None:
+        prepared = prepare_arguments(template, arguments)
         return RenderedText.literal(prepared.expand(prepared.text))
-    rendered = await render_for_task(session, task, prepared.text, last_n=last_n)
-    return RenderedText(
-        text=prepared.expand(rendered.text), display=prepared.expand(rendered.display)
+    return await render_for_task(
+        session,
+        task,
+        template,
+        last_n=last_n,
+        node_guide_url=node_guide_url,
+        arguments=arguments,
     )
 
 

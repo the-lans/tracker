@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.nodes import EXECUTION_FIELDS
 from db.models.enums import NodeType
-from db.models.pipelines import Node, Pipeline
+from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskLibraryPrompt
 from db.models.tasks import Task
 from db.models.users import User
@@ -550,3 +550,247 @@ class TestReasoningEffort:
         response = await authed_client.post("/nodes", json=payload)
 
         assert response.status_code == 422
+
+
+async def _own_pipeline(db_session: AsyncSession, user: User) -> Pipeline:
+    pipeline = Pipeline(id=uuid.uuid4(), name="P", created_by=user.id)
+    db_session.add(pipeline)
+    await db_session.flush()
+    return pipeline
+
+
+async def _library_item(db_session: AsyncSession, owner: User, **fields: object) -> Node:
+    values: dict[str, object] = {
+        "created_by": owner.id,
+        "name": "Ревью",
+        "description": "d",
+        "node_type": NodeType.PLAIN_PROMPT,
+        "prompt_template": "Проверь $1",
+        "is_library_item": True,
+        **fields,
+    }
+    node = Node(**values)
+    db_session.add(node)
+    await db_session.flush()
+    return node
+
+
+def _linked_node(pipeline: Pipeline, library_node: Node, **fields: object) -> dict[str, object]:
+    return {
+        "pipeline_id": str(pipeline.id),
+        "order_index": 0,
+        "name": "Шаг",
+        "node_type": NodeType.PLAIN_PROMPT.value,
+        "library_node_id": str(library_node.id),
+        **fields,
+    }
+
+
+class TestLibraryLink:
+    """Раздел 7.6: нода пайплайна со ссылкой на промт библиотеки."""
+
+    async def test_link_takes_type_and_drops_own_content(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, current_user)
+        script = await _library_item(
+            db_session,
+            current_user,
+            node_type=NodeType.SCRIPT,
+            prompt_template=None,
+            script_language="bash",
+            script_content="echo $1",
+        )
+
+        response = await authed_client.post(
+            "/nodes",
+            json=_linked_node(
+                pipeline,
+                script,
+                prompt_template="свой текст",
+                library_arguments="'a b' c",
+            ),
+        )
+
+        assert response.status_code == 201, response.text
+        body = response.json()
+        assert (body["node_type"], body["prompt_template"], body["library_arguments"]) == (
+            "script",
+            None,
+            "'a b' c",
+        )
+
+    @pytest.mark.parametrize(
+        ("fields", "status"),
+        [
+            ({"is_archived": True}, 409),
+            ({"node_type": NodeType.CLEAR_CONTEXT, "prompt_template": None}, 422),
+            ({"is_library_item": False}, 422),
+        ],
+        ids=["архивный", "недопустимый-тип", "не-библиотека"],
+    )
+    async def test_rejected_source(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        fields: dict[str, object],
+        status: int,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, current_user)
+        other = await _own_pipeline(db_session, current_user)
+        library_fields = {"pipeline_id": other.id} if fields.get("is_library_item") is False else {}
+        source = await _library_item(db_session, current_user, **fields, **library_fields)
+
+        response = await authed_client.post("/nodes", json=_linked_node(pipeline, source))
+
+        assert response.status_code == status, response.text
+
+    async def test_foreign_library_rejected(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+        admin_user: User,
+        current_user: User,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, admin_user)
+        foreign = await _library_item(db_session, current_user)
+
+        response = await admin_client.post("/nodes", json=_linked_node(pipeline, foreign))
+
+        assert response.status_code == 422
+        assert "автору пайплайна" in response.json()["error"]["message"]
+
+    async def test_library_item_needs_pipeline(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        source = await _library_item(db_session, current_user)
+
+        response = await authed_client.post(
+            "/nodes",
+            json=_library_prompt(library_node_id=str(source.id)),
+        )
+
+        assert response.status_code == 422
+
+    async def test_unlink_keeps_new_text(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, current_user)
+        source = await _library_item(db_session, current_user)
+        created = await authed_client.post("/nodes", json=_linked_node(pipeline, source))
+
+        unlinked = await authed_client.patch(
+            f"/nodes/{created.json()['id']}",
+            json={"library_node_id": None, "prompt_template": "свой"},
+        )
+
+        assert unlinked.status_code == 200, unlinked.text
+        assert (unlinked.json()["library_node_id"], unlinked.json()["prompt_template"]) == (
+            None,
+            "свой",
+        )
+
+    async def test_linked_item_not_deletable_but_archivable(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, current_user)
+        source = await _library_item(db_session, current_user)
+        created = await authed_client.post("/nodes", json=_linked_node(pipeline, source))
+        assert created.status_code == 201, created.text
+
+        deleted = await authed_client.delete(f"/nodes/{source.id}")
+        archived = await authed_client.patch(f"/nodes/{source.id}", json={"is_archived": True})
+        renamed = await authed_client.patch(
+            f"/nodes/{created.json()['id']}",
+            json={"name": "Шаг 1"},
+        )
+
+        assert (deleted.status_code, archived.status_code, renamed.status_code) == (409, 200, 200)
+
+    async def test_usage_counts_tasks_running_linked_node(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+        admin_user: User,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, admin_user)
+        source = await _library_item(db_session, admin_user)
+        linking = Node(
+            created_by=admin_user.id,
+            pipeline_id=pipeline.id,
+            name="Шаг",
+            node_type=NodeType.PLAIN_PROMPT,
+            is_library_item=False,
+            library_node_id=source.id,
+        )
+        task = Task(
+            id=uuid.uuid4(),
+            code=f"RR-{uuid.uuid4().hex[:8]}",
+            title="t",
+            description="",
+            created_by=admin_user.id,
+        )
+        db_session.add_all([linking, task])
+        await db_session.flush()
+        db_session.add(TaskNode(task_id=task.id, node_id=linking.id, order_index=0))
+        await db_session.flush()
+
+        response = await admin_client.get("/nodes/library-usage")
+
+        counts = {item["node_id"]: item["task_count"] for item in response.json()}
+        assert counts[str(source.id)] == 1
+
+
+class TestGuideUrl:
+    """Раздел 3.1, 5: гайд — только у «Обычного промта»."""
+
+    @pytest.mark.parametrize(
+        ("node_type", "expected"),
+        [
+            (NodeType.PLAIN_PROMPT, "https://wiki.example.com/g"),
+            (NodeType.SLASH_COMMAND, None),
+        ],
+    )
+    async def test_kept_only_for_plain_prompt(
+        self,
+        authed_client: AsyncClient,
+        node_type: NodeType,
+        expected: str | None,
+    ) -> None:
+        response = await authed_client.post(
+            "/nodes",
+            json=_library_prompt(
+                node_type=node_type.value,
+                command_invocation="/review",
+                guide_url="https://wiki.example.com/g",
+            ),
+        )
+
+        assert response.status_code == 201, response.text
+        assert response.json()["guide_url"] == expected
+
+    async def test_cleared_by_null(self, authed_client: AsyncClient) -> None:
+        created = await authed_client.post(
+            "/nodes",
+            json=_library_prompt(guide_url="https://wiki.example.com/g"),
+        )
+
+        cleared = await authed_client.patch(
+            f"/nodes/{created.json()['id']}",
+            json={"guide_url": None},
+        )
+
+        assert cleared.json()["guide_url"] is None
