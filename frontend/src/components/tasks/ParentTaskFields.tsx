@@ -1,9 +1,7 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect } from "@/components/common/inputs/SearchSelect";
 import { useTasks } from "@/hooks/useTasks";
-
-const NO_PARENT = "none";
 
 /** Раздел 3.1: родительская задача и флажок «передать саммари родителя» —
  * пересказ истории родителя станет первым сообщением сессии этой задачи. */
@@ -18,8 +16,10 @@ export function ParentTaskFields({
 }) {
   const { data: tasks } = useTasks();
 
-  function selectParent(value: string) {
-    const nextParent = value === NO_PARENT ? "" : value;
+  const options = (tasks ?? []).map((task) => ({ value: task.id, label: `${task.code} · ${task.title}` }));
+
+  function selectParent(value: string | null) {
+    const nextParent = value ?? "";
     onChange({ parentTaskId: nextParent, useParentSummary: nextParent ? useParentSummary : false });
   }
 
@@ -27,19 +27,14 @@ export function ParentTaskFields({
     <div className="flex flex-col gap-2">
       <div>
         <Label htmlFor="task-parent">Родительская задача</Label>
-        <Select value={parentTaskId || NO_PARENT} onValueChange={selectParent}>
-          <SelectTrigger id="task-parent">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NO_PARENT}>Без родителя</SelectItem>
-            {(tasks ?? []).map((task) => (
-              <SelectItem key={task.id} value={task.id}>
-                {task.code} · {task.title}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <SearchSelect
+          id="task-parent"
+          value={parentTaskId || null}
+          options={options}
+          onChange={selectParent}
+          clearLabel="Без родителя"
+          placeholder="Код или название задачи"
+        />
       </div>
       <label className="flex items-center gap-2 text-note text-text-2">
         <Checkbox

@@ -215,6 +215,32 @@ describe("CreateTaskDialog", () => {
       ).toBeDisabled();
     });
 
+    test("родителя находит поиск по коду или названию", async ({ api }) => {
+      api.respond("GET /tasks", [
+        makeTask({ id: "t5", code: "RR-12300", title: "Каталог товаров" }),
+        makeTask({ id: "t6", code: "RR-12301", title: "Корзина" }),
+      ]);
+      const { user } = renderDialog(api);
+
+      await user.type(screen.getByRole("combobox", { name: "Родительская задача" }), "корз");
+      await user.click(await screen.findByRole("option", { name: "RR-12301 · Корзина" }));
+      await fillRequired(user);
+      await user.click(screen.getByRole("button", { name: "Создать" }));
+
+      expect(createRequest(api)?.body).toMatchObject({ parent_task_id: "t6" });
+    });
+
+    test("Escape в поиске родителя закрывает список, а не диалог", async ({ api }) => {
+      api.respond("GET /tasks", [makeTask({ id: "t5", code: "RR-12300", title: "Каталог товаров" })]);
+      const { user, onOpenChange } = renderDialog(api);
+
+      await user.type(screen.getByRole("combobox", { name: "Родительская задача" }), "кат");
+      await user.keyboard("{Escape}");
+
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+      expect(onOpenChange).not.toHaveBeenCalled();
+    });
+
     test("отказ от родителя сбрасывает передачу саммари", async ({ api }) => {
       api.respond("GET /tasks", [makeTask({ id: "t5", code: "RR-12300", title: "Каталог товаров" })]);
       const { user } = renderDialog(api);

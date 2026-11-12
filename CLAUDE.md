@@ -242,11 +242,12 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               продовый образ (сборка на Node, раздача nginx с SPA-фолбэком
               на index.html для клиентских маршрутов). Общие элементы — по
               типам: components/ui (примитивы), components/common/{actions,
-              avatar,dialogs,feedback,filters,navigation,typography},
+              avatar,dialogs,feedback,filters,inputs,navigation,typography},
               components/layout; повторяющиеся механики — общими
               компонентами: navigation/PageTabs (вкладки страницы в `?tab=`,
               хук hooks/useUrlTab.ts) и SegmentedControl, filters/FilterSelect
-              (фильтр «Все/значение»), feedback/QueryState (загрузка, ошибка
+              (фильтр «Все/значение»), inputs/SearchSelect (выбор из
+              длинного списка с поиском), feedback/QueryState (загрузка, ошибка
               или содержимое) и ErrorState, tasks/TaskCodeLink (код задачи
               ссылкой);
               по разделам — components/{tasks,nodes,profile,admin,
