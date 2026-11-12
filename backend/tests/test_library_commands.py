@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 
@@ -22,10 +23,15 @@ from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from db.models.users import User
 from services.command_arguments import normalize_slash_name, parse_invocation, prepare_arguments
-from services.crypto import encrypt
+from services.crypto import decrypt, encrypt
 from services.errors import ConflictError, ValidationError
 from services.integrity import count_library_prompt_usage
-from services.library_commands import enqueue_command, load_snapshot, render_command
+from services.library_commands import (
+    CommandSnapshot,
+    enqueue_command,
+    load_snapshot,
+    render_command,
+)
 from services.manual_queue import process_manual_queue_once
 from services.template_context import SECRET_MASK
 from tests.factories import make_llm_account, make_task, make_user
@@ -334,6 +340,70 @@ class TestCommandExecution:
         assert rendered.text == "UPDATED NEW_SECRET {{env.TOKEN}}"
         assert rendered.display == f"UPDATED {SECRET_MASK} {{{{env.TOKEN}}}}"
         assert "NEW_SECRET" not in snapshot.model_dump_json()
+
+    @pytest.mark.parametrize(
+        ("snapshot_guide", "expected"),
+        [("https://wiki.example.com/g", "гайд https://wiki.example.com/g"), (None, "гайд ")],
+        ids=["в-снимке", "снимок-до-поля"],
+    )
+    async def test_guide_url_from_snapshot(
+        self,
+        db_session: AsyncSession,
+        command_task: Task,
+        command_node: Node,
+        snapshot_guide: str | None,
+        expected: str,
+    ) -> None:
+        command_node.prompt_template = "гайд {{node.guide_url}}"
+        command_node.guide_url = "https://wiki.example.com/g"
+        await db_session.commit()
+        request = await enqueue_command(
+            db_session,
+            task=command_task,
+            requested_by=command_task.created_by,
+            invocation="/review",
+            client_request_id=uuid.uuid4(),
+        )
+        stored = load_snapshot(request).model_dump(exclude={"guide_url"})
+        if snapshot_guide is not None:
+            stored["guide_url"] = snapshot_guide
+        snapshot = CommandSnapshot.model_validate(stored)
+
+        rendered = await render_command(
+            db_session, task=command_task, request=request, snapshot=snapshot
+        )
+
+        assert rendered is not None and rendered.text == expected
+
+    @pytest.mark.parametrize(
+        ("guide", "stored"),
+        [("https://wiki.example.com/g", True), (None, False)],
+        ids=["гайд-есть", "без-гайда"],
+    )
+    async def test_snapshot_omits_empty_guide(
+        self,
+        db_session: AsyncSession,
+        command_task: Task,
+        command_node: Node,
+        guide: str | None,
+        stored: bool,
+    ) -> None:
+        """Раздел 20.6: снимок без гайда читает и версия до появления поля."""
+        command_node.guide_url = guide
+        await db_session.commit()
+        request = await enqueue_command(
+            db_session,
+            task=command_task,
+            requested_by=command_task.created_by,
+            invocation="/review",
+            client_request_id=uuid.uuid4(),
+        )
+        assert request.command_snapshot_encrypted is not None
+
+        raw = json.loads(decrypt(request.command_snapshot_encrypted))
+
+        assert ("guide_url" in raw) is stored
+        assert load_snapshot(request).guide_url == guide
 
     async def test_prompt_requires_account(
         self,

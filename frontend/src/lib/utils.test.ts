@@ -96,6 +96,11 @@ describe("formatRelativeShort", () => {
   ])("%s → «%s»", (value, expected) => {
     expect(formatRelativeShort(value)).toBe(expected);
   });
+
+  it("считает от переданного момента", () => {
+    const later = NOW.getTime() + 5 * 60_000;
+    expect(formatRelativeShort("2026-10-25T11:59:30Z", later)).toBe("5 мин назад");
+  });
 });
 
 describe("initialsFromEmail", () => {

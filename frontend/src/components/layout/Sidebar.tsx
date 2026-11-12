@@ -8,6 +8,8 @@ import {
   KeySquare,
   Variable,
   ShieldCheck,
+  Activity,
+  Bell,
 } from "lucide-react";
 import { BrandMark } from "@/components/layout/BrandMark";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
@@ -24,12 +26,15 @@ interface NavItemDef {
   label: string;
   icon: typeof LayoutGrid;
   badge?: number;
+  /** Подсвечивать только на самом адресе, а не на вложенных страницах. */
+  end?: boolean;
 }
 
-function NavItem({ to, label, icon: Icon, badge }: NavItemDef) {
+function NavItem({ to, label, icon: Icon, badge, end }: NavItemDef) {
   return (
     <NavLink
       to={to}
+      end={end}
       className={({ isActive }) =>
         cn(
           "relative flex touch-target items-center gap-[11px] rounded-md px-2.5 py-2 text-sm font-semibold text-text-2",
@@ -71,6 +76,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <NavItem to="/library" label="Библиотека промтов" icon={BookText} />
         <NavItem to="/templates" label="Шаблоны" icon={FileStack} />
         <NavItem to="/repositories" label="Репозитории" icon={FolderGit2} />
+        <NavItem to="/events" label="События" icon={Bell} />
       </nav>
 
       <div className="mb-4.5 mt-4 flex flex-col gap-0.5">
@@ -89,7 +95,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <div className="px-2.5 pb-1.5 pt-2.5 text-caption font-bold uppercase tracking-wider text-text-3">
             Администрирование
           </div>
-          <NavItem to="/admin" label="Администрирование" icon={ShieldCheck} />
+          <NavItem to="/admin" label="Администрирование" icon={ShieldCheck} end />
+          <NavItem to="/admin/monitoring" label="Мониторинг" icon={Activity} />
         </div>
       )}
 

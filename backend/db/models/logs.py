@@ -80,6 +80,7 @@ class NodeLog(UUIDPrimaryKeyMixin, Base):
 
 class AppLog(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "app_logs"
+    __table_args__ = (sa.Index("ix_app_logs_created_at", sa.text("created_at DESC")),)
 
     level: Mapped[AppLogLevel] = mapped_column(pg_enum(AppLogLevel, name="app_log_level"))
     source: Mapped[str] = mapped_column(sa.String)

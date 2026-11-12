@@ -79,7 +79,9 @@ if TYPE_CHECKING:
 
 logger = get_logger("account_router")
 
-_SOURCE = "account_router"
+ACCOUNT_ROUTER_LOG_SOURCE = "account_router"
+# Раздел 15.5: мониторинг считает переключения по этой записи `app_logs`.
+ACCOUNT_SWITCHED_MESSAGE = "llm_account_switched"
 # Раздел 19.7: перед выбором расход обновляется, если опрос старше минуты.
 USAGE_MAX_AGE = timedelta(seconds=60)
 # Раздел 19.7: выбор по одному пользователю — под блокировкой, чтобы
@@ -190,7 +192,7 @@ class TaskAccountRouter:
         logger.info("llm_context_compacted", task_id=str(self._task.id), **context)
         await write_app_log(
             level=AppLogLevel.INFO if succeeded else AppLogLevel.WARNING,
-            source=_SOURCE,
+            source=ACCOUNT_ROUTER_LOG_SOURCE,
             message="llm_context_compacted",
             context=context,
             task_id=self._task.id,
@@ -458,11 +460,11 @@ class TaskAccountRouter:
             "to_account_id": str(choice.account.id),
             "reason": choice.reason.value,
         }
-        logger.info("llm_account_switched", task_id=str(self._task.id), **context)
+        logger.info(ACCOUNT_SWITCHED_MESSAGE, task_id=str(self._task.id), **context)
         await write_app_log(
             level=AppLogLevel.INFO,
-            source=_SOURCE,
-            message="llm_account_switched",
+            source=ACCOUNT_ROUTER_LOG_SOURCE,
+            message=ACCOUNT_SWITCHED_MESSAGE,
             context=context,
             task_id=self._task.id,
         )

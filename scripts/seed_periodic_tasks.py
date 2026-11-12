@@ -135,6 +135,14 @@ _SEED_TASKS: list[tuple[str, str, str, str, int | str | None]] = [
         _WEEK,
     ),
     (
+        "measure_volume_usage",
+        "Замер места на диске",
+        "Считает размер volume с репозиториями, файлами задач, сессиями агентов и "
+        "архивом логов для страницы «Мониторинг»",
+        "tasks.periodic.measure_volume_usage",
+        15 * _MINUTE,
+    ),
+    (
         "revoke_stale_sshfs_keys",
         "Отзыв неиспользуемых SSH-ключей",
         "Напоминает заменить SSH-ключ SFTP-доступа, не использованный 90 дней",

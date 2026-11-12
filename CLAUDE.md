@@ -107,7 +107,8 @@ backend/
   api/       — HTTP-эндпоинты, валидация входных данных, сериализация ответов
               (auth, tasks, repositories, templates, preview, llm_accounts,
               env_variables, mcp_servers, pipelines, nodes, users, profile,
-              periodic_tasks, monitoring, push, system_settings, jira,
+              periodic_tasks, monitoring — страница «Мониторинг», events —
+              лента событий, push, system_settings, jira,
               llm_proxy — состояние LLM-прокси для админки);
               tasks/ — эндпоинты задачи по разделам (crud, lifecycle, nodes,
               manual, env_variables, artifacts; common.py — доступ к задаче
@@ -151,6 +152,15 @@ backend/
               обслуживания `maintenance:deploy` на время обновления сервера;
               session_history_migration.py — перенос истории сессий из
               каталогов прежних LLM-аккаунтов (раздел 20.6);
+              library_links.py — нода пайплайна со ссылкой на промт
+              библиотеки: привязка, содержимое и аргументы запуска (раздел 7.6);
+              events.py — запись и выборка ленты событий (раздел 18.4; пишет
+              только notifications.py, вместе с push); «Мониторинг»
+              (раздел 15.5): server_status.py — сводка сервера, node_stats.py —
+              статистика нод за период, llm_usage_summary.py — расход и
+              переключения LLM-аккаунтов, volume_usage.py — замер volume
+              (в Redis) и место на диске, container_monitor.py — контейнеры
+              задач и признак «осиротел» (общий с purge_* в maintenance_tasks.py);
               backup/ — резервные копии в S3 (раздел 20.4): settings.py —
               настройки и их проверка, storage.py — клиент S3 с повторами,
               components.py — состав копии (= архивы install.sh --restore),
@@ -225,12 +235,20 @@ backend/
 frontend/    — React SPA: дашборд, страница задачи (обзор + диалог),
               конструктор пайплайна/библиотека, CRUD-страницы
               (репозитории/шаблоны/LLM-аккаунты/переменные окружения),
-              админка (раздел 15.5, в т. ч. вкладка «LLM-прокси»), Web Push (public/service-worker.js,
+              админка (раздел 15.5, в т. ч. вкладка «LLM-прокси»), страница
+              «Мониторинг» (components/monitoring) и лента «События»
+              (components/events, раздел 18.4), Web Push (public/service-worker.js,
               src/lib/push.ts, раздел 18.1); Dockerfile + nginx.conf —
               продовый образ (сборка на Node, раздача nginx с SPA-фолбэком
               на index.html для клиентских маршрутов). Общие элементы — по
               типам: components/ui (примитивы), components/common/{actions,
-              avatar,dialogs,feedback,typography}, components/layout;
+              avatar,dialogs,feedback,filters,navigation,typography},
+              components/layout; повторяющиеся механики — общими
+              компонентами: navigation/PageTabs (вкладки страницы в `?tab=`,
+              хук hooks/useUrlTab.ts) и SegmentedControl, filters/FilterSelect
+              (фильтр «Все/значение»), feedback/QueryState (загрузка, ошибка
+              или содержимое) и ErrorState, tasks/TaskCodeLink (код задачи
+              ссылкой);
               по разделам — components/{tasks,nodes,profile,admin,
               repositories,templates,llmAccounts,envVariables};
               styles/tokens.css + index.css — токены (цвета, шкала шрифтов
@@ -265,7 +283,9 @@ deploy/
               установленного сервера (раздел 20.6): флаг обслуживания,
               ожидание живых сессий, коммит из origin/main, пересборка всех
               образов (в т. ч. раннеров и tracker-session), дамп БД,
-              `.deploy/previous_ref`, миграции, перенос истории сессий; код
+              `.deploy/previous_ref`, `DEPLOYED_AT` в `.env`, миграции,
+              перенос истории сессий; при откате — данные новой версии в
+              понятный прежней вид (статусы, ссылки на библиотеку); код
               выхода 3 — отменено, сервер не изменён
   ci_deploy.sh — принудительная команда SSH-ключа развёртывания (раздел
               20.7): только `deploy <sha> [--force | --wait-idle <мин>]` и
@@ -296,7 +316,9 @@ alembic/
                  статус awaiting_limit и поля ожидания задачи (в т. ч.
                  попытка ждущей ноды), старт окна
                  и стоимость хода аккаунта, сжатие при смене аккаунта,
-                 бэкап в S3: настройки в system_settings и backup_runs);
+                 бэкап в S3: настройки в system_settings и backup_runs,
+                 таблица events, nodes.library_node_id и library_arguments,
+                 индекс app_logs.created_at);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
@@ -527,7 +549,8 @@ Postgres из `backend/tests/conftest.py`:
    предпросмотре промта и в `node_logs.rendered_prompt` — замаскированы
    (`RenderedText.display`); в сессию уходит настоящее значение.
 9. **Удаление вместо архивации запрещено** для: пайплайна, используемого хотя
-   бы одной задачей; системного промта, привязанного хотя бы к одной задаче.
+   бы одной задачей; системного промта, привязанного хотя бы к одной задаче
+   или выполняемого нодой пайплайна по ссылке (`nodes.library_node_id`).
    Разрешена только архивация. Ноду, которую использует задача,
    LLM-аккаунт, выбранный у задачи, и репозиторий, привязанный к любой
    задаче (`task_repositories` — её история), удалить нельзя — 409 (ТЗ 3.2);

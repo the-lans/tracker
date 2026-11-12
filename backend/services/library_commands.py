@@ -34,13 +34,16 @@ from services.errors import ConflictError, NotFoundError, ValidationError
 from services.manual_admission import ensure_manual_requests_open
 from services.system_settings import resolve_runner_image
 from services.task_launch import ensure_llm_for_request
-from services.template_context import RenderedText, render_for_task
+from services.template_context import RenderedText, render_for_task, render_node_guide_url
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 logger = get_logger("library_commands")
 COMMAND_TYPES = (NodeType.PLAIN_PROMPT, NodeType.SCRIPT)
+
+
+_GUIDE_FIELD = {"guide_url"}
 
 
 class CommandSnapshot(BaseModel):
@@ -59,6 +62,16 @@ class CommandSnapshot(BaseModel):
     retry_base_delay_seconds: int
     llm_output_last_n: int | None
     reasoning_effort: ReasoningEffort | None
+    # `{{node.guide_url}}` команды; у снимков, сделанных до появления поля, — нет.
+    guide_url: str | None = None
+
+    def to_json(self) -> str:
+        """
+        Пустой гайд в снимок не пишется: прежняя версия (раздел 20.6) читает
+        снимок без лишних полей (`extra="forbid"`) и иначе не выполнила бы
+        команду, поставленную в очередь до отката.
+        """
+        return self.model_dump_json(exclude=_GUIDE_FIELD if self.guide_url is None else None)
 
     def to_node(self, request: TaskManualRequestQueue) -> Node:
         return Node(
@@ -176,7 +189,7 @@ async def enqueue_command(
         command_name=node.slash_name,
         command_revision=node.revision,
         client_request_id=client_request_id,
-        command_snapshot_encrypted=encrypt(snapshot.model_dump_json()),
+        command_snapshot_encrypted=encrypt(snapshot.to_json()),
     )
     session.add(request)
     await session.commit()
@@ -212,6 +225,7 @@ async def snapshot_command(
         retry_base_delay_seconds=node.retry_base_delay_seconds,
         llm_output_last_n=node.llm_output_last_n,
         reasoning_effort=node.reasoning_effort,
+        guide_url=node.guide_url,
     )
 
 
@@ -240,6 +254,7 @@ async def render_command(
         template=snapshot.prompt_template or "",
         arguments=arguments,
         last_n=snapshot.llm_output_last_n,
+        node_guide_url=snapshot.guide_url,
     )
 
 
@@ -250,17 +265,24 @@ async def render_with_arguments(
     template: str,
     arguments: CommandArguments,
     last_n: int | None = None,
+    node_guide_url: str | None = None,
 ) -> RenderedText:
     """
     Аргументы подставляются после переменных и повторно не интерпретируются.
-    Без задачи переменные остаются текстом — так показывает предпросмотр библиотеки.
+    Без задачи переменные, кроме ``{{node.guide_url}}``, остаются текстом —
+    так показывает предпросмотр библиотеки.
     """
-    prepared = prepare_arguments(template, arguments)
     if task is None:
-        return RenderedText.literal(prepared.expand(prepared.text))
-    rendered = await render_for_task(session, task, prepared.text, last_n=last_n)
-    return RenderedText(
-        text=prepared.expand(rendered.text), display=prepared.expand(rendered.display)
+        prepared = prepare_arguments(template, arguments)
+        text = render_node_guide_url(prepared.text, node_guide_url)
+        return RenderedText.literal(prepared.expand(text))
+    return await render_for_task(
+        session,
+        task=task,
+        template=template,
+        last_n=last_n,
+        node_guide_url=node_guide_url,
+        arguments=arguments,
     )
 
 

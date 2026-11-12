@@ -40,6 +40,7 @@ from services.distributed_lock import LockNotAcquiredError, acquire_task_operati
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_library_prompt_attachable
 from services.library_commands import load_snapshot, render_command
+from services.library_links import COMMAND_ARGUMENTS_ENV
 from services.limit_wait import LimitGate, check_limit_gate, manual_request_node_type
 from services.manual_admission import ensure_manual_requests_open, lock_manual_task
 from services.node_runs import apply_node_outcome, mark_node_log_stopped, start_node_log
@@ -210,7 +211,7 @@ async def render_freeform_prompt(
     """
     if is_slash_command_text(text):
         return RenderedText.literal(text)
-    return await render_for_task(db_session, task, text)
+    return await render_for_task(db_session, task=task, template=text)
 
 
 _ACTIVE_REQUEST_STATUSES = (ManualRequestStatus.QUEUED, ManualRequestStatus.PROCESSING)
@@ -372,7 +373,7 @@ async def _run_library_prompt(
     )
     script_env = await resolve_script_env_or_none(db_session, node=node, task=task)
     if snapshot and node.node_type is NodeType.SCRIPT:
-        script_env = {**(script_env or {}), "TRACKER_COMMAND_ARGUMENTS": snapshot.raw_arguments}
+        script_env = {**(script_env or {}), COMMAND_ARGUMENTS_ENV: snapshot.raw_arguments}
     node_log = await start_node_log(
         db_session,
         NodeLog(

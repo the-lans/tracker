@@ -24,6 +24,7 @@ from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType
 from db.models.logs import NodeLog
 from db.models.pipelines import Node
 from services.failure_classification import is_transient_sdk_exception
+from services.library_links import resolve_linked_execution
 from services.limit_wait import LimitGate, check_limit_gate
 from services.llm_account_choice import LlmLimitWaitError
 from services.node_history import load_node_context_history
@@ -232,7 +233,15 @@ async def _run_pipeline_attempt(
     ``None`` вместо итога — остановка пользователем.
     """
     history = await load_node_context_history(db_session, task)
-    prompt = await resolve_node_prompt_or_none(db_session, node=node, task=task, history=history)
+    # Раздел 7.6: нода со ссылкой выполняет текущую версию промта библиотеки.
+    linked = await resolve_linked_execution(db_session, node)
+    prompt = await resolve_node_prompt_or_none(
+        db_session,
+        node=linked.node,
+        task=task,
+        history=history,
+        arguments=linked.arguments,
+    )
     node_log = await start_node_log(
         db_session,
         NodeLog(
@@ -241,6 +250,7 @@ async def _run_pipeline_attempt(
             trigger_type=NodeLogTriggerType.PIPELINE,
             attempt_number=attempt,
             rendered_prompt=logged_prompt(node, prompt),
+            command_revision=linked.revision,
         ),
     )
     if active_node_context is not None:
@@ -255,15 +265,18 @@ async def _run_pipeline_attempt(
     outcome = await _run_attempt(
         run_node_execution(
             execute_node(
-                node,
+                linked.node,
                 prompt=sent_prompt(prompt),
                 claude_session=claude_session,
                 repos_path=repos_path,
                 timeout_seconds=node.timeout_seconds,
                 db_session=db_session,
                 node_log_id=node_log.id,
-                runner_image=await resolve_runner_image(db_session, node),
-                script_env=await resolve_script_env_or_none(db_session, node=node, task=task),
+                runner_image=await resolve_runner_image(db_session, linked.node),
+                script_env=linked.script_env(
+                    await resolve_script_env_or_none(db_session, node=node, task=task),
+                ),
+                script_args=linked.script_args,
             ),
             node_type=node.node_type,
             claude_session=claude_session,

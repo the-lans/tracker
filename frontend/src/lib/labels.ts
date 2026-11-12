@@ -15,6 +15,8 @@ import {
   RepositoryRole,
   UserRole,
 } from "@/lib/types";
+import { EventCategory } from "@/lib/events.types";
+import { ContainerKind, ServerDependency, StatsPeriod, VolumeName } from "@/lib/monitoring.types";
 
 /** Человекочитаемые подписи значений enum — в интерфейсе не показываем внутренние коды. */
 
@@ -183,3 +185,70 @@ export const REMOTE_CONTROL_STATUS_LABEL: Record<RemoteControlStatus, string> = 
   [RemoteControlStatus.DISCONNECTED]: "мост отключён",
   [RemoteControlStatus.UNAVAILABLE]: "Просмотр в claude.ai/code недоступен",
 };
+
+/** Раздел 15.5: блоки страницы «Мониторинг». */
+export const SERVER_DEPENDENCY_LABEL: Record<ServerDependency, string> = {
+  [ServerDependency.POSTGRES]: "PostgreSQL",
+  [ServerDependency.REDIS]: "Redis",
+  [ServerDependency.LLM_PROXY]: "LLM-прокси",
+};
+
+/** Очереди Celery (раздел 20.3): кто их обслуживает. */
+export const CELERY_QUEUE_LABEL: Record<string, string> = {
+  celery: "Периодические задачи (worker)",
+  sessions: "Сессии задач (session-worker)",
+  backups: "Бэкапы (backup-worker)",
+};
+
+export const STATS_PERIOD_LABEL: Record<StatsPeriod, string> = {
+  [StatsPeriod.DAY]: "24 часа",
+  [StatsPeriod.WEEK]: "7 дней",
+};
+
+export const VOLUME_LABEL: Record<VolumeName, string> = {
+  [VolumeName.TASK_REPOS]: "Репозитории задач",
+  [VolumeName.USER_FILES]: "Файлы задач",
+  [VolumeName.CLAUDE_SESSIONS]: "Сессии агентов",
+  [VolumeName.LOG_ARCHIVE]: "Архив логов",
+};
+
+export const CONTAINER_KIND_LABEL: Record<ContainerKind, string> = {
+  [ContainerKind.SESSION]: "Сессия",
+  [ContainerKind.NODE]: "Script-нода",
+};
+
+/** Раздел 18.4: категория события в ленте. */
+export const EVENT_CATEGORY_LABEL: Record<EventCategory, string> = {
+  [EventCategory.TASK]: "Задачи",
+  [EventCategory.LLM_ACCOUNT]: "LLM-аккаунты",
+  [EventCategory.PERIODIC]: "Периодические задачи",
+  [EventCategory.BACKUP]: "Бэкапы",
+  [EventCategory.PROFILE]: "Профиль",
+};
+
+/** Цвет события по его типу (раздел 18.2); остальные — информационные. */
+const EVENT_TYPE_TONE: Record<string, BadgeTone> = {
+  done: "success",
+  backup_succeeded: "success",
+  backup_verified: "success",
+  periodic_task_recovered: "success",
+  failed: "danger",
+  autostart_failed: "danger",
+  queue_launch_failed: "danger",
+  library_prompt_failed: "danger",
+  backup_failed: "danger",
+  backup_verify_failed: "danger",
+  periodic_task_failed: "danger",
+  awaiting_decision: "warning",
+  awaiting_decision_reminder: "warning",
+  llm_login_required: "warning",
+  llm_limit_wait: "warning",
+  remote_control_disconnected: "warning",
+  manual_queue_request_expired: "warning",
+  gitlab_sync_failed: "warning",
+  stale_ssh_key: "warning",
+};
+
+export function eventTone(eventType: string): BadgeTone {
+  return EVENT_TYPE_TONE[eventType] ?? "info";
+}

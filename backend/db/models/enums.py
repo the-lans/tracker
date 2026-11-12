@@ -225,3 +225,18 @@ class BackupRunStatus(StrEnum):
     # Бэкап загружен, но часть файлов пропущена (заняты или менялись).
     WARNING = "warning"
     FAILED = "failed"
+
+
+class EventAudience(StrEnum):
+    """Раздел 18.4: событие одного пользователя или всех администраторов."""
+
+    USER = "user"
+    ADMINS = "admins"
+
+
+class EventCategory(StrEnum):
+    TASK = "task"
+    LLM_ACCOUNT = "llm_account"
+    PERIODIC = "periodic"
+    BACKUP = "backup"
+    PROFILE = "profile"

@@ -57,6 +57,15 @@ LIMIT_WAIT_RESET="UPDATE tasks SET status = CASE WHEN limit_wait_from_status::te
 # Периодические задачи воркера очереди: прежняя версия их не знает. Новая
 # создаёт их заново сидом (scripts/seed_periodic_tasks.py).
 QUEUE_PERIODIC_TASKS="'dispatch_ready_tasks','dispatch_night_tasks'"
+# Раздел 20.6: ссылки нод пайплайна на библиотеку и переменная
+# {{node.guide_url}}, которых не знает версия без этой миграции. Нода получает
+# копию содержимого элемента, переменная — гайд ноды; тем же запросом, что
+# downgrade миграции (_RESTORE_LIBRARY_CONTENT, _RESTORE_GUIDE_URL).
+LIBRARY_LINKS_MIGRATION="alembic/versions/c4e7a2b9d518_events_and_library_links.py"
+LIBRARY_CONTENT_RESET="UPDATE nodes SET prompt_template = library_items.prompt_template, command_invocation = library_items.command_invocation, script_language = library_items.script_language, script_content = library_items.script_content, docker_image = library_items.docker_image, guide_url = library_items.guide_url FROM nodes AS library_items WHERE nodes.library_node_id = library_items.id"
+# Периодическая задача замера места на диске: прежний worker её не знает.
+MONITORING_PERIODIC_TASKS="'measure_volume_usage'"
+GUIDE_URL_RESET="UPDATE nodes SET prompt_template = regexp_replace(prompt_template, '[{][{][[:space:]]*node[.]guide_url[[:space:]]*[}][}]', coalesce(guide_url, ''), 'g') WHERE prompt_template LIKE '%node.guide_url%'"
 # Флаг обслуживания (services/maintenance.py::MAINTENANCE_KEY): запуск задач
 # отвечает 503, воркер не берёт задачи из queued. TTL — срок ожидания плюс
 # запас на сборку и миграции: упавший скрипт не оставит флаг навсегда.
@@ -328,7 +337,8 @@ _generate_cliproxy_key() {
 
 # Перед каждой сборкой, во всех режимах: секреты, которых не знал .env
 # прежней версии, версия прокси из репозитория (обновление прокси — смена
-# версии в .env.example) и коммит сборки для /api/health (раздел 20.7).
+# версии в .env.example), коммит сборки для /api/health (раздел 20.7) и
+# время развёртывания для страницы «Мониторинг» (раздел 15.5).
 step_prepare_env_for_build() {
   _ensure_env_value SFTP_DB_PASSWORD "$(_generate_sftp_db_password)"
   _ensure_env_value CLIPROXY_API_KEY "$(_generate_cliproxy_key)"
@@ -338,6 +348,7 @@ step_prepare_env_for_build() {
   [ -n "${cliproxy_version}" ] || die "в ${ENV_EXAMPLE} не задана CLIPROXY_VERSION"
   _put_env_value CLIPROXY_VERSION "${cliproxy_version}"
   _put_env_value GIT_SHA "$(git -C "${INSTALL_DIR}" rev-parse HEAD)"
+  _put_env_value DEPLOYED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 
 # Шаг 3: генерация .env из .env.example — все секреты через openssl rand
@@ -680,7 +691,8 @@ step_wait_idle() {
 # прежний код не прочитал бы задачу с незнакомым статусом. Ждущие лимита
 # задачи уходят в failed (точка перезапуска — нода, которая ждала) или
 # обратно в refining; статусы до запуска — в new, а периодические задачи
-# воркера очереди, которых прежний worker не знает, удаляются. Одной
+# воркера очереди и замера диска, которых прежний worker не знает,
+# удаляются; ноды со ссылкой на библиотеку получают копию её промта. Одной
 # транзакцией, после checkout: если checkout не удался, БД не тронута. Сбой
 # здесь возвращает код на прежний коммит — сервер не изменён.
 _reset_unknown_task_statuses() {
@@ -692,7 +704,12 @@ _reset_unknown_task_statuses() {
   if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${PRE_LAUNCH_STATUSES_MIGRATION}" 2>/dev/null; then
     log "Обновление: у версии ${commit} нет статусов до запуска — такие задачи возвращаются в new"
     query+="UPDATE tasks SET status = 'new' WHERE status::text IN (${PRE_LAUNCH_STATUSES_ADDED})"
-    query+="; DELETE FROM periodic_tasks WHERE name IN (${QUEUE_PERIODIC_TASKS})"
+    query+="; DELETE FROM periodic_tasks WHERE name IN (${QUEUE_PERIODIC_TASKS}); "
+  fi
+  if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${LIBRARY_LINKS_MIGRATION}" 2>/dev/null; then
+    log "Обновление: у версии ${commit} нет ссылок на библиотеку и замера диска — ноды получают копию промта, {{node.guide_url}} — гайд ноды"
+    query+="${LIBRARY_CONTENT_RESET}; ${GUIDE_URL_RESET}"
+    query+="; DELETE FROM periodic_tasks WHERE name IN (${MONITORING_PERIODIC_TASKS})"
   fi
   [ -n "${query}" ] || return 0
   ( cd "${INSTALL_DIR}" \

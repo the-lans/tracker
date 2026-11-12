@@ -18,12 +18,15 @@ export function PromptTemplateField({
   allowNodeVariables,
   previewRequest,
   argumentHint,
+  withGuideVariable = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   allowNodeVariables: boolean;
   previewRequest: () => TemplatePreviewRequest;
   argumentHint?: string;
+  /** Раздел 5: {{node.guide_url}} — гайд этой же ноды, есть у обычного промта. */
+  withGuideVariable?: boolean;
 }) {
   const preview = useTemplatePreview();
   const [previewText, setPreviewText] = useState<string | null>(null);
@@ -52,7 +55,8 @@ export function PromptTemplateField({
       />
       <div className="mt-1 text-caption text-text-3">
         Доступные переменные: {"{{task.*}}"}, {"{{env.VAR}}"}
-        {allowNodeVariables && ", {{node.*}}"}, {"{{session.id}}"}
+        {allowNodeVariables && ", {{node.*}}"}
+        {withGuideVariable && ", {{node.guide_url}}"}, {"{{session.id}}"}
       </div>
       {withArguments && (
         <div className="mt-1.5">

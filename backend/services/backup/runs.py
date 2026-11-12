@@ -16,14 +16,13 @@ import sqlalchemy as sa
 
 from app_logging.config import get_logger
 from db.models.backups import BackupRun
-from db.models.enums import BackupRunKind, BackupRunStatus, UserRole
-from db.models.users import User
+from db.models.enums import BackupRunKind, BackupRunStatus
 from services.backup.bundle import BundleError
 from services.backup.crypto_gpg import GpgError
 from services.backup.dump import DumpError
 from services.backup.storage import StorageError
 from services.distributed_lock import wait_for_lock
-from services.notifications import NotificationEvent, notify_user_event
+from services.notifications import NotificationEvent, notify_admins
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -133,6 +132,20 @@ async def finish_run(
     return finished
 
 
+async def complete_run(
+    db_session: AsyncSession,
+    run: BackupRun,
+    *,
+    status: BackupRunStatus,
+    event: NotificationEvent,
+    detail: str,
+    **fields: Any,
+) -> None:
+    """Успешный итог; событие ленты — только тому вызову, который записал итог."""
+    if await finish_run(db_session, run, status=status, **fields):
+        await notify_admins(db_session, event=event, detail=detail)
+
+
 async def trim_runs(db_session: AsyncSession, *, kind: BackupRunKind) -> None:
     kept = (
         sa.select(BackupRun.id)
@@ -154,19 +167,6 @@ async def latest_run(db_session: AsyncSession, *, kind: BackupRunKind) -> Backup
         .limit(1),
     )
     return run
-
-
-async def notify_admins(db_session: AsyncSession, *, event: NotificationEvent, detail: str) -> None:
-    admin_ids = (
-        await db_session.scalars(
-            sa.select(User.id).where(
-                User.role == UserRole.ADMIN,
-                User.is_active == True,  # noqa: E712
-            ),
-        )
-    ).all()
-    for admin_id in admin_ids:
-        await notify_user_event(db_session, event=event, user_id=admin_id, detail=detail)
 
 
 def failure_message(exc: BaseException) -> str:

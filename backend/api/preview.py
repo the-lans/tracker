@@ -8,8 +8,9 @@
 существующей задачи (`{{task.*}}`/`{{env.*}}` резолвятся из строк БД) —
 без `task_id` эндпоинт лишь проверяет доступность переменных
 (`validate_template_variables`, та же проверка, что и при сохранении) и
-возвращает исходный текст без подстановки. Значения секретных переменных
-показываются замаскированными (раздел 19.4). Промт команды библиотеки
+возвращает исходный текст, подставив лишь ``{{node.guide_url}}`` из
+запроса. Значения секретных переменных показываются замаскированными
+(раздел 19.4). Промт команды библиотеки
 показывается с подставленными аргументами из `arguments` — так же, как при
 вызове `/имя аргументы`.
 """
@@ -32,7 +33,7 @@ from services.library_commands import render_with_arguments
 from services.manual_queue import render_freeform_prompt
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, load_node_context_history
 from services.pipeline_validation import PipelinePosition, pipeline_position, task_position
-from services.template_context import render_for_task
+from services.template_context import render_for_task, render_node_guide_url
 from services.templating import RenderScope, validate_template_variables
 
 router = APIRouter(prefix="/templates", tags=["templates"])
@@ -114,10 +115,12 @@ async def preview_template(
             task=task,
             template=body.text,
             arguments=parse_arguments(body.arguments),
+            node_guide_url=body.guide_url,
         )
         return TemplatePreviewResponse(rendered_text=rendered.display)
     if body.task_id is None:
-        return TemplatePreviewResponse(rendered_text=body.text)
+        echoed = render_node_guide_url(body.text, body.guide_url)
+        return TemplatePreviewResponse(rendered_text=echoed)
 
     task = await get_task_for_user(db_session, body.task_id, user=current_user)
 
@@ -133,9 +136,10 @@ async def preview_template(
 
     rendered_text = await render_for_task(
         db_session,
-        task,
-        body.text,
+        task=task,
+        template=body.text,
         history=history,
         last_n=position.llm_output_last_n,
+        node_guide_url=body.guide_url,
     )
     return TemplatePreviewResponse(rendered_text=rendered_text.display)

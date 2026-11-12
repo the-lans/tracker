@@ -18,6 +18,8 @@ import { LlmAccountsPage } from "@/pages/LlmAccountsPage";
 import { EnvVariablesPage } from "@/pages/EnvVariablesPage";
 import { ProfilePage } from "@/pages/ProfilePage";
 import { AdminPage } from "@/pages/AdminPage";
+import { EventsPage } from "@/pages/EventsPage";
+import { MonitoringPage } from "@/pages/MonitoringPage";
 
 export function App() {
   return (
@@ -37,9 +39,11 @@ export function App() {
                   <Route path="templates" element={<TemplatesPage />} />
                   <Route path="repositories" element={<RepositoriesPage />} />
                   <Route path="llm-accounts" element={<LlmAccountsPage />} />
+                  <Route path="events" element={<EventsPage />} />
                   <Route path="profile" element={<ProfilePage />} />
                   <Route element={<AdminRoute />}>
                     <Route path="admin" element={<AdminPage />} />
+                    <Route path="admin/monitoring" element={<MonitoringPage />} />
                     <Route path="env-variables" element={<EnvVariablesPage />} />
                   </Route>
                   <Route path="*" element={<Navigate to="/" replace />} />

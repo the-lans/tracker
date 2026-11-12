@@ -66,6 +66,9 @@ class NodeCreateRequest(BaseModel):
     llm_output_last_n: int | None = None
     # Раздел 3.1: None — уровень по умолчанию аккаунта, на котором нода выполняется.
     reasoning_effort: ReasoningEffort | None = None
+    # Раздел 7.6: нода пайплайна выполняет промт библиотеки с этими аргументами.
+    library_node_id: uuid.UUID | None = None
+    library_arguments: str | None = Field(default=None, max_length=MAX_COMMAND_LENGTH)
 
 
 class NodeUpdateRequest(BaseModel):
@@ -88,6 +91,9 @@ class NodeUpdateRequest(BaseModel):
     llm_output_last_n: int | None = None
     # Явный `null` возвращает уровень по умолчанию аккаунта.
     reasoning_effort: ReasoningEffort | None = None
+    # Явный `null` снимает ссылку на промт библиотеки — дальше нода хранит свой текст.
+    library_node_id: uuid.UUID | None = None
+    library_arguments: str | None = Field(default=None, max_length=MAX_COMMAND_LENGTH)
 
 
 class NodeResponse(BaseModel):
@@ -116,6 +122,8 @@ class NodeResponse(BaseModel):
     llm_output_last_n: int | None
     reasoning_effort: ReasoningEffort | None
     is_archived: bool
+    library_node_id: uuid.UUID | None = None
+    library_arguments: str | None = None
     created_by: uuid.UUID
 
 
@@ -136,6 +144,8 @@ class TemplatePreviewRequest(BaseModel):
     # Только для `scope = library`: аргументы команды, как их пишут после `/имя`;
     # `$1` и `$ARGUMENTS[1]` — первый.
     arguments: str | None = Field(default=None, max_length=MAX_COMMAND_LENGTH)
+    # `{{node.guide_url}}` — гайд из формы ноды или промта, ещё не сохранённый.
+    guide_url: str | None = None
 
 
 class TemplatePreviewResponse(BaseModel):

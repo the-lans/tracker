@@ -12,6 +12,7 @@ from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.logs import NodeLog
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
+from services.command_arguments import parse_arguments
 from services.crypto import encrypt
 from services.errors import ValidationError
 from services.node_history import NodeContextHistory
@@ -136,11 +137,49 @@ async def test_render_for_task_combines_all_sources(db_session: AsyncSession) ->
 
     rendered = await render_for_task(
         db_session,
-        task,
-        "{{task.code}} / {{env.REGION}} / {{session.id}}",
+        task=task,
+        template="{{task.code}} / {{env.REGION}} / {{session.id}}",
     )
 
     assert rendered.text == f"{task.code} / eu / sess-123"
+
+
+class TestRenderForTaskNodeFields:
+    @pytest.mark.parametrize(
+        ("guide_url", "expected"),
+        [
+            ("https://wiki.example.com/guide", "гайд https://wiki.example.com/guide"),
+            (None, "гайд "),
+        ],
+        ids=["задан", "не задан"],
+    )
+    async def test_guide_url(
+        self,
+        db_session: AsyncSession,
+        guide_url: str | None,
+        expected: str,
+    ) -> None:
+        task = await _make_task(db_session)
+        rendered = await render_for_task(
+            db_session,
+            task=task,
+            template="гайд {{node.guide_url}}",
+            node_guide_url=guide_url,
+        )
+        assert (rendered.text, rendered.display) == (expected, expected)
+
+    async def test_arguments_after_variables(self, db_session: AsyncSession) -> None:
+        task = await _make_task(db_session)
+        db_session.add(_global_env_variable("REGION", "eu"))
+        await db_session.flush()
+        rendered = await render_for_task(
+            db_session,
+            task=task,
+            template="{{env.REGION}}: $1",
+            arguments=parse_arguments("'{{task.code}}'"),
+        )
+        # Аргумент подставляется после переменных и повторно не рендерится.
+        assert rendered.text == "eu: {{task.code}}"
 
 
 async def _attach_repository_variable(

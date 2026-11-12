@@ -44,6 +44,8 @@ export type MockedApi = ReturnType<typeof mockApi>;
 export function mockApi(initialRoutes: MockRoutes = {}) {
   const routes: MockRoutes = { ...initialRoutes };
   const requests: RecordedRequest[] = [];
+  // Query-строки — отдельно: записи `requests` тесты сравнивают целиком.
+  const queries: Array<{ route: string; query: Record<string, string> }> = [];
 
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), window.location.origin);
@@ -51,6 +53,7 @@ export function mockApi(initialRoutes: MockRoutes = {}) {
     const path = url.pathname.replace(API_PREFIX, "");
     const body = typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : undefined;
     requests.push({ method, path, body });
+    queries.push({ route: `${method} ${path}`, query: Object.fromEntries(url.searchParams) });
 
     const route = routes[`${method} ${path}`];
     const response: unknown = await (typeof route === "function" ? route(body) : route);
@@ -74,5 +77,8 @@ export function mockApi(initialRoutes: MockRoutes = {}) {
     },
     /** Запросы на изменение (без GET) — то, что сделал пользователь. */
     mutations: () => requests.filter((request) => request.method !== "GET"),
+    /** Параметры query-строки каждого запроса маршрута «МЕТОД /путь» по порядку. */
+    queriesOf: (route: string) =>
+      queries.filter((entry) => entry.route === route).map((entry) => entry.query),
   };
 }

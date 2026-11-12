@@ -36,15 +36,22 @@ from db.session import async_session_factory
 from services import gitlab_sync, maintenance_tasks, users
 from services.autostart import run_scheduled_autostart_check
 from services.backup.jobs import backup_job, verify_job
+from services.events import purge_old_events
 from services.limit_wait import limit_waits_to_resume
 from services.llm_account_checks import check_llm_accounts
 from services.log_rotation import resolve_archive_root, rotate_node_logs
 from services.maintenance import maintenance_active
+from services.maintenance_tasks import DEFAULT_LOG_ROTATION_THRESHOLD_DAYS
 from services.manual_queue import STALE_QUEUED_REQUEST_AGE, expire_stale_manual_queue_requests
-from services.periodic_tasks import mark_periodic_task_running, record_periodic_task_run
+from services.periodic_tasks import (
+    mark_periodic_task_running,
+    notify_periodic_outcome,
+    record_periodic_task_run,
+)
 from services.redis_connection import redis_connection
 from services.remote_control import check_session_bridges
 from services.task_dispatcher import dispatch_queued_tasks, pending_queue_session_ids
+from services.volume_usage import store_volume_usage
 from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import (
     BACKUP_TO_S3,
@@ -62,6 +69,8 @@ if TYPE_CHECKING:
 
 logger = get_logger("tasks.periodic")
 
+_OWN_EVENT_TASKS = frozenset({BACKUP_TO_S3, VERIFY_S3_BACKUP})
+
 
 async def _get_periodic_task(db_session: AsyncSession, name: str) -> PeriodicTask | None:
     stmt = sa.select(PeriodicTask).where(PeriodicTask.name == name)
@@ -77,13 +86,16 @@ async def _run_periodic_async(name: str, body: Callable[[AsyncSession], Awaitabl
             return
 
         ran_at = datetime.now(UTC)
+        previous_status = periodic_task.last_run_status
         await mark_periodic_task_running(db_session, periodic_task=periodic_task)
         status = PeriodicRunStatus.SUCCESS
+        error: str | None = None
         try:
             await body(db_session)
         except Exception as exc:  # noqa: BLE001 — раздел 16.3: любая ошибка периодической задачи логируется, не роняет процесс
             status = PeriodicRunStatus.FAILED
-            logger.error("periodic_task_failed", name=name, error=str(exc))
+            error = str(exc)
+            logger.error("periodic_task_failed", name=name, error=error)
             # Сбой запроса оставляет транзакцию прерванной: без отката итог
             # запуска не записался бы, а статус так и остался бы `running`.
             await db_session.rollback()
@@ -100,6 +112,15 @@ async def _run_periodic_async(name: str, body: Callable[[AsyncSession], Awaitabl
             status=status,
             ran_at=ran_at,
         )
+        # Бэкап и проверка сообщают о своём итоге сами (раздел 20.4).
+        if name not in _OWN_EVENT_TASKS:
+            await notify_periodic_outcome(
+                db_session,
+                title=periodic_task.display_name,
+                previous=previous_status,
+                current=status,
+                error=error,
+            )
 
 
 def _run_periodic(name: str, body: Callable[[AsyncSession], Awaitable[None]]) -> None:
@@ -289,18 +310,36 @@ def purge_orphaned_playwright_processes() -> None:
 @celery_app.task(name="rotate_task_logs")
 def rotate_task_logs() -> None:
     async def body(db_session: AsyncSession) -> None:
+        now = datetime.now(UTC)
         result = await rotate_node_logs(
             db_session,
             archive_root=resolve_archive_root(),
-            now=datetime.now(UTC),
+            now=now,
         )
         logger.info(
             "node_logs_rotated",
             files=len(result.archived_files),
             deleted=result.deleted_count,
         )
+        # Раздел 18.4: лента событий хранится столько же, сколько `node_logs`.
+        purged = await purge_old_events(
+            db_session,
+            now=now,
+            threshold_days=DEFAULT_LOG_ROTATION_THRESHOLD_DAYS,
+        )
+        logger.info("events_purged", deleted=purged)
 
     _run_periodic("rotate_task_logs", body)
+
+
+@celery_app.task(name="measure_volume_usage")
+def measure_volume_usage() -> None:
+    async def body(_db_session: AsyncSession) -> None:
+        async with redis_connection() as redis_client:
+            snapshot = await store_volume_usage(redis_client, now=datetime.now(UTC))
+        logger.info("volume_usage_measured", sizes=snapshot.sizes)
+
+    _run_periodic("measure_volume_usage", body)
 
 
 @celery_app.task(name="revoke_stale_sshfs_keys")

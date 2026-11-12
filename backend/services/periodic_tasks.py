@@ -25,6 +25,7 @@ from app_logging.config import get_logger
 from db.models.enums import PeriodicRunStatus, PeriodicScheduleType
 from db.models.periodic import PeriodicTask
 from services.errors import ValidationError
+from services.notifications import NotificationEvent, notify_admins
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -32,6 +33,9 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger("periodic_tasks")
+
+# Текст ошибки в ленте — коротко; полный текст остаётся в `app_logs`.
+_EVENT_ERROR_MAX_LENGTH = 500
 
 
 async def list_enabled_periodic_tasks(db_session: AsyncSession) -> list[PeriodicTask]:
@@ -155,3 +159,33 @@ async def record_periodic_task_run(
         status=status,
         next_run_at=periodic_task.next_run_at,
     )
+
+
+def outcome_event(
+    previous: PeriodicRunStatus | None,
+    current: PeriodicRunStatus,
+) -> NotificationEvent | None:
+    """
+    Раздел 16.3, 18.4: событие — только при смене итога, а не на каждый
+    запуск: задача сломалась или снова выполняется успешно.
+    """
+    if current is PeriodicRunStatus.FAILED and previous is not PeriodicRunStatus.FAILED:
+        return NotificationEvent.PERIODIC_TASK_FAILED
+    if current is PeriodicRunStatus.SUCCESS and previous is PeriodicRunStatus.FAILED:
+        return NotificationEvent.PERIODIC_TASK_RECOVERED
+    return None
+
+
+async def notify_periodic_outcome(
+    db_session: AsyncSession,
+    *,
+    title: str,
+    previous: PeriodicRunStatus | None,
+    current: PeriodicRunStatus,
+    error: str | None = None,
+) -> None:
+    event = outcome_event(previous, current)
+    if event is None:
+        return
+    detail = title if not error else f"{title}: {error[:_EVENT_ERROR_MAX_LENGTH]}"
+    await notify_admins(db_session, event=event, detail=detail)

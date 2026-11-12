@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -23,12 +24,13 @@ from db.models.enums import EnvVariableScope
 from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
+from services.command_arguments import CommandArguments, prepare_arguments
 from services.crypto import decrypt
 from services.errors import ValidationError
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.task_artifacts import task_artifacts_path
 from services.task_workspace import task_repos_path
-from services.templating import VARIABLE_PATTERN, render_template
+from services.templating import NODE_GUIDE_URL_VARIABLE, VARIABLE_PATTERN, render_template
 
 logger = get_logger("template_context")
 
@@ -273,25 +275,52 @@ class RenderedText:
         return cls(text=text, display=text)
 
 
+def render_node_guide_url(template: str, node_guide_url: str | None) -> str:
+    """
+    Подставляет только ``{{node.guide_url}}``: его значение известно и без
+    задачи (предпросмотр формы ноды или промта библиотеки), остальные
+    переменные остаются текстом.
+    """
+
+    def _substitute(match: re.Match[str]) -> str:
+        if f"{match.group(1)}.{match.group(2)}" == NODE_GUIDE_URL_VARIABLE:
+            return _stringify(node_guide_url)
+        return match.group(0)
+
+    return VARIABLE_PATTERN.sub(_substitute, template)
+
+
 async def render_for_task(
     session: AsyncSession,
+    *,
     task: Task,
     template: str,
-    *,
     history: NodeContextHistory = EMPTY_NODE_CONTEXT_HISTORY,
     last_n: int | None = None,
+    node_guide_url: str | None = None,
+    arguments: CommandArguments | None = None,
 ) -> RenderedText:
     """Полный рендеринг: собирает контекст из всех источников раздела 5 и подставляет.
+
+    ``node_guide_url`` — гайд самой выполняемой ноды или промта библиотеки
+    (``{{node.guide_url}}``); у свободного ввода своей ноды нет.
+    ``arguments`` — аргументы команды библиотеки: подставляются после
+    переменных и повторно не интерпретируются.
 
     Единственная функция, кроме ``resolve_env_entry``, которой нужна сессия
     БД — сканирует шаблон на ``{{env.KEY}}`` и резолвит каждую переменную;
     остальной контекст (``task``/``session``/``node``) собирается из уже
     переданных объектов.
     """
+    expand: Callable[[str], str] = str
+    if arguments is not None:
+        prepared = prepare_arguments(template, arguments)
+        template, expand = prepared.text, prepared.expand
     context = {
         **build_task_context(task),
         **build_session_context(task),
         **build_node_context(history, last_n=last_n),
+        NODE_GUIDE_URL_VARIABLE: _stringify(node_guide_url),
     }
     display_context = dict(context)
     for namespace, key in VARIABLE_PATTERN.findall(template):
@@ -304,6 +333,6 @@ async def render_for_task(
         display_context[f"env.{key}"] = SECRET_MASK if is_secret else value
 
     return RenderedText(
-        text=render_template(template, context),
-        display=render_template(template, display_context),
+        text=expand(render_template(template, context)),
+        display=expand(render_template(template, display_context)),
     )

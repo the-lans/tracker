@@ -32,7 +32,12 @@ from services.command_arguments import normalize_slash_name
 from services.errors import ConflictError, NotFoundError
 from services.integrity import count_library_prompt_usage, ensure_node_deletable
 from services.library_commands import validate_command_node
-from services.pipeline_validation import validate_node_shape, validate_pipeline_templates
+from services.library_links import attach_library_source
+from services.pipeline_validation import (
+    drop_unused_guide,
+    validate_node_shape,
+    validate_pipeline_templates,
+)
 from services.system_settings import resolve_node_execution_defaults
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
@@ -74,6 +79,7 @@ async def _validate_and_flush(
     check_description: bool = True,
 ) -> None:
     """Проверка ноды и — для ноды пайплайна — всего пайплайна в новом составе."""
+    drop_unused_guide(node)
     validate_node_shape(node, check_description=check_description)
     validate_command_node(node)
     db_session.add(node)
@@ -117,6 +123,27 @@ async def _apply_execution_values(
     node.retry_base_delay_seconds = defaults.retry_base_delay_seconds
 
 
+async def _apply_library_link(
+    db_session: AsyncSession,
+    node: Node,
+    body: NodeUpdateRequest,
+) -> None:
+    """Раздел 7.6: не переданные поля ссылки остаются прежними."""
+    passed = body.model_fields_set
+    if not passed.intersection({"library_node_id", "library_arguments"}):
+        return
+    await attach_library_source(
+        db_session,
+        node,
+        library_node_id=(
+            body.library_node_id if "library_node_id" in passed else node.library_node_id
+        ),
+        arguments=(
+            body.library_arguments if "library_arguments" in passed else node.library_arguments
+        ),
+    )
+
+
 @router.post("", response_model=NodeResponse, status_code=201)
 async def create_node(
     body: NodeCreateRequest,
@@ -153,6 +180,12 @@ async def create_node(
         llm_output_last_n=body.llm_output_last_n,
         reasoning_effort=body.reasoning_effort,
         created_by=created_by,
+    )
+    await attach_library_source(
+        db_session,
+        node,
+        library_node_id=body.library_node_id,
+        arguments=body.library_arguments,
     )
     await _validate_and_flush(db_session, node)
     await db_session.commit()
@@ -230,7 +263,7 @@ async def update_node(
         node.script_content = body.script_content
     if body.docker_image is not None:
         node.docker_image = body.docker_image
-    if body.guide_url is not None:
+    if "guide_url" in body.model_fields_set:
         node.guide_url = body.guide_url
     if body.is_skipped is not None:
         node.is_skipped = body.is_skipped
@@ -240,6 +273,7 @@ async def update_node(
         node.llm_output_last_n = body.llm_output_last_n
     if "reasoning_effort" in body.model_fields_set:
         node.reasoning_effort = body.reasoning_effort
+    await _apply_library_link(db_session, node, body)
 
     await _validate_and_flush(
         db_session,

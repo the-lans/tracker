@@ -4,12 +4,13 @@ import { ArrowLeft, Layers, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { LibraryLinkLabel } from "@/components/nodes/LibraryLinkLabel";
 import { NodeForm } from "@/components/nodes/NodeForm";
 import { NodeReorderButton } from "@/components/nodes/NodeReorderButton";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { NODE_TYPE_LABEL } from "@/lib/labels";
 import { usePipeline, usePipelineNodes } from "@/hooks/usePipelines";
-import { useDeleteNode } from "@/hooks/useNodes";
+import { useDeleteNode, useNodes } from "@/hooks/useNodes";
 import { errorMessage } from "@/lib/errors";
 import type { NodeItem } from "@/lib/types";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
@@ -23,6 +24,7 @@ export function PipelineDetailPage() {
   const { pipelineId } = useParams<{ pipelineId: string }>();
   const { data: pipeline } = usePipeline(pipelineId);
   const { data: nodes, isLoading } = usePipelineNodes(pipelineId);
+  const { data: libraryItems } = useNodes({ libraryOnly: true, includeArchived: true });
   const deleteNode = useDeleteNode();
   const [dialogNode, setDialogNode] = useState<EditTarget<NodeItem>>(null);
 
@@ -58,6 +60,11 @@ export function PipelineDetailPage() {
                 <div className="text-caption font-bold uppercase text-text-3">
                   {NODE_TYPE_LABEL[node.node_type]}
                 </div>
+                {node.library_node_id && (
+                  <LibraryLinkLabel
+                    source={libraryItems?.find((item) => item.id === node.library_node_id)}
+                  />
+                )}
               </button>
               <div className="ml-auto flex shrink-0 items-center">
               <NodeReorderButton node={node} neighbor={sorted[index - 1]} direction="up" />
@@ -99,6 +106,7 @@ export function PipelineDetailPage() {
             <NodeForm
               mode="pipeline"
               pipelineId={pipelineId}
+              pipelineOwnerId={pipeline?.created_by}
               orderIndex={item === undefined ? nextOrderIndex : undefined}
               node={item}
               onSaved={close}

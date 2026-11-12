@@ -88,12 +88,22 @@ async def ensure_pipeline_deletable(session: AsyncSession, pipeline_id: uuid.UUI
         )
 
 
+async def library_item_is_linked(session: AsyncSession, library_node_id: uuid.UUID) -> bool:
+    """Раздел 7.6: на промт библиотеки ссылается хотя бы одна нода пайплайна."""
+    stmt = sa.select(sa.exists().where(Node.library_node_id == library_node_id))
+    return bool(await session.scalar(stmt))
+
+
 async def ensure_node_deletable(session: AsyncSession, node: Node) -> None:
     """
     Раздел 3.2: ноду, которую использует хотя бы одна задача (привязка,
     история выполнения, очередь), удалить нельзя. Промт библиотеки вместо
     этого архивируется, нода пайплайна — пропускается по умолчанию.
     """
+    if node.is_library_item and await library_item_is_linked(session, node.id):
+        raise ConflictError(
+            "Промт выполняют ноды пайплайнов — вместо удаления доступна архивация",
+        )
     if not await _node_is_referenced(session, node.id):
         return
     if node.pipeline_id is None:
@@ -186,7 +196,11 @@ async def count_library_prompt_usage(db_session: AsyncSession) -> list[tuple[uui
         "EXISTS (SELECT 1 FROM task_manual_request_queue "
         "WHERE task_manual_request_queue.node_id = nodes.id "
         "AND task_manual_request_queue.task_id = tasks.id "
-        "AND task_manual_request_queue.command_name IS NOT NULL)) GROUP BY nodes.id"
+        "AND task_manual_request_queue.command_name IS NOT NULL) OR "
+        # Раздел 7.6: задача выполняет промт нодой пайплайна со ссылкой на него.
+        "EXISTS (SELECT 1 FROM task_nodes JOIN nodes AS linking_nodes "
+        "ON linking_nodes.id = task_nodes.node_id WHERE task_nodes.task_id = tasks.id "
+        "AND linking_nodes.library_node_id = nodes.id)) GROUP BY nodes.id"
     )
     return [(node_id, int(count)) for node_id, count in (await db_session.execute(stmt)).all()]
 
