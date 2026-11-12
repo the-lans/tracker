@@ -67,8 +67,8 @@ async def resolve_node_prompt(
         raise ValueError(message)
     return await render_for_task(
         db_session,
-        task,
-        node.prompt_template,
+        task=task,
+        template=node.prompt_template,
         history=history,
         last_n=node.llm_output_last_n,
         node_guide_url=node_guide_url(node),

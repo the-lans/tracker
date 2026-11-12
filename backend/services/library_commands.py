@@ -278,8 +278,8 @@ async def render_with_arguments(
         return RenderedText.literal(prepared.expand(text))
     return await render_for_task(
         session,
-        task,
-        template,
+        task=task,
+        template=template,
         last_n=last_n,
         node_guide_url=node_guide_url,
         arguments=arguments,

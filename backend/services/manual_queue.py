@@ -211,7 +211,7 @@ async def render_freeform_prompt(
     """
     if is_slash_command_text(text):
         return RenderedText.literal(text)
-    return await render_for_task(db_session, task, text)
+    return await render_for_task(db_session, task=task, template=text)
 
 
 _ACTIVE_REQUEST_STATUSES = (ManualRequestStatus.QUEUED, ManualRequestStatus.PROCESSING)

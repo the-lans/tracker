@@ -30,7 +30,7 @@ from services.errors import ValidationError
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.task_artifacts import task_artifacts_path
 from services.task_workspace import task_repos_path
-from services.templating import NODE_GUIDE_URL, VARIABLE_PATTERN, render_template
+from services.templating import NODE_GUIDE_URL_VARIABLE, VARIABLE_PATTERN, render_template
 
 logger = get_logger("template_context")
 
@@ -283,7 +283,7 @@ def render_node_guide_url(template: str, node_guide_url: str | None) -> str:
     """
 
     def _substitute(match: re.Match[str]) -> str:
-        if (match.group(1), match.group(2)) == ("node", NODE_GUIDE_URL):
+        if f"{match.group(1)}.{match.group(2)}" == NODE_GUIDE_URL_VARIABLE:
             return _stringify(node_guide_url)
         return match.group(0)
 
@@ -292,9 +292,9 @@ def render_node_guide_url(template: str, node_guide_url: str | None) -> str:
 
 async def render_for_task(
     session: AsyncSession,
+    *,
     task: Task,
     template: str,
-    *,
     history: NodeContextHistory = EMPTY_NODE_CONTEXT_HISTORY,
     last_n: int | None = None,
     node_guide_url: str | None = None,
@@ -320,7 +320,7 @@ async def render_for_task(
         **build_task_context(task),
         **build_session_context(task),
         **build_node_context(history, last_n=last_n),
-        f"node.{NODE_GUIDE_URL}": _stringify(node_guide_url),
+        NODE_GUIDE_URL_VARIABLE: _stringify(node_guide_url),
     }
     display_context = dict(context)
     for namespace, key in VARIABLE_PATTERN.findall(template):

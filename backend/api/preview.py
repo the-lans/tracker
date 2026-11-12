@@ -136,8 +136,8 @@ async def preview_template(
 
     rendered_text = await render_for_task(
         db_session,
-        task,
-        body.text,
+        task=task,
+        template=body.text,
         history=history,
         last_n=position.llm_output_last_n,
         node_guide_url=body.guide_url,

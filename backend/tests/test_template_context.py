@@ -137,8 +137,8 @@ async def test_render_for_task_combines_all_sources(db_session: AsyncSession) ->
 
     rendered = await render_for_task(
         db_session,
-        task,
-        "{{task.code}} / {{env.REGION}} / {{session.id}}",
+        task=task,
+        template="{{task.code}} / {{env.REGION}} / {{session.id}}",
     )
 
     assert rendered.text == f"{task.code} / eu / sess-123"
@@ -162,8 +162,8 @@ class TestRenderForTaskNodeFields:
         task = await _make_task(db_session)
         rendered = await render_for_task(
             db_session,
-            task,
-            "гайд {{node.guide_url}}",
+            task=task,
+            template="гайд {{node.guide_url}}",
             node_guide_url=guide_url,
         )
         assert (rendered.text, rendered.display) == (expected, expected)
@@ -174,8 +174,8 @@ class TestRenderForTaskNodeFields:
         await db_session.flush()
         rendered = await render_for_task(
             db_session,
-            task,
-            "{{env.REGION}}: $1",
+            task=task,
+            template="{{env.REGION}}: $1",
             arguments=parse_arguments("'{{task.code}}'"),
         )
         # Аргумент подставляется после переменных и повторно не рендерится.

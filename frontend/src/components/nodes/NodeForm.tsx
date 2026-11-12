@@ -2,15 +2,15 @@ import { useState } from "react";
 import { Input, Textarea } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { DialogFooter } from "@/components/ui/dialog";
 import { LibrarySourceField } from "@/components/nodes/LibrarySourceField";
+import { NodeGuideField } from "@/components/nodes/NodeGuideField";
+import { NodeTypeField } from "@/components/nodes/NodeTypeField";
+import {
+  PROMPT_TYPES,
+  linkedContentPayload,
+  ownContentPayload,
+} from "@/components/nodes/nodeContent";
 import { NodeEffortField } from "@/components/nodes/NodeEffortField";
 import { NodeExecutionFields } from "@/components/nodes/NodeExecutionFields";
 import { PromptTemplateField } from "@/components/nodes/PromptTemplateField";
@@ -30,11 +30,9 @@ import {
   type ReasoningEffort,
   type TemplatePreviewRequest,
 } from "@/lib/types";
-import { NODE_TYPE_LABEL } from "@/lib/labels";
 
 const PIPELINE_ONLY_TYPES = Object.values(NodeType);
 const LIBRARY_ALLOWED_TYPES = [NodeType.PLAIN_PROMPT, NodeType.SLASH_COMMAND, NodeType.SCRIPT];
-const PROMPT_TYPES: readonly NodeType[] = [NodeType.PLAIN_PROMPT, NodeType.PLAN_PROMPT];
 /** Раздел 11.1: уровень рассуждений — у нод, которые выполняет модель. */
 const EFFORT_TYPES: readonly NodeType[] = [
   NodeType.PLAIN_PROMPT,
@@ -114,29 +112,12 @@ export function NodeForm({
       : { text: promptTemplate, scope: "library", ...guide };
   }
 
-  /** Содержимое ноды: своё или ссылка на промт библиотеки (поля содержимого тогда пусты). */
   function contentFields() {
-    if (linked) {
-      return {
-        node_type: effectiveType,
-        prompt_template: null,
-        command_invocation: null,
-        script_language: null,
-        script_content: null,
-        guide_url: null,
-        library_node_id: librarySource.libraryNodeId,
-        library_arguments: librarySource.arguments.trim() || null,
-      };
-    }
-    return {
-      node_type: nodeType,
-      prompt_template: PROMPT_TYPES.includes(nodeType) ? promptTemplate : null,
-      command_invocation: nodeType === NodeType.SLASH_COMMAND ? commandInvocation : null,
-      script_language: nodeType === NodeType.SCRIPT ? scriptLanguage : null,
-      script_content: nodeType === NodeType.SCRIPT ? scriptContent : null,
-      guide_url: withGuide ? guideUrl || null : null,
-      ...(isPipeline ? { library_node_id: null, library_arguments: null } : {}),
-    };
+    if (linked) return linkedContentPayload(librarySource, effectiveType);
+    return ownContentPayload(
+      { nodeType, promptTemplate, commandInvocation, scriptLanguage, scriptContent, guideUrl },
+      { isPipeline },
+    );
   }
 
   function handleSave() {
@@ -206,27 +187,7 @@ export function NodeForm({
         />
       )}
       {!linked && <>
-        <div>
-          <Label htmlFor="node-type">Тип ноды</Label>
-          <Select value={nodeType} onValueChange={(v) => setNodeType(v as NodeType)}>
-            <SelectTrigger id="node-type">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {availableTypes.map((type) => (
-                <SelectItem key={type} value={type}>
-                  {NODE_TYPE_LABEL[type]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {nodeType === NodeType.PLAN_PROMPT && (
-          <div className="rounded-md border border-info-tint bg-info-tint px-3 py-2 text-note text-info-text">
-            Нода доступна только внутри пайплайна и не может быть сохранена как элемент библиотеки.
-          </div>
-        )}
+        <NodeTypeField value={nodeType} types={availableTypes} onChange={setNodeType} />
 
         {PROMPT_TYPES.includes(nodeType) && (
           <PromptTemplateField
@@ -256,13 +217,7 @@ export function NodeForm({
           />
         )}
 
-        {withGuide && (
-          <div>
-            <Label htmlFor="node-guide">Гайд (URL Confluence)</Label>
-            <Input id="node-guide" value={guideUrl} onChange={(e) => setGuideUrl(e.target.value)} />
-            <p className="mt-1 text-small text-text-3">В тексте промта — {"{{node.guide_url}}"}.</p>
-          </div>
-        )}
+        {withGuide && <NodeGuideField value={guideUrl} onChange={setGuideUrl} />}
       </>}
 
       {EFFORT_TYPES.includes(effectiveType) && (

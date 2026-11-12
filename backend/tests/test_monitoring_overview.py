@@ -500,17 +500,18 @@ class TestContainers:
         assert (container.task_id, container.orphaned) == (None, False)
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "/monitoring/overview",
-        "/monitoring/node-stats",
-        "/monitoring/llm-usage",
-        "/monitoring/disk",
-        "/monitoring/containers",
-    ],
-)
-async def test_admin_only(authed_client: AsyncClient, path: str) -> None:
-    response = await authed_client.get(path)
+class TestAdminAccess:
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/monitoring/overview",
+            "/monitoring/node-stats",
+            "/monitoring/llm-usage",
+            "/monitoring/disk",
+            "/monitoring/containers",
+        ],
+    )
+    async def test_admin_only(self, authed_client: AsyncClient, path: str) -> None:
+        response = await authed_client.get(path)
 
-    assert response.status_code == 403
+        assert response.status_code == 403

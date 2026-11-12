@@ -1,4 +1,4 @@
-import { NodeType } from "@/lib/types";
+import { NodeType, type ScriptLanguage } from "@/lib/types";
 
 /** `null` — поле пустое: backend возьмёт значение из «Системных настроек» и у новой ноды, и при правке. */
 export interface NodeExecutionValues {
@@ -29,3 +29,13 @@ export const LINKABLE_NODE_TYPES: readonly NodeType[] = [
   NodeType.SLASH_COMMAND,
   NodeType.SCRIPT,
 ];
+
+/** Поля содержимого ноды, заполненные в форме вручную. */
+export interface OwnNodeContent {
+  nodeType: NodeType;
+  promptTemplate: string;
+  commandInvocation: string;
+  scriptLanguage: ScriptLanguage;
+  scriptContent: string;
+  guideUrl: string;
+}

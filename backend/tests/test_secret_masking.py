@@ -57,7 +57,7 @@ class TestRender:
         db_session.add(_global("API_KEY", "value-1", is_secret=is_secret))
         await db_session.flush()
 
-        rendered = await render_for_task(db_session, task, "key={{env.API_KEY}}")
+        rendered = await render_for_task(db_session, task=task, template="key={{env.API_KEY}}")
 
         assert rendered.text == "key=value-1"
         assert rendered.display == f"key={shown}"
@@ -67,7 +67,7 @@ class TestRender:
         db_session.add(TaskEnvVariable(task_id=task.id, key="TOKEN", value_encrypted=encrypt("t")))
         await db_session.flush()
 
-        rendered = await render_for_task(db_session, task, "{{env.TOKEN}}")
+        rendered = await render_for_task(db_session, task=task, template="{{env.TOKEN}}")
 
         assert (rendered.text, rendered.display) == ("t", SECRET_MASK)
 

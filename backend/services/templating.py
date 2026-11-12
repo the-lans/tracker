@@ -77,7 +77,9 @@ NODE_FIELD_REQUIRED_PRECEDING_TYPES: dict[str, frozenset[NodeType]] = {
 # {{node.guide_url}} — поле САМОЙ ноды (раздел 5): позиция в пайплайне не
 # нужна, поэтому переменная доступна и промту библиотеки, но не свободному
 # вводу — у него нет своей ноды.
+NODE_NAMESPACE = "node"
 NODE_GUIDE_URL = "guide_url"
+NODE_GUIDE_URL_VARIABLE = f"{NODE_NAMESPACE}.{NODE_GUIDE_URL}"
 NODE_SELF_FIELDS = frozenset({NODE_GUIDE_URL})
 
 
@@ -113,7 +115,7 @@ def validate_template_variables(
                 raise ValidationError(f"Неизвестная переменная {{{{session.{field}}}}}")
         elif namespace == "env":
             continue  # имя переменной окружения — произвольное, раздел 5
-        elif namespace == "node":
+        elif namespace == NODE_NAMESPACE:
             _validate_node_variable(
                 field,
                 scope=scope,
