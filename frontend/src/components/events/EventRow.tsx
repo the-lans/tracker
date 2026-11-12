@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { EventCategory, type TrackerEvent } from "@/lib/events.types";
 import { EVENT_CATEGORY_LABEL, eventTone } from "@/lib/labels";
 import { formatDateTime } from "@/lib/utils";
+import { WRAP_ROW } from "@/styles/classes";
 
 const CATEGORY_ICON: Record<EventCategory, LucideIcon> = {
   [EventCategory.TASK]: ListChecks,
@@ -22,7 +23,7 @@ export function EventRow({ event }: { event: TrackerEvent }) {
         <Icon className="size-4" aria-label={EVENT_CATEGORY_LABEL[event.category]} />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <div className={WRAP_ROW}>
           <Badge tone={eventTone(event.event_type)}>{event.title}</Badge>
           <time dateTime={event.created_at} className="text-caption text-text-3">
             {formatDateTime(event.created_at)}

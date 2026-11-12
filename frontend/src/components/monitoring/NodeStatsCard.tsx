@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SegmentedControl } from "@/components/common/navigation/SegmentedControl";
 import { MonitoringCard } from "@/components/monitoring/MonitoringCard";
 import { StatTile } from "@/components/monitoring/StatTile";
 import { useNodeStats } from "@/hooks/useMonitoring";
 import { STATS_PERIOD_LABEL } from "@/lib/labels";
 import { StatsPeriod, type NodeStats } from "@/lib/monitoring.types";
-import { formatDuration } from "@/lib/utils";
+import { cn, formatDuration } from "@/lib/utils";
+import { CARD_DIVIDER } from "@/styles/classes";
 
 function durationOrDash(seconds: number | null): string {
   return seconds === null ? "—" : formatDuration(seconds);
@@ -28,7 +29,7 @@ function NodeStatsBody({ stats }: { stats: NodeStats }) {
       <div className="text-caption text-text-3">
         Длительность — без запусков, ждавших решения пользователя.
       </div>
-      <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+      <div className={cn("flex flex-col gap-1.5", CARD_DIVIDER)}>
         <div className="text-note font-bold text-text-2">Чаще всего падают</div>
         {stats.top_failing.length === 0 ? (
           <div className="text-body text-text-3">Упавших нод нет</div>
@@ -60,15 +61,7 @@ export function NodeStatsCard() {
       isLoading={isLoading}
       isError={isError}
       action={
-        <Tabs value={period} onValueChange={(value) => setPeriod(value as StatsPeriod)}>
-          <TabsList aria-label="Период">
-            {Object.values(StatsPeriod).map((value) => (
-              <TabsTrigger key={value} value={value}>
-                {STATS_PERIOD_LABEL[value]}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+        <SegmentedControl value={period} options={STATS_PERIOD_LABEL} onChange={setPeriod} label="Период" />
       }
     >
       {data && <NodeStatsBody stats={data} />}

@@ -1,7 +1,8 @@
 import { Badge } from "@/components/ui/badge";
 import { BACKUP_RUN_STATUS_LABEL, BACKUP_RUN_STATUS_TONE } from "@/lib/labels";
 import type { BackupRun } from "@/lib/types";
-import { formatDateTime, formatFileSize } from "@/lib/utils";
+import { cn, formatDateTime, formatFileSize } from "@/lib/utils";
+import { CARD_DIVIDER } from "@/styles/classes";
 
 const SHOWN_SKIPPED_FILES = 5;
 
@@ -61,7 +62,7 @@ export function BackupStatus({
   lastVerify: BackupRun | null;
 }) {
   return (
-    <div className="flex flex-col gap-3 border-t border-border pt-3">
+    <div className={cn("flex flex-col gap-3", CARD_DIVIDER)}>
       <RunLine title="Последний бэкап" run={lastBackup} />
       <RunLine title="Последняя проверка восстановления" run={lastVerify} />
       <div className="text-small text-text-3">

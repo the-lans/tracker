@@ -3,6 +3,7 @@ import { useDiskUsage } from "@/hooks/useMonitoring";
 import { VOLUME_LABEL } from "@/lib/labels";
 import type { DiskUsage } from "@/lib/monitoring.types";
 import { cn, formatFileSize, formatRelativeShort } from "@/lib/utils";
+import { CARD_DIVIDER } from "@/styles/classes";
 
 /** Свободного места меньше этой доли — предупреждение. */
 const LOW_FREE_SPACE_RATIO = 0.1;
@@ -49,7 +50,7 @@ export function DiskUsageCard() {
               диске».
             </div>
           )}
-          <div className="border-t border-border pt-3 text-body">
+          <div className={cn("text-body", CARD_DIVIDER)}>
             <span className="text-text-3">Свободно: </span>
             <FreeSpace usage={data} />
           </div>

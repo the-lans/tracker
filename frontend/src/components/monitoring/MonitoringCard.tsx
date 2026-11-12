@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Card, CardTitle } from "@/components/ui/card";
-import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { QueryState } from "@/components/common/feedback/QueryState";
 import { cn } from "@/lib/utils";
 
 /** Карточка блока «Мониторинга»: заголовок, загрузка и ошибка запроса блока. */
@@ -25,9 +25,9 @@ export function MonitoringCard({
         <h2>{title}</h2>
         {action}
       </CardTitle>
-      {isLoading && <LoadingState className="py-3" />}
-      {isError && <div className="text-body text-danger-text">Не удалось получить данные</div>}
-      {!isLoading && !isError && children}
+      <QueryState isLoading={isLoading} isError={isError} loadingClassName="py-3">
+        {children}
+      </QueryState>
     </Card>
   );
 }

@@ -2,13 +2,13 @@ import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAppLogs } from "@/hooks/useAdmin";
 import { formatDateTime } from "@/lib/utils";
 import { AppLogLevel } from "@/lib/types";
 import { APP_LOG_LEVEL_LABEL, APP_LOG_LEVEL_TONE } from "@/lib/labels";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
-import { LoadingState } from "@/components/common/feedback/LoadingState";
+import { QueryState } from "@/components/common/feedback/QueryState";
+import { FilterSelect } from "@/components/common/filters/FilterSelect";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
 
 /** Граница дня `<input type="date">` в локальной зоне — в ISO для API. */
@@ -21,13 +21,13 @@ function dayBoundary(value: string, endOfDay: boolean): string | undefined {
 
 /** Раздел 15.5, 17.2: `app_logs` с фильтрами по уровню, источнику, задаче и дате. */
 export function AppLogsSection() {
-  const [level, setLevel] = useState<AppLogLevel | "all">("all");
+  const [level, setLevel] = useState<AppLogLevel>();
   const [source, setSource] = useState("");
   const [taskCode, setTaskCode] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const { data: logs, isLoading } = useAppLogs({
-    level: level === "all" ? undefined : level,
+  const { data: logs, isLoading, isError } = useAppLogs({
+    level,
     source: source.trim() || undefined,
     taskCode: taskCode.trim() || undefined,
     createdFrom: dayBoundary(dateFrom, false),
@@ -67,43 +67,39 @@ export function AppLogsSection() {
             value={dateTo}
             onChange={(event) => setDateTo(event.target.value)}
           />
-          <Select value={level} onValueChange={(value) => setLevel(value as AppLogLevel | "all")}>
-            <SelectTrigger className="w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Все уровни</SelectItem>
-              {Object.values(AppLogLevel).map((value) => (
-                <SelectItem key={value} value={value}>
-                  {APP_LOG_LEVEL_LABEL[value]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <FilterSelect
+            value={level}
+            onChange={setLevel}
+            values={Object.values(AppLogLevel)}
+            labels={APP_LOG_LEVEL_LABEL}
+            allLabel="Все уровни"
+            label="Уровень"
+          />
         </div>
       </div>
-      {isLoading && <LoadingState />}
-      {(logs ?? []).map((log) => (
-        <Card key={log.id} className="flex items-start gap-3 py-2.5">
-          <Badge tone={APP_LOG_LEVEL_TONE[log.level]} className="mt-0.5">
-            {APP_LOG_LEVEL_LABEL[log.level]}
-          </Badge>
-          <div className="min-w-0 flex-1">
-            <div className="text-body [overflow-wrap:anywhere]">{log.message}</div>
-            <div className="mt-0.5 text-caption text-text-3">
-              {log.source} · {formatDateTime(log.created_at)}
-              {log.task_id && ` · task ${log.task_id.slice(0, 8)}`}
+      <QueryState isLoading={isLoading} isError={isError}>
+        {(logs ?? []).map((log) => (
+          <Card key={log.id} className="flex items-start gap-3 py-2.5">
+            <Badge tone={APP_LOG_LEVEL_TONE[log.level]} className="mt-0.5">
+              {APP_LOG_LEVEL_LABEL[log.level]}
+            </Badge>
+            <div className="min-w-0 flex-1">
+              <div className="text-body [overflow-wrap:anywhere]">{log.message}</div>
+              <div className="mt-0.5 text-caption text-text-3">
+                {log.source} · {formatDateTime(log.created_at)}
+                {log.task_id && ` · task ${log.task_id.slice(0, 8)}`}
+              </div>
             </div>
-          </div>
-        </Card>
-      ))}
-      {!isLoading && (logs ?? []).length === 0 && (
-        <EmptyState
-          compact
-          title="Записей в журнале нет"
-          hint="Измените уровень, источник, задачу или диапазон дат в фильтрах выше."
-        />
-      )}
+          </Card>
+        ))}
+        {(logs ?? []).length === 0 && (
+          <EmptyState
+            compact
+            title="Записей в журнале нет"
+            hint="Измените уровень, источник, задачу или диапазон дат в фильтрах выше."
+          />
+        )}
+      </QueryState>
     </section>
   );
 }

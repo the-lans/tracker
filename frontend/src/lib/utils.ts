@@ -46,10 +46,9 @@ export function formatResetTime(value: string, now: Date = new Date()): string {
   return `${date.toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}, ${time}`;
 }
 
-export function formatRelativeShort(value: string | null | undefined): string {
+export function formatRelativeShort(value: string | null | undefined, now: number = Date.now()): string {
   if (!value) return "—";
   const then = new Date(value).getTime();
-  const now = Date.now();
   const diffSeconds = Math.max(0, Math.floor((now - then) / 1000));
   if (diffSeconds < 60) return `${diffSeconds} с назад`;
   const diffMinutes = Math.floor(diffSeconds / 60);

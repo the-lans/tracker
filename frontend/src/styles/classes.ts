@@ -19,3 +19,9 @@ export const HEADER_BUTTON =
 
 /** Градиент аватара пользователя — один и тот же в меню, профиле и ленте. */
 export const USER_AVATAR_GRADIENT = "bg-gradient-to-br from-avatar-from to-avatar-to text-white";
+
+/** Строка из подписи, бейджей и пояснений, переносящаяся на узком экране. */
+export const WRAP_ROW = "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1";
+
+/** Нижняя часть карточки, отделённая чертой от основного содержимого. */
+export const CARD_DIVIDER = "border-t border-border pt-3";

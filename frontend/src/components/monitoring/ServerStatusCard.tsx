@@ -1,7 +1,8 @@
 import { Badge } from "@/components/ui/badge";
 import { SERVER_DEPENDENCY_LABEL } from "@/lib/labels";
 import type { ServerOverview } from "@/lib/monitoring.types";
-import { formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
+import { CARD_DIVIDER, WRAP_ROW } from "@/styles/classes";
 
 const SHORT_SHA_LENGTH = 7;
 
@@ -16,7 +17,7 @@ export function ServerStatusCard({ overview }: { overview: ServerOverview }) {
     <div className="flex flex-col gap-3">
       <ul className="flex flex-col gap-2">
         {overview.dependencies.map((dependency) => (
-          <li key={dependency.name} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <li key={dependency.name} className={WRAP_ROW}>
             <span className="font-bold text-text">{SERVER_DEPENDENCY_LABEL[dependency.name]}</span>
             <Badge tone={dependency.ok ? "success" : "danger"}>
               {dependency.ok ? "работает" : "недоступен"}
@@ -27,7 +28,7 @@ export function ServerStatusCard({ overview }: { overview: ServerOverview }) {
           </li>
         ))}
       </ul>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 border-t border-border pt-3 text-body">
+      <dl className={cn("grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-body", CARD_DIVIDER)}>
         <dt className="text-text-3">Версия</dt>
         <dd className="min-w-0 truncate font-mono" title={overview.version}>
           {overview.version.slice(0, SHORT_SHA_LENGTH)}
