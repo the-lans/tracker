@@ -106,6 +106,9 @@ case "$*" in
   *"merge-base --is-ancestor"*) [ -f "$STUB_DIR/not-ancestor" ] && exit 1 ;;
   *"cat-file -e"*llm_limit_control*)
     [ -f "$STUB_DIR/old-target" ] || [ -f "$STUB_DIR/pre-limit-target" ] && exit 1 ;;
+  *"cat-file -e"*events_and_library_links*)
+    [ -f "$STUB_DIR/old-target" ] || [ -f "$STUB_DIR/pre-limit-target" ] \
+      || [ -f "$STUB_DIR/pre-library-target" ] && exit 1 ;;
   *"cat-file -e"*) [ -f "$STUB_DIR/old-target" ] && exit 1 ;;
   *"checkout --detach"*) for last; do :; done; echo "$last" > "$STUB_DIR/git-head" ;;
 esac
@@ -314,21 +317,24 @@ class TestSharedConstants:
         }
 
     @pytest.mark.parametrize(
-        ("variable", "constant"),
+        ("migration_variable", "variable", "constant"),
         [
-            ("LIMIT_WAIT_RESET", "_RESTORE_LIMIT_WAITS"),
-            ("LIMIT_SWITCH_REASONS_RESET", "_RESTORE_SWITCH_REASONS"),
+            ("LIMIT_WAIT_MIGRATION", "LIMIT_WAIT_RESET", "_RESTORE_LIMIT_WAITS"),
+            ("LIMIT_WAIT_MIGRATION", "LIMIT_SWITCH_REASONS_RESET", "_RESTORE_SWITCH_REASONS"),
+            ("LIBRARY_LINKS_MIGRATION", "LIBRARY_CONTENT_RESET", "_RESTORE_LIBRARY_CONTENT"),
+            ("LIBRARY_LINKS_MIGRATION", "GUIDE_URL_RESET", "_RESTORE_GUIDE_URL"),
         ],
     )
-    def test_limit_control_reset(
+    def test_downgrade_reset(
         self,
         stubs: Path,
         install_dir: Path,
+        migration_variable: str,
         variable: str,
         constant: str,
     ) -> None:
         """Откат возвращает данные в значения прежней версии тем же запросом, что downgrade."""
-        migration = self._value(stubs, install_dir, "LIMIT_WAIT_MIGRATION")
+        migration = self._value(stubs, install_dir, migration_variable)
         query = self._value(stubs, install_dir, variable)
         source = (_INSTALL_SCRIPT.parents[1] / migration).read_text()
         restore = re.search(rf"{constant} = \((.*?)\n\)", source, re.DOTALL)
@@ -670,11 +676,22 @@ class TestUpdate:
         assert not (install_dir / ".deploy").exists()
 
     @pytest.mark.parametrize(
-        ("target", "limit_reset", "pre_launch_reset"),
+        ("target", "limit_reset", "pre_launch_reset", "library_reset"),
         [
-            pytest.param("old-target", True, True, id="откат на версию без статусов до запуска"),
-            pytest.param("pre-limit-target", True, False, id="откат на версию без ожидания лимита"),
-            pytest.param(None, False, False, id="версия со всеми статусами"),
+            pytest.param(
+                "old-target", True, True, True, id="откат на версию без статусов до запуска",
+            ),
+            pytest.param(
+                "pre-limit-target", True, False, True, id="откат на версию без ожидания лимита",
+            ),
+            pytest.param(
+                "pre-library-target",
+                False,
+                False,
+                True,
+                id="откат на версию без ссылок на библиотеку",
+            ),
+            pytest.param(None, False, False, False, id="версия со всеми изменениями"),
         ],
     )
     def test_unknown_statuses_reset(
@@ -684,6 +701,7 @@ class TestUpdate:
         target: str | None,
         limit_reset: bool,
         pre_launch_reset: bool,
+        library_reset: bool,
     ) -> None:
         if target is not None:
             (stubs / target).touch()
@@ -693,9 +711,11 @@ class TestUpdate:
         assert result.returncode == 0, result.stdout + result.stderr
         calls = _calls(stubs)
         assert any("cat-file -e" in call for call in calls)
-        resets_seen = [call for call in calls if "UPDATE tasks SET status" in call]
-        assert len(resets_seen) == int(limit_reset or pre_launch_reset)
+        resets_seen = [call for call in calls if "psql" in call and "UPDATE" in call]
+        assert len(resets_seen) == int(limit_reset or pre_launch_reset or library_reset)
         reset = resets_seen[0] if resets_seen else ""
+        assert ("FROM nodes AS library_items" in reset) is library_reset
+        assert ("node[.]guide_url" in reset) is library_reset
         assert ("WHERE status::text = 'awaiting_limit'" in reset) is limit_reset
         assert ("UPDATE node_logs SET llm_switch_reason" in reset) is limit_reset
         assert ("UPDATE tasks SET status = 'new'" in reset) is pre_launch_reset
@@ -705,7 +725,7 @@ class TestUpdate:
             # Ждущие чата задачи сначала уходят в refining, затем — в new.
             assert reset.index("awaiting_limit") < reset.index("status = 'new'")
         if resets_seen:
-            _assert_in_order(calls, ["checkout --detach", "cat-file -e", "UPDATE tasks"])
+            _assert_in_order(calls, ["checkout --detach", "cat-file -e", "UPDATE"])
 
     def test_failed_reset_restores_code(self, stubs: Path, install_dir: Path) -> None:
         (stubs / "old-target").touch()

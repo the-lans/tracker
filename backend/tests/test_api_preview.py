@@ -303,8 +303,18 @@ class TestGuideUrlWithoutTask:
     @pytest.mark.parametrize(
         ("scope", "text", "extra", "expected"),
         [
-            (RenderScope.LIBRARY, f"{{{{ node.guide_url }}}} | {TASK_GUIDE}", {}, f"{GUIDE} | {TASK_GUIDE}"),
-            (RenderScope.PIPELINE, f"{{{{node.guide_url}}}} | {TASK_GUIDE}", {}, f"{GUIDE} | {TASK_GUIDE}"),
+            (
+                RenderScope.LIBRARY,
+                f"{{{{ node.guide_url }}}} | {TASK_GUIDE}",
+                {},
+                f"{GUIDE} | {TASK_GUIDE}",
+            ),
+            (
+                RenderScope.PIPELINE,
+                f"{{{{node.guide_url}}}} | {TASK_GUIDE}",
+                {},
+                f"{GUIDE} | {TASK_GUIDE}",
+            ),
             (
                 RenderScope.LIBRARY,
                 "{{node.guide_url}} | $1",

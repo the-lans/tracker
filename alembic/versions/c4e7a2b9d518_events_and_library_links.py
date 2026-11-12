@@ -23,6 +23,27 @@ _NODE_COLUMNS = (
     "library_arguments varchar",
 )
 _NODE_LIBRARY_CHECK = "ck_nodes_library_node_id_pipeline_only"
+# Прежняя версия не знает ссылок на библиотеку: нода получает копию
+# содержимого элемента. Повторяется в deploy/install.sh (откат кода без
+# downgrade, раздел 20.6).
+_RESTORE_LIBRARY_CONTENT = (
+    "UPDATE nodes SET "
+    "prompt_template = library_items.prompt_template, "
+    "command_invocation = library_items.command_invocation, "
+    "script_language = library_items.script_language, "
+    "script_content = library_items.script_content, "
+    "docker_image = library_items.docker_image, "
+    "guide_url = library_items.guide_url "
+    "FROM nodes AS library_items "
+    "WHERE nodes.library_node_id = library_items.id"
+)
+# И не знает переменной {{node.guide_url}}: она заменяется гайдом самой ноды.
+_RESTORE_GUIDE_URL = (
+    "UPDATE nodes SET prompt_template = regexp_replace(prompt_template, "
+    "'[{][{][[:space:]]*node[.]guide_url[[:space:]]*[}][}]', "
+    "coalesce(guide_url, ''), 'g') "
+    "WHERE prompt_template LIKE '%node.guide_url%'"
+)
 
 
 def _create_enum(type_name: str, values: str) -> None:
@@ -82,6 +103,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(_RESTORE_LIBRARY_CONTENT)
+    op.execute(_RESTORE_GUIDE_URL)
     op.execute("DROP INDEX IF EXISTS ix_app_logs_created_at")
     op.execute(f"ALTER TABLE nodes DROP CONSTRAINT IF EXISTS {_NODE_LIBRARY_CHECK}")
     op.execute("DROP INDEX IF EXISTS ix_nodes_library_node_id")
