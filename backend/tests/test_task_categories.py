@@ -220,7 +220,12 @@ class TestCategoryCrud:
 
     @pytest.mark.parametrize(
         ("field", "status_code"),
-        [("archived_pipeline", 409), ("foreign_pipeline", 404), ("archived_prompt", 409)],
+        [
+            ("archived_pipeline", 409),
+            ("foreign_pipeline", 404),
+            ("empty_pipeline", 422),
+            ("archived_prompt", 409),
+        ],
     )
     async def test_rejected_references(
         self,
@@ -241,6 +246,9 @@ class TestCategoryCrud:
             body["pipeline_id"] = str(pipeline.id)
         elif field == "foreign_pipeline":
             pipeline = await _pipeline_with_nodes(db_session, created_by=other.id)
+            body["pipeline_id"] = str(pipeline.id)
+        elif field == "empty_pipeline":
+            pipeline = await make_pipeline(db_session, created_by=current_user.id)
             body["pipeline_id"] = str(pipeline.id)
         else:
             prompt = await _library_prompt(db_session, created_by=current_user.id, archived=True)
@@ -358,6 +366,26 @@ class TestNewTaskOfCategory:
 
         assert response.status_code == 409
         assert "в архиве" in response.json()["error"]["message"]
+        assert await db_session.scalar(sa.select(Task.id).where(Task.code == code)) is None
+
+    async def test_emptied_pipeline_rejected(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        pipeline = await _pipeline_with_nodes(db_session, created_by=current_user.id)
+        category = await _create_category(authed_client, pipeline_id=str(pipeline.id))
+        await db_session.execute(sa.delete(Node).where(Node.pipeline_id == pipeline.id))
+        code = task_code()
+
+        response = await authed_client.post(
+            "/tasks",
+            json={"code": code, "title": "t", "description": "d", "category_id": category["id"]},
+        )
+
+        assert response.status_code == 422
+        assert "нет нод" in response.json()["error"]["message"]
         assert await db_session.scalar(sa.select(Task.id).where(Task.code == code)) is None
 
     async def test_foreign_category_rejected(

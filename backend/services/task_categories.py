@@ -108,14 +108,24 @@ async def category_view(db_session: AsyncSession, category: TaskCategory) -> Cat
     return CategoryView(category, prompt_ids[category.id])
 
 
+async def _pipeline_has_nodes(db_session: AsyncSession, pipeline_id: uuid.UUID) -> bool:
+    stmt = sa.select(sa.exists().where(Node.pipeline_id == pipeline_id))
+    return bool(await db_session.scalar(stmt))
+
+
 async def _ensure_pipeline_choosable(
     db_session: AsyncSession,
     pipeline_id: uuid.UUID,
     *,
     user: User,
 ) -> None:
+    """Пайплайн без нод задаче категории не привязать — его не выбрать и в категории."""
     pipeline = await get_pipeline_for_user(db_session, pipeline_id, user=user)
     ensure_pipeline_attachable(pipeline)
+    if not await _pipeline_has_nodes(db_session, pipeline_id):
+        raise ValidationError(
+            f"В пайплайне «{pipeline.name}» нет нод — добавьте их или выберите другой пайплайн",
+        )
 
 
 async def _ensure_prompts_choosable(
@@ -254,14 +264,24 @@ async def ensure_category_pipeline_usable(
     db_session: AsyncSession,
     category: TaskCategory,
 ) -> None:
-    """Раздел 3.2: архивный пайплайн категории новой задаче не достаётся — 409."""
+    """
+    Раздел 3.2: архивный пайплайн категории новой задаче не достаётся — 409;
+    пайплайн, из которого после выбора в категории удалили все ноды, — 422.
+    """
     if category.pipeline_id is None:
         return
     pipeline = await db_session.get(Pipeline, category.pipeline_id)
-    if pipeline is not None and pipeline.is_archived:
+    if pipeline is None:
+        return
+    if pipeline.is_archived:
         raise ConflictError(
             f"Пайплайн категории «{pipeline.name}» в архиве — разархивируйте его "
             "или выберите в категории другой",
+        )
+    if not await _pipeline_has_nodes(db_session, pipeline.id):
+        raise ValidationError(
+            f"В пайплайне категории «{pipeline.name}» нет нод — добавьте их "
+            "или выберите в категории другой пайплайн",
         )
 
 
