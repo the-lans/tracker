@@ -25,6 +25,8 @@ export const TaskStatus = {
   AWAITING_LIMIT: "awaiting_limit",
   FAILED: "failed",
   DONE: "done",
+  /** Раздел 14.2: завершённая задача через N дней автора; на дашборде не видна. */
+  ARCHIVED: "archived",
 } as const;
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
@@ -234,6 +236,10 @@ export interface User {
   llm_compact_on_switch: boolean;
   /** Раздел 14.4: лимит параллельных задач, задаёт администратор (1–50). */
   max_parallel_tasks: number;
+  /** Раздел 14.2: через сколько дней после завершения задача уходит в архив; null — никогда. */
+  archive_after_days: number | null;
+  /** Раздел 14.2: через сколько дней после завершения очищаются репозитории; null — никогда. */
+  cleanup_repos_after_days: number | null;
 }
 
 export interface LlmThresholdsUpdate {
@@ -292,6 +298,9 @@ export interface UserUpdateRequest {
   is_active?: boolean | null;
   os_username?: string | null;
   max_parallel_tasks?: number | null;
+  /** `null` — срок выключен; поле не передано — не меняется. */
+  archive_after_days?: number | null;
+  cleanup_repos_after_days?: number | null;
 }
 
 export interface AllowedEmail {
@@ -328,6 +337,11 @@ export interface Task {
   auto_start_enabled: boolean;
   last_failed_order_index: number | null;
   repo_cleaned_at: string | null;
+  /** Раздел 14.2: переход в `done`/`failed`; от него считаются сроки архива и очистки. */
+  finished_at?: string | null;
+  archived_at?: string | null;
+  /** Итоговый статус задачи в архиве — `done` или `failed`. */
+  archived_from_status?: TaskStatus | null;
   /** Раздел 14.4: больше — раньше в очереди автора. */
   queue_priority: number;
   /** Когда задача встала в `ready`/`night_worker`. */

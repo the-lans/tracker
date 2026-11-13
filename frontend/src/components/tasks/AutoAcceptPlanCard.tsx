@@ -1,6 +1,7 @@
 import { Card } from "@/components/ui/card";
 import { AutoAcceptPlanField } from "@/components/tasks/AutoAcceptPlanField";
-import { TaskStatus, type Task, type TaskUpdateRequest } from "@/lib/types";
+import { isReadOnly } from "@/lib/taskStatusTransitions";
+import type { Task, TaskUpdateRequest } from "@/lib/types";
 
 /** Раздел 9.4: план принимается без остановки на ревью. */
 export function AutoAcceptPlanCard({
@@ -16,7 +17,7 @@ export function AutoAcceptPlanCard({
     <Card>
       <AutoAcceptPlanField
         checked={task.auto_accept_plan}
-        disabled={task.status === TaskStatus.DONE || pending}
+        disabled={isReadOnly(task.status) || pending}
         onCheckedChange={(checked) => onUpdate({ auto_accept_plan: checked })}
       />
     </Card>

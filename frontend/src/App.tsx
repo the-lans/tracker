@@ -20,6 +20,7 @@ import { EnvVariablesPage } from "@/pages/EnvVariablesPage";
 import { ProfilePage } from "@/pages/ProfilePage";
 import { AdminPage } from "@/pages/AdminPage";
 import { EventsPage } from "@/pages/EventsPage";
+import { ArchivePage } from "@/pages/ArchivePage";
 import { MonitoringPage } from "@/pages/MonitoringPage";
 
 export function App() {
@@ -42,6 +43,7 @@ export function App() {
                   <Route path="repositories" element={<RepositoriesPage />} />
                   <Route path="llm-accounts" element={<LlmAccountsPage />} />
                   <Route path="events" element={<EventsPage />} />
+                  <Route path="archive" element={<ArchivePage />} />
                   <Route path="profile" element={<ProfilePage />} />
                   <Route element={<AdminRoute />}>
                     <Route path="admin" element={<AdminPage />} />

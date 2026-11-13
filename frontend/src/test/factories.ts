@@ -194,6 +194,8 @@ export function makeUser(overrides: Partial<User> = {}): User {
     llm_switch_threshold_5h_pct: 93,
     llm_compact_on_switch: true,
     max_parallel_tasks: 3,
+    archive_after_days: 14,
+    cleanup_repos_after_days: 30,
     ...overrides,
   };
 }

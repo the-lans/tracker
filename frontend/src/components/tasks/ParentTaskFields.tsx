@@ -14,7 +14,8 @@ export function ParentTaskFields({
   useParentSummary: boolean;
   onChange: (patch: { parentTaskId?: string; useParentSummary?: boolean }) => void;
 }) {
-  const { data: tasks } = useTasks();
+  // Раздел 3.1: родителем может быть и задача из архива.
+  const { data: tasks } = useTasks(undefined, { includeArchived: true });
 
   const options = (tasks ?? []).map((task) => ({ value: task.id, label: `${task.code} · ${task.title}` }));
 

@@ -1,7 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, vi } from "vitest";
 import { CreateTaskDialog } from "@/components/tasks/CreateTaskDialog";
-import { LlmAccountStatus, UserRole, type JiraIssueDraft } from "@/lib/types";
+import { LlmAccountStatus, TaskStatus, UserRole, type JiraIssueDraft } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
 import { makeCurrentUser, makeLlmAccount, makeRepository, makeTask, makeTaskCategory, makeUser } from "@/test/factories";
 import { test } from "@/test/fixtures";
@@ -267,6 +267,18 @@ describe("CreateTaskDialog", () => {
       await user.click(screen.getByRole("button", { name: "Создать" }));
 
       expect(createRequest(api)?.body).toMatchObject({ parent_task_id: "t6" });
+    });
+
+    test("родителем выбирается и задача из архива", async ({ api }) => {
+      api.respond("GET /tasks", [
+        makeTask({ id: "t7", code: "RR-12302", title: "Старый отчёт", status: TaskStatus.ARCHIVED }),
+      ]);
+      const { user } = renderDialog(api);
+
+      await user.click(screen.getByRole("combobox", { name: "Родительская задача" }));
+
+      expect(await screen.findByRole("option", { name: "RR-12302 · Старый отчёт" })).toBeInTheDocument();
+      expect(api.queriesOf("GET /tasks")).toContainEqual({ include_archived: "true" });
     });
 
     test("Escape в поиске родителя закрывает список, а не диалог", async ({ api }) => {

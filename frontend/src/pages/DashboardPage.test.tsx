@@ -7,10 +7,12 @@ import { makeTask, makeTaskCategory } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
-/** По задаче в каждом статусе: код — `RR-<статус>`. */
-const tasksByStatus: Task[] = Object.values(TaskStatus).map((status, index) =>
-  makeTask({ id: `t${index}`, code: `RR-${status}`, title: `Задача ${status}`, status }),
-);
+/** По задаче в каждом статусе дашборда (архивные сервер не отдаёт): код — `RR-<статус>`. */
+const tasksByStatus: Task[] = Object.values(TaskStatus)
+  .filter((status) => status !== TaskStatus.ARCHIVED)
+  .map((status, index) =>
+    makeTask({ id: `t${index}`, code: `RR-${status}`, title: `Задача ${status}`, status }),
+  );
 
 function renderDashboard(api: MockedApi, tasks: Task[] = tasksByStatus) {
   api.respond("GET /tasks", tasks);

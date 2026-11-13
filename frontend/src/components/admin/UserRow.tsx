@@ -8,14 +8,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SftpLoginEditor } from "@/components/admin/SftpLoginEditor";
-import { UserTaskLimitEditor } from "@/components/admin/UserTaskLimitEditor";
+import { UserNumberSettingEditor } from "@/components/admin/UserNumberSettingEditor";
+import { MAX_PARALLEL_TASKS_SETTING, RETENTION_SETTINGS } from "@/components/admin/userNumberSettings";
 import { SshKeyLine } from "@/components/admin/SshKeyLine";
 import { useUpdateUser } from "@/hooks/useAdmin";
 import { toastError } from "@/lib/errors";
 import { USER_ROLE_LABEL } from "@/lib/labels";
 import { UserRole, type User } from "@/lib/types";
 
-/** Пользователь: роль, блокировка и доступ по SFTP (раздел 15.5). */
+/** Пользователь: роль, блокировка, доступ по SFTP, лимит задач и сроки архива (раздел 15.5). */
 export function UserRow({ user }: { user: User }) {
   const updateUser = useUpdateUser(user.id);
 
@@ -29,7 +30,10 @@ export function UserRow({ user }: { user: User }) {
           {new Date(user.created_at).toLocaleDateString("ru-RU")}
         </div>
         <SftpLoginEditor user={user} />
-        <UserTaskLimitEditor user={user} />
+        <UserNumberSettingEditor user={user} setting={MAX_PARALLEL_TASKS_SETTING} />
+        {RETENTION_SETTINGS.map((setting) => (
+          <UserNumberSettingEditor key={setting.field} user={user} setting={setting} />
+        ))}
         <SshKeyLine user={user} />
       </div>
       <Select

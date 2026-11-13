@@ -37,6 +37,7 @@ describe("TaskStatusMenu", () => {
   test.for([
     { status: TaskStatus.FAILED, confirm: true },
     { status: TaskStatus.DONE, confirm: false },
+    { status: TaskStatus.ARCHIVED, confirm: true },
   ])("$status — сброс прогона после подтверждения ($confirm)", async ({ status, confirm }, { api }) => {
     const { user } = renderMenu({ status });
 

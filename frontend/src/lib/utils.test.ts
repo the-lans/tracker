@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import {
   formatCountdown,
   formatFileSize,
   formatInterval,
   formatRelativeShort,
   initialsFromEmail,
+  localDayBoundary,
+  pageCountOf,
   plural,
 } from "@/lib/utils";
 
@@ -110,5 +112,26 @@ describe("initialsFromEmail", () => {
     ["admin@example.com", "AD"],
   ])("%s → %s", (email, expected) => {
     expect(initialsFromEmail(email)).toBe(expected);
+  });
+});
+
+describe("localDayBoundary", () => {
+  test.for([
+    { value: "", endOfDay: false, expected: undefined },
+    { value: "2026-03-01", endOfDay: false, expected: new Date("2026-03-01T00:00:00").toISOString() },
+    { value: "2026-03-31", endOfDay: true, expected: new Date("2026-04-01T00:00:00").toISOString() },
+  ])("«$value», конец дня — $endOfDay", ({ value, endOfDay, expected }) => {
+    expect(localDayBoundary(value, endOfDay)).toBe(expected);
+  });
+});
+
+describe("pageCountOf", () => {
+  test.for([
+    { total: 0, pages: 1 },
+    { total: 20, pages: 1 },
+    { total: 21, pages: 2 },
+    { total: 100, pages: 5 },
+  ])("$total записей по 20 → $pages", ({ total, pages }) => {
+    expect(pageCountOf(total, 20)).toBe(pages);
   });
 });
