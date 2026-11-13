@@ -45,6 +45,7 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
             sa.text("queue_priority DESC"),
             "ready_at",
         ),
+        sa.Index("ix_tasks_status_finished_at", "status", "finished_at"),
     )
 
     code: Mapped[str] = mapped_column(sa.String, unique=True)
@@ -102,6 +103,14 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     # прежней сессии (очистка контекста, смена LLM-аккаунта).
     context_cleared_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     repo_cleaned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Раздел 14.2: переход в `done`/`failed` — от него считаются сроки архивации
+    # и очистки репозиториев; уход в архив его сохраняет, новый прогон сбрасывает.
+    finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Итоговый статус до архива: по нему откат релиза возвращает задачу (раздел 20.6).
+    archived_from_status: Mapped[TaskStatus | None] = mapped_column(
+        pg_enum(TaskStatus, name="task_status"),
+    )
     # Раздел 14.4: очередь автора — `ready`/`night_worker` по приоритету, затем
     # по времени постановки; слот ручного запуска и чата — по `occupies_slot`.
     queue_priority: Mapped[int] = mapped_column(

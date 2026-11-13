@@ -15,7 +15,12 @@ from db.models.enums import (
     PeriodicScheduleType,
     UserRole,
 )
-from db.models.users import MAX_MAX_PARALLEL_TASKS, MIN_MAX_PARALLEL_TASKS
+from db.models.users import (
+    MAX_MAX_PARALLEL_TASKS,
+    MAX_RETENTION_DAYS,
+    MIN_MAX_PARALLEL_TASKS,
+    MIN_RETENTION_DAYS,
+)
 from services.sftp_access import SFTP_LOGIN_PATTERN
 from services.ssh_keys import MAX_PUBLIC_KEY_LENGTH, fingerprint_of_public_key
 
@@ -41,6 +46,10 @@ class UserResponse(BaseModel):
     llm_compact_on_switch: bool
     # Раздел 14.4: лимит параллельных задач — задаёт администратор.
     max_parallel_tasks: int
+    # Раздел 14.2: через сколько дней после завершения — архив и очистка
+    # репозиториев; NULL — выключено.
+    archive_after_days: int | None = None
+    cleanup_repos_after_days: int | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -119,6 +128,17 @@ class UserUpdateRequest(BaseModel):
         default=None,
         ge=MIN_MAX_PARALLEL_TASKS,
         le=MAX_MAX_PARALLEL_TASKS,
+    )
+    # Раздел 14.2: явный `null` выключает срок, отсутствие поля его не меняет.
+    archive_after_days: int | None = Field(
+        default=None,
+        ge=MIN_RETENTION_DAYS,
+        le=MAX_RETENTION_DAYS,
+    )
+    cleanup_repos_after_days: int | None = Field(
+        default=None,
+        ge=MIN_RETENTION_DAYS,
+        le=MAX_RETENTION_DAYS,
     )
 
 

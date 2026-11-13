@@ -96,6 +96,8 @@ from api.schemas.system_settings import (
 )
 from api.schemas.task_categories import TaskCategoryRequest, TaskCategoryResponse
 from api.schemas.tasks import (
+    ArchivedTaskPageResponse,
+    ArchivedTaskResponse,
     ArtifactResponse,
     AwaitingDecisionCountResponse,
     BindPipelineRequest,
@@ -128,6 +130,8 @@ __all__ = [
     "AllowedEmailCreateRequest",
     "AllowedEmailResponse",
     "AppLogResponse",
+    "ArchivedTaskPageResponse",
+    "ArchivedTaskResponse",
     "ArtifactResponse",
     "AwaitingDecisionCountResponse",
     "BackupConnectionCheckResponse",

@@ -175,6 +175,7 @@ class TestEnsureNodeDeletable:
         (TaskStatus.IN_PROGRESS, False),
         (TaskStatus.DONE, True),
         (TaskStatus.FAILED, True),
+        (TaskStatus.ARCHIVED, True),
     ],
 )
 async def test_ensure_repository_deletable_depends_on_task_terminality(

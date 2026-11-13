@@ -17,11 +17,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from app_logging.config import get_logger
-from db.models.enums import TaskStatus
 from services.access import ensure_llm_account_of_owner
 from services.errors import ValidationError
 from services.task_categories import assign_task_category
-from services.task_status import PRE_LAUNCH_STATUSES
+from services.task_status import PRE_LAUNCH_STATUSES, READ_ONLY_STATUSES
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,7 +67,7 @@ async def update_task(
     }
     if changes and task.status not in PRE_LAUNCH_STATUSES:
         raise ValidationError("Поля задачи можно менять только до запуска")
-    if auto_accept_plan is not None and task.status is TaskStatus.DONE:
+    if auto_accept_plan is not None and task.status in READ_ONLY_STATUSES:
         raise ValidationError("Задача уже завершена")
     if changes.get(_LLM_ACCOUNT_FIELD) is not None:
         await ensure_llm_account_of_owner(

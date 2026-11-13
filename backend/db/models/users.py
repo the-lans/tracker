@@ -21,6 +21,13 @@ _THRESHOLD_RANGE = f"BETWEEN {MIN_LLM_SWITCH_THRESHOLD_PCT} AND {MAX_LLM_SWITCH_
 DEFAULT_MAX_PARALLEL_TASKS = 3
 MIN_MAX_PARALLEL_TASKS = 1
 MAX_MAX_PARALLEL_TASKS = 50
+# Раздел 14.2: через сколько дней после завершения задача уходит в архив и
+# очищаются её репозитории; NULL — у пользователя выключено.
+DEFAULT_ARCHIVE_AFTER_DAYS = 14
+DEFAULT_CLEANUP_REPOS_AFTER_DAYS = 30
+MIN_RETENTION_DAYS = 1
+MAX_RETENTION_DAYS = 3650
+_RETENTION_RANGE = f"BETWEEN {MIN_RETENTION_DAYS} AND {MAX_RETENTION_DAYS}"
 
 
 class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
@@ -33,6 +40,14 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         sa.CheckConstraint(
             f"max_parallel_tasks BETWEEN {MIN_MAX_PARALLEL_TASKS} AND {MAX_MAX_PARALLEL_TASKS}",
             name="ck_users_max_parallel_tasks",
+        ),
+        sa.CheckConstraint(
+            f"archive_after_days {_RETENTION_RANGE}",
+            name="ck_users_archive_after_days",
+        ),
+        sa.CheckConstraint(
+            f"cleanup_repos_after_days {_RETENTION_RANGE}",
+            name="ck_users_cleanup_repos_after_days",
         ),
     )
 
@@ -72,6 +87,17 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         sa.Integer,
         default=DEFAULT_MAX_PARALLEL_TASKS,
         server_default=str(DEFAULT_MAX_PARALLEL_TASKS),
+    )
+    # Раздел 14.2, 15.5: сроки архивации и очистки репозиториев задаёт администратор.
+    archive_after_days: Mapped[int | None] = mapped_column(
+        sa.Integer,
+        default=DEFAULT_ARCHIVE_AFTER_DAYS,
+        server_default=str(DEFAULT_ARCHIVE_AFTER_DAYS),
+    )
+    cleanup_repos_after_days: Mapped[int | None] = mapped_column(
+        sa.Integer,
+        default=DEFAULT_CLEANUP_REPOS_AFTER_DAYS,
+        server_default=str(DEFAULT_CLEANUP_REPOS_AFTER_DAYS),
     )
 
 

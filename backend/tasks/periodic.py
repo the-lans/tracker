@@ -50,7 +50,10 @@ from services.periodic_tasks import (
 )
 from services.redis_connection import redis_connection
 from services.remote_control import check_session_bridges
+from services.task_archive import archive_finished_tasks as archive_finished_tasks_pass
+from services.task_archive import clean_finished_task_repositories
 from services.task_dispatcher import dispatch_queued_tasks, pending_queue_session_ids
+from services.task_workspace import resolve_repos_root
 from services.volume_usage import store_volume_usage
 from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import (
@@ -226,6 +229,49 @@ def cleanup_stale_worktrees() -> None:
         logger.info("cleanup_reminders_sent", count=len(reminded))
 
     _run_periodic("cleanup_stale_worktrees", body)
+
+
+@celery_app.task(name="archive_finished_tasks")
+def archive_finished_tasks() -> None:
+    """Раздел 14.2: завершённые задачи старше срока автора уходят в архив."""
+
+    async def body(db_session: AsyncSession) -> None:
+        async with redis_connection() as redis_client:
+            result = await archive_finished_tasks_pass(
+                db_session,
+                redis_client,
+                now=datetime.now(UTC),
+            )
+        logger.info(
+            "finished_tasks_archived",
+            archived=len(result.done),
+            skipped=len(result.skipped),
+            lock_busy=result.lock_busy,
+        )
+
+    _run_periodic("archive_finished_tasks", body)
+
+
+@celery_app.task(name="cleanup_finished_task_repositories")
+def cleanup_finished_task_repositories() -> None:
+    """Раздел 14.2: репозитории завершённых задач очищаются через срок автора."""
+
+    async def body(db_session: AsyncSession) -> None:
+        async with redis_connection() as redis_client:
+            result = await clean_finished_task_repositories(
+                db_session,
+                redis_client,
+                now=datetime.now(UTC),
+                repos_root=resolve_repos_root(),
+            )
+        logger.info(
+            "finished_task_repositories_cleaned",
+            cleaned=len(result.done),
+            skipped=len(result.skipped),
+            lock_busy=result.lock_busy,
+        )
+
+    _run_periodic("cleanup_finished_task_repositories", body)
 
 
 @celery_app.task(name="detect_awaiting_input_timeout")

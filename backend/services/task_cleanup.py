@@ -25,7 +25,7 @@ from app_logging.config import get_logger
 from db.models.enums import ParentSummaryStatus, TaskStatus
 from db.models.tasks import Task, TaskParentSummary
 from services.errors import ConflictError
-from services.task_status import lock_task
+from services.task_status import FINISHED_STATUSES, lock_task
 from services.task_workspace import task_root
 
 if TYPE_CHECKING:
@@ -35,8 +35,9 @@ if TYPE_CHECKING:
 
 logger = get_logger("task_cleanup")
 
-# Раздел 14.3: только терминальные статусы — у задачи нет живой сессии.
-CLEANABLE_STATUSES = frozenset({TaskStatus.DONE, TaskStatus.FAILED})
+# Раздел 14.3: только завершённый прогон (в том числе в архиве) — у задачи
+# нет живой сессии.
+CLEANABLE_STATUSES = FINISHED_STATUSES
 
 
 async def _summary_in_progress(db_session: AsyncSession, task: Task) -> bool:

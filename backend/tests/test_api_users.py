@@ -147,3 +147,68 @@ class TestSftpLogin:
         response = await admin_client.patch(url, json={"os_username": "taken"})
 
         assert response.status_code == 409
+
+
+_RETENTION_FIELDS = ["archive_after_days", "cleanup_repos_after_days"]
+
+
+class TestRetentionSettings:
+    """Раздел 14.2, 15.5: сроки архивации и очистки репозиториев у пользователя."""
+
+    async def test_defaults(self, admin_client: AsyncClient, current_user: User) -> None:
+        response = await admin_client.get("/users")
+
+        row = next(item for item in response.json() if item["id"] == str(current_user.id))
+        assert (row["archive_after_days"], row["cleanup_repos_after_days"]) == (14, 30)
+
+    @pytest.mark.parametrize("field", _RETENTION_FIELDS)
+    @pytest.mark.parametrize("days", [1, 3650, None])
+    async def test_set(
+        self,
+        admin_client: AsyncClient,
+        current_user: User,
+        field: str,
+        days: int | None,
+    ) -> None:
+        response = await admin_client.patch(f"/users/{current_user.id}", json={field: days})
+
+        assert response.status_code == 200
+        assert response.json()[field] == days
+
+    @pytest.mark.parametrize("field", _RETENTION_FIELDS)
+    @pytest.mark.parametrize("days", [0, 3651, -1])
+    async def test_out_of_range(
+        self,
+        admin_client: AsyncClient,
+        current_user: User,
+        field: str,
+        days: int,
+    ) -> None:
+        response = await admin_client.patch(f"/users/{current_user.id}", json={field: days})
+
+        assert response.status_code == 422
+
+    async def test_absent_field_kept(
+        self,
+        admin_client: AsyncClient,
+        current_user: User,
+    ) -> None:
+        url = f"/users/{current_user.id}"
+        await admin_client.patch(url, json={"archive_after_days": 5})
+
+        response = await admin_client.patch(url, json={"cleanup_repos_after_days": None})
+
+        body = response.json()
+        assert (body["archive_after_days"], body["cleanup_repos_after_days"]) == (5, None)
+
+    async def test_non_admin_forbidden(
+        self,
+        authed_client: AsyncClient,
+        current_user: User,
+    ) -> None:
+        response = await authed_client.patch(
+            f"/users/{current_user.id}",
+            json={"archive_after_days": 1},
+        )
+
+        assert response.status_code == 403

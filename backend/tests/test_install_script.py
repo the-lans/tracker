@@ -29,7 +29,11 @@ from services.maintenance import MAINTENANCE_KEY
 from services.periodic_tasks import NIGHT_DISPATCH_TASK
 from services.task_status import SESSION_ACTIVE_STATUSES
 from tasks.celery_app import DISPATCH_READY_TASKS
-from tasks.periodic import measure_volume_usage
+from tasks.periodic import (
+    archive_finished_tasks,
+    cleanup_finished_task_repositories,
+    measure_volume_usage,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,6 +114,9 @@ case "$*" in
   *"cat-file -e"*events_and_library_links*)
     [ -f "$STUB_DIR/old-target" ] || [ -f "$STUB_DIR/pre-limit-target" ] \
       || [ -f "$STUB_DIR/pre-library-target" ] && exit 1 ;;
+  *"cat-file -e"*task_archive*)
+    [ -f "$STUB_DIR/old-target" ] || [ -f "$STUB_DIR/pre-limit-target" ] \
+      || [ -f "$STUB_DIR/pre-library-target" ] || [ -f "$STUB_DIR/pre-archive-target" ] && exit 1 ;;
   *"cat-file -e"*) [ -f "$STUB_DIR/old-target" ] && exit 1 ;;
   *"checkout --detach"*) for last; do :; done; echo "$last" > "$STUB_DIR/git-head" ;;
 esac
@@ -324,6 +331,7 @@ class TestSharedConstants:
             ("LIMIT_WAIT_MIGRATION", "LIMIT_SWITCH_REASONS_RESET", "_RESTORE_SWITCH_REASONS"),
             ("LIBRARY_LINKS_MIGRATION", "LIBRARY_CONTENT_RESET", "_RESTORE_LIBRARY_CONTENT"),
             ("LIBRARY_LINKS_MIGRATION", "GUIDE_URL_RESET", "_RESTORE_GUIDE_URL"),
+            ("ARCHIVE_MIGRATION", "ARCHIVE_RESET", "_RESTORE_ARCHIVED"),
         ],
     )
     def test_downgrade_reset(
@@ -375,6 +383,14 @@ class TestSharedConstants:
         raw = self._value(stubs, install_dir, "MONITORING_PERIODIC_TASKS")
         names = {item.strip("'") for item in raw.split(",")}
         assert names == {measure_volume_usage.name}
+
+    def test_archive_periodic_tasks(self, stubs: Path, install_dir: Path) -> None:
+        """Откат удаляет периодические задачи архивации и очистки репозиториев."""
+        raw = self._value(stubs, install_dir, "ARCHIVE_PERIODIC_TASKS")
+        assert {item.strip("'") for item in raw.split(",")} == {
+            archive_finished_tasks.name,
+            cleanup_finished_task_repositories.name,
+        }
 
     def test_queue_periodic_tasks(self, stubs: Path, install_dir: Path) -> None:
         """Откат удаляет ровно периодические задачи воркера очереди."""
@@ -683,22 +699,36 @@ class TestUpdate:
         assert not (install_dir / ".deploy").exists()
 
     @pytest.mark.parametrize(
-        ("target", "limit_reset", "pre_launch_reset", "library_reset"),
+        ("target", "limit_reset", "pre_launch_reset", "library_reset", "archive_reset"),
         [
             pytest.param(
-                "old-target", True, True, True, id="откат на версию без статусов до запуска",
+                "old-target", True, True, True, True, id="откат на версию без статусов до запуска",
             ),
             pytest.param(
-                "pre-limit-target", True, False, True, id="откат на версию без ожидания лимита",
+                "pre-limit-target",
+                True,
+                False,
+                True,
+                True,
+                id="откат на версию без ожидания лимита",
             ),
             pytest.param(
                 "pre-library-target",
                 False,
                 False,
                 True,
+                True,
                 id="откат на версию без ссылок на библиотеку",
             ),
-            pytest.param(None, False, False, False, id="версия со всеми изменениями"),
+            pytest.param(
+                "pre-archive-target",
+                False,
+                False,
+                False,
+                True,
+                id="откат на версию без архива задач",
+            ),
+            pytest.param(None, False, False, False, False, id="версия со всеми изменениями"),
         ],
     )
     def test_unknown_statuses_reset(
@@ -709,6 +739,7 @@ class TestUpdate:
         limit_reset: bool,
         pre_launch_reset: bool,
         library_reset: bool,
+        archive_reset: bool,
     ) -> None:
         if target is not None:
             (stubs / target).touch()
@@ -719,7 +750,9 @@ class TestUpdate:
         calls = _calls(stubs)
         assert any("cat-file -e" in call for call in calls)
         resets_seen = [call for call in calls if "psql" in call and "UPDATE" in call]
-        assert len(resets_seen) == int(limit_reset or pre_launch_reset or library_reset)
+        assert len(resets_seen) == int(
+            limit_reset or pre_launch_reset or library_reset or archive_reset,
+        )
         reset = resets_seen[0] if resets_seen else ""
         assert ("FROM nodes AS library_items" in reset) is library_reset
         assert ("node[.]guide_url" in reset) is library_reset
@@ -727,6 +760,10 @@ class TestUpdate:
         assert ("WHERE status::text = 'awaiting_limit'" in reset) is limit_reset
         assert ("UPDATE node_logs SET llm_switch_reason" in reset) is limit_reset
         assert ("UPDATE tasks SET status = 'new'" in reset) is pre_launch_reset
+        assert ("status = archived_from_status" in reset) is archive_reset
+        assert (
+            "WHERE name IN ('archive_finished_tasks','cleanup_finished_task_repositories')" in reset
+        ) is archive_reset
         if pre_launch_reset:
             assert "'refining','defined','ready','night_worker'" in reset
             assert "'dispatch_ready_tasks','dispatch_night_tasks'" in reset

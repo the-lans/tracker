@@ -125,7 +125,7 @@ async def duplicate_task(
     created_by: uuid.UUID,
 ) -> Task:
     """Новая задача и все копируемые данные — одной транзакцией (правило 10)."""
-    if source.status is not TaskStatus.DONE:
+    if TaskStatus.DONE not in (source.status, source.archived_from_status):
         raise ConflictError("Дублировать можно только выполненную задачу")
     if source.pipeline_id is not None:
         pipeline = await db_session.get(Pipeline, source.pipeline_id)

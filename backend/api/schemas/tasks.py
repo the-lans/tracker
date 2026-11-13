@@ -126,6 +126,10 @@ class TaskResponse(BaseModel):
     limit_wait_from_status: TaskStatus | None = None
     limit_wait_until: datetime | None = None
     repo_cleaned_at: datetime | None
+    # Раздел 14.2: завершение прогона и архив.
+    finished_at: datetime | None = None
+    archived_at: datetime | None = None
+    archived_from_status: TaskStatus | None = None
     queue_priority: int
     ready_at: datetime | None
     occupies_slot: bool
@@ -326,3 +330,27 @@ class ArtifactResponse(BaseModel):
     path: str
     size: int
     modified_at: datetime
+
+
+class ArchivedTaskResponse(BaseModel):
+    """Раздел 15.1: строка раздела «Архив»."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    code: str
+    title: str
+    archived_from_status: TaskStatus | None
+    # Название категории подставляет выборка архива (JOIN), у задачи его нет.
+    category_name: str | None = None
+    finished_at: datetime | None
+    archived_at: datetime | None
+    repo_cleaned_at: datetime | None
+    created_by: uuid.UUID
+
+
+class ArchivedTaskPageResponse(BaseModel):
+    items: list[ArchivedTaskResponse]
+    total: int
+    page: int
+    page_size: int

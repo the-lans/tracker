@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import replace
+from datetime import datetime
 from typing import Annotated
 
 import sqlalchemy as sa
@@ -15,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user
 from api.schemas import (
+    ArchivedTaskPageResponse,
+    ArchivedTaskResponse,
     AwaitingDecisionCountResponse,
     LlmLimitResponse,
     QueueSummaryResponse,
@@ -34,6 +37,13 @@ from services.jira_import import jira_issue_url, mark_attachment_copy_pending, v
 from services.limit_wait import author_waits_for_limit
 from services.redis_connection import redis_connection
 from services.session_context import list_active_sessions
+from services.task_archive import (
+    DEFAULT_ARCHIVE_PAGE_SIZE,
+    MAX_ARCHIVE_PAGE_SIZE,
+    MAX_ARCHIVE_SEARCH_LENGTH,
+    ArchiveFilters,
+    list_archived_tasks,
+)
 from services.task_creation import RepositoryAttachment, TaskDraft
 from services.task_creation import create_task as create_task_with_repositories
 from services.task_duplication import duplicate_task
@@ -177,7 +187,12 @@ async def list_tasks(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
     status_filter: TaskStatus | None = None,
+    include_archived: bool = False,
 ) -> list[TaskResponse]:
+    """
+    Раздел 15.1: задачи дашборда — без архивных (у них свой раздел);
+    ``include_archived`` — для выбора родительской задачи.
+    """
     stmt = (
         sa.select(Task)
         .where(owner_filter(Task.created_by, current_user))
@@ -185,8 +200,48 @@ async def list_tasks(
     )
     if status_filter is not None:
         stmt = stmt.where(Task.status == status_filter)
+    elif not include_archived:
+        stmt = stmt.where(Task.status != TaskStatus.ARCHIVED)
     tasks = list((await db_session.execute(stmt)).scalars().all())
     return await _with_queue_positions(db_session, tasks)
+
+
+@router.get("/archive", response_model=ArchivedTaskPageResponse)
+async def list_archive(
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    search: Annotated[str | None, Query(max_length=MAX_ARCHIVE_SEARCH_LENGTH)] = None,
+    finished_from: datetime | None = None,
+    finished_to: datetime | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[
+        int,
+        Query(ge=1, le=MAX_ARCHIVE_PAGE_SIZE),
+    ] = DEFAULT_ARCHIVE_PAGE_SIZE,
+) -> ArchivedTaskPageResponse:
+    """Раздел 15.1 «Архив»: постранично, поиск по коду и названию, период завершения."""
+    result = await list_archived_tasks(
+        db_session,
+        user=current_user,
+        filters=ArchiveFilters(
+            search=search,
+            finished_from=finished_from,
+            finished_to=finished_to,
+        ),
+        page=page,
+        page_size=page_size,
+    )
+    return ArchivedTaskPageResponse(
+        items=[
+            ArchivedTaskResponse.model_validate(row.task).model_copy(
+                update={"category_name": row.category_name},
+            )
+            for row in result.rows
+        ],
+        total=result.total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/awaiting-count", response_model=AwaitingDecisionCountResponse)
