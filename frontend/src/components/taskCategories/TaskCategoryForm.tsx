@@ -86,7 +86,7 @@ export function TaskCategoryForm({
     <>
       <div className="flex flex-col gap-3">
         <div>
-          <Label htmlFor="category-name">Название</Label>
+          <Label htmlFor="category-name" required>Название</Label>
           <Input id="category-name" value={name} onChange={(event) => setName(event.target.value)} />
         </div>
 

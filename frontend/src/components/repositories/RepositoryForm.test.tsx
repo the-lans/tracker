@@ -28,6 +28,12 @@ const branchField = () => screen.getByLabelText("Ветка по умолчан�
 const fromServer = () => screen.getByRole("button", { name: /С сервера/ });
 
 describe("RepositoryForm", () => {
+  test.for(["Название", "Git URL", "Ветка по умолчанию"])("«%s» отмечено обязательным", (field, { api }) => {
+    renderForm(api);
+
+    expect(screen.getByText(field, { selector: "label" })).toHaveAttribute("data-required");
+  });
+
   test("сохраняет выбранный доступ вместо приватного ключа", async ({ api }) => {
     const { user, saved } = renderForm(api);
 

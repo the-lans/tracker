@@ -35,7 +35,7 @@ export function RepositoryBranchField({
 
   return (
     <div>
-      <Label htmlFor="repo-default-branch">Ветка по умолчанию</Label>
+      <Label htmlFor="repo-default-branch" required>Ветка по умолчанию</Label>
       <div className="flex gap-2">
         <Input
           id="repo-default-branch"

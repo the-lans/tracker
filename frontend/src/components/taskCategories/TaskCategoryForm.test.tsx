@@ -96,6 +96,16 @@ describe("TaskCategoryForm", () => {
     expect(screen.getByRole("button", { name: "Создать" })).toBeDisabled();
   });
 
+  test.for([
+    { field: "Название", required: true },
+    { field: "Пайплайн по умолчанию", required: false },
+    { field: "Приоритет (очередь)", required: false },
+  ])("«$field» — обязательное: $required", ({ field, required }, { api }) => {
+    renderForm(api);
+
+    expect(screen.getByText(field, { selector: "label" }).hasAttribute("data-required")).toBe(required);
+  });
+
   test("правка сохраняет категорию целиком", async ({ api }) => {
     const { user } = renderForm(api, makeTaskCategory({ queue_priority: 300 }));
 

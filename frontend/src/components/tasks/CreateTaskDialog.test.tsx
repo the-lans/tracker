@@ -47,6 +47,7 @@ describe("CreateTaskDialog", () => {
     { field: "Описание", required: true },
     { field: "Гайд (URL Confluence)", required: false },
     { field: "Стартовый LLM-аккаунт", required: false },
+    { field: "Категория", required: false },
   ])("«$field» — обязательное: $required", ({ field, required }, { api }) => {
     renderDialog(api);
 

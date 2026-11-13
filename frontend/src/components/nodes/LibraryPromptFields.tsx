@@ -71,7 +71,7 @@ export function LibraryPromptFields({
   return (
     <>
       <div>
-        <Label htmlFor="node-library-item">Промт библиотеки</Label>
+        <Label htmlFor="node-library-item" required>Промт библиотеки</Label>
         <Select
           value={value.libraryNodeId ?? ""}
           onValueChange={(libraryNodeId) =>

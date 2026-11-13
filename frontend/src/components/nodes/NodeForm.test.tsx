@@ -58,6 +58,7 @@ describe("NodeForm", () => {
       for (const name of all) {
         expect(screen.queryByLabelText(name) !== null).toBe(name === field);
       }
+      expect(screen.getByText(field, { selector: "label" })).toHaveAttribute("data-required");
     });
 
     test("в библиотеке нет режима планирования и очистки контекста", async ({ api }) => {
