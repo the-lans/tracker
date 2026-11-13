@@ -23,6 +23,7 @@ import {
   type PendingOption,
   type Repository,
   type Task,
+  type TaskCategory,
   type TaskLibraryPromptItem,
   type TaskNodeItem,
   type Template,
@@ -251,6 +252,22 @@ export function makeRepository(overrides: Partial<Repository> = {}): Repository 
     default_branch: "master",
     default_template_id: null,
     git_credential_id: "cred1",
+    ...overrides,
+  };
+}
+
+export function makeTaskCategory(overrides: Partial<TaskCategory> = {}): TaskCategory {
+  return {
+    id: "cat1",
+    name: "Бэкенд",
+    pipeline_id: null,
+    auto_accept_plan: false,
+    library_prompt_ids: [],
+    queue_priority: 100,
+    occupies_slot: false,
+    created_by: "u1",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
   };
 }

@@ -343,10 +343,31 @@ export interface Task {
   limit_wait_from_status?: TaskStatus | null;
   /** Ближайший сброс лимита, которого ждёт задача. */
   limit_wait_until?: string | null;
+  /** Раздел 15.7: категория автора; null — без категории. */
+  category_id?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
 }
+
+/** Раздел 15.7: категория задачи — личная, её настройки копируются в новую задачу. */
+export interface TaskCategory {
+  id: string;
+  name: string;
+  pipeline_id: string | null;
+  auto_accept_plan: boolean;
+  library_prompt_ids: string[];
+  queue_priority: number;
+  occupies_slot: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TaskCategoryRequest = Pick<
+  TaskCategory,
+  "name" | "pipeline_id" | "auto_accept_plan" | "library_prompt_ids" | "queue_priority" | "occupies_slot"
+>;
 
 /** Раздел 15.1: слоты пользователя над списком задач дашборда. */
 export interface QueueSummary {
@@ -377,11 +398,13 @@ export interface TaskCreateRequest extends TaskDuplicateRequest {
   use_parent_summary?: boolean;
   /** Раздел 15.6: ссылка и вложения задачи Jira берутся по ключу. */
   jira_issue_key?: string | null;
+  /** Раздел 15.7: настройки категории копируются в новую задачу. */
+  category_id?: string | null;
 }
 
 /**
- * PATCH /tasks/{id}: auto_accept_plan — до `done`, приоритет и слот — всегда,
- * остальное — только в статусах до запуска.
+ * PATCH /tasks/{id}: auto_accept_plan — до `done`, приоритет, слот и
+ * категория — всегда, остальное — только в статусах до запуска.
  */
 export interface TaskUpdateRequest {
   title?: string;
@@ -394,6 +417,8 @@ export interface TaskUpdateRequest {
   /** Раздел 14.4: приоритет и галочка слота меняются в любом статусе. */
   queue_priority?: number;
   occupies_slot?: boolean;
+  /** Раздел 15.7: задаче до запуска без пайплайна достаётся пайплайн категории. */
+  category_id?: string | null;
 }
 
 export interface TaskRepository {

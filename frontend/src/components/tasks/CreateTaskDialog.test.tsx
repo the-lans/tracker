@@ -3,7 +3,7 @@ import { describe, expect, vi } from "vitest";
 import { CreateTaskDialog } from "@/components/tasks/CreateTaskDialog";
 import { LlmAccountStatus, UserRole, type JiraIssueDraft } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
-import { makeCurrentUser, makeLlmAccount, makeRepository, makeTask, makeUser } from "@/test/factories";
+import { makeCurrentUser, makeLlmAccount, makeRepository, makeTask, makeTaskCategory, makeUser } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
@@ -71,6 +71,7 @@ describe("CreateTaskDialog", () => {
         parent_task_id: null,
         use_parent_summary: false,
         jira_issue_key: null,
+        category_id: null,
       });
       await expect.poll(() => onOpenChange.mock.calls).toEqual([[false]]);
     });
@@ -125,6 +126,18 @@ describe("CreateTaskDialog", () => {
       expect(createRequest(api)?.body).toMatchObject({
         repositories: [{ repository_id: "r1", role: "read_write", base_branch: "release/1.2" }],
       });
+    });
+
+    test("выбранная категория уходит в запросе", async ({ api }) => {
+      api.respond("GET /task-categories", [makeTaskCategory({ id: "cat1", name: "Бэкенд" })]);
+      const { user } = renderDialog(api);
+
+      await fillRequired(user);
+      await user.click(screen.getByRole("combobox", { name: "Категория" }));
+      await user.click(await screen.findByRole("option", { name: "Бэкенд" }));
+      await user.click(screen.getByRole("button", { name: "Создать" }));
+
+      expect(createRequest(api)?.body).toMatchObject({ category_id: "cat1" });
     });
 
     test("ошибка сервера оставляет форму открытой с введёнными данными", async ({ api, toasts }) => {

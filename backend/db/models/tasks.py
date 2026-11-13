@@ -140,6 +140,11 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     limit_wait_order_index: Mapped[int | None] = mapped_column(sa.Integer)
     # Попытка ноды, ждавшей сброса: после него повторы продолжают счёт с неё.
     limit_wait_attempt: Mapped[int | None] = mapped_column(sa.Integer)
+    # Раздел 15.7: категория автора; удалённая категория оставляет задачу без категории.
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("task_categories.id", ondelete="SET NULL"),
+        index=True,
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"))
 
 

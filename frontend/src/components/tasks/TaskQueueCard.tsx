@@ -7,20 +7,17 @@ import { useSystemSettings } from "@/hooks/useAdmin";
 import { isQueued } from "@/lib/taskStatusTransitions";
 import { formatDateTime } from "@/lib/utils";
 import { TaskStatus, type Task, type TaskUpdateRequest } from "@/lib/types";
-
-/** Раздел 14.4: границы приоритета — как у `TaskUpdateRequest.queue_priority` backend. */
-export const MIN_QUEUE_PRIORITY = 1;
-export const MAX_QUEUE_PRIORITY = 1_000_000;
+import {
+  MAX_QUEUE_PRIORITY,
+  MIN_QUEUE_PRIORITY,
+  QUEUE_PRIORITY_HINT,
+  QUEUE_PRIORITY_RANGE_HINT,
+  parseQueuePriority,
+} from "@/lib/queuePriority";
 
 /** «ЧЧ:ММ:СС» настроек → «ЧЧ:ММ». */
 function clockTime(value: string): string {
   return value.slice(0, 5);
-}
-
-function parsePriority(draft: string): number | null {
-  const value = Number(draft);
-  if (!Number.isInteger(value) || value < MIN_QUEUE_PRIORITY || value > MAX_QUEUE_PRIORITY) return null;
-  return value;
 }
 
 /**
@@ -39,7 +36,7 @@ export function TaskQueueCard({
   const [draft, setDraft] = useState<string | null>(null);
   const { data: settings } = useSystemSettings();
   const shownPriority = draft ?? String(task.queue_priority);
-  const parsed = parsePriority(shownPriority);
+  const parsed = parseQueuePriority(shownPriority);
 
   function savePriority() {
     if (draft === null) return;
@@ -73,9 +70,7 @@ export function TaskQueueCard({
         />
       </div>
       <div className="mt-1 text-meta text-text-3">
-        {parsed === null
-          ? `Целое число от ${MIN_QUEUE_PRIORITY} до ${MAX_QUEUE_PRIORITY.toLocaleString("ru-RU")}`
-          : "Больше — раньше; при равном приоритете — кто встал в очередь раньше"}
+        {parsed === null ? QUEUE_PRIORITY_RANGE_HINT : QUEUE_PRIORITY_HINT}
       </div>
 
       <div className="mt-3 flex items-start gap-3">

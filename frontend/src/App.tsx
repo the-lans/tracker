@@ -12,6 +12,7 @@ import { TaskPage } from "@/pages/TaskPage";
 import { PipelinesPage } from "@/pages/PipelinesPage";
 import { PipelineDetailPage } from "@/pages/PipelineDetailPage";
 import { LibraryPage } from "@/pages/LibraryPage";
+import { TaskCategoriesPage } from "@/pages/TaskCategoriesPage";
 import { TemplatesPage } from "@/pages/TemplatesPage";
 import { RepositoriesPage } from "@/pages/RepositoriesPage";
 import { LlmAccountsPage } from "@/pages/LlmAccountsPage";
@@ -36,6 +37,7 @@ export function App() {
                   <Route path="pipelines" element={<PipelinesPage />} />
                   <Route path="pipelines/:pipelineId" element={<PipelineDetailPage />} />
                   <Route path="library" element={<LibraryPage />} />
+                  <Route path="categories" element={<TaskCategoriesPage />} />
                   <Route path="templates" element={<TemplatesPage />} />
                   <Route path="repositories" element={<RepositoriesPage />} />
                   <Route path="llm-accounts" element={<LlmAccountsPage />} />

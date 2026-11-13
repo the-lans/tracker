@@ -28,6 +28,14 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("link", { name: "Администрирование" }) !== null).toBe(admin);
   });
 
+  test("«Категории» — перед «Шаблонами»", () => {
+    renderSidebar(UserRole.USER);
+
+    const names = screen.getAllByRole("link").map((link) => link.textContent);
+    expect(screen.getByRole("link", { name: "Категории" })).toHaveAttribute("href", "/categories");
+    expect(names.indexOf("Категории") + 1).toBe(names.indexOf("Шаблоны"));
+  });
+
   test("«Мониторинг» ведёт на отдельную страницу администрирования", () => {
     renderSidebar(UserRole.ADMIN);
 

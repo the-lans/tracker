@@ -108,7 +108,8 @@ backend/
               (auth, tasks, repositories, templates, preview, llm_accounts,
               env_variables, mcp_servers, pipelines, nodes, users, profile,
               periodic_tasks, monitoring — страница «Мониторинг», events —
-              лента событий, push, system_settings, jira,
+              лента событий, task_categories — категории задач, push,
+              system_settings, jira,
               llm_proxy — состояние LLM-прокси для админки);
               tasks/ — эндпоинты задачи по разделам (crud, lifecycle, nodes,
               manual, env_variables, artifacts; common.py — доступ к задаче
@@ -126,6 +127,8 @@ backend/
               репозиториев и веток, безопасные для путей и git (раздел 3.1);
               task_launch.py — проверки перед запуском, в т. ч. LLM-аккаунт
               только для LLM-нод; task_editing.py — правка полей задачи;
+              task_categories.py — категории задач и копирование их
+              настроек в новую задачу (раздел 15.7);
               очередь задач (раздел 14.4): task_queue.py — слоты автора,
               порядок очереди, ночное окно, ручная смена статуса;
               task_dispatcher.py — проход дневного и ночного воркера
@@ -234,7 +237,8 @@ backend/
               worker_support.py — обвязка воркера сессии для его тестов и E2E)
 frontend/    — React SPA: дашборд, страница задачи (обзор + диалог),
               конструктор пайплайна/библиотека, CRUD-страницы
-              (репозитории/шаблоны/LLM-аккаунты/переменные окружения),
+              (категории задач/репозитории/шаблоны/LLM-аккаунты/переменные
+              окружения),
               админка (раздел 15.5, в т. ч. вкладка «LLM-прокси»), страница
               «Мониторинг» (components/monitoring) и лента «События»
               (components/events, раздел 18.4), Web Push (public/service-worker.js,
@@ -252,7 +256,7 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               или содержимое) и ErrorState, tasks/TaskCodeLink (код задачи
               ссылкой);
               по разделам — components/{tasks,nodes,profile,admin,
-              repositories,templates,llmAccounts,envVariables};
+              taskCategories,repositories,templates,llmAccounts,envVariables};
               styles/tokens.css + index.css — токены (цвета, шкала шрифтов
               text-caption…text-display), styles/classes.ts — общие наборы
               классов; lib/labels.ts — все подписи и цвета статусов;
@@ -320,7 +324,9 @@ alembic/
                  и стоимость хода аккаунта, сжатие при смене аккаунта,
                  бэкап в S3: настройки в system_settings и backup_runs,
                  таблица events, nodes.library_node_id и library_arguments,
-                 индекс app_logs.created_at, repositories.default_branch);
+                 индекс app_logs.created_at, repositories.default_branch,
+                 категории задач
+                 task_categories и tasks.category_id);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/

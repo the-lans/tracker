@@ -94,6 +94,7 @@ from api.schemas.system_settings import (
     LibraryUsageResponse,
     SystemSettingsBody,
 )
+from api.schemas.task_categories import TaskCategoryRequest, TaskCategoryResponse
 from api.schemas.tasks import (
     ArtifactResponse,
     AwaitingDecisionCountResponse,
@@ -194,6 +195,8 @@ __all__ = [
     "SftpConnectionResponse",
     "SshKeyUpdateRequest",
     "SystemSettingsBody",
+    "TaskCategoryRequest",
+    "TaskCategoryResponse",
     "TaskCreateRequest",
     "TaskDuplicateRequest",
     "TaskEnvVariableCreateRequest",

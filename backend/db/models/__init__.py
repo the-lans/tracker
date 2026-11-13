@@ -15,6 +15,7 @@ autogenerate (см. ``alembic/env.py``) и для тестовой фиксту�
 from __future__ import annotations
 
 from db.models.backups import BackupRun
+from db.models.categories import TaskCategory, TaskCategoryLibraryPrompt
 from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.events import Event
 from db.models.llm import LlmAccount
@@ -46,6 +47,8 @@ __all__ = [
     "Repository",
     "SystemSettings",
     "Task",
+    "TaskCategory",
+    "TaskCategoryLibraryPrompt",
     "TaskEnvVariable",
     "TaskLibraryPrompt",
     "TaskManualRequestQueue",

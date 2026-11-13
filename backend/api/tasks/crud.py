@@ -104,6 +104,7 @@ async def create_task(
         parent_task_id=body.parent_task_id,
         use_parent_summary=body.use_parent_summary,
     )
+    draft = replace(draft, category_id=body.category_id)
     if body.jira_issue_key is not None:
         issue_url = await jira_issue_url(db_session, current_user, body.jira_issue_key)
         draft = replace(draft, jira_issue_url=issue_url)

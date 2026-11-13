@@ -19,6 +19,11 @@ from db.models.tasks import Task, TaskRepository
 from services.access import ensure_llm_account_of_owner
 from services.errors import NotFoundError, TaskCodeTakenError, ValidationError
 from services.repository_validation import validate_branch_name
+from services.task_categories import (
+    apply_category_to_new_task,
+    ensure_category_pipeline_usable,
+    get_category_of_owner,
+)
 from services.task_codes import validate_task_code
 from services.task_workspace import build_branch_name
 
@@ -46,6 +51,8 @@ class TaskDraft:
     repositories: list[RepositoryAttachment] = field(default_factory=list)
     # Раздел 15.6: задача Jira, из которой заполнена форма.
     jira_issue_url: str | None = None
+    # Раздел 15.7: настройки категории копируются в новую задачу.
+    category_id: uuid.UUID | None = None
 
 
 async def _ensure_exists(
@@ -169,6 +176,18 @@ async def create_task(
     draft: TaskDraft,
     created_by: uuid.UUID,
 ) -> Task:
+    category = (
+        await get_category_of_owner(db_session, draft.category_id, owner_id=created_by)
+        if draft.category_id is not None
+        else None
+    )
+    if category is not None:
+        await ensure_category_pipeline_usable(db_session, category)
     task = await add_task_with_repositories(db_session, draft=draft, created_by=created_by)
+    if category is not None:
+        await apply_category_to_new_task(db_session, task=task, category=category)
     await db_session.commit()
+    if category is not None:
+        # Поля после вставки — отдельным UPDATE: `updated_at` перечитывается.
+        await db_session.refresh(task)
     return task
