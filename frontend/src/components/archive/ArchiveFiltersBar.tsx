@@ -55,6 +55,7 @@ export function ArchiveFiltersBar({
           <Input
             id="archive-to"
             type="date"
+            aria-label="Завершена по"
             className="h-11 min-w-0 sm:w-40"
             value={value.to}
             min={value.from || undefined}

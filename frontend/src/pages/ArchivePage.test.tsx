@@ -79,7 +79,7 @@ describe("ArchivePage", () => {
     await screen.findByText("Страница 2 из 3");
 
     await user.type(screen.getByLabelText("Завершена с"), "2026-03-01");
-    await user.type(screen.getByLabelText("по"), "2026-03-31");
+    await user.type(screen.getByLabelText("Завершена по"), "2026-03-31");
 
     await waitFor(() =>
       expect(archiveQueries(api).at(-1)).toEqual({

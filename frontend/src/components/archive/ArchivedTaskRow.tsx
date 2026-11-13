@@ -27,7 +27,7 @@ export function ArchivedTaskRow({ task }: { task: ArchivedTask }) {
           </div>
           <OwnerLabel ownerId={task.created_by} />
         </div>
-        <div className={`${WRAP_ROW} text-caption text-text-3 sm:shrink-0 sm:justify-end`}>
+        <div className={`${WRAP_ROW} text-caption tabular-nums text-text-3 sm:shrink-0 sm:justify-end`}>
           <TaskStatusBadge status={task.archived_from_status ?? TaskStatus.ARCHIVED} />
           {task.category_name && (
             <span className="max-w-40 truncate" title={task.category_name}>

@@ -30,10 +30,12 @@ export function UserRow({ user }: { user: User }) {
           {new Date(user.created_at).toLocaleDateString("ru-RU")}
         </div>
         <SftpLoginEditor user={user} />
-        <UserNumberSettingEditor user={user} setting={MAX_PARALLEL_TASKS_SETTING} />
-        {RETENTION_SETTINGS.map((setting) => (
-          <UserNumberSettingEditor key={setting.field} user={user} setting={setting} />
-        ))}
+        <div className="flex flex-wrap items-center gap-x-5">
+          <UserNumberSettingEditor user={user} setting={MAX_PARALLEL_TASKS_SETTING} />
+          {RETENTION_SETTINGS.map((setting) => (
+            <UserNumberSettingEditor key={setting.field} user={user} setting={setting} />
+          ))}
+        </div>
         <SshKeyLine user={user} />
       </div>
       <Select
