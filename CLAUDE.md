@@ -254,7 +254,8 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               (фильтр «Все/значение»), inputs/SearchSelect (выбор из
               длинного списка с поиском), feedback/QueryState (загрузка, ошибка
               или содержимое) и ErrorState, tasks/TaskCodeLink (код задачи
-              ссылкой);
+              ссылкой), tasks/AutoAcceptPlanField и tasks/OccupiesSlotField
+              (настройки задачи и категории);
               по разделам — components/{tasks,nodes,profile,admin,
               taskCategories,repositories,templates,llmAccounts,envVariables};
               styles/tokens.css + index.css — токены (цвета, шкала шрифтов

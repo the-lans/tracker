@@ -119,7 +119,9 @@ async def _ensure_pipeline_choosable(
     *,
     user: User,
 ) -> None:
-    """Пайплайн без нод задаче категории не привязать — его не выбрать и в категории."""
+    """
+    Пайплайн без нод задаче категории не привязать — его не выбрать и в категории.
+    """
     pipeline = await get_pipeline_for_user(db_session, pipeline_id, user=user)
     ensure_pipeline_attachable(pipeline)
     if not await _pipeline_has_nodes(db_session, pipeline_id):
@@ -298,7 +300,9 @@ async def _copy_library_prompts(
     task: Task,
     category_id: uuid.UUID,
 ) -> None:
-    """Архивный промт новой задаче не выдаётся (раздел 3.2) — он пропускается."""
+    """
+    Архивный промт новой задаче не выдаётся (раздел 3.2) — он пропускается.
+    """
     stmt = (
         sa.select(TaskCategoryLibraryPrompt.node_id)
         .join(Node, Node.id == TaskCategoryLibraryPrompt.node_id)

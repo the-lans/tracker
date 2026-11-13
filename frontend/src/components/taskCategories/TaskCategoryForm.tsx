@@ -6,8 +6,9 @@ import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
+import { AutoAcceptPlanField } from "@/components/tasks/AutoAcceptPlanField";
+import { OccupiesSlotField } from "@/components/tasks/OccupiesSlotField";
 import { useNodes } from "@/hooks/useNodes";
 import { usePipelines } from "@/hooks/usePipelines";
 import { useCreateTaskCategory, useUpdateTaskCategory } from "@/hooks/useTaskCategories";
@@ -117,13 +118,7 @@ export function TaskCategoryForm({
           </div>
         </div>
 
-        <label className="flex items-center justify-between gap-3 py-1">
-          <span>
-            <span className="block text-body font-bold">Принять план автоматически</span>
-            <span className="mt-0.5 block text-meta text-text-3">Без остановки на ревью плана</span>
-          </span>
-          <Switch checked={autoAcceptPlan} onCheckedChange={setAutoAcceptPlan} />
-        </label>
+        <AutoAcceptPlanField checked={autoAcceptPlan} onCheckedChange={setAutoAcceptPlan} />
 
         <Card>
           <CardTitle>Системные промты задачи</CardTitle>
@@ -168,22 +163,11 @@ export function TaskCategoryForm({
           </div>
         </div>
 
-        <div className="flex items-start gap-3">
-          <Checkbox
-            id="category-occupies-slot"
-            className="mt-0.5"
-            checked={occupiesSlot}
-            onCheckedChange={(checked) => setOccupiesSlot(checked === true)}
-          />
-          <div>
-            <Label htmlFor="category-occupies-slot" className="text-note font-bold">
-              Занимать слот параллельного запуска задач
-            </Label>
-            <div className="mt-0.5 text-meta text-text-3">
-              Для ручного запуска и чата в «Уточняется». Задача из очереди слот занимает всегда.
-            </div>
-          </div>
-        </div>
+        <OccupiesSlotField
+          id="category-occupies-slot"
+          checked={occupiesSlot}
+          onCheckedChange={setOccupiesSlot}
+        />
       </div>
       <DialogFooter>
         <Button variant="secondary" onClick={onCancel}>

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Card } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { OccupiesSlotField } from "@/components/tasks/OccupiesSlotField";
 import { useSystemSettings } from "@/hooks/useAdmin";
 import { isQueued } from "@/lib/taskStatusTransitions";
 import { formatDateTime } from "@/lib/utils";
@@ -73,22 +73,13 @@ export function TaskQueueCard({
         {parsed === null ? QUEUE_PRIORITY_RANGE_HINT : QUEUE_PRIORITY_HINT}
       </div>
 
-      <div className="mt-3 flex items-start gap-3">
-        <Checkbox
+      <div className="mt-3">
+        <OccupiesSlotField
           id={`occupies-slot-${task.id}`}
-          className="mt-0.5"
           checked={task.occupies_slot}
           disabled={pending}
-          onCheckedChange={(checked) => onUpdate({ occupies_slot: checked === true })}
+          onCheckedChange={(checked) => onUpdate({ occupies_slot: checked })}
         />
-        <div>
-          <Label htmlFor={`occupies-slot-${task.id}`} className="text-note font-bold">
-            Занимать слот параллельного запуска задач
-          </Label>
-          <div className="mt-0.5 text-meta text-text-3">
-            Для ручного запуска и чата в «Уточняется». Задача из очереди слот занимает всегда.
-          </div>
-        </div>
       </div>
 
       {isQueued(task.status) && (

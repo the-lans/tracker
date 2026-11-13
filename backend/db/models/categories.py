@@ -1,4 +1,6 @@
-"""Таблицы `task_categories`, `task_category_library_prompts` (раздел 3.1, 15.7 ТЗ)."""
+"""
+Таблицы `task_categories`, `task_category_library_prompts` (раздел 3.1, 15.7 ТЗ).
+"""
 
 from __future__ import annotations
 
@@ -50,7 +52,9 @@ class TaskCategory(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
 
 
 class TaskCategoryLibraryPrompt(Base):
-    """Системные промты категории — копируются в список промтов новой задачи."""
+    """
+    Системные промты категории — копируются в список промтов новой задачи.
+    """
 
     __tablename__ = "task_category_library_prompts"
 
