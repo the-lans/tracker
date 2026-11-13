@@ -129,6 +129,9 @@ backend/
               только для LLM-нод; task_editing.py — правка полей задачи;
               task_categories.py — категории задач и копирование их
               настроек в новую задачу (раздел 15.7);
+              task_archive.py — архив задач (раздел 14.2): уход в
+              `archived` и автоочистка репозиториев по срокам автора,
+              выборка раздела «Архив»;
               очередь задач (раздел 14.4): task_queue.py — слоты автора,
               порядок очереди, ночное окно, ручная смена статуса;
               task_dispatcher.py — проход дневного и ночного воркера
@@ -240,8 +243,9 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               (категории задач/репозитории/шаблоны/LLM-аккаунты/переменные
               окружения),
               админка (раздел 15.5, в т. ч. вкладка «LLM-прокси»), страница
-              «Мониторинг» (components/monitoring) и лента «События»
-              (components/events, раздел 18.4), Web Push (public/service-worker.js,
+              «Мониторинг» (components/monitoring), лента «События»
+              (components/events, раздел 18.4) и «Архив» (components/archive,
+              pages/ArchivePage.tsx, раздел 15.1), Web Push (public/service-worker.js,
               src/lib/push.ts, раздел 18.1); Dockerfile + nginx.conf —
               продовый образ (сборка на Node, раздача nginx с SPA-фолбэком
               на index.html для клиентских маршрутов). Общие элементы — по
@@ -327,7 +331,9 @@ alembic/
                  таблица events, nodes.library_node_id и library_arguments,
                  индекс app_logs.created_at, repositories.default_branch,
                  категории задач
-                 task_categories и tasks.category_id);
+                 task_categories и tasks.category_id, архив задач:
+                 статус archived, tasks.finished_at/archived_at/
+                 archived_from_status, сроки архива и очистки у users);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
@@ -545,9 +551,10 @@ Postgres из `backend/tests/conftest.py`:
    внутренней сети сервисов.
    Git воркера не исполняет код из репозитория: без хуков, без системного и
    глобального конфига, локальный `.git/config` — по белому списку.
-5. **Очистка рабочей директории репозиториев — только вручную и только в
-   терминальном статусе** (`done`/`failed`). Автоматическое удаление
-   запрещено.
+5. **Очистка рабочей директории репозиториев — только в завершённом
+   статусе** (`done`/`failed`/`archived`): кнопкой или по сроку автора
+   `users.cleanup_repos_after_days` (`services/task_archive.py`, тот же код,
+   что у кнопки). Другое автоматическое удаление запрещено.
 6. **Очистка контекста сессии (`clear_context`) запрещена**, пока существует
    хотя бы одна запись `node_logs` со статусом `running`/`awaiting_decision`.
 7. **Retry применяется только к нодам пайплайна** (`trigger_type = pipeline`)
