@@ -29,7 +29,7 @@ function FilterSelect({
         aria-label={label}
         title={label}
         // На телефоне — компактная ячейка в строке из трёх фильтров.
-        className="h-9 w-full min-w-0 px-2 text-note sm:h-10 sm:w-44 sm:px-3 sm:text-sm [&>span]:truncate"
+        className="h-9 w-full min-w-0 px-2 text-note sm:h-10 sm:w-44 sm:px-3 sm:text-sm"
       >
         <SelectValue />
       </SelectTrigger>

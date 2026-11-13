@@ -28,7 +28,12 @@ export function FilterSelect<T extends string>({
 }) {
   return (
     <Select value={value ?? ALL} onValueChange={(next) => onChange(next === ALL ? undefined : (next as T))}>
-      <SelectTrigger className={cn("w-40", className)} aria-label={label}>
+      <SelectTrigger
+        className={cn("w-40", className)}
+        aria-label={label}
+        // Длинная подпись в поле обрезается — целиком она видна в подсказке.
+        title={value === undefined ? allLabel : labels[value]}
+      >
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
