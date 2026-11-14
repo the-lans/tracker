@@ -65,7 +65,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <aside
-      className="flex h-full w-[248px] shrink-0 flex-col border-r border-border bg-surface p-3.5"
+      aria-label="Основное меню"
+      className="flex h-full min-h-0 w-[248px] shrink-0 flex-col overflow-y-auto overscroll-contain border-r border-border bg-surface p-3.5"
       onClick={onNavigate}
     >
       <div className="flex items-center gap-2.5 px-2 pb-[22px] pt-1.5">
@@ -79,6 +80,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <NavItem to="/categories" label="Категории" icon={Tags} />
         <NavItem to="/pipelines" label="Пайплайны" icon={GitBranch} />
         <NavItem to="/library" label="Библиотека промтов" icon={BookText} />
+        <NavItem to="/knowledge" label="База знаний" icon={BookText} />
         <NavItem to="/templates" label="Шаблоны" icon={FileStack} />
         <NavItem to="/repositories" label="Репозитории" icon={FolderGit2} />
         <NavItem to="/events" label="События" icon={Bell} />
@@ -106,7 +108,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       )}
 
-      <div className="mt-auto flex flex-col gap-2.5 border-t border-border pt-3">
+      <div className="mt-auto flex shrink-0 flex-col gap-2.5 border-t border-border pt-3">
         <ThemeToggle />
         <NavLink to="/profile" className="flex items-center gap-2.5 rounded-md p-1">
           <UserAvatar email={user?.email} />

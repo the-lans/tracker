@@ -45,6 +45,7 @@ COMPONENTS: tuple[Component, ...] = (
     # Репозитории целиком, с `.git`: незапушенные коммиты и правки агента.
     Component("task_repos", required=True),
     Component("user_files", required=True),
+    Component("knowledge", required=False),
     Component("log_archive", required=True),
     Component("claude_sessions", required=False, excludes=_CACHE_EXCLUDES),
     # Учётки LLM-прокси с токенами OAuth.

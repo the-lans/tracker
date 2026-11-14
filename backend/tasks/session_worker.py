@@ -32,6 +32,7 @@ from db.models.enums import NodeType, ParentSummaryStatus, RemoteControlStatus, 
 from db.models.mcp import McpServer
 from db.models.repositories import Repository, TemplateMcpServer
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
+from db.models.users import User
 from db.session import async_session_factory
 from services.account_router import TaskAccountRouter
 from services.child_rebase import apply_requested_rebases
@@ -41,6 +42,9 @@ from services.claude_config import (
     session_config_dir,
 )
 from services.errors import ConflictError
+from services.knowledge_agent import build_knowledge_tools
+from services.knowledge_sections import section_snapshot
+from services.knowledge_views import knowledge_mounts
 from services.limit_wait import LimitGate, check_limit_gate, enter_limit_wait, leave_limit_wait
 from services.llm_account_choice import LlmLimitWaitError
 from services.llm_routing import llm_session_token
@@ -989,6 +993,7 @@ class _SessionClientFactory:
     mcp_servers: dict[str, McpServerConfig]
     can_use_tool: CanUseTool
     cli_env: dict[str, str]
+    knowledge_dirs: tuple[str, ...] = ()
 
     def __call__(
         self,
@@ -1006,7 +1011,7 @@ class _SessionClientFactory:
             claude_config_dir=str(self.config_dir),
             enable_remote_control=enable_remote_control,
             can_use_tool=self.can_use_tool,
-            add_dirs=[str(self.artifacts_dir)],
+            add_dirs=[str(self.artifacts_dir), *self.knowledge_dirs],
             cli_path=str(SESSION_CLI_PATH),
             cli_env=self.cli_env,
         )
@@ -1024,6 +1029,8 @@ async def _build_client_factory(
     config_dir = session_config_dir(task.code)
     artifacts_dir = task_artifacts_dir(task.code)
     has_llm = await task_uses_llm(db_session, task)
+    knowledge_owner = await _knowledge_owner(db_session, task)
+    knowledge_sections = await section_snapshot(db_session, user=knowledge_owner)
     cli_env = (
         await build_session_cli_env(
             task_id=task.id,
@@ -1031,6 +1038,9 @@ async def _build_client_factory(
             config_dir=config_dir,
             session_token=session_token,
             artifacts_dir=artifacts_dir,
+            knowledge_mounts=await knowledge_mounts(
+                db_session, user=knowledge_owner, sections=knowledge_sections
+            ),
         )
         if has_llm
         else {}
@@ -1043,9 +1053,17 @@ async def _build_client_factory(
         workspace=workspace,
         artifacts_dir=artifacts_dir,
         config_dir=config_dir,
-        mcp_servers=await _resolve_mcp_servers_for_task(db_session, task),
+        mcp_servers={
+            **await _resolve_mcp_servers_for_task(db_session, task),
+            "tracker-knowledge": await build_knowledge_tools(
+                db_session, task=task, sections=knowledge_sections
+            ),
+        },
         can_use_tool=can_use_tool,
         cli_env=cli_env,
+        knowledge_dirs=tuple(
+            f"/workspace/knowledge/{section.id}" for section in knowledge_sections
+        ),
     )
 
 
@@ -1281,3 +1299,10 @@ async def _settle_pipeline_run(
         if outcome.stopped:
             logger.info("task_stopped_by_user", task_id=str(task.id))
         await _fail_task(db_session, task, failed_order_index=outcome.failed_order_index)
+
+
+async def _knowledge_owner(db_session: AsyncSession, task: Task) -> User:
+    user = await db_session.get(User, task.created_by)
+    if user is None:
+        raise RuntimeError("Автор задачи не найден")
+    return user

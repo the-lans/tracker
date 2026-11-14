@@ -12,6 +12,7 @@ const TITLES: Record<string, string> = {
   "/": "Дашборд",
   "/daily": "Дейли",
   "/pipelines": "Пайплайны",
+  "/knowledge": "База знаний",
   "/library": "Библиотека промтов",
   "/categories": "Категории",
   "/templates": "Шаблоны",
@@ -45,7 +46,7 @@ export function AppShell() {
       </div>
 
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-        <SheetContent className="left-0 top-0 h-dvh w-[280px] max-w-[85vw] rounded-none border-r border-t-0 p-0">
+        <SheetContent className="left-0 top-0 h-dvh max-h-dvh w-[280px] max-w-[85vw] overflow-hidden rounded-none border-r border-t-0 p-0 [&>[data-sheet-handle]]:hidden">
           <Sidebar onNavigate={() => setMobileNavOpen(false)} />
         </SheetContent>
       </Sheet>

@@ -76,7 +76,9 @@ async function request<TResponse>(path: string, options: RequestOptions = {}): P
   const token = getStoredToken();
   const headers = authHeaders(token);
   let body: BodyInit | undefined;
-  if (options.body instanceof Blob) {
+  if (options.body instanceof FormData) {
+    body = options.body;
+  } else if (options.body instanceof Blob) {
     // Раздел 14.3: файл артефакта уходит телом запроса как есть.
     headers["Content-Type"] = options.body.type || "application/octet-stream";
     body = options.body;

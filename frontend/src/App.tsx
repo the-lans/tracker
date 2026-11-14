@@ -8,6 +8,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { ProtectedRoute, AdminRoute } from "@/components/layout/ProtectedRoute";
 import { LoginPage } from "@/pages/LoginPage";
 import { DashboardPage } from "@/pages/DashboardPage";
+import { KnowledgePage } from "@/pages/KnowledgePage";
 import { DailyPage } from "@/pages/DailyPage";
 import { TaskPage } from "@/pages/TaskPage";
 import { PipelinesPage } from "@/pages/PipelinesPage";
@@ -35,6 +36,7 @@ export function App() {
               <Route element={<ProtectedRoute />}>
                 <Route element={<AppShell />}>
                   <Route index element={<DashboardPage />} />
+                  <Route path="knowledge" element={<KnowledgePage />} />
                   <Route path="daily" element={<DailyPage />} />
                   <Route path="tasks/:taskId" element={<TaskPage />} />
                   <Route path="pipelines" element={<PipelinesPage />} />

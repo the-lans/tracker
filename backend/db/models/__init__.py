@@ -25,6 +25,7 @@ from db.models.daily import (
 )
 from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.events import Event
+from db.models.knowledge import KnowledgeEntry, KnowledgeSection, KnowledgeVersion
 from db.models.llm import LlmAccount
 from db.models.logs import AppLog, NodeLog
 from db.models.mcp import McpServer
@@ -54,6 +55,9 @@ __all__ = [
     "Pipeline",
     "PushSubscription",
     "GitCredential",
+    "KnowledgeEntry",
+    "KnowledgeSection",
+    "KnowledgeVersion",
     "GoogleCalendarConnection",
     "Repository",
     "SystemSettings",
