@@ -11,6 +11,7 @@ import {
   LibraryPromptRunStatus,
   LlmAccountStatus,
   LlmLimitState,
+  MergeStatus,
   ManualRequestStatus,
   ManualRequestType,
   NodeLogStatus,
@@ -18,6 +19,7 @@ import {
   NodeType,
   ReasoningEffort,
   RemoteControlStatus,
+  RepositoryRole,
   TaskStatus,
   UserRole,
   type BackupRun,
@@ -35,6 +37,7 @@ import {
   type TaskCategory,
   type TaskLibraryPromptItem,
   type TaskNodeItem,
+  type TaskRepository,
   type Template,
   type User,
 } from "@/lib/types";
@@ -262,6 +265,20 @@ export function makeRepository(overrides: Partial<Repository> = {}): Repository 
     default_branch: "master",
     default_template_id: null,
     git_credential_id: "cred1",
+    ...overrides,
+  };
+}
+
+export function makeTaskRepository(overrides: Partial<TaskRepository> = {}): TaskRepository {
+  return {
+    id: "tr1",
+    repository_id: "r1",
+    role: RepositoryRole.READ_WRITE,
+    branch_name: "feature/RR-12345",
+    base_branch: "master",
+    pushed_at: null,
+    merge_status: MergeStatus.NOT_PUSHED,
+    cloned_at: CREATED_AT,
     ...overrides,
   };
 }

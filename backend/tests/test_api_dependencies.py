@@ -53,6 +53,28 @@ async def test_accepts_valid_token_for_active_user(db_session: AsyncSession) -> 
     assert resolved.id == user.id
 
 
+@pytest.mark.parametrize(("token_version", "accepted"), [(2, True), (1, False)])
+async def test_session_version_must_match(
+    db_session: AsyncSession,
+    token_version: int,
+    *,
+    accepted: bool,
+) -> None:
+    """
+    Раздел 19.1: после «Выйти на всех устройствах» прежний токен отклоняется.
+    """
+    user = User(id=uuid.uuid4(), email="revoked@example.com", role=UserRole.USER, session_version=2)
+    db_session.add(user)
+    await db_session.flush()
+    token = issue_session_token(user.id, session_version=token_version)
+
+    if accepted:
+        assert (await get_current_user(db_session, authorization=f"Bearer {token}")).id == user.id
+    else:
+        with pytest.raises(UnauthorizedError, match="Сессия завершена"):
+            await get_current_user(db_session, authorization=f"Bearer {token}")
+
+
 async def test_require_admin_rejects_plain_user() -> None:
     user = User(id=uuid.uuid4(), email="user@example.com", role=UserRole.USER, is_active=True)
 

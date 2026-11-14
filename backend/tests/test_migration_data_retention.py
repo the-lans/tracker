@@ -20,9 +20,7 @@ _COLUMNS = {
     "users": {"artifacts_retention_days"},
     "system_settings": {"app_logs_retention_days"},
 }
-_USER_INSERT = (
-    "INSERT INTO users (id, email, role, is_active) VALUES (:id, :email, 'user', true)"
-)
+_USER_INSERT = "INSERT INTO users (id, email, role, is_active) VALUES (:id, :email, 'user', true)"
 _SETTINGS_INSERT = (
     "INSERT INTO system_settings (id, default_timeout_seconds, default_max_retries, "
     "default_retry_base_delay_seconds, default_runner_image_python, default_runner_image_bash) "

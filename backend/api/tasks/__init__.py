@@ -15,10 +15,21 @@ from api.tasks import (
     lifecycle,
     manual,
     nodes,
+    repositories,
 )
 
 router = APIRouter()
-for module in (crud, lifecycle, nodes, manual, commands, env_variables, artifacts, day_marks):
+for module in (
+    crud,
+    lifecycle,
+    nodes,
+    manual,
+    commands,
+    env_variables,
+    artifacts,
+    day_marks,
+    repositories,
+):
     router.include_router(module.router)
 
 __all__ = ["router"]

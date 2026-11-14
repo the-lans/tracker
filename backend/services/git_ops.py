@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shlex
 import signal
 import sys
 import tempfile
@@ -35,7 +34,14 @@ from db.models.repositories import GitCredential, Repository
 from db.models.tasks import TaskRepository
 from services.crypto import decrypt
 from services.errors import ExternalServiceError, ValidationError
-from services.git_credentials import git_host
+from services.git_credentials import HTTPS_TOKEN_KIND, git_host
+from services.git_ssh import (
+    HOST_KEY_REJECTED_MESSAGE,
+    host_key_rejected,
+    remember_host_keys,
+    ssh_command,
+    write_known_hosts,
+)
 from services.repository_validation import validate_branch_name
 from services.task_codes import validate_task_code
 
@@ -170,7 +176,7 @@ async def _deploy_key_env(repository: Repository) -> AsyncIterator[dict[str, str
         yield env
         return
     host, https = git_host(repository.git_url)
-    if host != credential.host or (credential.kind == "https_token") != https:
+    if host != credential.host or (credential.kind == HTTPS_TOKEN_KIND) != https:
         raise ExternalServiceError("Учётные данные не соответствуют Git URL", is_transient=False)
     secret = decrypt(credential.secret_encrypted)
     with tempfile.TemporaryDirectory(prefix="tracker-git-") as directory:
@@ -178,15 +184,19 @@ async def _deploy_key_env(repository: Repository) -> AsyncIterator[dict[str, str
         secret_path = root / "secret"
         secret_path.touch(mode=_KEY_FILE_MODE)
         secret_path.write_text(secret)
-        if credential.kind == "https_token":
+        if credential.kind == HTTPS_TOKEN_KIND:
             helper = _write_askpass(secret_path, credential)
             env.update(GIT_ASKPASS=str(helper), LC_ALL="C")
-        else:
-            env["GIT_SSH_COMMAND"] = (
-                f"ssh -i {shlex.quote(str(secret_path))} -o IdentitiesOnly=yes "
-                "-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-            )
+            yield env
+            return
+        known_hosts_path = write_known_hosts(root, credential)
+        env["GIT_SSH_COMMAND"] = ssh_command(
+            secret_path=secret_path,
+            known_hosts_path=known_hosts_path,
+            strict=credential.ssh_known_hosts is not None,
+        )
         yield env
+        await remember_host_keys(credential, known_hosts_path)
 
 
 async def _run_git(
@@ -216,6 +226,8 @@ async def _run_git(
         await process.wait()
         raise
     returncode = process.returncode if process.returncode is not None else -1
+    if check and returncode != 0 and host_key_rejected(stderr.decode()):
+        raise ExternalServiceError(HOST_KEY_REJECTED_MESSAGE, is_transient=False)
     if check and returncode != 0:
         raise ExternalServiceError(
             f"Git-операция {args[0] if args else 'unknown'} завершилась с кодом {returncode}",
@@ -497,7 +509,7 @@ async def _ls_remote(repository: Repository, *args: str) -> str:
         with tempfile.TemporaryDirectory(prefix="tracker-git-check-") as directory:
             async with _deploy_key_env(repository) as env:
                 async with asyncio.timeout(_GIT_CHECK_TIMEOUT_SECONDS):
-                    code, stdout, _stderr = await _run_git(
+                    code, stdout, stderr = await _run_git(
                         "ls-remote",
                         *args,
                         repository.git_url,
@@ -508,6 +520,8 @@ async def _ls_remote(repository: Repository, *args: str) -> str:
                     )
     except (TimeoutError, OSError) as exc:
         raise ValidationError("Проверка Git не завершилась: проверьте адрес и доступ") from exc
+    if code != 0 and host_key_rejected(stderr):
+        raise ValidationError(HOST_KEY_REJECTED_MESSAGE)
     if code != 0:
         raise ValidationError("Git отказал в доступе: проверьте URL, ключ или токен")
     return stdout

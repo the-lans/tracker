@@ -27,7 +27,7 @@ from db.models.enums import TaskStatus, UserRole
 from db.models.tasks import Task
 from db.models.users import User
 from db.session import async_session_factory
-from services.auth_tokens import issue_session_token
+from services.auth_tokens import SessionClaims, issue_session_token
 from services.output_stream import output_channel_name, publish_output_delta
 from ws.tasks import (
     TaskState,
@@ -272,15 +272,21 @@ class TestAccessDeniedCloseCode:
     """Раздел 19.2: канал задачи — только для активного автора или `admin`."""
 
     @pytest.mark.parametrize(
-        ("viewer_is_owner", "viewer_active", "expected"),
-        [(True, True, None), (False, True, 4404), (True, False, 4401)],
-        ids=["owner", "stranger", "blocked"],
+        ("viewer_is_owner", "viewer_active", "session_version", "expected"),
+        [
+            (True, True, 0, None),
+            (False, True, 0, 4404),
+            (True, False, 0, 4401),
+            (True, True, 1, 4401),
+        ],
+        ids=["owner", "stranger", "blocked", "revoked_sessions"],
     )
     async def test_close_code(
         self,
         run_migrations: None,
         viewer_is_owner: bool,
         viewer_active: bool,
+        session_version: int,
         expected: int | None,
     ) -> None:
         owner_id, stranger_id, task_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
@@ -292,6 +298,7 @@ class TestAccessDeniedCloseCode:
                         email=f"{owner_id}@example.com",
                         role=UserRole.USER,
                         is_active=viewer_active,
+                        session_version=session_version,
                     ),
                     User(
                         id=stranger_id,
@@ -315,7 +322,8 @@ class TestAccessDeniedCloseCode:
 
         viewer_id = owner_id if viewer_is_owner else stranger_id
         try:
-            assert await _access_denied_close_code(user_id=viewer_id, task_id=task_id) == expected
+            claims = SessionClaims(user_id=viewer_id, session_version=0)
+            assert await _access_denied_close_code(claims=claims, task_id=task_id) == expected
         finally:
             async with async_session_factory() as session:
                 await session.execute(sa.delete(Task).where(Task.id == task_id))

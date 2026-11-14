@@ -34,10 +34,11 @@ from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task, TaskParentSummary
 from db.models.users import User
+from prompts.agent import SUMMARY_DELIVERY_INSTRUCTION
 from services.account_router import TaskAccountRouter
 from services.llm_routing import TurnPlan
 from services.manual_queue import process_manual_queue_once
-from services.parent_summary import DELIVERY_INSTRUCTION, deny_all_tools
+from services.parent_summary import deny_all_tools
 from services.task_control import TaskControlCommand, request_task_control
 from tasks import session_worker
 from tests.factories import make_llm_account, make_user
@@ -371,7 +372,7 @@ class TestIdleParent:
         await _run_child(child)
 
         delivery = worker_env.client.queries[0]
-        assert delivery.endswith(DELIVERY_INSTRUCTION)
+        assert delivery.endswith(SUMMARY_DELIVERY_INSTRUCTION)
         assert denied == {delivery[:20]: True, "шаг 0": False}
 
     async def test_no_session_note(

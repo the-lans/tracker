@@ -137,4 +137,29 @@
       height: max(100%, 36px);
     }
   }
+
+  /* Фильтры списков на экране уже 768px: ниже по высоте, чтобы не занимать
+     пол-экрана; зона нажатия прежняя — за счёт ::after, как у .touch-hit. */
+  @media (max-width: 767px) {
+    .touch-compact {
+      position: relative;
+      min-height: 0;
+    }
+    .touch-compact::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+      transform: translate(-50%, -50%);
+    }
+  }
+
+  @media (max-width: 767px) and (max-height: 540px) {
+    .touch-compact::after {
+      width: max(100%, 36px);
+      height: max(100%, 36px);
+    }
+  }
 }

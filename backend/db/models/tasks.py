@@ -177,6 +177,9 @@ class TaskRepository(UUIDPrimaryKeyMixin, Base):
     # Раздел 16.2: ветку родителя слили — ребейз на новую базу выполнит воркер
     # задачи в ближайшей точке между нодами и очистит отметку.
     rebase_requested_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Разделы 3.1, 3.2: когда воркер склонировал репозиторий в каталог задачи;
+    # `None` — привязку добавили, а клона ещё нет: её можно удалить.
+    cloned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
 
 class TaskParentSummary(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

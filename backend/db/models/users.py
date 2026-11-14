@@ -67,6 +67,9 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         default=UserRole.USER,
     )
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    # Раздел 19.1: версия сессий — токен с другой версией недействителен;
+    # «Выйти на всех устройствах» увеличивает её.
+    session_version: Mapped[int] = mapped_column(sa.Integer, default=0, server_default="0")
     # Раздел 15.1: публичный ключ входа в SFTP-шлюз (не секрет — правило 8 не
     # применяется); действует сразу после сохранения в профиле.
     ssh_public_key: Mapped[str | None] = mapped_column(sa.Text)

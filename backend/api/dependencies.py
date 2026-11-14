@@ -16,6 +16,7 @@ from clients.google_calendar import GoogleCalendarClient
 from db.models.enums import UserRole
 from db.models.users import User
 from db.session import get_session
+from services.auth import load_session_user
 from services.auth_tokens import InvalidSessionTokenError, verify_session_token
 from services.errors import ForbiddenError, UnauthorizedError
 from services.google_calendar import open_google_calendar_client
@@ -31,14 +32,10 @@ async def get_current_user(
         raise UnauthorizedError("Не передан токен сессии")
     token = authorization.removeprefix(_BEARER_PREFIX)
     try:
-        user_id = verify_session_token(token)
+        claims = verify_session_token(token)
     except InvalidSessionTokenError as exc:
         raise UnauthorizedError(str(exc)) from exc
-
-    user = await db_session.get(User, user_id)
-    if user is None or not user.is_active:
-        raise UnauthorizedError("Пользователь не найден или заблокирован")
-    return user
+    return await load_session_user(db_session, claims)
 
 
 async def require_admin(current_user: Annotated[User, Depends(get_current_user)]) -> User:

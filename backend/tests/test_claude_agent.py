@@ -699,3 +699,59 @@ class TestCompaction:
 
         assert router.boundaries == [(True, False), (False, True)]
         assert router.compactions == []
+
+
+class TestPendingNotice:
+    """Раздел 3.2: служебная строка трекера — первой строкой следующего обычного хода."""
+
+    async def test_goes_with_next_plain_prompt_once(self) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 2)
+        session = ClaudeCodeSession(fake)
+        session.add_notice("добавлен frontend")
+        session.add_notice("добавлен infra")
+
+        await session.send_and_collect_text("сделай задачу")
+        await session.send_and_collect_text("продолжай")
+
+        assert fake.queries == ["добавлен frontend\nдобавлен infra\n\nсделай задачу", "продолжай"]
+
+    @pytest.mark.parametrize(
+        ("prompt", "boundary"),
+        [("/review RR-1", True), ("  /compact", True), ("ответ на вопрос", False)],
+    )
+    async def test_waits_past_slash_command_and_mid_turn(
+        self,
+        prompt: str,
+        *,
+        boundary: bool,
+    ) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 2)
+        session = ClaudeCodeSession(fake)
+        session.add_notice("добавлен frontend")
+
+        await session.send_and_collect_text(prompt, boundary=boundary)
+        await session.send_and_collect_text("дальше")
+
+        assert fake.queries == [prompt, "добавлен frontend\n\nдальше"]
+
+    async def test_kept_when_turn_not_routed(self) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        router = FakeTurnRouter(available=False)
+        session = ClaudeCodeSession(fake, router=router)
+        session.add_notice("добавлен frontend")
+
+        with pytest.raises(NoLlmAccountAvailableError):
+            await session.send_and_collect_text("сделай задачу")
+        router.available = True
+        await session.send_and_collect_text("сделай задачу")
+
+        assert fake.queries == ["добавлен frontend\n\nсделай задачу"]
+
+    async def test_none_is_ignored(self) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+        session = ClaudeCodeSession(fake)
+        session.add_notice(None)
+
+        await session.send_and_collect_text("сделай задачу")
+
+        assert fake.queries == ["сделай задачу"]

@@ -17,9 +17,7 @@ _PREVIOUS_REVISION = "d8a3f6c1b742"
 _REVISION = "f3a8c5e1d927"
 _TASK_COLUMNS = {"finished_at", "archived_at", "archived_from_status"}
 _USER_COLUMNS = {"archive_after_days", "cleanup_repos_after_days"}
-_USER_INSERT = (
-    "INSERT INTO users (id, email, role, is_active) VALUES (:id, :email, 'user', true)"
-)
+_USER_INSERT = "INSERT INTO users (id, email, role, is_active) VALUES (:id, :email, 'user', true)"
 _TASK_INSERT = (
     "INSERT INTO tasks (id, code, title, description, status, use_parent_summary, "
     "auto_accept_plan, remote_control_status, remote_control_reconnect_attempts, "

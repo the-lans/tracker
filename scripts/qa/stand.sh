@@ -111,6 +111,8 @@ make_env() {
   # Свой compose-проект: volume и сеть стенда не пересекаются с другим стеком трекера.
   ensure_env_value "$TRACKER_ENV" COMPOSE_PROJECT_NAME "$COMPOSE_PROJECT"
   set_env_value "$TRACKER_ENV" DOMAIN localhost
+  # HSTS на localhost навсегда перевёл бы на https и dev-сервер Vite.
+  set_env_value "$TRACKER_ENV" HSTS_MAX_AGE 0
   set_env_value "$TRACKER_ENV" ACME_EMAIL "$QA_ADMIN_EMAIL"
   set_env_value "$TRACKER_ENV" VAPID_CLAIMS_EMAIL "$QA_ADMIN_EMAIL"
   # Сгенерированные секреты не перегенерируются: ключ шифрования и пароли

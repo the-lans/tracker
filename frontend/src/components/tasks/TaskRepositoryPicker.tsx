@@ -10,11 +10,17 @@ import { EmptyState } from "@/components/common/feedback/EmptyState";
 export function TaskRepositoryPicker({
   value,
   onChange,
+  excludeIds,
+  defaultRole = RepositoryRole.READ_WRITE,
 }: {
   value: TaskRepositoryAttach[];
   onChange: (value: TaskRepositoryAttach[]) => void;
+  /** Уже привязанные к задаче — в списке их нет (раздел 3.2). */
+  excludeIds?: ReadonlySet<string>;
+  defaultRole?: RepositoryRole;
 }) {
-  const { data: repositories, isLoading } = useRepositories();
+  const { data: allRepositories, isLoading } = useRepositories();
+  const repositories = allRepositories?.filter((repository) => !excludeIds?.has(repository.id));
   const selected = new Map(value.map((attached) => [attached.repository_id, attached]));
 
   /** Базовая ветка — по умолчанию ветка из настроек репозитория (раздел 3.1). */
@@ -24,7 +30,7 @@ export function TaskRepositoryPicker({
         ...value,
         {
           repository_id: repository.id,
-          role: RepositoryRole.READ_WRITE,
+          role: defaultRole,
           base_branch: repository.default_branch,
         },
       ]);
@@ -43,6 +49,9 @@ export function TaskRepositoryPicker({
 
   if (isLoading) {
     return <div className="text-note text-text-3">Загрузка репозиториев…</div>;
+  }
+  if (allRepositories?.length && !repositories?.length) {
+    return <EmptyState compact title="Все репозитории уже привязаны к задаче" />;
   }
   if (!repositories?.length) {
     return (

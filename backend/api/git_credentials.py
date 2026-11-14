@@ -5,16 +5,20 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Literal
+from typing import Annotated
 
 import httpx
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user, require_admin
-from api.schemas.common import HTTP_URL_PATTERN
+from api.schemas import (
+    CredentialCheckRequest,
+    CredentialCheckResponse,
+    CredentialInput,
+    CredentialResponse,
+)
 from clients.gitlab import GitlabClient, project_path_from_git_url
 from db.models.repositories import GitCredential, Repository
 from db.models.users import User
@@ -25,6 +29,7 @@ from services.git_credentials import (
     HTTPS_TOKEN_KIND,
     gitlab_api_access,
     lock_credential,
+    next_ssh_known_hosts,
     resolve_credential,
     validate_gitlab_api,
     validate_host,
@@ -33,6 +38,7 @@ from services.git_credentials import (
 )
 from services.git_ops import check_git_access
 from services.integrity import commit_or_conflict
+from services.ssh_known_hosts import known_hosts_fingerprints
 
 router = APIRouter(prefix="/git-credentials", tags=["git-credentials"])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -40,39 +46,9 @@ Admin = Annotated[User, Depends(require_admin)]
 Current = Annotated[User, Depends(get_current_user)]
 
 
-MAX_NAME_LENGTH = 200
-MAX_HOST_LENGTH = 253
-MAX_SECRET_LENGTH = 65536
-MAX_GIT_URL_LENGTH = 2048
-DEFAULT_HTTPS_USERNAME = "oauth2"
 GITLAB_API_TIMEOUT_SECONDS = 15.0
 GITLAB_API_OK = "ok"
 GITLAB_API_DISABLED = "disabled"
-
-
-class CredentialInput(BaseModel):
-    name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
-    kind: Literal["https_token", "ssh_key"]
-    host: str = Field(min_length=1, max_length=MAX_HOST_LENGTH)
-    username: str = Field(default=DEFAULT_HTTPS_USERNAME, min_length=1, max_length=MAX_NAME_LENGTH)
-    secret: str | None = Field(default=None, max_length=MAX_SECRET_LENGTH)
-    # Раздел 16.2: статус MR репозиториев с этими учётными данными.
-    gitlab_api_enabled: bool = False
-    # `None` — оставить сохранённый токен API, пустая строка — удалить.
-    gitlab_api_token: str | None = Field(default=None, max_length=MAX_SECRET_LENGTH)
-    gitlab_api_url: str | None = Field(default=None, pattern=HTTP_URL_PATTERN)
-
-
-class CredentialResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: uuid.UUID
-    name: str
-    kind: str
-    host: str
-    username: str
-    gitlab_api_enabled: bool
-    gitlab_api_url: str | None
-    gitlab_api_token_set: bool
 
 
 def _response(row: GitCredential) -> CredentialResponse:
@@ -85,6 +61,7 @@ def _response(row: GitCredential) -> CredentialResponse:
         gitlab_api_enabled=row.gitlab_api_enabled,
         gitlab_api_url=row.gitlab_api_url,
         gitlab_api_token_set=row.gitlab_api_token_encrypted is not None,
+        ssh_host_key_fingerprints=known_hosts_fingerprints(row.ssh_known_hosts),
     )
 
 
@@ -129,6 +106,12 @@ async def create_credential(
         secret_encrypted=encrypt(body.secret),
     )
     _apply_gitlab_api(row, body)
+    row.ssh_known_hosts = next_ssh_known_hosts(
+        kind=body.kind,
+        stored=None,
+        submitted=body.ssh_known_hosts,
+        server_changed=False,
+    )
     session.add(row)
     await session.commit()
     return _response(row)
@@ -143,7 +126,8 @@ async def update_credential(
 ) -> CredentialResponse:
     row = await lock_credential(session, credential_id)
     host = validate_host(body.host)
-    if (row.kind, row.host) != (body.kind, host):
+    server_changed = (row.kind, row.host) != (body.kind, host)
+    if server_changed:
         if await session.scalar(
             sa.select(Repository.id)
             .where(
@@ -159,6 +143,12 @@ async def update_credential(
         row.secret_encrypted = encrypt(body.secret)
     validate_username(body.username)
     _apply_gitlab_api(row, body)
+    row.ssh_known_hosts = next_ssh_known_hosts(
+        kind=body.kind,
+        stored=row.ssh_known_hosts,
+        submitted=body.ssh_known_hosts,
+        server_changed=server_changed,
+    )
     row.name, row.kind, row.host, row.username = body.name, body.kind, host, body.username
     await session.commit()
     return _response(row)
@@ -179,15 +169,6 @@ async def delete_credential(credential_id: uuid.UUID, session: Session, _: Admin
     await commit_or_conflict(session, message="Учётные данные используются репозиторием")
 
 
-class CredentialCheckRequest(BaseModel):
-    git_url: str = Field(min_length=1, max_length=MAX_GIT_URL_LENGTH)
-
-
-class CredentialCheckResponse(BaseModel):
-    read_access: bool
-    gitlab_api: str
-
-
 @router.post("/{credential_id}/check")
 async def check_credential(
     credential_id: uuid.UUID,
@@ -196,10 +177,20 @@ async def check_credential(
     _: Admin,
 ) -> CredentialCheckResponse:
     credential = await resolve_credential(session, credential_id, body.git_url)
+    # Блокировка учётных данных не держится на время сетевого запроса: ключ
+    # хоста, полученный им, сохраняется своей транзакцией (раздел 19.3).
+    await session.commit()
     await check_git_access(Repository(git_url=body.git_url, git_credential=credential))
+    gitlab_api = await _check_gitlab_api(credential, body.git_url)
+    if credential is not None:
+        # Ключ сохранила своя транзакция `check_git_access` — перечитываем.
+        await session.refresh(credential)
     return CredentialCheckResponse(
         read_access=True,
-        gitlab_api=await _check_gitlab_api(credential, body.git_url),
+        gitlab_api=gitlab_api,
+        ssh_host_key_fingerprints=known_hosts_fingerprints(
+            credential.ssh_known_hosts if credential is not None else None,
+        ),
     )
 
 

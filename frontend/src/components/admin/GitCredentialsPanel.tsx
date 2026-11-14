@@ -13,15 +13,16 @@ import { EditButton } from "@/components/common/actions/EditButton";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
 import {
-  useGitCredentials, useSaveGitCredential, useDeleteGitCredential, type GitCredential,
+  useCheckGitCredential, useGitCredentials, useSaveGitCredential, useDeleteGitCredential,
+  type GitCredential,
 } from "@/hooks/useGitCredentials";
 import { GitlabApiFields } from "@/components/admin/GitlabApiFields";
-import type { GitCredentialCheck, GitlabApiState } from "@/components/admin/gitCredentials.types";
-import { api } from "@/lib/apiClient";
+import { SshHostKeyField } from "@/components/admin/SshHostKeyField";
+import type { GitlabApiState, SshHostKeyState } from "@/components/admin/gitCredentials.types";
 import { errorMessage, toastError } from "@/lib/errors";
-import {
-  GITLAB_API_OK, gitlabApiBody, gitlabApiCheckMessage, gitlabApiTokenMissing, initialGitlabApi,
-} from "@/lib/gitlabApi";
+import { gitCredentialCheckOutcome } from "@/lib/gitCredentialCheck";
+import { gitlabApiBody, gitlabApiTokenMissing, initialGitlabApi } from "@/lib/gitlabApi";
+import { sshHostKeyBody, sshHostKeySummary } from "@/lib/sshHostKey";
 
 function CredentialForm({ credential, onSaved }: { credential?: GitCredential; onSaved: () => void }) {
   const [name, setName] = useState(credential?.name ?? "");
@@ -31,8 +32,11 @@ function CredentialForm({ credential, onSaved }: { credential?: GitCredential; o
   const [secret, setSecret] = useState("");
   const [showSecret, setShowSecret] = useState(false);
   const [checkUrl, setCheckUrl] = useState("");
-  const [checking, setChecking] = useState(false);
   const [gitlabApi, setGitlabApi] = useState<GitlabApiState>(() => initialGitlabApi(credential));
+  const [hostKey, setHostKey] = useState<SshHostKeyState>({ knownHosts: "", reset: false });
+  // Проверка может запомнить ключ хоста — форма показывает отпечаток из её ответа.
+  const [fingerprints, setFingerprints] = useState(credential?.ssh_host_key_fingerprints ?? []);
+  const check = useCheckGitCredential(credential?.id);
   const apiTokenSet = credential?.gitlab_api_token_set ?? false;
   const save = useSaveGitCredential(credential?.id);
   return <>
@@ -74,25 +78,24 @@ function CredentialForm({ credential, onSaved }: { credential?: GitCredential; o
         </Button>
         </div>
         <p className="text-small text-text-3">Секрет хранится зашифрованным и не отображается после сохранения.</p></div>
+      {kind === "ssh_key" && <SshHostKeyField fingerprints={fingerprints}
+        value={hostKey} onChange={setHostKey} />}
       <GitlabApiFields kind={kind} host={host} tokenSet={apiTokenSet} value={gitlabApi}
         onChange={(patch) => setGitlabApi((prev) => ({ ...prev, ...patch }))} />
     </div>
     {credential && <div className="my-3 flex flex-col gap-2">
       <Label htmlFor="git-access-check">URL для проверки чтения</Label>
       <Input id="git-access-check" value={checkUrl} onChange={(e) => setCheckUrl(e.target.value)} />
-      <Button variant="secondary" disabled={!checkUrl || checking} onClick={async () => {
-        setChecking(true);
-        try {
-          const result = await api.post<GitCredentialCheck>(`/git-credentials/${credential.id}/check`, { git_url: checkUrl });
-          const apiMessage = gitlabApiCheckMessage(result.gitlab_api);
-          const gitMessage = "Чтение доступно. Право записи этой проверкой не проверяется.";
-          const message = apiMessage ? `${gitMessage} ${apiMessage}` : gitMessage;
-          // Git читается, но API отклонён — ошибка настройки опроса статуса MR.
-          if (apiMessage && result.gitlab_api !== GITLAB_API_OK) toast.error(message);
-          else toast.success(message);
-        } catch (e) { toast.error(errorMessage(e, "Не удалось проверить доступ")); }
-        finally { setChecking(false); }
-      }}>Проверить сохранённый доступ</Button>
+      <Button variant="secondary" disabled={!checkUrl || check.isPending} onClick={() =>
+        check.mutate(checkUrl, {
+          onSuccess: (result) => {
+            setFingerprints(result.ssh_host_key_fingerprints);
+            const { message, failed } = gitCredentialCheckOutcome(result);
+            if (failed) toast.error(message);
+            else toast.success(message);
+          },
+          onError: toastError("Не удалось проверить доступ"),
+        })}>Проверить сохранённый доступ</Button>
     </div>}
     <DialogFooter><Button variant="secondary" onClick={onSaved}>Отмена</Button>
       <Button disabled={!name.trim() || !host.trim() || !username || (!credential && !secret)
@@ -100,6 +103,7 @@ function CredentialForm({ credential, onSaved }: { credential?: GitCredential; o
         onClick={() => save.mutate({
           name, host, kind, username, ...(secret ? { secret } : {}),
           ...gitlabApiBody(kind, gitlabApi, apiTokenSet),
+          ...(kind === "ssh_key" ? sshHostKeyBody(hostKey) : {}),
         }, {
           onSuccess: onSaved, onError: (e) => toast.error(errorMessage(e, "Не удалось сохранить доступ Git")),
         })}>Сохранить</Button></DialogFooter>
@@ -118,7 +122,8 @@ export function GitCredentialsPanel() {
     {!isLoading && !data?.length && <p>Учётных данных пока нет.</p>}
     {data?.map((c) => <Card key={c.id} className="flex items-center gap-3">
       <div className="min-w-0 flex-1"><div className="font-bold">{c.name}</div>
-        <div className="text-small text-text-3">{c.kind === "ssh_key" ? "SSH" : "HTTPS"} · {c.host}{c.gitlab_api_enabled && " · статус MR"}</div></div>
+        <div className="text-small text-text-3">{c.kind === "ssh_key" ? "SSH" : "HTTPS"} · {c.host}{c.gitlab_api_enabled && " · статус MR"}
+          {c.kind === "ssh_key" && ` · ${sshHostKeySummary(c.ssh_host_key_fingerprints)}`}</div></div>
       <EditButton name={c.name} onClick={() => setTarget(c)} />
       <ConfirmDeleteButton kind="Учётные данные Git" name={c.name} pending={remove.isPending}
         onConfirm={() => remove.mutate(c.id, { onError: toastError("Не удалось удалить доступ Git") })} />

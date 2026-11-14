@@ -12,6 +12,7 @@ FRONTEND_MODULES_MARKER := $(FRONTEND_DIR)/node_modules/.installed
 .PHONY: check check-backend check-frontend \
 	backend-lint backend-typecheck backend-test \
 	frontend-lint frontend-typecheck frontend-test \
+	audit backend-audit frontend-audit \
 	clean
 
 check: check-backend check-frontend
@@ -62,6 +63,21 @@ frontend-typecheck: $(FRONTEND_MODULES_MARKER)
 
 frontend-test: $(FRONTEND_MODULES_MARKER)
 	cd $(FRONTEND_DIR) && npm test
+
+# --- уязвимости зависимостей ---
+
+# Известные уязвимости зависимостей backend (с dev) и frontend (уровень high и
+# выше). Не входит в `make check`: новая уязвимость в чужом пакете не должна
+# останавливать работу — CI запускает её отдельно (.github/workflows/security.yml).
+NPM_AUDIT_LEVEL = high
+
+audit: backend-audit frontend-audit
+
+backend-audit: $(BACKEND_VENV_MARKER)
+	cd $(BACKEND_DIR) && .venv/bin/pip-audit --skip-editable --progress-spinner off
+
+frontend-audit: $(FRONTEND_MODULES_MARKER)
+	cd $(FRONTEND_DIR) && npm audit --audit-level=$(NPM_AUDIT_LEVEL)
 
 # --- прочее ---
 

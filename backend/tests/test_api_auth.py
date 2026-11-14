@@ -141,3 +141,40 @@ class TestRejectedToken:
         response = await api_client.post("/auth/google", json={"id_token": "bad"})
 
         assert response.status_code == status_code
+
+
+class TestLogoutEverywhere:
+    """
+    Раздел 19.1: «Выйти на всех устройствах» отзывает все выданные токены.
+    """
+
+    async def _login(self, api_client: AsyncClient) -> str:
+        response = await api_client.post("/auth/google", json={"id_token": "fake-jwt"})
+        assert response.status_code == 200, response.text
+        return str(response.json()["session_token"])
+
+    async def test_old_tokens_rejected_new_login_works(
+        self,
+        api_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        email = f"{uuid.uuid4()}@example.com"
+        db_session.add(User(id=uuid.uuid4(), email=email, role=UserRole.USER, is_active=True))
+        await db_session.flush()
+        _override_verifier(GoogleIdentity(email=email, email_verified=True))
+        this_device = await self._login(api_client)
+        other_device = await self._login(api_client)
+
+        revoked = await api_client.post(
+            "/auth/logout-all",
+            headers={"Authorization": f"Bearer {this_device}"},
+        )
+        statuses = [
+            (
+                await api_client.get("/profile", headers={"Authorization": f"Bearer {token}"})
+            ).status_code
+            for token in (this_device, other_device, await self._login(api_client))
+        ]
+
+        assert revoked.status_code == 204
+        assert statuses == [401, 401, 200]

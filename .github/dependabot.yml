@@ -33,6 +33,8 @@ updates:
     directories:
       - "/backend"
       - "/frontend"
+      - "/runners/*"
+      - "/deploy/backup"
     schedule:
       interval: "weekly"
     ignore:
@@ -43,6 +45,19 @@ updates:
       # Только LTS-ветки Node (чётные мажоры); нечётные живут полгода
       - dependency-name: "node"
         versions: ["21.x", "23.x", "25.x", "27.x"]
+      # pg_dump сервиса бэкапа — той же мажорной версии, что PostgreSQL в
+      # docker-compose.yml; переход на новый мажор — перенос данных, вручную
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+
+  # Образы сервисов в docker-compose.yml (PostgreSQL, Redis, Caddy, Alpine)
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

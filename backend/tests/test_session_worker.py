@@ -47,6 +47,10 @@ from db.models.prompts import TaskManualRequestQueue
 from db.models.repositories import Repository, Template, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
+from prompts.agent import (
+    PLAN_ACCEPTED_MESSAGE,
+    PLAN_REVISE_DENIED,
+)
 from services import gitlab_sync
 from services import task_status as task_status_module
 from services.account_router import TaskAccountRouter
@@ -56,8 +60,6 @@ from services.llm_routing import resolve_session_token
 from services.manual_queue import enqueue_freeform_prompt_run
 from services.notifications import NotificationEvent
 from services.plan_mode import (
-    PLAN_ACCEPTED_MESSAGE,
-    PLAN_REVISE_DENIED,
     PlanDecisionOption,
     encode_decision,
 )
@@ -106,6 +108,7 @@ if TYPE_CHECKING:
 
 _REPOSITORY_NAME = "backend"
 _LIMIT_RESET = datetime(2099, 1, 1, 12, 0, tzinfo=UTC)
+
 
 async def _make_task(
     db_session: AsyncSession,
@@ -2300,3 +2303,96 @@ class TestLimitWait:
         await db_session.refresh(task)
         assert task.status is TaskStatus.REFINING
         assert chats == [str(task.id)]
+
+
+class TestRepositoryAddedDuringRun:
+    """Раздел 3.2: репозиторий, добавленный во время прогона, — до следующей ноды."""
+
+    async def _add_repository(
+        self,
+        db_session: AsyncSession,
+        *,
+        task: Task,
+        git_url: str,
+    ) -> TaskRepository:
+        repository = await make_repository(db_session, name="frontend", git_url=git_url)
+        task_repository = TaskRepository(
+            task_id=task.id,
+            repository_id=repository.id,
+            role=RepositoryRole.READ_ONLY,
+            branch_name=build_branch_name(task.code),
+            base_branch="main",
+        )
+        db_session.add(task_repository)
+        await db_session.flush()
+        return task_repository
+
+    @pytest.mark.parametrize("clonable", [True, False])
+    async def test_cloned_before_next_node(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        tmp_path: Path,
+        *,
+        clonable: bool,
+    ) -> None:
+        task = await _make_task(
+            db_session,
+            status=TaskStatus.QUEUED,
+            origin=init_bare_origin(tmp_path),
+        )
+        await _add_node(db_session, task, order_index=0)
+        await _add_node(db_session, task, order_index=1)
+        second_origin = tmp_path / "second"
+        second_origin.mkdir()
+        git_url = str(init_bare_origin(second_origin)) if clonable else str(tmp_path / "x.git")
+        added: list[TaskRepository] = []
+
+        async def repository_added_during_first_node() -> None:
+            if len(worker_env.client.queries) == 1:
+                added.append(await self._add_repository(db_session, task=task, git_url=git_url))
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(2),
+            on_query=repository_added_during_first_node,
+        )
+
+        await _run_worker(task)
+
+        # Сбой клона прогон не роняет — задача доходит до конца.
+        assert await _refreshed_status(db_session, task) is TaskStatus.DONE
+        first, second = worker_env.client.queries
+        assert first == "шаг 0"
+        frontend_dir = worker_env.repos_root / task.code / "frontend"
+        await db_session.refresh(added[0])
+        if clonable:
+            assert second.endswith("\n\nшаг 1")
+            assert f"- frontend (read-only, changes are not pushed): {frontend_dir}" in second
+            assert (frontend_dir / ".git").exists()
+            assert added[0].cloned_at is not None
+        else:
+            assert second == "шаг 1"
+            assert added[0].cloned_at is None
+
+    @pytest.mark.parametrize("session_id", [None, "sess-old"])
+    async def test_added_before_run_announced_to_resumed_session(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        tmp_path: Path,
+        session_id: str | None,
+    ) -> None:
+        task = await _make_task(
+            db_session,
+            status=TaskStatus.QUEUED,
+            origin=init_bare_origin(tmp_path),
+        )
+        task.session_id = session_id
+        await _add_node(db_session, task, order_index=0)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        await _run_worker(task)
+
+        [query] = worker_env.client.queries
+        assert query.endswith("шаг 0")
+        assert (f"- {_REPOSITORY_NAME} (read-write)" in query) is (session_id is not None)

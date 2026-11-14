@@ -13,30 +13,24 @@ from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 
-from db.models.enums import RepositoryRole
 from db.models.repositories import Repository
-from db.models.tasks import Task, TaskRepository
+from db.models.tasks import Task
 from services.access import ensure_llm_account_of_owner
 from services.errors import NotFoundError, TaskCodeTakenError, ValidationError
-from services.repository_validation import validate_branch_name
 from services.task_categories import (
     apply_category_to_new_task,
     ensure_category_pipeline_usable,
     get_category_of_owner,
 )
 from services.task_codes import validate_task_code
-from services.task_workspace import build_branch_name
+from services.task_repositories import (
+    RepositoryAttachment,
+    build_task_repository,
+    validate_repository_attachments,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
-
-
-@dataclass(frozen=True, slots=True)
-class RepositoryAttachment:
-    repository_id: uuid.UUID
-    role: RepositoryRole
-    # `None` — ветка по умолчанию репозитория (раздел 3.1).
-    base_branch: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,13 +59,6 @@ async def _ensure_exists(
         raise NotFoundError(f"{label} {entity_id} не найден")
 
 
-async def _get_repository(db_session: AsyncSession, repository_id: uuid.UUID) -> Repository:
-    repository = await db_session.get(Repository, repository_id)
-    if repository is None:
-        raise NotFoundError(f"Репозиторий {repository_id} не найден")
-    return repository
-
-
 async def _validate_draft(
     db_session: AsyncSession,
     draft: TaskDraft,
@@ -80,16 +67,7 @@ async def _validate_draft(
 ) -> dict[uuid.UUID, Repository]:
     """Проверяет черновик задачи; возвращает её репозитории по id."""
     validate_task_code(draft.code)
-    for attached in draft.repositories:
-        if attached.base_branch is not None:
-            validate_branch_name(attached.base_branch)
-    repository_ids = [attached.repository_id for attached in draft.repositories]
-    if len(set(repository_ids)) != len(repository_ids):
-        raise ValidationError("Репозиторий указан у задачи больше одного раза")
-    repositories = {
-        repository_id: await _get_repository(db_session, repository_id)
-        for repository_id in repository_ids
-    }
+    repositories = await validate_repository_attachments(db_session, draft.repositories)
     if draft.llm_account_id is not None:
         # Раздел 19.2: только аккаунт автора — и при дублировании задачи.
         await ensure_llm_account_of_owner(
@@ -156,14 +134,11 @@ async def add_task_with_repositories(
     )
     await _flush_task(db_session, task)
     for attached in draft.repositories:
-        repository = repositories[attached.repository_id]
         db_session.add(
-            TaskRepository(
-                task_id=task.id,
-                repository_id=attached.repository_id,
-                role=attached.role,
-                branch_name=build_branch_name(draft.code),
-                base_branch=attached.base_branch or repository.default_branch,
+            build_task_repository(
+                task=task,
+                attached=attached,
+                repository=repositories[attached.repository_id],
             ),
         )
     await db_session.flush()

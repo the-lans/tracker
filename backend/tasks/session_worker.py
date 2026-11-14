@@ -105,6 +105,8 @@ from services.task_status import (
     transition_task_status,
 )
 from services.task_workspace import (
+    added_repositories_notice,
+    clone_missing_repositories,
     prepare_task_workspace,
     push_task_workspace,
     resolve_repos_root,
@@ -340,13 +342,28 @@ class _SessionControl:
                 logger.exception("bridge_reconnect_failed", task_id=str(self.task.id))
         await record_bridge_status(self.db_session, task=self.task, status=status)
 
+    async def clone_added_repositories(self) -> None:
+        """
+        Раздел 3.2: репозиторий, добавленный к задаче во время прогона,
+        клонируется до следующей ноды; агент узнаёт о нём из служебной строки
+        следующего хода. Сбой клона прогон не останавливает.
+        """
+        cloned = await clone_missing_repositories(
+            self.db_session,
+            task=self.task,
+            repos_root=resolve_repos_root(),
+            tolerate_errors=True,
+        )
+        self.claude_session.add_notice(added_repositories_notice(self.workspace, cloned))
+
     async def _serve_between_nodes(self, *, status: TaskStatus) -> TaskControlCommand | None:
         """
-        Работа между нодами (правило 16): мост, ребейз, ручные запросы — и
-        команда управления после них. Неразобранный конфликт ребейза
-        равносилен `stop`.
+        Работа между нодами (правило 16): мост, добавленные репозитории,
+        ребейз, ручные запросы — и команда управления после них.
+        Неразобранный конфликт ребейза равносилен `stop`.
         """
         await self.reconnect_bridge_if_requested()
+        await self.clone_added_repositories()
         if not await self.resolve_rebase_conflict_if_any(resume_status=status):
             return TaskControlCommand.STOP
         await self.process_manual_queue()
@@ -676,11 +693,9 @@ async def _run_chat(
     lane: _LlmLane,
 ) -> None:
     """Мост удалённого управления в чате не поднимается — сессия живёт один проход."""
-    workspace = await prepare_task_workspace(
-        db_session,
-        task=task,
-        repos_root=resolve_repos_root(),
-    )
+    repos_root = resolve_repos_root()
+    added = await clone_missing_repositories(db_session, task=task, repos_root=repos_root)
+    workspace = await prepare_task_workspace(db_session, task=task, repos_root=repos_root)
     active_node_context = ActiveNodeContext()
     make_client = await _build_client_factory(
         db_session,
@@ -701,6 +716,8 @@ async def _run_chat(
         on_rate_limit=lane.router.record_rate_limit,
         router=lane.router,
     )
+    if start_plan.resume_session_id is not None:
+        session.add_notice(added_repositories_notice(workspace, added))
     active_node_context.output_length = session.turn_text_length
     active_node_context.user_wait_clock = session.user_wait_clock
     await session.connect()
@@ -1078,6 +1095,7 @@ async def _run_claimed_task(
     first_attempt: int = 1,
 ) -> None:
     repos_root = resolve_repos_root()
+    added = await clone_missing_repositories(db_session, task=task, repos_root=repos_root)
     workspace = await prepare_task_workspace(db_session, task=task, repos_root=repos_root)
 
     parent_summary = None
@@ -1129,6 +1147,10 @@ async def _run_claimed_task(
         on_rate_limit=lane.router.record_rate_limit,
         router=lane.router,
     )
+    if start_plan.resume_session_id is not None:
+        # Продолжение сессии: о репозиториях, добавленных до запуска, агент
+        # иначе не узнает (раздел 3.2).
+        session.add_notice(added_repositories_notice(workspace, added))
     active_node_context.output_length = session.turn_text_length
     active_node_context.user_wait_clock = session.user_wait_clock
     control = _SessionControl(

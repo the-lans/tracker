@@ -44,6 +44,12 @@ class TaskRepositoryAttachRequest(BaseModel):
     base_branch: str | None = None
 
 
+class TaskRepositoriesAddRequest(BaseModel):
+    """Раздел 3.2: репозитории, добавляемые к уже созданной задаче."""
+
+    repositories: list[TaskRepositoryAttachRequest] = Field(min_length=1)
+
+
 class TaskDuplicateRequest(BaseModel):
     """Раздел 14.2 «Дублировать задачу»: форма создания с новым кодом."""
 
@@ -97,6 +103,8 @@ class TaskRepositoryResponse(BaseModel):
     base_branch: str
     pushed_at: datetime | None
     merge_status: MergeStatus
+    # Раздел 3.2: `None` — привязку добавили, клона ещё нет.
+    cloned_at: datetime | None
 
 
 class TaskResponse(BaseModel):

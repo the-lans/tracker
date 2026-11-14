@@ -37,8 +37,9 @@ from db.models.pipelines import Node, Pipeline
 from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
+from prompts.agent import PLAN_ACCEPTED_MESSAGE
 from services.autostart import run_scheduled_autostart_check
-from services.plan_mode import PLAN_ACCEPTED_MESSAGE, PlanDecisionOption
+from services.plan_mode import PlanDecisionOption
 from services.task_dispatcher import dispatch_queued_tasks
 from tasks import session_worker
 from tests.factories import make_llm_account, make_repository

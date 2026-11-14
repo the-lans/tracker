@@ -371,6 +371,9 @@ class ClaudeCodeSession:
         # В поток хода уже ушёл текст: следующий текстовый блок отделяется.
         self._turn_streamed_text = False
         self.user_wait_clock = UserWaitClock()
+        # Служебная строка трекера (например, о добавленных репозиториях,
+        # раздел 3.2) — уходит первой строкой следующего обычного хода.
+        self._pending_notice: str | None = None
 
     def take_partial_turn_text(self) -> str | None:
         """
@@ -506,6 +509,9 @@ class ClaudeCodeSession:
         """
         async with self._lock:
             route = await self._route(effort=effort, node_type=node_type, boundary=boundary)
+            # Только после выбора аккаунта: ворота лимита (`LlmLimitWaitError`)
+            # и отсутствие аккаунта не должны стереть строку, ход ещё не начат.
+            prompt = self._with_pending_notice(prompt, boundary=boundary)
             logger.info("session_query_started", prompt_length=len(prompt))
             self._turn_open = True
             try:
@@ -555,6 +561,24 @@ class ClaudeCodeSession:
                 route=route,
                 account_transient=account_transient,
             )
+
+    def add_notice(self, notice: str | None) -> None:
+        """Служебная строка трекера к следующему обычному ходу (раздел 3.2)."""
+        if notice is None:
+            return
+        self._pending_notice = (
+            notice if self._pending_notice is None else f"{self._pending_notice}\n{notice}"
+        )
+
+    def _with_pending_notice(self, prompt: str, *, boundary: bool) -> str:
+        """
+        Слэш-команда передаётся буквально (правило 2) — строка ждёт следующего
+        обычного хода; продолжение хода (не граница) её тоже не получает.
+        """
+        if self._pending_notice is None or not boundary or prompt.lstrip().startswith("/"):
+            return prompt
+        notice, self._pending_notice = self._pending_notice, None
+        return f"{notice}\n\n{prompt}"
 
     async def _route(
         self,

@@ -37,8 +37,14 @@ export function renderWithProviders(
   {
     currentUser = makeCurrentUser(),
     login = () => {},
+    logout = () => {},
     path = "/",
-  }: { currentUser?: CurrentUser | null; login?: AuthContextValue["login"]; path?: string } = {},
+  }: {
+    currentUser?: CurrentUser | null;
+    login?: AuthContextValue["login"];
+    logout?: AuthContextValue["logout"];
+    path?: string;
+  } = {},
 ) {
   const queryClient = createTestQueryClient();
   const auth: AuthContextValue = {
@@ -46,7 +52,7 @@ export function renderWithProviders(
     user: currentUser,
     isAuthenticated: currentUser !== null,
     login,
-    logout: () => {},
+    logout,
   };
   const wrap = (element: ReactElement) => (
     <QueryClientProvider client={queryClient}>
