@@ -3,7 +3,7 @@ import { describe, expect } from "vitest";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { TaskStatus, type Task } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
-import { makeTask, makeTaskCategory } from "@/test/factories";
+import { makeDailyCalendar, makeTask, makeTaskCategory } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
@@ -163,6 +163,35 @@ describe("DashboardPage", () => {
       expect(screen.getByRole("button", { name: "Все · 1" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Завершено · 1" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "До запуска · 0" })).toBeInTheDocument();
+    });
+  });
+
+  describe("фильтр по отметкам на день", () => {
+    const marked: Task[] = [
+      makeTask({ id: "m1", code: "RR-today", status: TaskStatus.NEW }),
+      makeTask({ id: "m2", code: "RR-both", status: TaskStatus.DONE }),
+      makeTask({ id: "m3", code: "RR-none", status: TaskStatus.NEW }),
+    ];
+
+    test.for([
+      { option: "Вчера", codes: ["RR-both"] },
+      { option: "Сегодня", codes: ["RR-today"] },
+      { option: "Завтра", codes: ["RR-both"] },
+      { option: "Все дни", codes: ["RR-today", "RR-both", "RR-none"] },
+    ])("«$option» → $codes", async ({ option, codes }, { api }) => {
+      api.respond("GET /daily/calendar", makeDailyCalendar());
+      api.respond("GET /daily/marks", [
+        { task_id: "m1", days: ["2026-11-16"] },
+        { task_id: "m2", days: ["2026-11-15", "2026-11-17"] },
+      ]);
+      const { user } = renderDashboard(api, marked);
+      await screen.findByText("RR-none");
+
+      await user.click(screen.getByRole("combobox", { name: "Отмечены на день" }));
+      await user.click(await screen.findByRole("option", { name: option }));
+
+      expect(shownCodes().sort()).toEqual([...codes].sort());
+      expect(screen.getByRole("button", { name: `Все · ${codes.length}`, pressed: true })).toBeInTheDocument();
     });
   });
 });

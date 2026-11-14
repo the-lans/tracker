@@ -8,6 +8,7 @@ import { TaskLogsPanel } from "@/components/tasks/TaskLogsPanel";
 import { type MobileTaskTab, TaskMobileTabs } from "@/components/tasks/TaskMobileTabs";
 import { TaskWorkspaceTabs, type WorkspaceView } from "@/components/tasks/TaskWorkspaceTabs";
 import { TaskControlButtons } from "@/components/tasks/TaskControlButtons";
+import { TaskDayMarks } from "@/components/tasks/TaskDayMarks";
 import { RemoteControlButton } from "@/components/tasks/RemoteControlButton";
 import { RemoteControlNotice } from "@/components/tasks/RemoteControlNotice";
 import { TaskLlmAccountBadge } from "@/components/tasks/TaskLlmAccountBadge";
@@ -55,6 +56,7 @@ export function TaskPage() {
           <div className="flex items-center gap-2">
             <span className="font-mono text-small font-bold text-text-3">{task.code}</span>
             <TaskStatusMenu task={task} />
+            <TaskDayMarks task={task} />
           </div>
           <div className="truncate text-title font-extrabold tracking-tight" title={task.title}>
             {task.title}

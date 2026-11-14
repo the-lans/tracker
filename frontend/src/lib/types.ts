@@ -973,6 +973,8 @@ export interface SystemSettings {
   night_window_end: string;
   /** Раздел 17.2: сколько дней хранится журнал приложения; 0 — бессрочно. */
   app_logs_retention_days: number;
+  /** Раздел 15.8: начало дня «Дейли» по МСК, «ЧЧ:ММ:СС». */
+  day_start_time: string;
 }
 
 /**

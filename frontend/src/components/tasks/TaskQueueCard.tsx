@@ -14,11 +14,7 @@ import {
   QUEUE_PRIORITY_RANGE_HINT,
   parseQueuePriority,
 } from "@/lib/queuePriority";
-
-/** «ЧЧ:ММ:СС» настроек → «ЧЧ:ММ». */
-function clockTime(value: string): string {
-  return value.slice(0, 5);
-}
+import { clockTime } from "@/lib/clockTime";
 
 /**
  * Раздел 14.4: приоритет в очереди автора и галочка «Занимать слот» —

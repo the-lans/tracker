@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Play } from "lucide-react";
 import { toast } from "sonner";
+import { TaskDayMarks } from "@/components/tasks/TaskDayMarks";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { TASK_STATUS_META } from "@/components/tasks/taskStatusMeta";
 import { useLlmLimit, useStartTask } from "@/hooks/useTasks";
@@ -64,6 +65,7 @@ export function TaskCard({ task }: { task: Task }) {
       <OwnerLabel ownerId={task.created_by} />
       <div className="mt-0.5 flex items-center gap-2 border-t border-border pt-2.5">
         <span className="text-xs font-bold text-text-2">{formatRelativeShort(task.updated_at)}</span>
+        <TaskDayMarks task={task} />
         {preLaunch && (
           <button
             type="button"

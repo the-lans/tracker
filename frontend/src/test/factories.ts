@@ -1,3 +1,11 @@
+import type {
+  DailyCalendar,
+  DailyEvent,
+  DailyMarkedTask,
+  DailyPlan,
+  DailyTemplate,
+  GoogleCalendarConnection,
+} from "@/lib/daily.types";
 import {
   BackupRunStatus,
   LibraryPromptRunStatus,
@@ -298,6 +306,7 @@ export function makeSystemSettings(overrides: Partial<SystemSettings> = {}): Sys
     night_window_start: "03:15:00",
     night_window_end: "07:00:00",
     app_logs_retention_days: 30,
+    day_start_time: "08:00:00",
     ...overrides,
   };
 }
@@ -315,6 +324,82 @@ export function makeBackupSettings(overrides: Partial<BackupSettings> = {}): Bac
     passphrase_set: true,
     last_backup: null,
     last_verify: null,
+    ...overrides,
+  };
+}
+
+/** Раздел 15.8: сегодня — понедельник 16.11.2026, день начинается в 08:00. */
+export function makeDailyCalendar(overrides: Partial<DailyCalendar> = {}): DailyCalendar {
+  return {
+    today: "2026-11-16",
+    yesterday: "2026-11-15",
+    tomorrow: "2026-11-17",
+    history_days: [
+      "2026-11-17",
+      "2026-11-16",
+      "2026-11-15",
+      "2026-11-14",
+      "2026-11-13",
+      "2026-11-12",
+      "2026-11-11",
+      "2026-11-10",
+      "2026-11-09",
+    ],
+    day_start_time: "08:00:00",
+    ...overrides,
+  };
+}
+
+export function makeDailyMarkedTask(overrides: Partial<DailyMarkedTask> = {}): DailyMarkedTask {
+  return { id: "t1", code: "RR-1", title: "Задача", status: TaskStatus.IN_PROGRESS, fact: "worked", ...overrides };
+}
+
+export function makeDailyEvent(overrides: Partial<DailyEvent> = {}): DailyEvent {
+  return {
+    id: "e1",
+    source: "manual",
+    day: "2026-11-16",
+    end_day: "2026-11-16",
+    starts_at: null,
+    ends_at: null,
+    start_time: null,
+    end_time: null,
+    title: "Ревью кода",
+    notes: null,
+    hidden: false,
+    ...overrides,
+  };
+}
+
+export function makeDailyPlan(overrides: Partial<DailyPlan> = {}): DailyPlan {
+  return {
+    id: "p1",
+    day: "2026-11-16",
+    content: "Доброго всем утра!",
+    created_at: "2026-11-16T05:10:00Z",
+    updated_at: "2026-11-16T05:10:00Z",
+    ...overrides,
+  };
+}
+
+export function makeDailyTemplate(overrides: Partial<DailyTemplate> = {}): DailyTemplate {
+  return {
+    content: "Вчера:\n{{daily.yesterday}}",
+    is_default: true,
+    variables: ["daily.date", "daily.today", "daily.yesterday"],
+    ...overrides,
+  };
+}
+
+export function makeGoogleCalendarConnection(
+  overrides: Partial<GoogleCalendarConnection> = {},
+): GoogleCalendarConnection {
+  return {
+    google_email: "planner@example.com",
+    status: "connected",
+    calendar_ids: ["primary"],
+    last_synced_at: "2026-11-16T05:00:00Z",
+    last_error: null,
     ...overrides,
   };
 }

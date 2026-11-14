@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import {
   Archive,
+  CalendarCheck,
   LayoutGrid,
   GitBranch,
   BookText,
@@ -74,9 +75,10 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       <nav className="flex flex-col gap-0.5">
         <NavItem to="/" label="Дашборд" icon={LayoutGrid} badge={awaitingCount?.count} />
+        <NavItem to="/daily" label="Дейли" icon={CalendarCheck} />
+        <NavItem to="/categories" label="Категории" icon={Tags} />
         <NavItem to="/pipelines" label="Пайплайны" icon={GitBranch} />
         <NavItem to="/library" label="Библиотека промтов" icon={BookText} />
-        <NavItem to="/categories" label="Категории" icon={Tags} />
         <NavItem to="/templates" label="Шаблоны" icon={FileStack} />
         <NavItem to="/repositories" label="Репозитории" icon={FolderGit2} />
         <NavItem to="/events" label="События" icon={Bell} />

@@ -53,6 +53,19 @@ describe("SystemSettingsPanel: ночное окно", () => {
   });
 });
 
+describe("SystemSettingsPanel: начало дня", () => {
+  test("сохраняется вместе с настройками", async ({ api }) => {
+    const { user } = await renderPanel(api);
+
+    setTime("Начало дня", "09:30");
+    await user.click(saveButton());
+
+    expect(api.mutations()).toEqual([
+      { method: "PUT", path: "/system-settings", body: { ...SETTINGS, day_start_time: "09:30:00" } },
+    ]);
+  });
+});
+
 describe("SystemSettingsPanel: хранение данных", () => {
   test.for([
     { input: "60", saved: 60, hint: "Записи журнала старше срока удаляются раз в день" },

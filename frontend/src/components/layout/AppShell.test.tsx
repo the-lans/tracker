@@ -9,6 +9,7 @@ vi.mock("@/lib/push", () => ({ ensurePushSubscription: vi.fn(() => Promise.resol
 
 describe("AppShell", () => {
   test.for([
+    { path: "/daily", title: "Дейли" },
     { path: "/archive", title: "Архив" },
     { path: "/events", title: "События" },
     { path: "/categories", title: "Категории" },
