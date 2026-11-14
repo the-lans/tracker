@@ -31,6 +31,9 @@ function applyEvent(queryClient: QueryClient, taskId: string, payload: TaskSocke
       prev ? { ...prev, chat_active: payload.chat_active } : prev,
     );
     void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "node-logs"] });
+    // Раздел 3.2: проход чата клонирует добавленные репозитории (`cloned_at`),
+    // а статус `refining` при этом не меняется.
+    void queryClient.invalidateQueries({ queryKey: ["tasks", taskId, "repositories"] });
     return;
   }
   queryClient.setQueryData<Task | undefined>(["tasks", "detail", taskId], (prev) =>

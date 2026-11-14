@@ -64,6 +64,7 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | boto3 | 1.43.127* (выгрузка резервных копий в S3, раздел 20.4) |
 | PostgreSQL | 15+ |
 | pytest / pytest-asyncio / pytest-cov | 9.2.0 / 1.4.1.post1* / 7.1.0* |
+| pip-audit | 2.10.1* (`make audit`, `security.yml`) |
 | ruff | 0.17.3 |
 | mypy | 2.4.1 |
 
@@ -114,7 +115,8 @@ backend/
               llm_proxy — состояние LLM-прокси для админки);
               tasks/ — эндпоинты задачи по разделам (crud, lifecycle, nodes,
               manual, env_variables, artifacts, day_marks — отметки на
-              день; common.py — доступ к задаче
+              день, repositories — добавление и удаление репозиториев
+              задачи после создания; common.py — доступ к задаче
               и сигнал воркеру); dependencies.py — текущий пользователь и
               require_admin; schemas/ — схемы запросов и ответов по разделам
               (импорт — `from api.schemas import …`)
@@ -127,10 +129,18 @@ backend/
               видимости задач SFTP-шлюза (раздел 19.6); task_codes.py и
               repository_validation.py — коды задач, git_url, имена
               репозиториев и веток, безопасные для путей и git (раздел 3.1);
+              ssh_known_hosts.py — разбор known_hosts и отпечатки ключей
+              хоста, git_ssh.py — SSH-окружение git воркера: проверка ключа
+              хоста и запоминание ключей сервера (раздел 19.3);
+              git_credentials.py — учётные данные Git и правило их ключа хоста;
               task_launch.py — проверки перед запуском, в т. ч. LLM-аккаунт
               только для LLM-нод; task_editing.py — правка полей задачи;
               task_categories.py — категории задач и копирование их
               настроек в новую задачу (раздел 15.7);
+              task_repositories.py — привязка репозиториев к задаче при
+              создании и после него (раздел 3.2); task_workspace.py —
+              клон недостающих репозиториев (и между нодами), файлы
+              шаблонов, пуш;
               task_archive.py — архив задач (раздел 14.2): уход в
               `archived` и автоочистка репозиториев по срокам автора,
               выборка раздела «Архив» (ArchivePass, RepositoryCleanupPass);
@@ -218,7 +228,13 @@ backend/
               «Архива», parent_summaries.py — идёт ли пересказ для
               дочерней задачи, app_logs.py — удаление старого журнала,
               daily.py — отметки, работа за день, события и календарь
-              «Дейли»
+              «Дейли», task_repositories.py — блокировка задачи и
+              привязанные репозитории, git_credentials.py — запись ключа
+              хоста SSH compare-and-swap, users.py — версия сессий входа
+  prompts/   — служебные тексты трекера для агента (agent.py): сообщения
+              хода (пересказ родителя, конфликт ребейза, добавленные
+              репозитории) и тексты отказов инструментов; новые — на
+              английском, рядом комментарий с переводом
   clients/   — обёртки над Claude Agent SDK (claude_agent.py, в т. ч.
               OfflineAgentClient для задач без LLM-аккаунта и маршрут хода
               TurnRouter), GitLab API (gitlab.py), Jira REST API (jira.py),
@@ -374,7 +390,9 @@ alembic/
                  system_settings.app_logs_retention_days, «Дейли»:
                  task_day_marks, daily_events, daily_plans,
                  daily_plan_templates, google_calendar_connections,
-                 system_settings.day_start_time);
+                 system_settings.day_start_time,
+                 task_repositories.cloned_at,
+                 git_credentials.ssh_known_hosts, users.session_version);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
@@ -408,11 +426,15 @@ docs/        — техническая документация: ТЗ, implemen
               тестирование в браузере), remote_control_findings.md
               (верификация допущения раздела 6.3 и проверка LLM-прокси), design/ (HTML-референсы
               дашборда и страницы задачи), screen/ (скриншоты страницы задачи)
-.github/     — workflows/ci.yml (сборка образов раннеров → make check →
-              smoke-тест образа фронтенда), workflows/deploy.yml
+.github/     — workflows/ci.yml (PR и push в main; сборка образов раннеров →
+              make check → smoke-тест образа фронтенда), workflows/deploy.yml
               (развёртывание после зелёного CI на main, раздел 20.7;
               scripts/verify_deployment.sh — проверка /api/health и
-              index.html, откат на previous_ref) и dependabot.yml
+              index.html, откат на previous_ref), workflows/security.yml
+              (pip-audit и npm audit — `make audit`; в PR, на main и раз в
+              неделю, не обязательная проверка) и dependabot.yml; действия
+              подключаются по SHA с версией в комментарии
+              (tests/test_workflow_pins.py)
 docker-compose.yml, docker-compose.prod.yml, .env.example — раздел 20.3 ТЗ
 .mcp.json    — MCP-серверы для Claude Code (раздел 4 ниже)
 .claude/commands/ — команды-промты /promt-* для работы в Claude Code
@@ -465,6 +487,15 @@ make check
 на первой же ошибке. CI (`.github/workflows/ci.yml`) дополнительно перед
 ней собирает образы раннеров, а после — запускает
 `scripts/smoke_frontend_image.sh`.
+
+### Уязвимости зависимостей
+```bash
+make audit   # pip-audit (backend с dev) и npm audit --audit-level=high
+```
+Не входит в `make check` и в обязательные проверки `main`: в CI её
+запускает `.github/workflows/security.yml`. Транзитивную уязвимость сначала
+закрывают `npm audit fix` без `--force` (меняет только lock), не ломая
+закреплённые версии раздела 2.
 
 ### Тесты
 ```bash
@@ -595,6 +626,10 @@ Postgres из `backend/tests/conftest.py`:
    внутренней сети сервисов.
    Git воркера не исполняет код из репозитория: без хуков, без системного и
    глобального конфига, локальный `.git/config` — по белому списку.
+   Git по SSH проверяет ключ хоста (`git_credentials.ssh_known_hosts`):
+   сохранённый — строго, до первого подключения запоминается (TOFU), новые
+   ключи сервера приходят через `UpdateHostKeys` и сохраняются
+   compare-and-swap; `StrictHostKeyChecking=no` недопустим.
 5. **Очистка рабочей директории репозиториев — только в завершённом
    статусе** (`done`/`failed`/`archived`): кнопкой или по сроку автора
    `users.cleanup_repos_after_days` (`services/task_archive.py`, тот же код,
@@ -668,7 +703,10 @@ Postgres из `backend/tests/conftest.py`:
     напрямую: ручные промты кладёт в очередь, команды pause/resume/stop —
     в Redis (`services/task_control.py`), и будит воркер сигналом. Воркер
     перед каждой нодой выполняет запрошенное переподключение моста, затем
-    выполняет запрошенный ребейз (`task_repositories.rebase_requested_at`)
+    клонирует репозитории задачи, которых ещё нет в её каталоге (добавленные
+    по ходу работы; о впервые склонированных агент получает служебное
+    сообщение), выполняет запрошенный ребейз
+    (`task_repositories.rebase_requested_at`)
     и обрабатывает конфликт ребейза, очередь ручных запросов FIFO и команды;
     статус `paused` — решение пользователя, см.
     `docs/implementation_plan.md`, п. 6. `claude.ai/code` — только для

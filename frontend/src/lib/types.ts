@@ -454,6 +454,13 @@ export interface TaskRepository {
   base_branch: string;
   pushed_at: string | null;
   merge_status: MergeStatus;
+  /** Раздел 3.2: `null` — привязку добавили, клона ещё нет. */
+  cloned_at: string | null;
+}
+
+/** Раздел 3.2: репозитории, добавляемые к уже созданной задаче. */
+export interface TaskRepositoriesAddRequest {
+  repositories: TaskRepositoryAttach[];
 }
 
 export interface PendingOption {

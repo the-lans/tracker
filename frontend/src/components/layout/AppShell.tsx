@@ -52,7 +52,7 @@ export function AppShell() {
       </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-3 short:py-0 lg:hidden">
+        <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-1.5 short:py-0 lg:hidden">
           {/* Раздел 18.3: счётчик ожидающих решения виден и без открытого меню. */}
           <Button
             variant="ghost"

@@ -761,7 +761,12 @@ class TestUpdate:
         ("target", "limit_reset", "pre_launch_reset", "library_reset", "archive_reset"),
         [
             pytest.param(
-                "old-target", True, True, True, True, id="откат на версию без статусов до запуска",
+                "old-target",
+                True,
+                True,
+                True,
+                True,
+                id="откат на версию без статусов до запуска",
             ),
             pytest.param(
                 "pre-limit-target",

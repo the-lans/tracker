@@ -14,6 +14,7 @@ const HTTPS: GitCredential = {
   gitlab_api_enabled: false,
   gitlab_api_url: null,
   gitlab_api_token_set: false,
+  ssh_host_key_fingerprints: [],
 };
 const SAVED = { name: "GitLab", host: "gitlab.example.com", kind: "https_token", username: "oauth2" };
 
@@ -124,9 +125,13 @@ test.for([
   { gitlab_api: "disabled", kind: "success", text: "Чтение доступно. Право записи этой проверкой не проверяется." },
   { gitlab_api: "ok", kind: "success", text: "не проверяется. GitLab API доступен." },
   { gitlab_api: "GitLab отклонил токен API (401)", kind: "error", text: "GitLab API: GitLab отклонил токен API (401)" },
-] as const)("проверка доступа: API $gitlab_api", async ({ gitlab_api, kind, text }, { api, toasts }) => {
+  { gitlab_api: "disabled", kind: "success", text: "Сверьте ключ хоста SHA256:abc с Git-сервером.", fingerprints: ["SHA256:abc"] },
+] as const)("проверка доступа: API $gitlab_api", async ({ gitlab_api, kind, text, ...rest }, { api, toasts }) => {
+  const fingerprints = "fingerprints" in rest ? [...(rest.fingerprints ?? [])] : [];
   api.respond("GET /git-credentials", [HTTPS]);
-  api.respond("POST /git-credentials/cred1/check", { read_access: true, gitlab_api });
+  api.respond("POST /git-credentials/cred1/check", {
+    read_access: true, gitlab_api, ssh_host_key_fingerprints: fingerprints,
+  });
   const { user } = renderWithProviders(<GitCredentialsPanel />);
   await user.click(await screen.findByRole("button", { name: /Изменить GitLab/ }));
   await user.type(screen.getByLabelText("URL для проверки чтения"), "https://gitlab.example.com/g/p.git");
@@ -162,4 +167,59 @@ test("новый доступ: смена HTTPS на SSH требует токе
   await user.paste("key");
   expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
   expect(screen.getByLabelText("Токен GitLab API")).toBeInTheDocument();
+});
+
+const SSH: GitCredential = { ...HTTPS, id: "ssh1", name: "SSH", kind: "ssh_key", host: "git.example.com" };
+const SSH_SAVED = { name: "SSH", host: "git.example.com", kind: "ssh_key", username: "oauth2" };
+const FINGERPRINT = "SHA256:abc";
+
+test.for([
+  { fingerprints: [FINGERPRINT], summary: `ключ хоста ${FINGERPRINT}` },
+  { fingerprints: [], summary: "ключ хоста ещё не получен" },
+])("строка SSH-доступа: $summary", async ({ fingerprints, summary }, { api }) => {
+  api.respond("GET /git-credentials", [{ ...SSH, ssh_host_key_fingerprints: fingerprints }]);
+  renderWithProviders(<GitCredentialsPanel />);
+
+  expect(await screen.findByText(new RegExp(summary))).toBeInTheDocument();
+});
+
+test.for([
+  { action: "без правок ключ не передаётся", known_hosts: undefined, reset: false },
+  { action: "вставленные строки заменяют ключ", known_hosts: "git.example.com ssh-ed25519 AAAA", reset: false },
+  { action: "сброс отправляет пустую строку", known_hosts: "", reset: true },
+])("ключ хоста: $action", async ({ known_hosts, reset }, { api }) => {
+  api.respond("GET /git-credentials", [{ ...SSH, ssh_host_key_fingerprints: [FINGERPRINT] }]);
+  const { user } = renderWithProviders(<GitCredentialsPanel />);
+  await user.click(await screen.findByRole("button", { name: /Изменить SSH/ }));
+
+  if (known_hosts) await user.type(screen.getByLabelText("Ключ хоста (known_hosts)"), known_hosts);
+  if (reset) await user.click(screen.getByRole("button", { name: "Сбросить ключ хоста" }));
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+
+  await vi.waitFor(() => expect(api.mutations()).toEqual([{
+    method: "PUT", path: "/git-credentials/ssh1", body: {
+      ...SSH_SAVED, gitlab_api_enabled: false, gitlab_api_url: null,
+      ...(known_hosts === undefined ? {} : { ssh_known_hosts: known_hosts }),
+    },
+  }]));
+});
+
+test("проверка запоминает ключ хоста: отпечаток в форме, список перечитывается", async ({ api, toasts }) => {
+  api.respond("GET /git-credentials", [SSH]);
+  api.respond("POST /git-credentials/ssh1/check", {
+    read_access: true, gitlab_api: "disabled", ssh_host_key_fingerprints: [FINGERPRINT],
+  });
+  const { user } = renderWithProviders(<GitCredentialsPanel />);
+  await user.click(await screen.findByRole("button", { name: /Изменить SSH/ }));
+  expect(screen.queryByRole("button", { name: "Сбросить ключ хоста" })).not.toBeInTheDocument();
+
+  await user.type(screen.getByLabelText("URL для проверки чтения"), "ssh://git@git.example.com/g/p.git");
+  await user.click(screen.getByRole("button", { name: "Проверить сохранённый доступ" }));
+
+  await vi.waitFor(() => expect(toasts.success).toHaveBeenCalledTimes(1));
+  expect(screen.getByText(new RegExp(`Сохранён: ${FINGERPRINT}`))).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Сбросить ключ хоста" })).toBeInTheDocument();
+  await vi.waitFor(() => expect(
+    api.requests.filter((request) => request.method === "GET" && request.path === "/git-credentials"),
+  ).toHaveLength(2));
 });

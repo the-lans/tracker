@@ -29,20 +29,25 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import services.git_ops as git_ops
-from api.git_credentials import CredentialInput, update_credential
+from api.git_credentials import update_credential
+from api.schemas import CredentialInput
 from clients.gitlab import GitlabAccessDeniedError, GitlabClient
 from db.base import Base
 from db.models.repositories import GitCredential, Repository
 from db.models.users import User
+from db.session import async_session_factory
 from services.crypto import decrypt, encrypt
-from services.errors import ConflictError, ValidationError
+from services.errors import ConflictError, ExternalServiceError, ValidationError
 from services.git_credentials import (
     GitlabApiAccess,
     git_host,
     gitlab_api_access,
+    next_ssh_known_hosts,
     resolve_credential,
 )
 from services.git_ops import _deploy_key_env, _run_git
+from services.git_ssh import HOST_KEY_REJECTED_MESSAGE
+from services.ssh_known_hosts import known_hosts_fingerprints
 from tests.factories import build_git_credential
 from tests.git_support import init_bare_origin
 
@@ -170,7 +175,11 @@ class TestCredentialAPI:
         body = {"git_url": "https://git.example.com/team/repo.git"}
         response = await admin_client.post(endpoint, json=body)
         assert response.status_code == 200
-        assert response.json() == {"read_access": True, "gitlab_api": "disabled"}
+        assert response.json() == {
+            "read_access": True,
+            "gitlab_api": "disabled",
+            "ssh_host_key_fingerprints": [],
+        }
         assert run.call_args.args[:1] == ("ls-remote",)
         assert not Path(run.call_args.kwargs["env"]["GIT_ASKPASS"]).exists()
         run.return_value = (128, "", "server echoed secret-token")
@@ -345,6 +354,7 @@ class TestGitlabApiFields:
             "gitlab_api_enabled": True,
             "gitlab_api_url": "https://git.example.com/gl",
             "gitlab_api_token_set": True,
+            "ssh_host_key_fingerprints": [],
         }
         removed = await admin_client.put(endpoint, json=body | {"gitlab_api_token": ""})
         assert removed.json()["gitlab_api_token_set"] is False
@@ -402,7 +412,11 @@ class TestGitlabApiFields:
             json={"git_url": self._URL},
         )
 
-        assert response.json() == {"read_access": True, "gitlab_api": expected}
+        assert response.json() == {
+            "read_access": True,
+            "gitlab_api": expected,
+            "ssh_host_key_fingerprints": [],
+        }
         assert get_project.await_count == int(enabled)
         if enabled:
             get_project.assert_awaited_with("team/repo")
@@ -533,6 +547,251 @@ class TestGitAuthentication:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+
+def _host_key_line(host: str = "git.example.com") -> str:
+    public_key = asyncssh.generate_private_key("ssh-ed25519").export_public_key().decode()
+    return f"{host} {public_key.strip()}\n"
+
+
+def _ssh_credential(**overrides: Any) -> GitCredential:
+    key = asyncssh.generate_private_key("ssh-ed25519").export_private_key().decode()
+    return credential(kind="ssh_key", secret_encrypted=encrypt(key), **overrides)
+
+
+def _ssh_repository(row: GitCredential) -> Repository:
+    return Repository(git_url="git@git.example.com:org/r.git", git_credential=row)
+
+
+def _ssh_options(env: dict[str, str]) -> dict[str, str]:
+    words = shlex.split(env["GIT_SSH_COMMAND"])
+    return dict(
+        word.split("=", 1)
+        for previous, word in zip(words, words[1:], strict=False)
+        if previous == "-o"
+    )
+
+
+class TestHostKeyChecking:
+    """
+    Раздел 19.3: ключ Git-сервера проверяется всегда — сохранённый строго,
+    без сохранённого запоминается при первом подключении; новые ключи сервера
+    сохраняются, чтобы плановая смена ключей не останавливала задачи.
+    """
+
+    @pytest.mark.parametrize(("saved", "checking"), [(True, "yes"), (False, "accept-new")])
+    async def test_ssh_options(self, *, saved: bool, checking: str) -> None:
+        known_hosts = _host_key_line() if saved else None
+        async with _deploy_key_env(
+            _ssh_repository(_ssh_credential(ssh_known_hosts=known_hosts))
+        ) as env:
+            options = _ssh_options(env)
+            file_text = Path(options["UserKnownHostsFile"]).read_text()
+
+        assert options["StrictHostKeyChecking"] == checking
+        assert options["UpdateHostKeys"] == "yes"
+        assert file_text == (known_hosts or "")
+
+    async def _commit(self, row: GitCredential) -> GitCredential:
+        async with async_session_factory() as session:
+            session.add(row)
+            await session.commit()
+        return row
+
+    async def _saved(self, row: GitCredential) -> str | None:
+        async with async_session_factory() as session:
+            return await session.scalar(
+                sa.select(GitCredential.ssh_known_hosts).where(GitCredential.id == row.id),
+            )
+
+    async def _cleanup(self, row: GitCredential) -> None:
+        async with async_session_factory() as session:
+            await session.execute(sa.delete(GitCredential).where(GitCredential.id == row.id))
+            await session.commit()
+
+    @pytest.mark.parametrize("saved", [False, True], ids=["first_use", "server_added_keys"])
+    async def test_learned_keys_saved(self, run_migrations: None, *, saved: bool) -> None:
+        previous = _host_key_line() if saved else None
+        row = await self._commit(_ssh_credential(ssh_known_hosts=previous))
+        learned = (previous or "") + _host_key_line()
+        try:
+            async with _deploy_key_env(_ssh_repository(row)) as env:
+                # Так ssh дописывает ключи: accept-new и UpdateHostKeys.
+                Path(_ssh_options(env)["UserKnownHostsFile"]).write_text(learned)
+
+            assert await self._saved(row) == learned
+        finally:
+            await self._cleanup(row)
+
+    async def test_not_saved_after_failed_operation(self, run_migrations: None) -> None:
+        row = await self._commit(_ssh_credential())
+        try:
+            with pytest.raises(ExternalServiceError):
+                async with _deploy_key_env(_ssh_repository(row)) as env:
+                    Path(_ssh_options(env)["UserKnownHostsFile"]).write_text(_host_key_line())
+                    raise ExternalServiceError("clone failed", is_transient=False)
+
+            assert await self._saved(row) is None
+        finally:
+            await self._cleanup(row)
+
+    async def test_concurrent_change_kept(self, run_migrations: None) -> None:
+        """
+        Ключ, который за время операции сохранили другие, не перезаписывается.
+        """
+        row = await self._commit(_ssh_credential())
+        meanwhile = _host_key_line()
+        try:
+            async with _deploy_key_env(_ssh_repository(row)) as env:
+                async with async_session_factory() as session:
+                    await session.execute(
+                        sa.update(GitCredential)
+                        .where(GitCredential.id == row.id)
+                        .values(ssh_known_hosts=meanwhile),
+                    )
+                    await session.commit()
+                Path(_ssh_options(env)["UserKnownHostsFile"]).write_text(_host_key_line())
+
+            assert await self._saved(row) == meanwhile
+        finally:
+            await self._cleanup(row)
+
+    async def test_save_failure_does_not_break_git(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import services.git_credentials as git_credentials
+
+        monkeypatch.setattr(
+            git_credentials,
+            "replace_ssh_known_hosts",
+            AsyncMock(side_effect=sa.exc.OperationalError("UPDATE", {}, Exception("down"))),
+        )
+        async with _deploy_key_env(_ssh_repository(_ssh_credential())) as env:
+            Path(_ssh_options(env)["UserKnownHostsFile"]).write_text(_host_key_line())
+
+    async def test_rejected_host_key_explained(self, tmp_path: Path) -> None:
+        fake_ssh = tmp_path / "ssh"
+        fake_ssh.write_text("#!/bin/sh\necho 'Host key verification failed.' >&2\nexit 255\n")
+        fake_ssh.chmod(0o700)
+        env = git_ops._credential_environment() | {"GIT_SSH_COMMAND": str(fake_ssh)}
+
+        with pytest.raises(ExternalServiceError) as exc_info:
+            await _run_git("ls-remote", "git@git.example.com:org/r.git", cwd=tmp_path, env=env)
+
+        assert exc_info.value.message == HOST_KEY_REJECTED_MESSAGE
+
+
+class TestHostKeyAPI:
+    """
+    Раздел 19.3: ключ хоста в «Учётных данных Git» — вставить, сбросить, сверить.
+    """
+
+    def _body(self, **fields: Any) -> dict[str, Any]:
+        return {"name": "SSH", "kind": "ssh_key", "host": "git.example.com", **fields}
+
+    async def test_saved_and_fingerprint_shown(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        known_hosts = _host_key_line()
+        key = asyncssh.generate_private_key("ssh-ed25519").export_private_key().decode()
+
+        r = await admin_client.post(
+            "/git-credentials",
+            json=self._body(secret=key, ssh_known_hosts=known_hosts),
+        )
+
+        assert r.status_code == 201, r.text
+        assert r.json()["ssh_host_key_fingerprints"] == known_hosts_fingerprints(known_hosts)
+        row = await db_session.get(GitCredential, uuid.UUID(r.json()["id"]))
+        assert row is not None and row.ssh_known_hosts == known_hosts
+
+    @pytest.mark.parametrize(
+        ("fields", "expected"),
+        [
+            ({}, "kept"),
+            ({"ssh_known_hosts": ""}, None),
+            ({"host": "other.example.com"}, None),
+        ],
+        ids=["omitted_keeps", "empty_resets", "host_change_resets"],
+    )
+    async def test_update(
+        self,
+        admin_client: AsyncClient,
+        db_session: AsyncSession,
+        fields: dict[str, str],
+        expected: str | None,
+    ) -> None:
+        saved = _host_key_line()
+        row = _ssh_credential(ssh_known_hosts=saved)
+        db_session.add(row)
+        await db_session.flush()
+
+        r = await admin_client.put(f"/git-credentials/{row.id}", json=self._body(**fields))
+
+        assert r.status_code == 200, r.text
+        await db_session.refresh(row)
+        assert row.ssh_known_hosts == (saved if expected == "kept" else expected)
+
+    @pytest.mark.parametrize(
+        "known_hosts",
+        ["git.example.com ssh-ed25519 AAAAbroken", "только-хост", "# комментарий без ключей"],
+    )
+    async def test_invalid_rejected(self, admin_client: AsyncClient, known_hosts: str) -> None:
+        key = asyncssh.generate_private_key("ssh-ed25519").export_private_key().decode()
+
+        r = await admin_client.post(
+            "/git-credentials",
+            json=self._body(secret=key, ssh_known_hosts=known_hosts),
+        )
+
+        assert r.status_code == 422
+
+
+class TestNextSshKnownHosts:
+    """Раздел 19.3: какой ключ хоста остаётся у записи после сохранения."""
+
+    @pytest.mark.parametrize(
+        ("kind", "submitted", "server_changed", "expected"),
+        [
+            ("ssh_key", None, False, "stored"),
+            ("ssh_key", None, True, None),
+            ("ssh_key", "", False, None),
+            ("ssh_key", "  ", True, None),
+            ("ssh_key", "new", True, "new"),
+            ("https_token", None, False, None),
+            ("https_token", "new", False, None),
+        ],
+    )
+    def test_rule(
+        self,
+        kind: str,
+        submitted: str | None,
+        expected: str | None,
+        *,
+        server_changed: bool,
+    ) -> None:
+        values = {"stored": _host_key_line(), "new": _host_key_line("other.example.com")}
+
+        result = next_ssh_known_hosts(
+            kind=kind,
+            stored=values["stored"],
+            submitted=values.get(submitted, submitted) if submitted is not None else None,
+            server_changed=server_changed,
+        )
+
+        assert result == (values[expected] if expected is not None else None)
+
+    def test_submitted_validated(self) -> None:
+        with pytest.raises(ValidationError):
+            next_ssh_known_hosts(
+                kind="ssh_key",
+                stored=None,
+                submitted="только-хост",
+                server_changed=False,
+            )
 
 
 class TestCredentialMigration:

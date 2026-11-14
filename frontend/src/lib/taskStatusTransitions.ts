@@ -1,5 +1,5 @@
 import { TaskStatus } from "@/lib/types";
-import type { Task } from "@/lib/types";
+import type { Task, TaskRepository } from "@/lib/types";
 
 /** Раздел 14.1: статусы до запуска — между ними задачу переводит пользователь. */
 export const PRE_LAUNCH_STATUSES: readonly TaskStatus[] = [
@@ -45,6 +45,18 @@ export function isReadOnly(status: TaskStatus): boolean {
 /** Раздел 14.3: дублируется выполненная задача — и в архиве, если она ушла туда из `done`. */
 export function isDuplicable(task: Task): boolean {
   return task.status === TaskStatus.DONE || task.archived_from_status === TaskStatus.DONE;
+}
+
+/**
+ * Зеркало `remove_task_repository` backend (раздел 3.2): убрать можно ещё не
+ * склонированный репозиторий, пока сессией задачи никто не владеет.
+ */
+export function isTaskRepositoryRemovable(task: Task, taskRepository: TaskRepository): boolean {
+  return (
+    taskRepository.cloned_at === null &&
+    (isPreLaunch(task.status) || task.status === TaskStatus.FAILED) &&
+    !task.chat_active
+  );
 }
 
 export function isResettable(status: TaskStatus): boolean {

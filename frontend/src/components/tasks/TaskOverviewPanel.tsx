@@ -31,7 +31,7 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
   const environment = (
     <>
       <TaskStartAccountCard task={task} pending={updateTask.isPending} onUpdate={update} />
-      <TaskRepositoriesCard taskId={task.id} />
+      <TaskRepositoriesCard task={task} />
       <TaskEnvVariablesCard task={task} />
       <TaskArtifactsCard task={task} />
     </>

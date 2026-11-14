@@ -82,6 +82,9 @@ async def get_remote_default_branch(
     """
     git_url = validate_git_url(body.git_url)
     credential = await resolve_credential(db_session, body.git_credential_id, git_url)
+    # Блокировка учётных данных не держится на время сетевого запроса: ключ
+    # хоста, полученный им, сохраняется своей транзакцией (раздел 19.3).
+    await db_session.commit()
     branch = await fetch_default_branch(Repository(git_url=git_url, git_credential=credential))
     return RepositoryDefaultBranchResponse(default_branch=branch)
 

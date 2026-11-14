@@ -341,6 +341,7 @@ services:
     environment:
       DOMAIN: ${DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-31536000}
     ports:
       - "80:80"
       - "443:443"

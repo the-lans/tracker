@@ -5,7 +5,7 @@ Check whether there is enough data to move to planning.
 Ask questions only if, without an answer:
 - the place of change cannot be reliably chosen;
 - there is a risk of changing the wrong service, module or layer;
-- "how it should be" sources contradict each other: task vs. docs (GDD, spec) or two docs, and the task doesn't say which takes precedence;
+- "how it should be" sources contradict each other: task vs. docs (design doc, spec) or two docs, and the task doesn't say which takes precedence;
 - the expected system behavior is unclear.
 
 Before asking, try to answer it yourself from what has been read:

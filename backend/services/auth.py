@@ -21,6 +21,8 @@ from google.oauth2 import id_token as google_id_token
 from app_logging.config import get_logger
 from db.models.enums import UserRole
 from db.models.users import AllowedEmail, User
+from db.queries.users import increment_session_version
+from services.auth_tokens import SessionClaims
 from services.errors import ExternalServiceError, ForbiddenError, UnauthorizedError
 
 if TYPE_CHECKING:
@@ -34,6 +36,9 @@ BLOCKED_USER_MESSAGE = "Учётная запись заблокирована �
 NOT_ALLOWED_MESSAGE = (
     "Вход для {email} не разрешён — попросите администратора добавить этот email в список допуска"
 )
+# Отказ по токену сессии (401): пользователь пропал, заблокирован или вышел везде.
+INACTIVE_SESSION_MESSAGE = "Пользователь не найден или заблокирован"
+REVOKED_SESSION_MESSAGE = "Сессия завершена — войдите заново"
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,3 +133,25 @@ async def authenticate_or_register(
         is_first_user=is_first_user,
     )
     return user
+
+
+async def load_session_user(db_session: AsyncSession, claims: SessionClaims) -> User:
+    """
+    Раздел 19.1: пользователь токена — активный и с той же версией сессий;
+    после «Выйти на всех устройствах» прежние токены отклоняются.
+    """
+    user = await db_session.get(User, claims.user_id)
+    if user is None or not user.is_active:
+        raise UnauthorizedError(INACTIVE_SESSION_MESSAGE)
+    if user.session_version != claims.session_version:
+        raise UnauthorizedError(REVOKED_SESSION_MESSAGE)
+    return user
+
+
+async def revoke_user_sessions(db_session: AsyncSession, user: User) -> None:
+    """
+    Раздел 19.1: «Выйти на всех устройствах» — все выданные токены недействительны.
+    """
+    await increment_session_version(db_session, user.id)
+    await db_session.commit()
+    logger.info("user_sessions_revoked", user_id=str(user.id))

@@ -7,6 +7,7 @@ Origin — локальный bare-репозиторий (файловый tran
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -23,10 +24,12 @@ from db.models.enums import (
 from db.models.repositories import Repository, Template
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
-from services.errors import ConflictError, ValidationError
+from services.errors import ConflictError, ExternalServiceError, ValidationError
 from services.task_cleanup import cleanup_task_repositories
 from services.task_workspace import (
+    added_repositories_notice,
     build_branch_name,
+    clone_missing_repositories,
     prepare_task_workspace,
     push_task_workspace,
     write_template_files,
@@ -346,3 +349,126 @@ class TestCleanupDuringParentSummary:
                 await cleanup_task_repositories(db_session, task=parent, repos_root=tmp_path)
 
         assert (tmp_path / parent.code).exists() is not allowed
+
+
+class TestCloneMissingRepositories:
+    """Раздел 3.2: репозиторий, добавленный к задаче после создания."""
+
+    async def test_first_clone_is_marked_and_reported(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await _make_task(db_session)
+        task_repository = await _attach_repository(
+            db_session,
+            task=task,
+            origin=_init_bare_origin(tmp_path, "backend"),
+            name="backend",
+            role=RepositoryRole.READ_ONLY,
+        )
+        repos_root = tmp_path / "repos"
+
+        cloned = await clone_missing_repositories(db_session, task=task, repos_root=repos_root)
+        again = await clone_missing_repositories(db_session, task=task, repos_root=repos_root)
+
+        assert [pair[0].id for pair in cloned] == [task_repository.id]
+        assert task_repository.cloned_at is not None
+        assert again == []
+
+    async def test_reclone_after_cleanup_is_not_new(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await _make_task(db_session)
+        await _attach_repository(
+            db_session,
+            task=task,
+            origin=_init_bare_origin(tmp_path, "backend"),
+            name="backend",
+            role=RepositoryRole.READ_WRITE,
+        )
+        repos_root = tmp_path / "repos"
+        await clone_missing_repositories(db_session, task=task, repos_root=repos_root)
+        shutil.rmtree(repos_root / task.code / "backend")
+
+        cloned = await clone_missing_repositories(db_session, task=task, repos_root=repos_root)
+
+        assert cloned == []
+        assert (repos_root / task.code / "backend" / ".git").exists()
+
+    async def test_added_repository_brings_its_template(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task = await _make_task(db_session)
+        repos_root = tmp_path / "repos"
+        await _attach_repository(
+            db_session,
+            task=task,
+            origin=_init_bare_origin(tmp_path, "backend"),
+            name="backend",
+            role=RepositoryRole.READ_WRITE,
+        )
+        await clone_missing_repositories(db_session, task=task, repos_root=repos_root)
+        template = await _make_template(db_session, {"CLAUDE.md": "правила фронтенда\n"})
+        await _attach_repository(
+            db_session,
+            task=task,
+            origin=_init_bare_origin(tmp_path, "frontend"),
+            name="frontend",
+            role=RepositoryRole.READ_ONLY,
+            template=template,
+        )
+
+        cloned = await clone_missing_repositories(db_session, task=task, repos_root=repos_root)
+
+        assert [pair[1].name for pair in cloned] == ["frontend"]
+        assert (repos_root / task.code / "CLAUDE.md").read_text() == "правила фронтенда\n"
+
+    @pytest.mark.parametrize("tolerate_errors", [True, False])
+    async def test_clone_failure(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        *,
+        tolerate_errors: bool,
+    ) -> None:
+        task = await _make_task(db_session)
+        task_repository = await _attach_repository(
+            db_session,
+            task=task,
+            origin=tmp_path / "missing.git",
+            name="missing",
+            role=RepositoryRole.READ_ONLY,
+        )
+        repos_root = tmp_path / "repos"
+
+        if tolerate_errors:
+            cloned = await clone_missing_repositories(
+                db_session,
+                task=task,
+                repos_root=repos_root,
+                tolerate_errors=True,
+            )
+            assert cloned == []
+        else:
+            with pytest.raises(ExternalServiceError):
+                await clone_missing_repositories(db_session, task=task, repos_root=repos_root)
+        assert task_repository.cloned_at is None
+
+
+class TestAddedRepositoriesNotice:
+    def test_lists_name_role_and_path(self) -> None:
+        repository = Repository(name="frontend", git_url="git@example.com:frontend.git")
+        task_repository = TaskRepository(role=RepositoryRole.READ_ONLY)
+
+        notice = added_repositories_notice(Path("/repos/RR-1"), [(task_repository, repository)])
+
+        assert notice is not None
+        assert "- frontend (read-only, changes are not pushed): /repos/RR-1/frontend" in notice
+
+    def test_nothing_added(self) -> None:
+        assert added_repositories_notice(Path("/repos/RR-1"), []) is None

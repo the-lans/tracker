@@ -277,6 +277,10 @@ DEPLOY_DOMAIN="$DOMAIN" bash .github/scripts/verify_deployment.sh "$DEPLOYED_SHA
 Она проверяет доверенный HTTPS, SHA в `/api/health` и HTML фронтенда. Дополнительно
 проверьте загрузку JS/CSS и HTTP → HTTPS, сертификат для выбранного имени,
 публикации портов и отсутствие внешнего доступа к 8000, 5432, 6379, 8317, 8320.
+Заголовки безопасности (`curl -sI "https://$DOMAIN/"`): `Content-Security-Policy`,
+`Strict-Transport-Security` и `X-Content-Type-Options` на месте, `Server` нет. HSTS
+задаёт `HSTS_MAX_AGE` в `.env` (по умолчанию год); на домене без постоянного HTTPS
+поставьте 0 до первого деплоя — включённый HSTS браузер помнит весь срок.
 Сверьте OAuth Client ID из `.env` с собранным frontend, не выводя секреты.
 Если в checkout есть локальные правки, явно сообщите: SHA в health их не отражает.
 
@@ -403,8 +407,31 @@ gh secret set DEPLOY_SSH_KNOWN_HOSTS --repo "$GH_REPO" --env production < "$KNOW
 и после проверки SSH. Сохранённые самим пользователем ключи не удаляйте.
 
 По выбору пользователя настройте Required reviewers и Deployment branches только
-`main`; защита ветки с обязательным CI задаётся отдельно. Не добавляйте новые
-обязательные ручные подтверждения, если пользователь просит автоматический деплой.
+`main`; защита ветки с обязательным CI задаётся отдельно:
+
+```bash
+gh api -X PUT "repos/$GH_REPO/branches/main/protection" --input - <<'JSON'
+{"required_status_checks": {"strict": false, "contexts": ["check"]},
+ "enforce_admins": true, "required_pull_request_reviews": null, "restrictions": null}
+JSON
+```
+
+Не добавляйте новые обязательные ручные подтверждения, если пользователь просит
+автоматический деплой.
+
+Проверки безопасности репозитория: оповещения Dependabot об уязвимостях с
+автоматическими PR исправлений, secret scanning и push protection. Workflow
+`security.yml` (`pip-audit` и `npm audit`) в обязательные проверки не добавляйте:
+новая уязвимость в чужом пакете не должна останавливать слияние и развёртывание.
+
+```bash
+gh api -X PUT "repos/$GH_REPO/vulnerability-alerts"
+gh api -X PUT "repos/$GH_REPO/automated-security-fixes"
+gh api -X PATCH "repos/$GH_REPO" --input - <<'JSON'
+{"security_and_analysis": {"secret_scanning": {"status": "enabled"},
+ "secret_scanning_push_protection": {"status": "enabled"}}}
+JSON
+```
 
 ### Проверить Actions
 
@@ -491,6 +518,13 @@ Personal Access Token создайте HTTPS-доступ с именем хос
 токеном. Выберите запись в нужных репозиториях с HTTPS URL. Токен не требуется
 добавлять в `.env`, переменные задач или GitHub Actions. API и UI репозитория
 больше не принимают старое поле `deploy_key`; используйте `git_credential_id`.
+
+У SSH-доступа ключ хоста Git-сервера запоминается при первом подключении (или
+вставьте строку `ssh-keyscan -p <порт> <хост>` в поле «Ключ хоста»). После первой
+«Проверки» сверьте показанный отпечаток с отпечатком сервера. Плановую смену ключей
+сервер сообщает сам, пока принимает прежний ключ; если ключ полностью заменён и
+операции падают с ошибкой «Ключ Git-сервера не совпал», сверьте новый отпечаток
+и нажмите «Сбросить ключ хоста».
 Миграция рассчитана на новую установку и удаляет прежнее поле SSH-ключа без
 переноса значений. Сохранение старых данных и совместимость старой версии не предусмотрены.
 При откате схемы учётные данные Git удаляются, прежнее поле восстанавливается

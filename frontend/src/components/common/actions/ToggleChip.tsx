@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils";
 const chipVariants = cva("rounded-full font-bold disabled:opacity-50", {
   variants: {
     size: {
-      default: "touch-target bg-surface-2 px-3.5 py-1.5 text-body text-text",
+      // Фильтр списка: на телефоне ниже (touch-compact), зона нажатия та же.
+      default: "touch-target touch-compact bg-surface-2 px-3.5 py-1.5 text-body text-text",
       // В строке карточки: зона нажатия 44×44 — без увеличения самой кнопки.
       sm: "touch-hit border border-border px-2.5 py-0.5 text-caption text-text-2",
     },

@@ -52,6 +52,17 @@ from db.models.enums import NodeLogStatus, NodeType, PermissionMode, TaskStatus
 from db.models.logs import NodeLog
 from db.models.pipelines import Node, TaskNode
 from db.models.tasks import Task
+from prompts.agent import (
+    CONTEXT_ONLY_TOOL_DENIED,
+    DECISION_TIMEOUT_DENIED,
+    NO_ACTIVE_NODE_DENIED,
+    NO_QUESTIONS_DENIED,
+    PLAN_ACCEPTED_MESSAGE,
+    PLAN_ACCEPTED_TOOL_DENIED,
+    PLAN_MODE_WRITE_DENIED,
+    PLAN_REVISE_DENIED,
+    TOOL_DENIED_BY_USER,
+)
 from services.access import get_task_record_or_404
 from services.errors import ConflictError, ValidationError
 from services.task_signal import (
@@ -85,22 +96,6 @@ TOOL_APPROVAL_OPTIONS: list[dict[str, str]] = [
     {"id": TOOL_APPROVAL_ALLOW, "label": "Разрешить"},
     {"id": TOOL_APPROVAL_DENY, "label": "Запретить"},
 ]
-PLAN_MODE_WRITE_DENIED = (
-    "В режиме планирования изменения запрещены: сначала предложите план (ExitPlanMode)"
-)
-# Раздел 9.3: принятый план завершает ход ноды `plan_prompt` — реализацию
-# выполняют следующие ноды. Отказ без прерывания: агент видит, что план принят,
-# и сам заканчивает ответ (прерванный ход CLI завершает ошибкой).
-PLAN_ACCEPTED_MESSAGE = (
-    "План принят пользователем. Реализацию выполнит следующий запрос — "
-    "сейчас ничего не меняй и заверши ответ."
-)
-PLAN_ACCEPTED_TOOL_DENIED = "План принят: изменения — в следующем запросе. Заверши ответ."
-CONTEXT_ONLY_TOOL_DENIED = "Сейчас только прими контекст: задание придёт следующим сообщением."
-DECISION_TIMEOUT_DENIED = "Истекло время ожидания решения пользователя"
-# Раздел 9.3: у отказа всегда есть текст — пустой отказ API Claude отклоняет
-# (400), и сессия с ним в истории больше не отвечает.
-PLAN_REVISE_DENIED = "Пользователь просит доработать план"
 _TOOL_DESCRIPTION_LIMIT = 500
 
 
@@ -596,7 +591,7 @@ class _PermissionCallback:
             return PermissionResultDeny(message=CONTEXT_ONLY_TOOL_DENIED, interrupt=False)
         if tool_name in INTERCEPTED_TOOLS:
             if not active:
-                return PermissionResultDeny(message="Нет активной ноды для обработки решения")
+                return PermissionResultDeny(message=NO_ACTIVE_NODE_DENIED)
             if tool_name == EXIT_PLAN_MODE_TOOL:
                 return await self._review_plan(tool_input)
             return await self._answer_questions(tool_input)
@@ -683,7 +678,7 @@ class _PermissionCallback:
     async def _answer_questions(self, tool_input: dict[str, Any]) -> PermissionResult:
         questions = [item for item in tool_input.get("questions") or [] if isinstance(item, dict)]
         if not questions:
-            return PermissionResultDeny(message="Нет вопросов для пользователя")
+            return PermissionResultDeny(message=NO_QUESTIONS_DENIED)
         answers: dict[str, str] = {}
         for question in questions:
             text = str(question.get("question", ""))
@@ -717,7 +712,7 @@ class _PermissionCallback:
         await self._finish_question(resolution)
         if option_id == TOOL_APPROVAL_ALLOW:
             return PermissionResultAllow()
-        message = "Пользователь запретил это действие"
+        message = TOOL_DENIED_BY_USER
         if feedback_text:
             message = f"{message}: {feedback_text}"
         return PermissionResultDeny(message=message, interrupt=False)

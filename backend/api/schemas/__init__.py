@@ -47,6 +47,12 @@ from api.schemas.env_variables import (
     TaskEnvVariableUpdateRequest,
 )
 from api.schemas.events import EventResponse
+from api.schemas.git_credentials import (
+    CredentialCheckRequest,
+    CredentialCheckResponse,
+    CredentialInput,
+    CredentialResponse,
+)
 from api.schemas.knowledge import (
     DeletedRequest,
     EntryResponse,
@@ -147,6 +153,7 @@ from api.schemas.tasks import (
     TaskLibraryPromptResponse,
     TaskNodeResponse,
     TaskNodeUpdateRequest,
+    TaskRepositoriesAddRequest,
     TaskRepositoryAttachRequest,
     TaskRepositoryResponse,
     TaskResponse,
@@ -155,6 +162,10 @@ from api.schemas.tasks import (
 )
 
 __all__ = [
+    "CredentialCheckRequest",
+    "CredentialCheckResponse",
+    "CredentialInput",
+    "CredentialResponse",
     "DeletedRequest",
     "EntryResponse",
     "FileRequest",
@@ -266,6 +277,7 @@ __all__ = [
     "TaskCustomNodeCreateRequest",
     "TaskNodeResponse",
     "TaskNodeUpdateRequest",
+    "TaskRepositoriesAddRequest",
     "TaskRepositoryAttachRequest",
     "TaskRepositoryResponse",
     "TaskResponse",

@@ -137,7 +137,8 @@ export function DashboardPage() {
       />
 
       <QueueSummaryLine />
-      <div className="flex flex-wrap items-center gap-2 px-5 pb-4 lg:px-8">
+      {/* На телефоне ряды фильтров ниже; отступ 12px — зоны нажатия 44px соседних рядов не перекрываются. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-3 px-5 pb-4 md:gap-2 lg:px-8">
         {FILTERS.map((filterDef) => (
           <ToggleChip
             key={filterDef.key}
@@ -154,7 +155,7 @@ export function DashboardPage() {
           labels={categoryLabels}
           allLabel="Все категории"
           label="Категория"
-          className="w-48"
+          className="w-40 md:w-48"
         />
         <FilterSelect
           value={markDayKey}
@@ -163,7 +164,7 @@ export function DashboardPage() {
           labels={MARK_DAY_LABEL}
           allLabel="Все дни"
           label="Отмечены на день"
-          className="w-36"
+          className="w-32 md:w-36"
         />
       </div>
 

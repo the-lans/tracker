@@ -115,7 +115,8 @@ class TestRepositoryDefaultBranch:
         expected: str,
     ) -> None:
         response = await authed_client.post(
-            "/repositories", json={"name": "app", "git_url": PUBLIC_URL, **body},
+            "/repositories",
+            json={"name": "app", "git_url": PUBLIC_URL, **body},
         )
 
         assert response.status_code == 201, response.text
@@ -141,7 +142,8 @@ class TestRepositoryDefaultBranch:
         expected: str,
     ) -> None:
         created = await authed_client.post(
-            "/repositories", json={"name": "app", "git_url": PUBLIC_URL},
+            "/repositories",
+            json={"name": "app", "git_url": PUBLIC_URL},
         )
 
         response = await authed_client.patch(f"/repositories/{created.json()['id']}", json=body)

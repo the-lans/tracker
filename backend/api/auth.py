@@ -15,12 +15,15 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.dependencies import get_current_user
 from db.models.enums import UserRole
+from db.models.users import User
 from db.session import get_session
 from services.auth import (
     GoogleAuthLibraryVerifier,
     GoogleIdTokenVerifier,
     authenticate_or_register,
+    revoke_user_sessions,
     verify_google_id_token,
 )
 from services.auth_tokens import issue_session_token
@@ -63,8 +66,19 @@ async def login_with_google(
 ) -> LoginResponse:
     identity = await verify_google_id_token(verifier, body.id_token)
     user = await authenticate_or_register(db_session, identity=identity)
-    session_token = issue_session_token(user.id)
+    session_token = issue_session_token(user.id, session_version=user.session_version)
     return LoginResponse(
         session_token=session_token,
         user=CurrentUserResponse(id=str(user.id), email=user.email, role=user.role),
     )
+
+
+@router.post("/logout-all", status_code=204)
+async def logout_everywhere(
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    """
+    Раздел 19.1: токены пользователя на всех устройствах, включая этот, недействительны.
+    """
+    await revoke_user_sessions(db_session, current_user)

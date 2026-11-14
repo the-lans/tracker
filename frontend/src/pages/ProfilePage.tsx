@@ -1,6 +1,6 @@
-import { LogOut } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ActiveSessionsCard } from "@/components/profile/ActiveSessionsCard";
+import { LogoutActions } from "@/components/profile/LogoutActions";
 import { SshKeyCard } from "@/components/profile/SshKeyCard";
 import { SftpConnectionCard } from "@/components/profile/SftpConnectionCard";
 import { GoogleCalendarCard } from "@/components/profile/GoogleCalendarCard";
@@ -8,14 +8,13 @@ import { JiraConnectionCard } from "@/components/profile/JiraConnectionCard";
 import { LlmCompactSwitchCard } from "@/components/profile/LlmCompactSwitchCard";
 import { LlmThresholdsCard } from "@/components/profile/LlmThresholdsCard";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { USER_ROLE_LABEL } from "@/lib/labels";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 import { UserAvatar } from "@/components/common/avatar/UserAvatar";
 
 export function ProfilePage() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   if (!user) return null;
 
   return (
@@ -45,10 +44,7 @@ export function ProfilePage() {
 
           <ActiveSessionsCard />
 
-          <Button variant="secondary" className="self-start" onClick={logout}>
-            <LogOut className="size-4" />
-            Выйти
-          </Button>
+          <LogoutActions />
         </div>
       </div>
     </div>

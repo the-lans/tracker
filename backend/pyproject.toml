@@ -37,6 +37,8 @@ dev = [
     "pyyaml==6.0.3",
     "types-PyYAML==6.0.12.20261103",
     "boto3-stubs[s3]==1.43.127",
+    # Известные уязвимости зависимостей (`make audit`, .github/workflows/security.yml).
+    "pip-audit==2.10.1",
 ]
 
 [build-system]

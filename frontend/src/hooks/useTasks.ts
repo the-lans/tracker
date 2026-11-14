@@ -22,6 +22,7 @@ import type {
   TaskCustomNodeCreateRequest,
   TaskNodeItem,
   TaskNodeUpdateRequest,
+  TaskRepositoriesAddRequest,
   TaskRepository,
   TaskStatus,
   TaskUpdateRequest,
@@ -388,6 +389,23 @@ export function useCreateTaskNode(taskId: string) {
   return useInvalidatingMutation(
     (body: TaskCustomNodeCreateRequest) => api.post<TaskNodeItem>(`/tasks/${taskId}/nodes`, body),
     [taskKeys.nodes(taskId)],
+  );
+}
+
+/** Раздел 3.2: репозиторий добавляется и после создания задачи. */
+export function useAddTaskRepositories(taskId: string) {
+  return useInvalidatingMutation(
+    (body: TaskRepositoriesAddRequest) =>
+      api.post<TaskRepository[]>(`/tasks/${taskId}/repositories`, body),
+    [taskKeys.repositories(taskId)],
+  );
+}
+
+/** Раздел 3.2: убирается только ещё не склонированный репозиторий. */
+export function useRemoveTaskRepository(taskId: string) {
+  return useInvalidatingMutation(
+    (taskRepositoryId: string) => api.delete(`/tasks/${taskId}/repositories/${taskRepositoryId}`),
+    [taskKeys.repositories(taskId)],
   );
 }
 

@@ -44,11 +44,12 @@ from services.task_archive import (
     ArchiveFilters,
     list_archived_tasks,
 )
-from services.task_creation import RepositoryAttachment, TaskDraft
+from services.task_creation import TaskDraft
 from services.task_creation import create_task as create_task_with_repositories
 from services.task_duplication import duplicate_task
 from services.task_editing import update_task as update_task_fields
 from services.task_queue import queue_positions, queue_summary
+from services.task_repositories import RepositoryAttachment
 from services.task_workspace import load_task_repositories
 from tasks.celery_app import wake_task_dispatcher
 from tasks.jira_attachments import copy_jira_attachments_to_task

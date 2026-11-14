@@ -25,6 +25,7 @@ from app_logging.config import get_logger
 from db.models.enums import MergeStatus, NodeLogTriggerType, RepositoryRole
 from db.models.logs import NodeLog
 from db.models.tasks import TaskRepository
+from prompts.agent import REBASE_RESOLUTION_INTRO, REBASE_RESOLUTION_REPOSITORY
 from services.git_ops import is_rebased_onto_base
 from services.node_runs import apply_node_outcome, start_node_log
 from services.nodes.dispatch import execute_llm_node_with_timeout
@@ -110,17 +111,13 @@ async def find_outdated_repositories(
 
 
 def build_rebase_resolution_prompt(outdated: list[OutdatedRepository]) -> str:
-    lines = [
-        "Базовая ветка обновилась, и автоматический ребейз рабочей ветки упал на конфликте.",
-        "Для каждого репозитория ниже:",
-        "1. перейди в его директорию и выполни `git rebase origin/<базовая ветка>`;",
-        "2. разреши конфликты, сохранив смысл изменений обеих сторон;",
-        "3. заверши ребейз (`git add` и `git rebase --continue`), не используя `--abort`.",
-        "",
-    ]
+    lines = [*REBASE_RESOLUTION_INTRO, ""]
     lines.extend(
-        f"- `{item.repository.name}/`: ветка `{item.task_repository.branch_name}`, "
-        f"база `origin/{item.task_repository.base_branch}`"
+        REBASE_RESOLUTION_REPOSITORY.format(
+            name=item.repository.name,
+            branch=item.task_repository.branch_name,
+            base_branch=item.task_repository.base_branch,
+        )
         for item in outdated
     )
     return "\n".join(lines)

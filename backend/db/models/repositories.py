@@ -28,6 +28,9 @@ class GitCredential(UUIDPrimaryKeyMixin, Base):
     gitlab_api_enabled: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     gitlab_api_token_encrypted: Mapped[str | None] = mapped_column(sa.Text)
     gitlab_api_url: Mapped[str | None] = mapped_column(sa.String)
+    # Раздел 19.3: ключи Git-сервера в формате known_hosts для доступа по SSH.
+    # `None` — ключ запомнится при первом подключении; не секрет.
+    ssh_known_hosts: Mapped[str | None] = mapped_column(sa.Text)
 
 
 class Repository(UUIDPrimaryKeyMixin, Base):

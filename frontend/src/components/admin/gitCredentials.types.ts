@@ -10,6 +10,8 @@ export interface GitCredential {
   gitlab_api_enabled: boolean;
   gitlab_api_url: string | null;
   gitlab_api_token_set: boolean;
+  /** Раздел 19.3: отпечатки сохранённого ключа Git-сервера; пусто — ещё не получен. */
+  ssh_host_key_fingerprints: string[];
 }
 
 /** `gitlab_api_token`: не передан — оставить сохранённый, пустая строка — удалить. */
@@ -22,12 +24,21 @@ export interface GitCredentialInput {
   gitlab_api_enabled: boolean;
   gitlab_api_url: string | null;
   gitlab_api_token?: string;
+  /** Ключ хоста для SSH: не передан — оставить сохранённый, пустая строка — сбросить. */
+  ssh_known_hosts?: string;
 }
 
 /** Итог проверки: чтение Git и доступ к GitLab API (`ok`, `disabled` или причина отказа). */
 export interface GitCredentialCheck {
   read_access: boolean;
   gitlab_api: string;
+  ssh_host_key_fingerprints: string[];
+}
+
+/** Ключ хоста в форме: вставленные строки known_hosts или сброс сохранённого. */
+export interface SshHostKeyState {
+  knownHosts: string;
+  reset: boolean;
 }
 
 /** Состояние полей GitLab API в форме учётных данных. */

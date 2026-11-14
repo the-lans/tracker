@@ -22,7 +22,9 @@ from db.models.pipelines import Node, Pipeline
 from db.models.repositories import Template
 from db.models.tasks import Task
 from db.models.users import User
-from services.errors import ForbiddenError, NotFoundError, UnauthorizedError, ValidationError
+from services.auth import load_session_user
+from services.auth_tokens import SessionClaims
+from services.errors import ForbiddenError, NotFoundError, ValidationError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -210,19 +212,16 @@ async def ensure_llm_account_of_owner(
 async def authorize_task_stream(
     db_session: AsyncSession,
     *,
-    user_id: uuid.UUID,
+    claims: SessionClaims,
     task_id: uuid.UUID,
 ) -> User:
     """
     Раздел 19.2 для WebSocket-канала задачи: токен подписан, но доступ к
     каналу есть только у активного автора задачи или `admin`.
 
-    ``UnauthorizedError`` — пользователь удалён или заблокирован;
-    ``NotFoundError`` — задачи нет или она чужая.
+    ``UnauthorizedError`` — пользователь удалён, заблокирован или вышел на всех
+    устройствах (раздел 19.1); ``NotFoundError`` — задачи нет или она чужая.
     """
-    user = await db_session.get(User, user_id)
-    if user is None or not user.is_active:
-        message = "Пользователь не найден или заблокирован"
-        raise UnauthorizedError(message)
+    user = await load_session_user(db_session, claims)
     await get_task_for_user(db_session, task_id, user=user)
     return user

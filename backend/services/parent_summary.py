@@ -37,6 +37,7 @@ from db.models.enums import (
 from db.models.logs import NodeLog
 from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task, TaskParentSummary
+from prompts.agent import SUMMARY_DELIVERY_MESSAGE, SUMMARY_REQUEST_PROMPT
 from services.llm_account_choice import LlmLimitWaitError
 from services.node_runs import record_turn_route
 from services.nodes.dispatch import execute_llm_node_with_timeout
@@ -59,20 +60,6 @@ logger = get_logger("parent_summary")
 _WAIT_POLL_SECONDS = 30.0
 _CLOSED_REQUEST_STATUSES = frozenset({ManualRequestStatus.DONE, ManualRequestStatus.CANCELLED})
 
-SUMMARY_REQUEST_PROMPT = (
-    "Кратко перескажи историю этой задачи для дочерней задачи {child_code} «{child_title}»: "
-    "цель, принятые решения и утверждённый план, что сделано, что осталось, важные нюансы и "
-    "ограничения. Ответь только пересказом, ничего не меняй в файлах и не запускай инструменты."
-)
-# Раздел 6.7: первое сообщение — только контекст, работа начинается с ноды.
-DELIVERY_INSTRUCTION = (
-    "Учитывай его в работе над этой задачей. Сейчас ничего не делай и не запускай "
-    "инструменты: задание придёт следующим сообщением."
-)
-DELIVERY_MESSAGE = (
-    "Контекст родительской задачи {parent_code} «{parent_title}» — пересказ её сессии:\n\n"
-    "{summary}\n\n" + DELIVERY_INSTRUCTION
-)
 REASON_NO_SESSION = "у родительской задачи нет сессии"
 REASON_PARENT_MISSING = "родительская задача не найдена"
 REASON_SUMMARY_FAILED = "сессия родителя не смогла составить пересказ"
@@ -369,7 +356,7 @@ async def deliver_parent_summary(
     db_session.add(node_log)
     if summary.status is ParentSummaryStatus.READY and parent is not None:
         assert summary.summary_text is not None
-        message = DELIVERY_MESSAGE.format(
+        message = SUMMARY_DELIVERY_MESSAGE.format(
             parent_code=parent.code,
             parent_title=parent.title,
             summary=summary.summary_text,

@@ -41,7 +41,7 @@ from db.models.enums import TaskStatus
 from db.models.tasks import Task
 from db.session import async_session_factory
 from services.access import authorize_task_stream
-from services.auth_tokens import InvalidSessionTokenError, verify_session_token
+from services.auth_tokens import InvalidSessionTokenError, SessionClaims, verify_session_token
 from services.errors import NotFoundError, UnauthorizedError
 from services.output_stream import output_channel_name
 from services.redis_connection import redis_connection
@@ -203,11 +203,14 @@ async def serve_task_events(
     logger.info("ws_task_status_disconnected", task_id=str(task_id))
 
 
-async def _access_denied_close_code(*, user_id: uuid.UUID, task_id: uuid.UUID) -> int | None:
-    """Раздел 19.2: канал задачи — только для активного автора задачи или `admin`."""
+async def _access_denied_close_code(*, claims: SessionClaims, task_id: uuid.UUID) -> int | None:
+    """
+    Раздел 19.2: канал задачи — только для активного автора задачи или
+    `admin`; после «Выйти на всех устройствах» (раздел 19.1) канал закрывается.
+    """
     async with async_session_factory() as db_session:
         try:
-            await authorize_task_stream(db_session, user_id=user_id, task_id=task_id)
+            await authorize_task_stream(db_session, claims=claims, task_id=task_id)
         except UnauthorizedError:
             return _UNAUTHORIZED_CLOSE_CODE
         except NotFoundError:
@@ -235,18 +238,18 @@ async def task_status_stream(websocket: WebSocket, task_id: uuid.UUID) -> None:
         await websocket.close(code=_UNAUTHORIZED_CLOSE_CODE)
         return
     try:
-        user_id = verify_session_token(token)
+        claims = verify_session_token(token)
     except InvalidSessionTokenError:
         await websocket.close(code=_UNAUTHORIZED_CLOSE_CODE)
         return
 
-    close_code = await _access_denied_close_code(user_id=user_id, task_id=task_id)
+    close_code = await _access_denied_close_code(claims=claims, task_id=task_id)
     if close_code is not None:
         await websocket.close(code=close_code)
         return
 
     async def check_access() -> int | None:
-        return await _access_denied_close_code(user_id=user_id, task_id=task_id)
+        return await _access_denied_close_code(claims=claims, task_id=task_id)
 
     async with redis_connection() as redis_client:
         try:

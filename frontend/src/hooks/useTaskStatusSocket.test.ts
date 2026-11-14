@@ -92,7 +92,7 @@ describe("useTaskStatusSocket", () => {
     expect(queryClient.getQueryState(["tasks", "t1", "node-logs"])?.isInvalidated).toBe(false);
   });
 
-  it.for([true, false])("чат в «Уточняется» (chat_active=%s) обновляет задачу и ленту, статус не трогает", (active) => {
+  it.for([true, false])("чат в «Уточняется» (chat_active=%s) обновляет задачу, ленту и репозитории, статус не трогает", (active) => {
     const { queryClient } = renderSocket();
 
     act(() => FakeWebSocket.latest().receive({ type: "chat", task_id: "t1", chat_active: active }));
@@ -100,6 +100,7 @@ describe("useTaskStatusSocket", () => {
     const task = queryClient.getQueryData<Task>(["tasks", "detail", "t1"]);
     expect([task?.chat_active, task?.status]).toEqual([active, TaskStatus.IN_PROGRESS]);
     expect(queryClient.getQueryState(["tasks", "t1", "node-logs"])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(["tasks", "t1", "repositories"])?.isInvalidated).toBe(true);
   });
 
   it("фрагменты ответа копятся по записи лога и не сбрасываются сменой статуса", () => {

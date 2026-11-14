@@ -27,6 +27,7 @@ from services.access import (
     get_template_for_user,
     owner_filter,
 )
+from services.auth_tokens import SessionClaims
 from services.errors import NotFoundError, UnauthorizedError, ValidationError
 from services.llm_accounts import account_prefix
 from tests.factories import make_llm_account, make_user
@@ -197,12 +198,19 @@ class TestAuthorizeTaskStream:
     так же, как в `test_ws.py`: канал задачи читает БД своим соединением.
     """
 
-    async def _commit_user(self, *, role: UserRole, is_active: bool = True) -> User:
+    async def _commit_user(
+        self,
+        *,
+        role: UserRole,
+        is_active: bool = True,
+        session_version: int = 0,
+    ) -> User:
         user = User(
             id=uuid.uuid4(),
             email=f"{uuid.uuid4()}@example.com",
             role=role,
             is_active=is_active,
+            session_version=session_version,
         )
         async with async_session_factory() as session:
             session.add(user)
@@ -216,14 +224,15 @@ class TestAuthorizeTaskStream:
             await session.commit()
 
     @pytest.mark.parametrize(
-        ("viewer_role", "viewer_is_owner", "viewer_active", "expected"),
+        ("viewer_role", "viewer_is_owner", "viewer_active", "revoked", "expected"),
         [
-            (UserRole.USER, True, True, None),
-            (UserRole.USER, False, True, NotFoundError),
-            (UserRole.ADMIN, False, True, None),
-            (UserRole.USER, True, False, UnauthorizedError),
+            (UserRole.USER, True, True, False, None),
+            (UserRole.USER, False, True, False, NotFoundError),
+            (UserRole.ADMIN, False, True, False, None),
+            (UserRole.USER, True, False, False, UnauthorizedError),
+            (UserRole.USER, True, True, True, UnauthorizedError),
         ],
-        ids=["owner", "stranger", "admin", "blocked_owner"],
+        ids=["owner", "stranger", "admin", "blocked_owner", "revoked_sessions"],
     )
     async def test_access(
         self,
@@ -231,9 +240,14 @@ class TestAuthorizeTaskStream:
         viewer_role: UserRole,
         viewer_is_owner: bool,
         viewer_active: bool,
+        revoked: bool,
         expected: type[Exception] | None,
     ) -> None:
-        owner = await self._commit_user(role=UserRole.USER, is_active=viewer_active)
+        owner = await self._commit_user(
+            role=UserRole.USER,
+            is_active=viewer_active,
+            session_version=1 if revoked else 0,
+        )
         viewer = owner if viewer_is_owner else await self._commit_user(role=viewer_role)
         task = Task(
             code=f"RR-{uuid.uuid4().hex[:6]}",
@@ -248,10 +262,12 @@ class TestAuthorizeTaskStream:
 
         try:
             async with async_session_factory() as session:
+                # Токен выдан до «Выйти на всех устройствах» — версии 0.
+                claims = SessionClaims(user_id=viewer.id, session_version=0)
                 if expected is None:
-                    await authorize_task_stream(session, user_id=viewer.id, task_id=task.id)
+                    await authorize_task_stream(session, claims=claims, task_id=task.id)
                 else:
                     with pytest.raises(expected):
-                        await authorize_task_stream(session, user_id=viewer.id, task_id=task.id)
+                        await authorize_task_stream(session, claims=claims, task_id=task.id)
         finally:
             await self._cleanup(task_id=task.id, user_ids=[owner.id, viewer.id])
