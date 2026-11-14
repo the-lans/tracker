@@ -11,6 +11,8 @@ export interface ArchivedTask {
   finished_at: string | null;
   archived_at: string | null;
   repo_cleaned_at: string | null;
+  session_cleaned_at: string | null;
+  artifacts_cleaned_at: string | null;
   created_by: string;
 }
 

@@ -2,13 +2,16 @@ import { Link } from "react-router-dom";
 import { OwnerLabel } from "@/components/common/avatar/OwnerLabel";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import type { ArchivedTask } from "@/lib/archive.types";
+import { CLEANED_DATA_LABEL } from "@/lib/labels";
 import { TaskStatus } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
 import { WRAP_ROW } from "@/styles/classes";
 
+const CLEANED_FIELDS = Object.keys(CLEANED_DATA_LABEL) as Array<keyof typeof CLEANED_DATA_LABEL>;
+
 /**
- * Раздел 15.1: строка архива — код, название, итоговый статус, категория и
- * даты; на узком экране переносится на вторую строку.
+ * Раздел 15.1: строка архива — код, название, итоговый статус, категория,
+ * даты и удалённые по сроку хранения данные; на узком экране переносится на вторую строку.
  */
 export function ArchivedTaskRow({ task }: { task: ArchivedTask }) {
   return (
@@ -37,7 +40,9 @@ export function ArchivedTaskRow({ task }: { task: ArchivedTask }) {
           <span>
             Завершена <time dateTime={task.finished_at ?? undefined}>{formatDateTime(task.finished_at)}</time>
           </span>
-          {task.repo_cleaned_at && <span>Репозитории очищены</span>}
+          {CLEANED_FIELDS.filter((field) => task[field]).map((field) => (
+            <span key={field}>{CLEANED_DATA_LABEL[field]}</span>
+          ))}
         </div>
       </Link>
     </li>

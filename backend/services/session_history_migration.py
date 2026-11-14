@@ -32,7 +32,8 @@ if TYPE_CHECKING:
 logger = get_logger("session_history_migration")
 
 ACCOUNTS_ROOT_ENV_VAR = "CLAUDE_ACCOUNTS_ROOT"
-# Volume `claude_accounts` контейнера backend (docker-compose.yml).
+# Том `claude_accounts` прежней версии: `deploy/install.sh` монтирует его сюда
+# только на время переноса, а после него удаляет.
 DEFAULT_ACCOUNTS_ROOT = "/data/claude-accounts"
 _PROJECTS_DIR = "projects"
 _HISTORY_SUFFIX = ".jsonl"

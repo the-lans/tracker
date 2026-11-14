@@ -149,26 +149,26 @@ class TestSftpLogin:
         assert response.status_code == 409
 
 
-_RETENTION_FIELDS = ["archive_after_days", "cleanup_repos_after_days"]
+_RETENTION_FIELDS = ["archive_after_days", "cleanup_repos_after_days", "artifacts_retention_days"]
 
 
 class TestRetentionSettings:
-    """Раздел 14.2, 15.5: сроки архивации и очистки репозиториев у пользователя."""
+    """Раздел 14.2, 14.3, 15.5: сроки хранения задач пользователя, 0 — бессрочно."""
 
     async def test_defaults(self, admin_client: AsyncClient, current_user: User) -> None:
         response = await admin_client.get("/users")
 
         row = next(item for item in response.json() if item["id"] == str(current_user.id))
-        assert (row["archive_after_days"], row["cleanup_repos_after_days"]) == (14, 30)
+        assert [row[field] for field in _RETENTION_FIELDS] == [14, 30, 90]
 
     @pytest.mark.parametrize("field", _RETENTION_FIELDS)
-    @pytest.mark.parametrize("days", [1, 3650, None])
+    @pytest.mark.parametrize("days", [0, 1, 3650])
     async def test_set(
         self,
         admin_client: AsyncClient,
         current_user: User,
         field: str,
-        days: int | None,
+        days: int,
     ) -> None:
         response = await admin_client.patch(f"/users/{current_user.id}", json={field: days})
 
@@ -176,7 +176,7 @@ class TestRetentionSettings:
         assert response.json()[field] == days
 
     @pytest.mark.parametrize("field", _RETENTION_FIELDS)
-    @pytest.mark.parametrize("days", [0, 3651, -1])
+    @pytest.mark.parametrize("days", [3651, -1])
     async def test_out_of_range(
         self,
         admin_client: AsyncClient,
@@ -196,10 +196,11 @@ class TestRetentionSettings:
         url = f"/users/{current_user.id}"
         await admin_client.patch(url, json={"archive_after_days": 5})
 
+        # `null` поле не меняет: выключенный срок — 0.
         response = await admin_client.patch(url, json={"cleanup_repos_after_days": None})
 
         body = response.json()
-        assert (body["archive_after_days"], body["cleanup_repos_after_days"]) == (5, None)
+        assert (body["archive_after_days"], body["cleanup_repos_after_days"]) == (5, 30)
 
     async def test_non_admin_forbidden(
         self,

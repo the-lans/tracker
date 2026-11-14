@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -14,7 +15,8 @@ import pytest
 from db.models.enums import NodeLogStatus, NodeLogTriggerType, TaskStatus, UserRole
 from db.models.logs import NodeLog
 from db.models.tasks import Task
-from db.models.users import User
+from db.models.users import RETENTION_FOREVER, User
+from db.queries.finished_tasks import FinishedTask
 from services.distributed_lock import acquire_lock
 from services.errors import ConflictError, ValidationError
 from services.maintenance_tasks import find_node_logs_eligible_for_rotation
@@ -22,11 +24,8 @@ from services.task_archive import (
     ARCHIVE_LOCK_KEY,
     CLEANUP_LOCK_KEY,
     ArchiveFilters,
-    FinishedTask,
-    archive_finished_tasks,
-    clean_finished_task_repositories,
-    find_tasks_to_archive,
-    find_tasks_to_clean,
+    ArchivePass,
+    RepositoryCleanupPass,
     list_archived_tasks,
 )
 from services.task_creation import TaskDraft
@@ -45,8 +44,8 @@ NOW = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
 async def _author(
     db_session: AsyncSession,
     *,
-    archive_after_days: int | None = 14,
-    cleanup_repos_after_days: int | None = 30,
+    archive_after_days: int = 14,
+    cleanup_repos_after_days: int = 30,
     role: UserRole = UserRole.USER,
 ) -> User:
     user = await make_user(db_session, role=role)
@@ -54,6 +53,18 @@ async def _author(
     user.cleanup_repos_after_days = cleanup_repos_after_days
     await db_session.flush()
     return user
+
+
+async def _to_archive(db_session: AsyncSession) -> set[uuid.UUID]:
+    return {task.id for task in await ArchivePass(db_session, now=NOW).candidates()}
+
+
+def _cleanup(db_session: AsyncSession, repos_root: Path = Path("/unused")) -> RepositoryCleanupPass:
+    return RepositoryCleanupPass(db_session, now=NOW, repos_root=repos_root)
+
+
+async def _to_clean(db_session: AsyncSession) -> set[uuid.UUID]:
+    return {task.id for task in await _cleanup(db_session).candidates()}
 
 
 async def _finished_task(
@@ -96,15 +107,15 @@ class TestFindTasksToArchive:
     ) -> None:
         task = await _finished_task(db_session, await _author(db_session), status=status, age=age)
 
-        found = {item.id for item in await find_tasks_to_archive(db_session, now=NOW)}
+        found = await _to_archive(db_session)
 
         assert (task.id in found) is expected
 
     async def test_disabled_for_author(self, db_session: AsyncSession) -> None:
-        author = await _author(db_session, archive_after_days=None)
+        author = await _author(db_session, archive_after_days=RETENTION_FOREVER)
         task = await _finished_task(db_session, author, age=timedelta(days=400))
 
-        found = {item.id for item in await find_tasks_to_archive(db_session, now=NOW)}
+        found = await _to_archive(db_session)
 
         assert task.id not in found
 
@@ -114,7 +125,7 @@ class TestFindTasksToArchive:
         kept = await _finished_task(db_session, patient, age=timedelta(days=5))
         archived = await _finished_task(db_session, hasty, age=timedelta(days=5))
 
-        found = {item.id for item in await find_tasks_to_archive(db_session, now=NOW)}
+        found = await _to_archive(db_session)
 
         assert (kept.id in found, archived.id in found) == (False, True)
 
@@ -135,7 +146,7 @@ class TestArchivePass:
         )
         finished_at = task.finished_at
 
-        result = await archive_finished_tasks(db_session, redis_client, now=NOW)
+        result = await ArchivePass(db_session, now=NOW).run(redis_client)
 
         await db_session.refresh(task)
         assert task.id in result.done
@@ -155,16 +166,16 @@ class TestArchivePass:
         """Задачу вернули в статус до запуска между выборкой и переходом — пропуск."""
         task = await _finished_task(db_session, await _author(db_session), age=timedelta(days=20))
         await db_session.commit()
-        found = await find_tasks_to_archive(db_session, now=NOW)
+        found = await ArchivePass(db_session, now=NOW).candidates()
         task.status = TaskStatus.NEW
         await db_session.commit()
 
-        async def stale(*_args: object, **_kwargs: object) -> list[FinishedTask]:
+        async def stale(_self: ArchivePass) -> list[FinishedTask]:
             return found
 
-        monkeypatch.setattr("services.task_archive.find_tasks_to_archive", stale)
+        monkeypatch.setattr(ArchivePass, "candidates", stale)
 
-        result = await archive_finished_tasks(db_session, redis_client, now=NOW)
+        result = await ArchivePass(db_session, now=NOW).run(redis_client)
 
         await db_session.refresh(task)
         assert task.id in result.skipped
@@ -174,7 +185,7 @@ class TestArchivePass:
         task = await _finished_task(db_session, await _author(db_session), age=timedelta(days=20))
 
         async with acquire_lock(redis_client, ARCHIVE_LOCK_KEY, busy_message="занято"):
-            result = await archive_finished_tasks(db_session, redis_client, now=NOW)
+            result = await ArchivePass(db_session, now=NOW).run(redis_client)
 
         assert result.lock_busy
         assert task.status is TaskStatus.DONE
@@ -208,15 +219,15 @@ class TestFindTasksToClean:
             repo_cleaned_at=NOW if cleaned else None,
         )
 
-        found = {item.id for item in await find_tasks_to_clean(db_session, now=NOW)}
+        found = await _to_clean(db_session)
 
         assert (task.id in found) is expected
 
     async def test_disabled_for_author(self, db_session: AsyncSession) -> None:
-        author = await _author(db_session, cleanup_repos_after_days=None)
+        author = await _author(db_session, cleanup_repos_after_days=RETENTION_FOREVER)
         task = await _finished_task(db_session, author, age=timedelta(days=400))
 
-        found = {item.id for item in await find_tasks_to_clean(db_session, now=NOW)}
+        found = await _to_clean(db_session)
 
         assert task.id not in found
 
@@ -237,12 +248,7 @@ class TestCleanupPass:
         root = tmp_path / task.code
         (root / "backend").mkdir(parents=True)
 
-        result = await clean_finished_task_repositories(
-            db_session,
-            redis_client,
-            now=NOW,
-            repos_root=tmp_path,
-        )
+        result = await _cleanup(db_session, tmp_path).run(redis_client)
 
         await db_session.refresh(task)
         assert task.id in result.done
@@ -265,12 +271,7 @@ class TestCleanupPass:
 
         monkeypatch.setattr("services.task_archive.cleanup_task_repositories", busy)
 
-        result = await clean_finished_task_repositories(
-            db_session,
-            redis_client,
-            now=NOW,
-            repos_root=tmp_path,
-        )
+        result = await _cleanup(db_session, tmp_path).run(redis_client)
 
         await db_session.refresh(task)
         assert task.id in result.skipped
@@ -283,12 +284,7 @@ class TestCleanupPass:
         tmp_path: Path,
     ) -> None:
         async with acquire_lock(redis_client, CLEANUP_LOCK_KEY, busy_message="занято"):
-            result = await clean_finished_task_repositories(
-                db_session,
-                redis_client,
-                now=NOW,
-                repos_root=tmp_path,
-            )
+            result = await _cleanup(db_session, tmp_path).run(redis_client)
 
         assert result.lock_busy
 

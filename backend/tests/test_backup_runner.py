@@ -168,8 +168,9 @@ class TestFullBackup:
         assert {item["name"] for item in manifest["components"]} == {
             component.name for component in COMPONENTS
         }
-        [accounts] = [item for item in manifest["components"] if item["name"] == "claude_accounts"]
-        assert accounts == {"name": "claude_accounts", "present": False}
+        # Каталоги аккаунтов прежней версии в копию не входят: том удаляется после
+        # переноса истории сессий (раздел 20.6).
+        assert "claude_accounts" not in {item["name"] for item in manifest["components"]}
         database = manifest["database"]
         assert database["alembic_version"]
         assert database["table_counts"]["system_settings"] >= 0

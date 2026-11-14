@@ -131,7 +131,15 @@ backend/
               настроек в новую задачу (раздел 15.7);
               task_archive.py — архив задач (раздел 14.2): уход в
               `archived` и автоочистка репозиториев по срокам автора,
-              выборка раздела «Архив»;
+              выборка раздела «Архив» (ArchivePass, RepositoryCleanupPass);
+              task_passes.py — общий каркас проходов по завершённым
+              задачам: базовый класс TaskPass (блокировка прохода,
+              кандидаты, пропуск до следующего запуска), PassResult,
+              remove_directory; task_retention.py — удаление истории
+              сессии (180 дней в архиве) и артефактов (срок автора)
+              архивных задач (SessionHistoryPass, ArtifactsPass, разделы
+              6.4, 14.3); app_log_retention.py — срок хранения app_logs
+              (раздел 17.2);
               очередь задач (раздел 14.4): task_queue.py — слоты автора,
               порядок очереди, ночное окно, ручная смена статуса;
               task_dispatcher.py — проход дневного и ночного воркера
@@ -193,7 +201,12 @@ backend/
               redis_connection.py — клиент Redis на операцию; integrity.py —
               запреты удаления (раздел 3.2) и commit_or_conflict
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
-              (db/session.py — engine/session из DATABASE_URL)
+              (db/session.py — engine/session из DATABASE_URL); queries/ —
+              запросы к БД без бизнес-решений (статусы и сроки передаёт
+              сервис, коммит — тоже за ним): finished_tasks.py — кандидаты
+              проходов по завершённым задачам, archived_tasks.py — выборка
+              «Архива», parent_summaries.py — идёт ли пересказ для
+              дочерней задачи, app_logs.py — удаление старого журнала
   clients/   — обёртки над Claude Agent SDK (claude_agent.py, в т. ч.
               OfflineAgentClient для задач без LLM-аккаунта и маршрут хода
               TurnRouter), GitLab API (gitlab.py), Jira REST API (jira.py),
@@ -289,14 +302,19 @@ deploy/
   install.sh — единственный скрипт установки по разделу 20.2 ТЗ;
               `--restore <каталог>` — перенос на новый сервер (раздел 20.4):
               дамп БД и архивы volume task_repos, user_files, log_archive,
-              claude_sessions, cliproxy_data, claude_accounts, sftp_host_keys;
+              claude_sessions, cliproxy_data, sftp_host_keys (архив
+              claude_accounts прежней версии — во временный том для
+              переноса истории сессий);
               `--update [--ref <sha>] [--wait-idle <мин>]` — обновление
               установленного сервера (раздел 20.6): флаг обслуживания,
               ожидание живых сессий, коммит из origin/main, пересборка всех
               образов (в т. ч. раннеров и tracker-session), дамп БД,
               `.deploy/previous_ref`, `DEPLOYED_AT` в `.env`, миграции,
-              перенос истории сессий; при откате — данные новой версии в
-              понятный прежней вид (статусы, ссылки на библиотеку); код
+              перенос истории сессий, после перезапуска сервисов —
+              удаление тома claude_accounts и висячих образов трекера
+              (без -a) и кеша сборки старше недели; при откате — данные
+              новой версии в понятный прежней вид (статусы, ссылки на
+              библиотеку, новые периодические задачи); код
               выхода 3 — отменено, сервер не изменён
   ci_deploy.sh — принудительная команда SSH-ключа развёртывания (раздел
               20.7): только `deploy <sha> [--force | --wait-idle <мин>]` и
@@ -333,7 +351,10 @@ alembic/
                  категории задач
                  task_categories и tasks.category_id, архив задач:
                  статус archived, tasks.finished_at/archived_at/
-                 archived_from_status, сроки архива и очистки у users);
+                 archived_from_status, сроки архива и очистки у users;
+                 сроки хранения: tasks.session_cleaned_at/
+                 artifacts_cleaned_at, users.artifacts_retention_days,
+                 system_settings.app_logs_retention_days);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
@@ -554,7 +575,9 @@ Postgres из `backend/tests/conftest.py`:
 5. **Очистка рабочей директории репозиториев — только в завершённом
    статусе** (`done`/`failed`/`archived`): кнопкой или по сроку автора
    `users.cleanup_repos_after_days` (`services/task_archive.py`, тот же код,
-   что у кнопки). Другое автоматическое удаление запрещено.
+   что у кнопки). Другое автоматическое удаление запрещено. История сессии
+   и артефакты удаляются автоматически только у задачи в `archived`
+   (`services/task_retention.py`); для всех сроков 0 — бессрочно.
 6. **Очистка контекста сессии (`clear_context`) запрещена**, пока существует
    хотя бы одна запись `node_logs` со статусом `running`/`awaiting_decision`.
 7. **Retry применяется только к нодам пайплайна** (`trigger_type = pipeline`)

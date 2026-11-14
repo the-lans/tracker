@@ -74,11 +74,13 @@ class TestTaskListWithoutArchive:
         current_user: User,
         db_session: AsyncSession,
     ) -> None:
-        archived = await _archived(db_session, current_user)
+        archived = await _archived(db_session, current_user, artifacts_cleaned_at=ARCHIVED)
 
         body = (await authed_client.get(f"/tasks/{archived.id}")).json()
 
         assert body["archived_from_status"] == TaskStatus.FAILED.value
+        assert datetime.fromisoformat(body["artifacts_cleaned_at"]) == ARCHIVED
+        assert body["session_cleaned_at"] is None
         assert datetime.fromisoformat(body["finished_at"]) == FINISHED
         assert datetime.fromisoformat(body["archived_at"]) == ARCHIVED
 
@@ -106,7 +108,11 @@ class TestArchiveEndpoint:
         assert row["title"] == "Отчёт"
         assert row["category_name"] == "Бэкенд"
         assert row["archived_from_status"] == TaskStatus.FAILED.value
-        assert row["repo_cleaned_at"] is None
+        assert (row["repo_cleaned_at"], row["session_cleaned_at"], row["artifacts_cleaned_at"]) == (
+            None,
+            None,
+            None,
+        )
         assert row["created_by"] == str(current_user.id)
 
     async def test_foreign_hidden_for_user(

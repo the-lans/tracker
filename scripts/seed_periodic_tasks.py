@@ -109,6 +109,28 @@ _SEED_TASKS: list[tuple[str, str, str, str, int | str | None]] = [
         _HOUR,
     ),
     (
+        "cleanup_archived_task_sessions",
+        "Удаление истории сессий архивных задач",
+        "Удаляет историю сессии Claude Code у задач, которые в «Архиве» дольше 180 дней",
+        "tasks.periodic.cleanup_archived_task_sessions",
+        _HOUR,
+    ),
+    (
+        "cleanup_archived_task_artifacts",
+        "Удаление артефактов архивных задач",
+        "Удаляет артефакты задач в «Архиве», завершённых раньше срока хранения автора "
+        "(настройка пользователя, по умолчанию 90 дней)",
+        "tasks.periodic.cleanup_archived_task_artifacts",
+        _HOUR,
+    ),
+    (
+        "purge_old_app_logs",
+        "Очистка журнала приложения",
+        "Удаляет записи app_logs старше срока из системных настроек (по умолчанию 30 дней)",
+        "tasks.periodic.purge_old_app_logs",
+        _DAY,
+    ),
+    (
         "detect_awaiting_input_timeout",
         "Таймаут ожидания ввода",
         "Повторно уведомляет автора задачи, ожидающей решения дольше порога",
@@ -146,7 +168,8 @@ _SEED_TASKS: list[tuple[str, str, str, str, int | str | None]] = [
     (
         "rotate_task_logs",
         "Ротация логов задач",
-        "Выгружает старые записи node_logs выполненных задач в архив и удаляет их из БД",
+        "Выгружает старые записи node_logs выполненных задач в архив и удаляет их из БД, "
+        "удаляет файлы архива логов старше 180 дней",
         "tasks.periodic.rotate_task_logs",
         _WEEK,
     ),

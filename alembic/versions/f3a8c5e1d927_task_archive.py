@@ -1,6 +1,6 @@
 """
 Архив задач (раздел 14.2): статус `archived`, момент завершения задачи,
-сроки архивации и очистки репозиториев у пользователя.
+сроки архивации и очистки репозиториев у пользователя (0 — бессрочно).
 
 Только добавление (раздел 20.6): прежняя версия новых столбцов не читает, а
 архивные задачи откат возвращает в их итоговый статус до перехода на прежний
@@ -40,13 +40,13 @@ def upgrade() -> None:
         "WHERE status IN ('done', 'failed') AND finished_at IS NULL"
     )
     op.execute(
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS archive_after_days integer DEFAULT 14 "
-        "CONSTRAINT ck_users_archive_after_days CHECK (archive_after_days BETWEEN 1 AND 3650)"
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS archive_after_days integer NOT NULL DEFAULT 14 "
+        "CONSTRAINT ck_users_archive_after_days CHECK (archive_after_days BETWEEN 0 AND 3650)"
     )
     op.execute(
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS cleanup_repos_after_days integer DEFAULT 30 "
-        "CONSTRAINT ck_users_cleanup_repos_after_days "
-        "CHECK (cleanup_repos_after_days BETWEEN 1 AND 3650)"
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS cleanup_repos_after_days integer NOT NULL "
+        "DEFAULT 30 CONSTRAINT ck_users_cleanup_repos_after_days "
+        "CHECK (cleanup_repos_after_days BETWEEN 0 AND 3650)"
     )
 
 

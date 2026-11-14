@@ -31,6 +31,7 @@ _SETTINGS = {
     "default_timeout_seconds": 900,
     "default_max_retries": 2,
     "default_retry_base_delay_seconds": 10,
+    "app_logs_retention_days": 30,
 }
 
 

@@ -620,6 +620,8 @@ class TestFinishedAt:
             finished_at=now,
             archived_at=now,
             archived_from_status=TaskStatus.DONE,
+            session_cleaned_at=now,
+            artifacts_cleaned_at=now,
         )
 
         updated = await transition_task_status(
@@ -629,8 +631,10 @@ class TestFinishedAt:
             to_status=to_status,
         )
 
-        assert (updated.finished_at, updated.archived_at, updated.archived_from_status) == (
-            None,
-            None,
-            None,
-        )
+        assert (
+            updated.finished_at,
+            updated.archived_at,
+            updated.archived_from_status,
+            updated.session_cleaned_at,
+            updated.artifacts_cleaned_at,
+        ) == (None, None, None, None, None)

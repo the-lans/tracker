@@ -154,16 +154,26 @@ def _queue_values(from_status: TaskStatus, to_status: TaskStatus) -> dict[str, o
     return {"ready_at": None} if from_status in QUEUE_STATUSES else {}
 
 
+_FINISHED_RUN_FIELDS = (
+    "finished_at",
+    "archived_at",
+    "archived_from_status",
+    "session_cleaned_at",
+    "artifacts_cleaned_at",
+)
+
+
 def _finish_values(from_status: TaskStatus, to_status: TaskStatus) -> dict[str, object]:
     """
     Раздел 3.1 `tasks.finished_at`: итог прогона ставит момент завершения,
     уход в архив его сохраняет, новый прогон (перезапуск, возврат в статус до
-    запуска) сбрасывает вместе с отметками архива.
+    запуска) сбрасывает вместе с отметками архива и удаления данных по сроку
+    хранения (раздел 6.4, 14.3): у нового прогона свой срок.
     """
     if to_status in FINAL_STATUSES:
         return {"finished_at": datetime.now(UTC)}
     if from_status in FINISHED_STATUSES and to_status not in FINISHED_STATUSES:
-        return {"finished_at": None, "archived_at": None, "archived_from_status": None}
+        return dict.fromkeys(_FINISHED_RUN_FIELDS)
     return {}
 
 

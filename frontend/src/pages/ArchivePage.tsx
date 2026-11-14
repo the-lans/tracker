@@ -10,6 +10,7 @@ import { Pagination } from "@/components/common/navigation/Pagination";
 import { ARCHIVE_PAGE_SIZE, useArchivedTasks } from "@/hooks/useArchivedTasks";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useProfile } from "@/hooks/useProfile";
+import { RETENTION_FOREVER } from "@/lib/types";
 import { pageCountOf, plural } from "@/lib/utils";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 
@@ -24,8 +25,8 @@ function pageFrom(params: URLSearchParams): number {
   return Number.isInteger(page) && page > 1 ? page : 1;
 }
 
-function emptyHint(archiveAfterDays: number | null | undefined): string {
-  if (archiveAfterDays === null) return "Автоархивация выключена — срок задаёт администратор.";
+function emptyHint(archiveAfterDays: number | undefined): string {
+  if (archiveAfterDays === RETENTION_FOREVER) return "Автоархивация выключена — срок задаёт администратор.";
   if (archiveAfterDays === undefined) return "Сюда попадают задачи в «Готово» и «Ошибка».";
   return `Задачи в «Готово» и «Ошибка» попадают сюда через ${archiveAfterDays} ${plural(archiveAfterDays, DAY_FORMS)} после завершения.`;
 }

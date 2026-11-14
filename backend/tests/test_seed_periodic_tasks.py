@@ -96,15 +96,35 @@ class TestBackupSchedules:
         assert {row.schedule_type for row in rows.values()} == {PeriodicScheduleType.CRONTAB}
         assert rows["backup_to_s3"].task_path == "tasks.periodic.backup_to_s3"
 
-    async def test_archive_tasks_hourly(self, seed: ModuleType) -> None:
-        """Раздел 14.2: архивация и очистка репозиториев проверяют сроки раз в час."""
-        names = ["archive_finished_tasks", "cleanup_finished_task_repositories"]
+    @pytest.mark.parametrize(
+        ("names", "interval_seconds"),
+        [
+            (
+                [
+                    "archive_finished_tasks",
+                    "cleanup_finished_task_repositories",
+                    "cleanup_archived_task_sessions",
+                    "cleanup_archived_task_artifacts",
+                ],
+                3600,
+            ),
+            (["purge_old_app_logs"], 86400),
+        ],
+        ids=["hourly", "daily"],
+    )
+    async def test_retention_tasks(
+        self,
+        seed: ModuleType,
+        names: list[str],
+        interval_seconds: int,
+    ) -> None:
+        """Разделы 14.2, 14.3, 17.2: сроки архивации и хранения данных проверяются по расписанию."""
         await seed._seed()
 
         rows = await _seeded_rows(names)
         assert {
             (row.name, row.interval_seconds, row.schedule_type, row.task_path) for row in rows
         } == {
-            (name, 3600, PeriodicScheduleType.INTERVAL, f"tasks.periodic.{name}")
+            (name, interval_seconds, PeriodicScheduleType.INTERVAL, f"tasks.periodic.{name}")
             for name in names
         }

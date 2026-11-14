@@ -24,8 +24,8 @@ from services.users import ensure_allowed_email_deletable
 from tasks.celery_app import wake_task_dispatcher
 
 router = APIRouter(tags=["admin-users"])
-# Раздел 14.2: сроки, которые можно выключить явным `null`.
-RETENTION_FIELDS = frozenset({"archive_after_days", "cleanup_repos_after_days"})
+# Раздел 14.2, 14.3: сроки хранения задач пользователя (0 — бессрочно).
+RETENTION_FIELDS = ("archive_after_days", "cleanup_repos_after_days", "artifacts_retention_days")
 
 
 async def _get_user_or_404(db_session: AsyncSession, user_id: uuid.UUID) -> User:
@@ -83,8 +83,10 @@ async def update_user(
     )
     if body.max_parallel_tasks is not None:
         user.max_parallel_tasks = body.max_parallel_tasks
-    for field in RETENTION_FIELDS & body.model_fields_set:
-        setattr(user, field, getattr(body, field))
+    for field in RETENTION_FIELDS:
+        days = getattr(body, field)
+        if days is not None:
+            setattr(user, field, days)
     try:
         await db_session.commit()
     except sa.exc.IntegrityError as exc:

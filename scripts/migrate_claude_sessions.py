@@ -1,8 +1,10 @@
 """Перенос истории сессий задач из каталогов прежних LLM-аккаунтов (раздел 20.6 ТЗ).
 
-Запуск — из `deploy/install.sh --update` после миграций БД:
+Запуск — из `deploy/install.sh --update`/`--restore` после миграций БД, с
+томом каталогов аккаунтов прежней версии (после переноса том удаляется):
 
-    docker compose run --rm backend python /app/scripts/migrate_claude_sessions.py
+    docker compose run --rm -v <проект>_claude_accounts:/data/claude-accounts:ro \
+        backend python /app/scripts/migrate_claude_sessions.py
 
 Идемпотентен: уже перенесённые файлы не перезаписываются
 (`services/session_history_migration.py`).

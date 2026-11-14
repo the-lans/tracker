@@ -6,15 +6,16 @@
 #   deploy/install.sh --restore <каталог> — перенос на новый сервер (раздел
 #     20.4, docs/migration.md): в каталоге .env, дамп БД *.sql.gz,
 #     task_repos.tar.gz, user_files.tar.gz, log_archive.tar.gz и необязательные
-#     claude_sessions.tar.gz, cliproxy_data.tar.gz, claude_accounts.tar.gz,
-#     sftp_host_keys.tar.gz со старого сервера; --ref <коммит> — версия кода,
+#     claude_sessions.tar.gz, cliproxy_data.tar.gz, sftp_host_keys.tar.gz со
+#     старого сервера (и claude_accounts.tar.gz копии прежней версии); --ref <коммит> — версия кода,
 #     на которой сняты архивы (restore.sh копии в S3 передаёт коммит из
 #     manifest.json), без него — вершина origin/main
 #   deploy/install.sh --update [--ref <коммит>] [--wait-idle <минуты>] —
 #     обновление установленного сервера (раздел 20.6): флаг обслуживания,
 #     ожидание живых сессий, переход на коммит из origin/main, пересборка
 #     всех образов (в том числе раннеров и tracker-session), дамп БД,
-#     миграции, перенос истории сессий и перезапуск сервисов
+#     миграции, перенос истории сессий, перезапуск сервисов и удаление
+#     висячих образов трекера
 
 set -euo pipefail
 
@@ -72,6 +73,10 @@ MONITORING_PERIODIC_TASKS="'measure_volume_usage'"
 ARCHIVE_MIGRATION="alembic/versions/f3a8c5e1d927_task_archive.py"
 ARCHIVE_RESET="UPDATE tasks SET status = archived_from_status WHERE status::text = 'archived'"
 ARCHIVE_PERIODIC_TASKS="'archive_finished_tasks','cleanup_finished_task_repositories'"
+# Раздел 20.6: периодические задачи сроков хранения данных, которых прежний
+# worker не знает.
+RETENTION_MIGRATION="alembic/versions/b7d4e2a9c615_data_retention.py"
+RETENTION_PERIODIC_TASKS="'cleanup_archived_task_sessions','cleanup_archived_task_artifacts','purge_old_app_logs'"
 GUIDE_URL_RESET="UPDATE nodes SET prompt_template = regexp_replace(prompt_template, '[{][{][[:space:]]*node[.]guide_url[[:space:]]*[}][}]', coalesce(guide_url, ''), 'g') WHERE prompt_template LIKE '%node.guide_url%'"
 # Флаг обслуживания (services/maintenance.py::MAINTENANCE_KEY): запуск задач
 # отвечает 503, воркер не берёт задачи из queued. TTL — срок ожидания плюс
@@ -100,11 +105,20 @@ RESTORE_OPTIONAL_ARCHIVES=(
   "claude_sessions:/data/claude-sessions"
   # Учётки прокси с токенами OAuth; volume подключён только к прокси.
   "cliproxy_data:/data:cliproxy-init"
-  # Каталоги аккаунтов прежней версии — источник переноса истории сессий.
-  "claude_accounts:/data/claude-accounts"
   # У backend этот volume только для чтения — распаковывает сам шлюз.
   "sftp_host_keys:/data/sftp-host-keys:sftp"
 )
+
+# Каталоги LLM-аккаунтов прежних версий — источник переноса истории сессий
+# (раздел 20.6). Новые копии их не содержат; архив старой копии
+# распаковывается во временный том, после переноса том удаляется.
+LEGACY_ACCOUNTS_VOLUME_KEY="claude_accounts"
+LEGACY_ACCOUNTS_MOUNT="/data/claude-accounts"
+# Раздел 20.6: после обновления удаляются только висячие образы трекера (без
+# -a: образ, на котором есть контейнер, Docker не удаляет — сессия и
+# script-нода на прежнем образе его сохраняют) и кеш сборки старше недели.
+RUNNER_IMAGE_LABEL="tracker.image=runner"
+BUILD_CACHE_KEEP="168h"
 
 log() { echo "[install.sh] $*"; }
 
@@ -456,11 +470,11 @@ step_build_images() {
   # worker'ом через docker.sock (раздел 11.4, 19.3), а не как долгоживущий
   # сервис; имена образов обязаны совпадать с
   # `services/nodes/script.py::DEFAULT_RUNNER_IMAGES`.
-  docker build -t tracker-runner-python:latest "${INSTALL_DIR}/runners/tracker-runner-python"
-  docker build -t tracker-runner-bash:latest "${INSTALL_DIR}/runners/tracker-runner-bash"
+  docker build --label "${RUNNER_IMAGE_LABEL}" -t tracker-runner-python:latest "${INSTALL_DIR}/runners/tracker-runner-python"
+  docker build --label "${RUNNER_IMAGE_LABEL}" -t tracker-runner-bash:latest "${INSTALL_DIR}/runners/tracker-runner-bash"
   # Контейнер сессии — процесс Claude Code CLI задачи (раздел 19.3); имя —
   # `services/session_container.py::DEFAULT_SESSION_IMAGE`.
-  docker build -t tracker-session:latest "${INSTALL_DIR}/runners/tracker-session"
+  docker build --label "${RUNNER_IMAGE_LABEL}" -t tracker-session:latest "${INSTALL_DIR}/runners/tracker-session"
 }
 
 # Шаг 6: поднятие инфраструктурных сервисов первыми, с healthcheck
@@ -521,12 +535,60 @@ step_final_instructions() {
   log "LLM-аккаунты: пользователь заводит аккаунт в разделе «LLM-аккаунты» и входит в провайдера по ссылке из диалога входа — консоль сервера для этого не нужна"
 }
 
+# Имя compose-проекта — первая строка `docker compose config` (`name: …`).
+_compose_project() {
+  { ( cd "${INSTALL_DIR}" && docker compose config 2>/dev/null ) || true; } | sed -n '1s/^name: //p'
+}
+
+# Том каталогов прежних LLM-аккаунтов, если он есть: compose его больше не
+# объявляет, поэтому ищется по имени `<проект>_claude_accounts`.
+_legacy_accounts_volume() {
+  local name
+  name="$(_compose_project)_${LEGACY_ACCOUNTS_VOLUME_KEY}"
+  docker volume ls -q --filter "name=^${name}$" | grep -x "${name}" || true
+}
+
 # Перенос истории сессий из каталогов аккаунтов прежней версии (раздел
-# 20.6); идемпотентен, на сервере без них ничего не делает.
+# 20.6); идемпотентен. Тома нет — переносить нечего. Сбой переноса
+# прерывает скрипт: том остаётся и не удаляется.
 step_migrate_sessions() {
-  log "Перенос истории сессий задач в их каталоги"
+  local volume
+  volume="$(_legacy_accounts_volume)"
+  if [ -z "${volume}" ]; then
+    log "Каталогов LLM-аккаунтов прежней версии нет — перенос истории сессий не нужен"
+    return 0
+  fi
+  log "Перенос истории сессий задач из тома ${volume} в их каталоги"
   ( cd "${INSTALL_DIR}" \
-    && docker compose run --rm backend python /app/scripts/migrate_claude_sessions.py )
+    && docker compose run --rm -v "${volume}:${LEGACY_ACCOUNTS_MOUNT}:ro" \
+      backend python /app/scripts/migrate_claude_sessions.py )
+}
+
+# После переноса и перезапуска сервисов: контейнеры пересозданы без этого
+# тома. Не удалось (том ещё занят) — повторит следующее обновление.
+step_remove_legacy_accounts_volume() {
+  local volume
+  volume="$(_legacy_accounts_volume)"
+  [ -n "${volume}" ] || return 0
+  log "Удаление тома ${volume}: история сессий перенесена"
+  docker volume rm "${volume}" >/dev/null \
+    || log "Предупреждение: том ${volume} не удалён — повтор при следующем обновлении"
+}
+
+# Висячие образы трекера и старый кеш сборки (раздел 20.6); сбой не роняет
+# уже завершённое обновление.
+step_prune_docker() {
+  local project
+  project="$(_compose_project)"
+  log "Обновление: удаление висячих образов трекера и кеша сборки старше ${BUILD_CACHE_KEEP}"
+  if [ -n "${project}" ]; then
+    docker image prune -f --filter "label=com.docker.compose.project=${project}" >/dev/null \
+      || log "Предупреждение: не удалось удалить висячие образы сервисов"
+  fi
+  docker image prune -f --filter "label=${RUNNER_IMAGE_LABEL}" >/dev/null \
+    || log "Предупреждение: не удалось удалить висячие образы раннеров и сессии"
+  docker builder prune -f --filter "until=${BUILD_CACHE_KEEP}" >/dev/null \
+    || log "Предупреждение: не удалось очистить кеш сборки"
 }
 
 # --- Восстановление на новом сервере (раздел 20.4, docs/migration.md) ---
@@ -584,6 +646,20 @@ step_restore_database() {
     && docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"')
 }
 
+# Архив каталогов аккаунтов из копии прежней версии: том compose больше не
+# объявляет — он создаётся под тем же именем, что у прежней версии, и его
+# находит перенос истории сессий (step_migrate_sessions).
+step_restore_legacy_accounts() {
+  local archive="${LEGACY_ACCOUNTS_VOLUME_KEY}.tar.gz" volume
+  [ -f "${RESTORE_DIR}/${archive}" ] || return 0
+  volume="$(_compose_project)_${LEGACY_ACCOUNTS_VOLUME_KEY}"
+  log "Восстановление: ${archive} -> том ${volume} (для переноса истории сессий)"
+  docker volume create "${volume}" >/dev/null
+  (cd "${INSTALL_DIR}" && docker compose run --rm --no-deps \
+    -v "${volume}:${LEGACY_ACCOUNTS_MOUNT}" -v "${RESTORE_DIR}:/restore:ro" --entrypoint sh backend \
+    -c "find '${LEGACY_ACCOUNTS_MOUNT}' -mindepth 1 -delete && tar xzf '/restore/${archive}' -C '${LEGACY_ACCOUNTS_MOUNT}'")
+}
+
 # Тома монтирует сам сервис — имя compose-проекта знать не нужно.
 step_restore_volumes() {
   local mapping archive target service rest
@@ -630,10 +706,12 @@ run_restore() {
   step_start_infra
   step_restore_database
   step_restore_volumes
+  step_restore_legacy_accounts
   step_run_migrations
   _seed_periodic_tasks
   step_migrate_sessions
   step_start_app_services
+  step_remove_legacy_accounts_volume
   step_wait_tls
   log "Восстановление завершено: откройте https://<DOMAIN> и войдите прежним аккаунтом администратора"
 }
@@ -698,9 +776,9 @@ step_wait_idle() {
 # прежний код не прочитал бы задачу с незнакомым статусом. Ждущие лимита
 # задачи уходят в failed (точка перезапуска — нода, которая ждала) или
 # обратно в refining; статусы до запуска — в new, а периодические задачи
-# воркера очереди и замера диска, которых прежний worker не знает,
-# удаляются; ноды со ссылкой на библиотеку получают копию её промта; архивные
-# задачи возвращаются в done/failed. Одной
+# воркера очереди, замера диска и сроков хранения данных, которых прежний
+# worker не знает, удаляются; ноды со ссылкой на библиотеку получают копию её
+# промта; архивные задачи возвращаются в done/failed. Одной
 # транзакцией, после checkout: если checkout не удался, БД не тронута. Сбой
 # здесь возвращает код на прежний коммит — сервер не изменён.
 _reset_unknown_task_statuses() {
@@ -721,7 +799,11 @@ _reset_unknown_task_statuses() {
   fi
   if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${ARCHIVE_MIGRATION}" 2>/dev/null; then
     log "Обновление: у версии ${commit} нет архива задач — архивные задачи возвращаются в done или failed"
-    query+="${ARCHIVE_RESET}; DELETE FROM periodic_tasks WHERE name IN (${ARCHIVE_PERIODIC_TASKS})"
+    query+="${ARCHIVE_RESET}; DELETE FROM periodic_tasks WHERE name IN (${ARCHIVE_PERIODIC_TASKS}); "
+  fi
+  if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${RETENTION_MIGRATION}" 2>/dev/null; then
+    log "Обновление: у версии ${commit} нет сроков хранения данных — их периодические задачи удаляются"
+    query+="DELETE FROM periodic_tasks WHERE name IN (${RETENTION_PERIODIC_TASKS})"
   fi
   [ -n "${query}" ] || return 0
   ( cd "${INSTALL_DIR}" \
@@ -792,6 +874,8 @@ run_update() {
   _seed_periodic_tasks
   step_migrate_sessions
   step_start_app_services
+  step_remove_legacy_accounts_volume
+  step_prune_docker
   _clear_maintenance_flag
   log "Обновление завершено: $(git -C "${INSTALL_DIR}" rev-parse HEAD)"
 }

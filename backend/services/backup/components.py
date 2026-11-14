@@ -49,7 +49,6 @@ COMPONENTS: tuple[Component, ...] = (
     Component("claude_sessions", required=False, excludes=_CACHE_EXCLUDES),
     # Учётки LLM-прокси с токенами OAuth.
     Component("cliproxy_data", required=False),
-    Component("claude_accounts", required=False, excludes=_CACHE_EXCLUDES),
     # Иначе после восстановления сменится отпечаток SFTP-сервера.
     Component("sftp_host_keys", required=False),
 )

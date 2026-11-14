@@ -261,3 +261,10 @@ const EVENT_TYPE_TONE: Record<string, BadgeTone> = {
 export function eventTone(eventType: string): BadgeTone {
   return EVENT_TYPE_TONE[eventType] ?? "info";
 }
+
+/** Разделы 6.4, 14.2, 14.3: что у завершённой задачи уже удалено — вручную или по сроку хранения. */
+export const CLEANED_DATA_LABEL = {
+  repo_cleaned_at: "Репозитории очищены",
+  session_cleaned_at: "История сессии удалена",
+  artifacts_cleaned_at: "Артефакты удалены",
+} as const;

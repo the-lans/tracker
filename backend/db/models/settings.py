@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
+from db.models.users import MAX_RETENTION_DAYS, MIN_RETENTION_DAYS
 
 # Единственная строка настроек инстанса.
 SYSTEM_SETTINGS_ROW_ID = 1
@@ -19,6 +20,8 @@ DEFAULT_BACKUP_FOLDER = "Tracker"
 DEFAULT_BACKUP_RETENTION_COUNT = 7
 MIN_BACKUP_RETENTION_COUNT = 1
 MAX_BACKUP_RETENTION_COUNT = 365
+# Раздел 17.2: сколько дней хранится журнал `app_logs`; 0 — бессрочно.
+DEFAULT_APP_LOGS_RETENTION_DAYS = 30
 
 
 class SystemSettings(Base):
@@ -29,7 +32,7 @@ class SystemSettings(Base):
     Jira (раздел 15.6: сервер, к которому обращается импорт задач, выбирает
     администратор, личный токен — в профиле пользователя).
     Резервное копирование в S3 (раздел 20.4): хранилище, папка, число копий
-    и пароль шифрования.
+    и пароль шифрования. Срок хранения журнала `app_logs` (раздел 17.2).
 
     Одна строка на инстанс: `id` всегда равен `SYSTEM_SETTINGS_ROW_ID`.
     """
@@ -41,6 +44,10 @@ class SystemSettings(Base):
             "backup_retention_count BETWEEN "
             f"{MIN_BACKUP_RETENTION_COUNT} AND {MAX_BACKUP_RETENTION_COUNT}",
             name="ck_system_settings_backup_retention_count",
+        ),
+        sa.CheckConstraint(
+            f"app_logs_retention_days BETWEEN {MIN_RETENTION_DAYS} AND {MAX_RETENTION_DAYS}",
+            name="ck_system_settings_app_logs_retention_days",
         ),
     )
 
@@ -89,3 +96,8 @@ class SystemSettings(Base):
         server_default=str(DEFAULT_BACKUP_RETENTION_COUNT),
     )
     backup_passphrase_encrypted: Mapped[str | None] = mapped_column(sa.Text)
+    app_logs_retention_days: Mapped[int] = mapped_column(
+        sa.Integer,
+        default=DEFAULT_APP_LOGS_RETENTION_DAYS,
+        server_default=str(DEFAULT_APP_LOGS_RETENTION_DAYS),
+    )

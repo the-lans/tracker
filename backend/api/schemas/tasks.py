@@ -130,6 +130,9 @@ class TaskResponse(BaseModel):
     finished_at: datetime | None = None
     archived_at: datetime | None = None
     archived_from_status: TaskStatus | None = None
+    # Раздел 6.4, 14.3: история сессии и артефакты удалены по сроку хранения.
+    session_cleaned_at: datetime | None = None
+    artifacts_cleaned_at: datetime | None = None
     queue_priority: int
     ready_at: datetime | None
     occupies_slot: bool
@@ -346,6 +349,8 @@ class ArchivedTaskResponse(BaseModel):
     finished_at: datetime | None
     archived_at: datetime | None
     repo_cleaned_at: datetime | None
+    session_cleaned_at: datetime | None
+    artifacts_cleaned_at: datetime | None
     created_by: uuid.UUID
 
 

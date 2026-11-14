@@ -111,6 +111,10 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     archived_from_status: Mapped[TaskStatus | None] = mapped_column(
         pg_enum(TaskStatus, name="task_status"),
     )
+    # Раздел 6.4, 14.3: история сессии и артефакты архивной задачи удалены по
+    # сроку хранения; новый прогон отметки сбрасывает.
+    session_cleaned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    artifacts_cleaned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     # Раздел 14.4: очередь автора — `ready`/`night_worker` по приоритету, затем
     # по времени постановки; слот ручного запуска и чата — по `occupies_slot`.
     queue_priority: Mapped[int] = mapped_column(

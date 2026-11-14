@@ -6,9 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useSystemSettings, useUpdateSystemSettings } from "@/hooks/useAdmin";
 import { errorMessage } from "@/lib/errors";
-import type { SystemSettings } from "@/lib/types";
+import { parseIntegerInRange } from "@/lib/integerInput";
+import { MAX_RETENTION_DAYS, RETENTION_FOREVER, type SystemSettings } from "@/lib/types";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
+import { AppLogsRetentionField } from "@/components/admin/AppLogsRetentionField";
 import { IntegrationsCard } from "@/components/admin/IntegrationsCard";
 import { BackupSettingsCard } from "@/components/admin/BackupSettingsCard";
 
@@ -43,10 +45,14 @@ function SettingsForm({ initial }: { initial: SystemSettings }) {
   const update = useUpdateSystemSettings();
   const nightWindowEmpty =
     clockTime(values.night_window_start) === clockTime(values.night_window_end);
+  // Черновик строкой: пустое поле не должно молча стать 0 — «бессрочно».
+  const [appLogsDraft, setAppLogsDraft] = useState(String(initial.app_logs_retention_days));
+  const appLogsDays = parseIntegerInRange(appLogsDraft, RETENTION_FOREVER, MAX_RETENTION_DAYS);
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    update.mutate(values, {
+    if (!appLogsDays.valid) return;
+    update.mutate({ ...values, app_logs_retention_days: appLogsDays.value }, {
       onSuccess: () => toast.success("Настройки сохранены"),
       onError: (error) =>
         toast.error(
@@ -101,8 +107,9 @@ function SettingsForm({ initial }: { initial: SystemSettings }) {
             : "В начале окна ночной воркер запускает задачи «Ночной воркер»; окно может переходить через полночь. Начатые ночью задачи после конца окна не прерываются."}
         </div>
       </fieldset>
+      <AppLogsRetentionField draft={appLogsDraft} parsed={appLogsDays} onChange={setAppLogsDraft} />
       <div>
-        <Button type="submit" disabled={update.isPending || nightWindowEmpty}>
+        <Button type="submit" disabled={update.isPending || nightWindowEmpty || !appLogsDays.valid}>
           Сохранить
         </Button>
       </div>
@@ -110,7 +117,7 @@ function SettingsForm({ initial }: { initial: SystemSettings }) {
   );
 }
 
-/** Раздел 15.5: значения по умолчанию для новых нод (уже созданные не меняются), ночное окно, интеграции и бэкап в S3. */
+/** Раздел 15.5: значения по умолчанию для новых нод (уже созданные не меняются), ночное окно, срок журнала, интеграции и бэкап в S3. */
 export function SystemSettingsPanel() {
   const { data: settings, isLoading } = useSystemSettings();
 

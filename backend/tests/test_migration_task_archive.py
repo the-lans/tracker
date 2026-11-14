@@ -132,7 +132,7 @@ class TestTaskArchiveMigration:
         finally:
             await engine.dispose()
 
-    @pytest.mark.parametrize("days", [0, 3651])
+    @pytest.mark.parametrize("days", [-1, 3651, None], ids=["negative", "too_long", "null"])
     async def test_days_out_of_range_rejected(
         self,
         scratch_database: str,
@@ -149,5 +149,25 @@ class TestTaskArchiveMigration:
                             sa.text(f"UPDATE users SET {column} = :days WHERE id = :id"),
                             {"days": days, "id": user_id},
                         )
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.parametrize("days", [0, 3650])
+    async def test_days_boundaries_accepted(
+        self,
+        scratch_database: str,
+        engine: AsyncEngine,
+        days: int,
+    ) -> None:
+        """0 — срок выключен, задачи хранятся бессрочно."""
+        try:
+            run_alembic(scratch_database, "upgrade", _REVISION)
+            user_id, _ = await _seed(engine, [])
+            async with engine.begin() as connection:
+                for column in _USER_COLUMNS:
+                    await connection.execute(
+                        sa.text(f"UPDATE users SET {column} = :days WHERE id = :id"),
+                        {"days": days, "id": user_id},
+                    )
         finally:
             await engine.dispose()

@@ -18,6 +18,8 @@ function makeArchivedTask(overrides: Partial<ArchivedTask> = {}): ArchivedTask {
     finished_at: "2026-03-01T10:00:00Z",
     archived_at: "2026-03-15T10:00:00Z",
     repo_cleaned_at: null,
+    session_cleaned_at: null,
+    artifacts_cleaned_at: null,
     created_by: "u1",
     ...overrides,
   };
@@ -30,7 +32,7 @@ function page(items: ArchivedTask[], total = items.length, pageNumber = 1): Arch
 function renderArchive(
   api: MockedApi,
   response: MockResponse = page([makeArchivedTask()]),
-  { path = "/archive", archiveAfterDays = 14 as number | null } = {},
+  { path = "/archive", archiveAfterDays = 14 } = {},
 ) {
   api.respond("GET /tasks/archive", response);
   api.respond("GET /profile", makeUser({ archive_after_days: archiveAfterDays }));
@@ -50,6 +52,18 @@ describe("ArchivePage", () => {
     expect(within(row).getByText("Бэкенд")).toBeInTheDocument();
     expect(within(row).getByText("Репозитории очищены")).toBeInTheDocument();
     expect(screen.getByText("1 задача")).toBeInTheDocument();
+  });
+
+  test.for([
+    { field: "repo_cleaned_at", label: "Репозитории очищены" },
+    { field: "session_cleaned_at", label: "История сессии удалена" },
+    { field: "artifacts_cleaned_at", label: "Артефакты удалены" },
+  ] as const)("$field → «$label», остальных отметок нет", async ({ field, label }, { api }) => {
+    renderArchive(api, page([makeArchivedTask({ [field]: "2026-09-01T00:00:00Z" })]));
+
+    const row = await screen.findByRole("link", { name: "RR-100 · Отчёт по продажам" });
+    const marks = ["Репозитории очищены", "История сессии удалена", "Артефакты удалены"];
+    expect(marks.filter((mark) => within(row).queryByText(mark) !== null)).toEqual([label]);
   });
 
   test.for([
@@ -125,7 +139,7 @@ describe("ArchivePage", () => {
   test.for([
     { days: 14, path: "/archive", title: "В архиве пусто", hint: "через 14 дней после завершения" },
     { days: 1, path: "/archive", title: "В архиве пусто", hint: "через 1 день после завершения" },
-    { days: null, path: "/archive", title: "В архиве пусто", hint: "Автоархивация выключена" },
+    { days: 0, path: "/archive", title: "В архиве пусто", hint: "Автоархивация выключена" },
     { days: 14, path: "/archive?q=нет", title: "Ничего не найдено", hint: "Измените поиск или период." },
   ])("пусто ($path, N = $days) → «$title»", async ({ days, path, title, hint }, { api }) => {
     renderArchive(api, page([]), { path, archiveAfterDays: days });

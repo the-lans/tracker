@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  isForever,
   parseSetting,
   settingValue,
   type UserNumberSetting,
@@ -10,7 +11,7 @@ import { useUpdateUser } from "@/hooks/useAdmin";
 import { toastError } from "@/lib/errors";
 import type { User } from "@/lib/types";
 
-const OFF_PLACEHOLDER = "выкл.";
+const FOREVER_HINT = "бессрочно";
 
 /**
  * Раздел 15.5: числовая настройка пользователя в строке администратора;
@@ -20,10 +21,11 @@ export function UserNumberSettingEditor({ user, setting }: { user: User; setting
   const updateUser = useUpdateUser(user.id);
   const [draft, setDraft] = useState<string | null>(null);
   const current = settingValue(user, setting);
-  const shown = draft ?? (current === null ? "" : String(current));
+  const shown = draft ?? String(current);
   const parsed = parseSetting(shown, setting);
   const inputId = `${setting.field}-${user.id}`;
-  const range = `От ${setting.min} до ${setting.max}${setting.nullable ? "; пусто — выключено" : ""}`;
+  const range = `От ${setting.min} до ${setting.max}${setting.zeroMeansForever ? "; 0 — бессрочно" : ""}`;
+  const forever = parsed.valid && isForever(parsed.value, setting);
 
   function save() {
     if (draft === null) return;
@@ -53,7 +55,6 @@ export function UserNumberSettingEditor({ user, setting }: { user: User; setting
         max={setting.max}
         className="h-8 w-20"
         value={shown}
-        placeholder={setting.nullable ? OFF_PLACEHOLDER : undefined}
         disabled={updateUser.isPending}
         aria-label={`${setting.label} ${user.email}`}
         aria-invalid={!parsed.valid}
@@ -65,6 +66,7 @@ export function UserNumberSettingEditor({ user, setting }: { user: User; setting
           if (event.key === "Escape") setDraft(null);
         }}
       />
+      {forever && <span>{FOREVER_HINT}</span>}
     </div>
   );
 }

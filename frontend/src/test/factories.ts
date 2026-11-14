@@ -14,6 +14,7 @@ import {
   UserRole,
   type BackupRun,
   type BackupSettings,
+  type SystemSettings,
   type CurrentUser,
   type LlmAccount,
   type LlmProvider,
@@ -196,6 +197,7 @@ export function makeUser(overrides: Partial<User> = {}): User {
     max_parallel_tasks: 3,
     archive_after_days: 14,
     cleanup_repos_after_days: 30,
+    artifacts_retention_days: 90,
     ...overrides,
   };
 }
@@ -288,6 +290,18 @@ export function makeBackupRun(overrides: Partial<BackupRun> = {}): BackupRun {
 }
 
 /** Настройки бэкапа в S3: всё заполнено, секреты сохранены, запусков ещё не было. */
+export function makeSystemSettings(overrides: Partial<SystemSettings> = {}): SystemSettings {
+  return {
+    default_timeout_seconds: 900,
+    default_max_retries: 2,
+    default_retry_base_delay_seconds: 10,
+    night_window_start: "03:15:00",
+    night_window_end: "07:00:00",
+    app_logs_retention_days: 30,
+    ...overrides,
+  };
+}
+
 export function makeBackupSettings(overrides: Partial<BackupSettings> = {}): BackupSettings {
   return {
     enabled: true,

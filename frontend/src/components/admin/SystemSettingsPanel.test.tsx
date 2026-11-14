@@ -2,17 +2,11 @@ import { fireEvent, screen, within } from "@testing-library/react";
 import { describe, expect } from "vitest";
 import { SystemSettingsPanel } from "@/components/admin/SystemSettingsPanel";
 import type { MockedApi } from "@/test/apiMock";
-import { makeBackupSettings } from "@/test/factories";
+import { makeBackupSettings, makeSystemSettings } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
-const SETTINGS = {
-  default_timeout_seconds: 900,
-  default_max_retries: 2,
-  default_retry_base_delay_seconds: 10,
-  night_window_start: "03:15:00",
-  night_window_end: "07:00:00",
-};
+const SETTINGS = makeSystemSettings();
 
 async function renderPanel(api: MockedApi) {
   api.respond("GET /system-settings", SETTINGS);
@@ -56,5 +50,37 @@ describe("SystemSettingsPanel: ночное окно", () => {
 
     expect(screen.getByText("Начало и конец окна должны различаться")).toBeInTheDocument();
     expect(saveButton()).toBeDisabled();
+  });
+});
+
+describe("SystemSettingsPanel: хранение данных", () => {
+  test.for([
+    { input: "60", saved: 60, hint: "Записи журнала старше срока удаляются раз в день" },
+    { input: "0", saved: 0, hint: "Журнал хранится бессрочно." },
+  ])("срок журнала «$input» → $saved", async ({ input, saved, hint }, { api }) => {
+    const { user } = await renderPanel(api);
+    const field = screen.getByLabelText("Журнал приложения, дн.");
+
+    await user.clear(field);
+    await user.type(field, input);
+    await user.click(saveButton());
+
+    expect(screen.getByText(new RegExp(hint))).toBeInTheDocument();
+    expect(api.mutations()).toEqual([
+      { method: "PUT", path: "/system-settings", body: { ...SETTINGS, app_logs_retention_days: saved } },
+    ]);
+  });
+
+  test.for(["", "2.5", "3651"])("срок журнала «%s» не сохраняется", async (input, { api }) => {
+    const { user } = await renderPanel(api);
+    const field = screen.getByLabelText("Журнал приложения, дн.");
+
+    await user.clear(field);
+    if (input) await user.type(field, input);
+
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("Целое число от 0 до 3650")).toBeInTheDocument();
+    expect(saveButton()).toBeDisabled();
+    expect(api.mutations()).toEqual([]);
   });
 });

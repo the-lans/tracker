@@ -46,10 +46,11 @@ class UserResponse(BaseModel):
     llm_compact_on_switch: bool
     # Раздел 14.4: лимит параллельных задач — задаёт администратор.
     max_parallel_tasks: int
-    # Раздел 14.2: через сколько дней после завершения — архив и очистка
-    # репозиториев; NULL — выключено.
-    archive_after_days: int | None = None
-    cleanup_repos_after_days: int | None = None
+    # Раздел 14.2, 14.3: через сколько дней после завершения — архив, очистка
+    # репозиториев и удаление артефактов архивной задачи; 0 — бессрочно.
+    archive_after_days: int
+    cleanup_repos_after_days: int
+    artifacts_retention_days: int
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -129,13 +130,18 @@ class UserUpdateRequest(BaseModel):
         ge=MIN_MAX_PARALLEL_TASKS,
         le=MAX_MAX_PARALLEL_TASKS,
     )
-    # Раздел 14.2: явный `null` выключает срок, отсутствие поля его не меняет.
+    # Раздел 14.2, 14.3: 0 выключает срок, отсутствие поля его не меняет.
     archive_after_days: int | None = Field(
         default=None,
         ge=MIN_RETENTION_DAYS,
         le=MAX_RETENTION_DAYS,
     )
     cleanup_repos_after_days: int | None = Field(
+        default=None,
+        ge=MIN_RETENTION_DAYS,
+        le=MAX_RETENTION_DAYS,
+    )
+    artifacts_retention_days: int | None = Field(
         default=None,
         ge=MIN_RETENTION_DAYS,
         le=MAX_RETENTION_DAYS,

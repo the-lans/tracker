@@ -49,6 +49,8 @@ class SystemSettingsValues:
     # Раздел 14.4: ночное окно по московскому времени, общее для всех.
     night_window_start: time
     night_window_end: time
+    # Раздел 17.2: срок хранения журнала `app_logs`.
+    app_logs_retention_days: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +96,7 @@ async def update_system_settings(
     settings.default_timeout_seconds = values.default_timeout_seconds
     settings.default_max_retries = values.default_max_retries
     settings.default_retry_base_delay_seconds = values.default_retry_base_delay_seconds
+    settings.app_logs_retention_days = values.app_logs_retention_days
     await db_session.commit()
     logger.info("system_settings_updated")
     return settings

@@ -236,11 +236,18 @@ export interface User {
   llm_compact_on_switch: boolean;
   /** Раздел 14.4: лимит параллельных задач, задаёт администратор (1–50). */
   max_parallel_tasks: number;
-  /** Раздел 14.2: через сколько дней после завершения задача уходит в архив; null — никогда. */
-  archive_after_days: number | null;
-  /** Раздел 14.2: через сколько дней после завершения очищаются репозитории; null — никогда. */
-  cleanup_repos_after_days: number | null;
+  /** Раздел 14.2: через сколько дней после завершения задача уходит в архив; 0 — никогда. */
+  archive_after_days: number;
+  /** Раздел 14.2: через сколько дней после завершения очищаются репозитории; 0 — никогда. */
+  cleanup_repos_after_days: number;
+  /** Раздел 14.3: через сколько дней после завершения удаляются артефакты архивной задачи; 0 — никогда. */
+  artifacts_retention_days: number;
 }
+
+/** Разделы 14.2, 14.3, 17.2: срок хранения выключен — данные хранятся бессрочно. */
+export const RETENTION_FOREVER = 0;
+/** Верхняя граница сроков хранения — как `MAX_RETENTION_DAYS` backend. */
+export const MAX_RETENTION_DAYS = 3650;
 
 export interface LlmThresholdsUpdate {
   five_hour_pct: number;
@@ -298,9 +305,10 @@ export interface UserUpdateRequest {
   is_active?: boolean | null;
   os_username?: string | null;
   max_parallel_tasks?: number | null;
-  /** `null` — срок выключен; поле не передано — не меняется. */
-  archive_after_days?: number | null;
-  cleanup_repos_after_days?: number | null;
+  /** 0 — срок выключен; поле не передано — не меняется. */
+  archive_after_days?: number;
+  cleanup_repos_after_days?: number;
+  artifacts_retention_days?: number;
 }
 
 export interface AllowedEmail {
@@ -342,6 +350,9 @@ export interface Task {
   archived_at?: string | null;
   /** Итоговый статус задачи в архиве — `done` или `failed`. */
   archived_from_status?: TaskStatus | null;
+  /** Раздел 6.4, 14.3: история сессии и артефакты архивной задачи удалены по сроку хранения. */
+  session_cleaned_at?: string | null;
+  artifacts_cleaned_at?: string | null;
   /** Раздел 14.4: больше — раньше в очереди автора. */
   queue_priority: number;
   /** Когда задача встала в `ready`/`night_worker`. */
@@ -960,6 +971,8 @@ export interface SystemSettings {
   /** Раздел 14.4: ночное окно по МСК, «ЧЧ:ММ:СС». */
   night_window_start: string;
   night_window_end: string;
+  /** Раздел 17.2: сколько дней хранится журнал приложения; 0 — бессрочно. */
+  app_logs_retention_days: number;
 }
 
 /**

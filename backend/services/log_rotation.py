@@ -5,6 +5,9 @@
 порога выгружаются в сжатые JSONL-файлы в volume `log_archive` и удаляются из БД.
 Удаление идёт только после того, как файл полностью записан на диск:
 сбой записи не теряет историю, а повторный запуск подхватит те же записи.
+
+Сами файлы архива хранятся `LOG_ARCHIVE_RETENTION_DAYS` и удаляются той же
+еженедельной задачей (`prune_log_archive`); опустевший каталог задачи — тоже.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -41,6 +44,11 @@ _DEFAULT_ARCHIVE_ROOT = "tracker/log-archive"
 # Записей за один запуск: еженедельная задача доберёт остаток в следующий раз.
 ROTATION_BATCH_SIZE = 5000
 _FILE_TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+_FILE_PREFIX = "node_logs-"
+_FILE_SUFFIX = ".jsonl.gz"
+# Раздел 16.2: срок хранения файла архива — по времени изменения файла
+# (`tar` при переносе на новый сервер его сохраняет).
+LOG_ARCHIVE_RETENTION_DAYS = 180
 
 
 def resolve_archive_root() -> Path:
@@ -117,7 +125,7 @@ async def rotate_node_logs(
 
     stamp = now.strftime(_FILE_TIMESTAMP_FORMAT)
     for task_code, node_logs in by_task.items():
-        file_name = f"node_logs-{stamp}-{uuid.uuid4().hex[:8]}.jsonl.gz"
+        file_name = f"{_FILE_PREFIX}{stamp}-{uuid.uuid4().hex[:8]}{_FILE_SUFFIX}"
         path = archive_root / validate_task_code(task_code) / file_name
         records = [_serialize(node_log) for node_log in node_logs]
         await asyncio.to_thread(_write_archive, path, records)
@@ -134,3 +142,63 @@ async def rotate_node_logs(
             count=len(node_logs),
         )
     return result
+
+
+class LogArchivePruner:
+    """
+    Удаляет файлы архива `node_logs` старше `cutoff` по времени изменения
+    (`tar` при переносе сервера его сохраняет) и опустевшие каталоги задач.
+    Чужие имена и символические ссылки не трогает.
+    """
+
+    def __init__(self, archive_root: Path, *, cutoff: datetime) -> None:
+        self.archive_root = archive_root
+        self.cutoff = cutoff.timestamp()
+
+    @staticmethod
+    def is_archive_file(path: Path) -> bool:
+        return (
+            path.is_file()
+            and not path.is_symlink()
+            and path.name.startswith(_FILE_PREFIX)
+            and path.name.endswith(_FILE_SUFFIX)
+        )
+
+    def is_expired(self, path: Path) -> bool:
+        return self.is_archive_file(path) and path.stat().st_mtime < self.cutoff
+
+    def prune_task_dir(self, task_dir: Path) -> int:
+        expired = [path for path in task_dir.iterdir() if self.is_expired(path)]
+        for path in expired:
+            path.unlink()
+        if expired and not any(task_dir.iterdir()):
+            task_dir.rmdir()
+        return len(expired)
+
+    def task_dirs(self) -> list[Path]:
+        if not self.archive_root.is_dir():
+            return []
+        return [
+            task_dir
+            for task_dir in sorted(self.archive_root.iterdir())
+            if task_dir.is_dir() and not task_dir.is_symlink()
+        ]
+
+    def prune(self) -> int:
+        """Число удалённых файлов."""
+        return sum(self.prune_task_dir(task_dir) for task_dir in self.task_dirs())
+
+
+async def prune_log_archive(
+    *,
+    archive_root: Path,
+    now: datetime,
+    retention_days: int = LOG_ARCHIVE_RETENTION_DAYS,
+) -> int:
+    """
+    Удаляет файлы архива старше срока вне event loop; число удалённых файлов.
+    """
+    pruner = LogArchivePruner(archive_root, cutoff=now - timedelta(days=retention_days))
+    removed = await asyncio.to_thread(pruner.prune)
+    logger.info("log_archive_pruned", removed=removed)
+    return removed

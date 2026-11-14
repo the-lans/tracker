@@ -6,6 +6,7 @@ import { DuplicateTaskDialog } from "@/components/tasks/DuplicateTaskDialog";
 import { HEADER_BUTTON } from "@/styles/classes";
 import { useCleanupRepositories, useClearContext } from "@/hooks/useTasks";
 import { toastError } from "@/lib/errors";
+import { CLEANED_DATA_LABEL } from "@/lib/labels";
 import { isDuplicable, isFinished } from "@/lib/taskStatusTransitions";
 import { TaskStatus, type Task } from "@/lib/types";
 import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
@@ -69,7 +70,7 @@ export function TaskLifecycleActions({ task }: { task: Task }) {
         </button>
       )}
       {finished && task.repo_cleaned_at && (
-        <span className="hidden text-small text-text-3 sm:inline">Репозитории очищены</span>
+        <span className="hidden text-small text-text-3 sm:inline">{CLEANED_DATA_LABEL.repo_cleaned_at}</span>
       )}
       {isDuplicable(task) && (
         <button

@@ -19,6 +19,7 @@ _SETTINGS = {
     "default_retry_base_delay_seconds": 10,
     "night_window_start": "02:30:00",
     "night_window_end": "06:45:00",
+    "app_logs_retention_days": 60,
 }
 
 
@@ -27,6 +28,7 @@ class TestSystemSettings:
         initial = await admin_client.get("/system-settings")
         assert initial.status_code == 200
         assert initial.json()["default_timeout_seconds"] == 600
+        assert initial.json()["app_logs_retention_days"] == 30
         assert "default_runner_image_python" not in initial.json()
         assert "default_runner_image_bash" not in initial.json()
 
@@ -41,6 +43,9 @@ class TestSystemSettings:
             ("default_timeout_seconds", 0),
             ("default_max_retries", 11),
             ("default_retry_base_delay_seconds", -1),
+            ("app_logs_retention_days", -1),
+            ("app_logs_retention_days", 3651),
+            ("app_logs_retention_days", None),
         ],
     )
     async def test_rejects_out_of_range(
@@ -52,6 +57,14 @@ class TestSystemSettings:
         response = await admin_client.put("/system-settings", json={**_SETTINGS, field: value})
 
         assert response.status_code == 422
+
+    async def test_app_logs_forever(self, admin_client: AsyncClient) -> None:
+        response = await admin_client.put(
+            "/system-settings",
+            json={**_SETTINGS, "app_logs_retention_days": 0},
+        )
+
+        assert response.json()["app_logs_retention_days"] == 0
 
     async def test_update_is_admin_only(self, authed_client: AsyncClient) -> None:
         assert (await authed_client.get("/system-settings")).status_code == 200
