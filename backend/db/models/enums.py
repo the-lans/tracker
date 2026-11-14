@@ -260,3 +260,10 @@ class GoogleCalendarStatus(StrEnum):
 
     CONNECTED = "connected"
     NEEDS_REAUTH = "needs_reauth"
+
+
+class KnowledgeOperation(StrEnum):
+    SAVE = "save"
+    MOVE = "move"
+    DELETE = "delete"
+    RESTORE = "restore"

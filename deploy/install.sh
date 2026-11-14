@@ -105,6 +105,7 @@ RESTORE_ARCHIVES=(
 )
 # Необязательные: на сервере прежней версии такого volume ещё не было.
 RESTORE_OPTIONAL_ARCHIVES=(
+  "knowledge:/data/knowledge"
   "claude_sessions:/data/claude-sessions"
   # Учётки прокси с токенами OAuth; volume подключён только к прокси.
   "cliproxy_data:/data:cliproxy-init"

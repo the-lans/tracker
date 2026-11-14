@@ -162,6 +162,7 @@ services:
     volumes:
       - task_repos:/data/repos
       - user_files:/data/user-files
+      - knowledge:/data/knowledge
       # Через backend `install.sh --restore` распаковывает архивы всех volume.
       - log_archive:/data/log-archive
       - claude_sessions:/data/claude-sessions
@@ -202,6 +203,7 @@ services:
       - task_repos:/data/repos
       - claude_sessions:/data/claude-sessions
       - user_files:/data/user-files
+      - knowledge:/data/knowledge
       - log_archive:/data/log-archive
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -246,6 +248,7 @@ services:
     volumes:
       - task_repos:/data/backup-src/task_repos:ro
       - user_files:/data/backup-src/user_files:ro
+      - knowledge:/data/backup-src/knowledge:ro
       - log_archive:/data/backup-src/log_archive:ro
       - claude_sessions:/data/backup-src/claude_sessions:ro
       - cliproxy_data:/data/backup-src/cliproxy_data:ro
@@ -296,6 +299,7 @@ services:
     volumes:
       - task_repos:/data/repos:ro
       - user_files:/data/user-files
+      - knowledge:/data/knowledge
       - sftp_host_keys:/data/sftp-host-keys
     ports:
       - "${SFTP_PORT:-2222}:2222"
@@ -375,6 +379,7 @@ volumes:
   # и пользовательские файлы задач — именованные Docker-volumes, раздельный жизненный цикл.
   task_repos:
   user_files:
+  knowledge:
   # Раздел 6.4: конфигурационные каталоги сессий задач с историей диалогов.
   claude_sessions:
   # Раздел 19.4, 20.4: конфигурация LLM-прокси и его учётки с токенами OAuth.

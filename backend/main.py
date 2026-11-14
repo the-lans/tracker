@@ -20,6 +20,7 @@ from api.env_variables import router as env_variables_router
 from api.events import router as events_router
 from api.git_credentials import router as git_credentials_router
 from api.jira import router as jira_router
+from api.knowledge import router as knowledge_router
 from api.llm_accounts import router as llm_accounts_router
 from api.llm_proxy import router as llm_proxy_router
 from api.mcp_servers import router as mcp_servers_router
@@ -68,6 +69,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Tracker API", lifespan=lifespan)
+app.include_router(knowledge_router)
 app.include_router(auth_router)
 app.include_router(tasks_router)
 app.include_router(daily_router)

@@ -8,8 +8,9 @@ SDK запускает CLI через ``cli_path``: вместо самого CL
 stdin/stdout контейнера — `ClaudeSDKClient`, callback разрешений, БД и git
 остаются в воркере.
 
-В контейнер монтируются только каталоги задачи (репозитории, артефакты) и
-конфигурационная директория её сессии — по тем же путям, что в воркере, так
+В контейнер монтируются каталоги задачи (репозитории, артефакты), разрешённые
+разделы базы знаний только для чтения и конфигурационная директория сессии.
+Каталоги задачи подключены по тем же путям, что в воркере, так
 что история сессии и пути в ответах агента совпадают
 (`services/docker_mounts.py`). Переменные окружения обёртка передаёт по
 белому списку — секреты воркера в контейнер не попадают.
@@ -121,6 +122,7 @@ async def build_session_cli_env(
     config_dir: Path,
     session_token: str,
     artifacts_dir: Path | None = None,
+    knowledge_mounts: list[str] | None = None,
 ) -> dict[str, str]:
     """
     Окружение обёртки для сессии задачи `task_id` — добавляется к
@@ -131,6 +133,7 @@ async def build_session_cli_env(
     """
     docker_args = [
         *_isolation_args(task_id),
+        *(knowledge_mounts or []),
         *await _task_mount_args(cwd=cwd, config_dir=config_dir, artifacts_dir=artifacts_dir),
         "-w",
         str(cwd),
