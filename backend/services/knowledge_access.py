@@ -5,19 +5,8 @@
 фиксируются при старте сессии.
 """
 
-from dataclasses import dataclass
-
 from db.models.enums import UserRole
-
-
-@dataclass(frozen=True, slots=True)
-class KnowledgeAccess:
-    read: bool
-    write: bool
-
-    def __post_init__(self) -> None:
-        if self.write and not self.read:
-            raise ValueError("Право записи требует права чтения")
+from services.knowledge_objects import KnowledgeAccess as KnowledgeAccess
 
 
 def knowledge_access_for_role(role: UserRole, *, user_access: KnowledgeAccess) -> KnowledgeAccess:

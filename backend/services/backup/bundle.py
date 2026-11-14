@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app_logging.config import get_logger
+from db.queries.knowledge import protect_collection
 from services.backup.archive import ArchiveOptions, SkippedFile, archive_directory
 from services.backup.components import COMPONENTS, ENV_FILE_RELATIVE, Component
 from services.backup.dump import DumpCommandFactory, dump_database
@@ -223,12 +224,14 @@ async def build_bundle(
     directory.mkdir(parents=True)
     _copy_env(request.sources, directory)
     dump_path = directory / f"tracker-{request.started_at.strftime(TIMESTAMP_FORMAT)}.sql.gz"
-    dump = await dump_database(engine, dump_path, command_factory=dump_command)
-    components, skipped = await _archive_components(
-        request.sources,
-        directory,
-        options=request.archive_options,
-    )
+    async with engine.begin() as protection:
+        await protect_collection(protection)
+        dump = await dump_database(engine, dump_path, command_factory=dump_command)
+        components, skipped = await _archive_components(
+            request.sources,
+            directory,
+            options=request.archive_options,
+        )
     (directory / AFTER_RESTORE_SQL_NAME).write_text(
         after_restore_sql(
             run_id=request.run_id,

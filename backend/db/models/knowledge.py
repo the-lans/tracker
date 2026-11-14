@@ -1,4 +1,6 @@
-"""Метаданные разделов и файлов общей базы знаний."""
+"""
+Метаданные разделов и файлов общей базы знаний.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ class KnowledgeSection(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
         sa.CheckConstraint("NOT user_write OR user_read", name="ck_knowledge_section_write_read"),
     )
 
+    publication_pending: Mapped[bool] = mapped_column(sa.Boolean, server_default=sa.true())
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     user_read: Mapped[bool] = mapped_column(sa.Boolean, server_default=sa.false())
     user_write: Mapped[bool] = mapped_column(sa.Boolean, server_default=sa.false())

@@ -47,6 +47,15 @@ from api.schemas.env_variables import (
     TaskEnvVariableUpdateRequest,
 )
 from api.schemas.events import EventResponse
+from api.schemas.knowledge import (
+    DeletedRequest,
+    EntryResponse,
+    FileRequest,
+    MoveRequest,
+    SectionRequest,
+    SectionResponse,
+    VersionResponse,
+)
 from api.schemas.llm_accounts import (
     LlmAccountCreateRequest,
     LlmAccountFields,
@@ -146,6 +155,13 @@ from api.schemas.tasks import (
 )
 
 __all__ = [
+    "DeletedRequest",
+    "EntryResponse",
+    "FileRequest",
+    "MoveRequest",
+    "SectionRequest",
+    "SectionResponse",
+    "VersionResponse",
     "GoogleCalendarConnectionResponse",
     "GoogleCalendarInfoResponse",
     "GoogleCalendarLoginResponse",

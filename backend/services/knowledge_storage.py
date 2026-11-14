@@ -1,9 +1,12 @@
-"""Неизменяемое хранилище содержимого версий базы знаний."""
+"""
+Неизменяемое хранилище содержимого версий базы знаний.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import uuid
 from pathlib import Path, PurePosixPath
 
@@ -35,7 +38,7 @@ def validate_knowledge_path(value: str) -> str:
     return value
 
 
-def _object_path(key: str) -> Path:
+def knowledge_object_path(key: str) -> Path:
     try:
         identifier = uuid.UUID(key)
     except ValueError as exc:
@@ -45,7 +48,7 @@ def _object_path(key: str) -> Path:
 
 def _write_object(content: bytes) -> str:
     key = str(uuid.uuid4())
-    path = _object_path(key)
+    path = knowledge_object_path(key)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("xb") as stream:
         stream.write(content)
@@ -61,4 +64,20 @@ async def store_knowledge_content(content: bytes) -> str:
 
 
 async def read_knowledge_content(key: str) -> bytes:
-    return await asyncio.to_thread(_object_path(key).read_bytes)
+    return await asyncio.to_thread(knowledge_object_path(key).read_bytes)
+
+
+def collect_objects(referenced: set[str], sections: set[str]) -> int:
+    removed = 0
+    objects = knowledge_root() / "objects"
+    if objects.exists():
+        for path in objects.iterdir():
+            if path.is_file() and path.name not in referenced:
+                path.unlink()
+                removed += 1
+    views = knowledge_root() / "views"
+    if views.exists():
+        for path in views.iterdir():
+            if path.name not in sections and path.is_dir():
+                shutil.rmtree(path)
+    return removed

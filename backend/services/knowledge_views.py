@@ -1,70 +1,61 @@
-"""Обновляемое представление разрешённых файлов для чтения из контейнера."""
+"""
+Инкрементальное представление файлов без загрузки содержимого в память.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from pathlib import Path
 
-import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.knowledge import KnowledgeEntry, KnowledgeSection
+from app_logging.config import get_logger
 from db.models.users import User
+from db.queries import knowledge as queries
 from services.docker_mounts import mount_args
-from services.knowledge_files import entry_content
-from services.knowledge_sections import KnowledgeSectionSnapshot, section_snapshot
-from services.knowledge_storage import knowledge_root, validate_knowledge_path
+from services.knowledge_objects import KnowledgeProjection, KnowledgeSectionSnapshot
+from services.knowledge_projection import KnowledgeProjectionPublisher
+from services.knowledge_sections import section_snapshot
+from services.knowledge_storage import knowledge_root
+
+logger = get_logger("knowledge_views")
 
 
-def _publish(root: Path, files: dict[str, bytes | None]) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    expected = set(files)
-    for relative, content in files.items():
-        validate_knowledge_path(relative)
-        target = root / relative
-        if content is None:
-            target.mkdir(parents=True, exist_ok=True)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_name(".tracker-" + uuid.uuid4().hex)
-            temporary.write_bytes(content)
-            os.replace(temporary, target)
-        parent = Path(relative).parent
-        while parent != Path("."):
-            expected.add(parent.as_posix())
-            parent = parent.parent
-    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
-        if path.relative_to(root).as_posix() not in expected:
-            if path.is_dir():
-                path.rmdir()
-            else:
-                path.unlink()
+def _publish(root: Path, files: list[KnowledgeProjection]) -> None:
+    KnowledgeProjectionPublisher(root).publish(files)
+
+
+async def _publish_section(db: AsyncSession, *, section_id: uuid.UUID) -> None:
+    await queries.lock_storage(db)
+    section = await queries.section(db, section_id, lock=True)
+    if section is None:
+        return
+    files = [
+        KnowledgeProjection(path=path, storage_key=None if directory else key)
+        for path, directory, key in await queries.projection(db, section_id)
+    ]
+    await asyncio.to_thread(_publish, knowledge_root() / "views" / str(section_id), files)
+    section.publication_pending = False
 
 
 async def publish_section(db: AsyncSession, *, section_id: uuid.UUID) -> None:
-    section = await db.get(
-        KnowledgeSection, section_id, with_for_update=True, populate_existing=True
-    )
-    if section is None:
-        return
-    entries = list(
-        await db.scalars(
-            sa.select(KnowledgeEntry)
-            .where(
-                KnowledgeEntry.section_id == section_id,
-                KnowledgeEntry.deleted_at.is_(None),
-            )
-            .order_by(KnowledgeEntry.path)
-        )
-    )
-    files = {
-        entry.path: None if entry.is_directory else await entry_content(db, entry=entry)
-        for entry in entries
-    }
-    await asyncio.to_thread(_publish, knowledge_root() / "views" / str(section_id), files)
+    async with db.begin_nested():
+        await _publish_section(db, section_id=section_id)
     await db.commit()
+
+
+async def finish_changes(db: AsyncSession, *, section_ids: set[uuid.UUID]) -> bool:
+    await db.commit()
+    synchronized = True
+    for section_id in sorted(section_ids):
+        try:
+            await publish_section(db, section_id=section_id)
+        except OSError:
+            await db.commit()
+            logger.exception("knowledge_publication_pending", section_id=str(section_id))
+            synchronized = False
+    return synchronized
 
 
 async def knowledge_mounts(
@@ -83,7 +74,3 @@ async def knowledge_mounts(
             args[1] = f"{source}:{destination}:ro"
         result.extend(args)
     return result
-
-
-async def clear_section_view(section_id: uuid.UUID) -> None:
-    await asyncio.to_thread(_publish, knowledge_root() / "views" / str(section_id), {})
