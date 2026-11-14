@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.nodes import EXECUTION_FIELDS
 from db.models.enums import NodeType
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskLibraryPrompt
@@ -34,6 +33,59 @@ async def test_create_library_prompt(authed_client: AsyncClient) -> None:
     body = response.json()
     assert body["is_library_item"] is True
     assert body["pipeline_id"] is None
+    assert body["pause_after"] is False
+
+
+class TestPipelinePause:
+    async def test_pause_can_be_set_on_create(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        pipeline = Pipeline(name="p", created_by=current_user.id)
+        db_session.add(pipeline)
+        await db_session.flush()
+
+        response = await authed_client.post(
+            "/nodes",
+            json={
+                "pipeline_id": str(pipeline.id),
+                "order_index": 0,
+                "name": "n",
+                "node_type": "plain_prompt",
+                "prompt_template": "p",
+                "pause_after": True,
+            },
+        )
+
+        assert response.status_code == 201, response.text
+        assert response.json()["pause_after"] is True
+
+    @pytest.mark.parametrize("pipeline_node", [False, True])
+    async def test_pause_rejected_outside_pipeline_or_after_clear_context(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        pipeline_node: bool,
+    ) -> None:
+        fields: dict[str, object] = {
+            "name": "n",
+            "description": "d",
+            "node_type": "plain_prompt",
+            "prompt_template": "p",
+            "pause_after": True,
+        }
+        if pipeline_node:
+            pipeline = Pipeline(name="p", created_by=current_user.id)
+            db_session.add(pipeline)
+            await db_session.flush()
+            fields.update(pipeline_id=str(pipeline.id), order_index=0, node_type="clear_context")
+
+        response = await authed_client.post("/nodes", json=fields)
+
+        assert response.status_code == 422, response.text
 
 
 async def test_library_prompt_rejects_clear_context_type(authed_client: AsyncClient) -> None:
@@ -407,103 +459,30 @@ class TestLibraryDescription:
         assert response.status_code == 201
 
 
-class TestExecutionLimits:
-    """Таймаут и retry ноды — в тех же границах, что у «Системных настроек»."""
-
-    @pytest.mark.parametrize(
-        ("field", "value"),
-        [
-            ("timeout_seconds", 0),
-            ("timeout_seconds", 24 * 60 * 60 + 1),
-            ("max_retries", 11),
-            ("retry_base_delay_seconds", -1),
-        ],
-    )
-    async def test_out_of_range_rejected(
+class TestSystemExecutionSettings:
+    async def test_legacy_overrides_not_exposed(
         self,
         authed_client: AsyncClient,
-        field: str,
-        value: int,
     ) -> None:
-        created = await authed_client.post(
+        legacy = {"timeout_seconds": 1800, "max_retries": 7, "retry_base_delay_seconds": 30}
+        response = await authed_client.post(
             "/nodes",
             json={
                 "name": "n",
                 "description": "d",
-                "node_type": NodeType.PLAIN_PROMPT.value,
+                "node_type": "plain_prompt",
                 "prompt_template": "x",
-            },
-        )
-        assert created.status_code == 201, created.text
-        node_id = created.json()["id"]
-
-        create = await authed_client.post(
-            "/nodes",
-            json={
-                "name": "n",
-                "description": "d",
-                "node_type": NodeType.PLAIN_PROMPT.value,
-                "prompt_template": "x",
-                field: value,
-            },
-        )
-        update = await authed_client.patch(f"/nodes/{node_id}", json={field: value})
-
-        assert (create.status_code, update.status_code) == (422, 422)
-
-
-class TestExecutionDefaultsOnUpdate:
-    """Раздел 15.5: явный `null` при правке — значение из «Системных настроек»."""
-
-    async def _node(self, client: AsyncClient) -> dict[str, int | str]:
-        response = await client.post(
-            "/nodes",
-            json={
-                "name": "n",
-                "description": "d",
-                "node_type": NodeType.PLAIN_PROMPT.value,
-                "prompt_template": "x",
-                "timeout_seconds": 1800,
-                "max_retries": 7,
-                "retry_base_delay_seconds": 30,
+                **legacy,
             },
         )
         assert response.status_code == 201, response.text
-        body: dict[str, int | str] = response.json()
-        return body
-
-    @pytest.mark.parametrize(
-        ("field", "setting"),
-        [
-            ("timeout_seconds", "default_timeout_seconds"),
-            ("max_retries", "default_max_retries"),
-            ("retry_base_delay_seconds", "default_retry_base_delay_seconds"),
-        ],
-    )
-    async def test_null_resets_to_default(
-        self,
-        authed_client: AsyncClient,
-        field: str,
-        setting: str,
-    ) -> None:
-        node = await self._node(authed_client)
-        settings = (await authed_client.get("/system-settings")).json()
-
-        response = await authed_client.patch(f"/nodes/{node['id']}", json={field: None})
-
-        assert response.status_code == 200, response.text
-        updated = response.json()
-        assert updated[field] == settings[setting]
-        others = [name for name in EXECUTION_FIELDS if name != field]
-        assert {name: updated[name] for name in others} == {name: node[name] for name in others}
-
-    async def test_omitted_fields_kept(self, authed_client: AsyncClient) -> None:
-        node = await self._node(authed_client)
-
-        response = await authed_client.patch(f"/nodes/{node['id']}", json={"name": "renamed"})
-
-        assert response.status_code == 200, response.text
-        assert (response.json()["timeout_seconds"], response.json()["max_retries"]) == (1800, 7)
+        assert not legacy.keys() & response.json().keys()
+        updated = await authed_client.patch(
+            f"/nodes/{response.json()['id']}",
+            json={"name": "renamed", **legacy},
+        )
+        assert updated.status_code == 200, updated.text
+        assert not legacy.keys() & updated.json().keys()
 
 
 def _library_prompt(**fields: object) -> dict[str, object]:
@@ -588,6 +567,179 @@ def _linked_node(pipeline: Pipeline, library_node: Node, **fields: object) -> di
 
 class TestLibraryLink:
     """Раздел 7.6: нода пайплайна со ссылкой на промт библиотеки."""
+
+    @pytest.mark.parametrize("plan_mode", [False, True])
+    async def test_linked_source_type_is_locked(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        plan_mode: bool,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, current_user)
+        source = await _library_item(db_session, current_user)
+        response = await authed_client.post(
+            "/nodes",
+            json=_linked_node(pipeline, source, library_plan_mode=plan_mode),
+        )
+        assert response.status_code == 201, response.text
+        response = await authed_client.patch(
+            f"/nodes/{source.id}",
+            json={"node_type": "script", "script_language": "bash", "script_content": "echo ok"},
+        )
+        assert response.status_code == 409, response.text
+        await db_session.refresh(source)
+        assert source.node_type is NodeType.PLAIN_PROMPT
+        response = await authed_client.patch(
+            f"/nodes/{source.id}",
+            json={"node_type": "plain_prompt", "name": "Новое имя"},
+        )
+        assert response.status_code == 200, response.text
+
+    async def test_unlinked_source_type_can_change(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        source = await _library_item(db_session, current_user)
+        response = await authed_client.patch(
+            f"/nodes/{source.id}",
+            json={"node_type": "script", "script_language": "bash", "script_content": "echo ok"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["node_type"] == "script"
+
+    @pytest.mark.parametrize("plan_mode", [False, True])
+    async def test_unlink_library_prompt_to_script(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        plan_mode: bool,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, current_user)
+        source = await _library_item(db_session, current_user)
+        created = await authed_client.post(
+            "/nodes",
+            json=_linked_node(pipeline, source, library_plan_mode=plan_mode),
+        )
+        assert created.status_code == 201, created.text
+        response = await authed_client.patch(
+            f"/nodes/{created.json()['id']}",
+            json={
+                "library_node_id": None,
+                "node_type": "script",
+                "script_language": "bash",
+                "script_content": "echo ok",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["node_type"] == "script"
+        assert response.json()["library_node_id"] is None
+
+    @pytest.mark.parametrize("source_type", [None, NodeType.SCRIPT, NodeType.SLASH_COMMAND])
+    async def test_plan_mode_requires_text_library_prompt(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        source_type: NodeType | None,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, current_user)
+        body: dict[str, object] = {
+            "pipeline_id": str(pipeline.id),
+            "order_index": 0,
+            "name": "Plan",
+            "node_type": "plain_prompt",
+            "library_plan_mode": True,
+        }
+        if source_type is not None:
+            source = await _library_item(db_session, current_user, node_type=source_type)
+            body["library_node_id"] = str(source.id)
+        response = await authed_client.post("/nodes", json=body)
+        assert response.status_code == 422, response.text
+
+    async def test_library_plan_mode_can_be_enabled_and_disabled(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, current_user)
+        source = await _library_item(db_session, current_user)
+        response = await authed_client.post(
+            "/nodes",
+            json=_linked_node(pipeline, source, library_plan_mode=True),
+        )
+        assert response.status_code == 201, response.text
+        body = response.json()
+        assert body["library_plan_mode"] is True
+        assert body["node_type"] == "plan_prompt"
+        assert source.node_type is NodeType.PLAIN_PROMPT
+        response = await authed_client.patch(
+            f"/nodes/{body['id']}",
+            json={"library_arguments": "{{task.code}}"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["library_plan_mode"] is True
+        response = await authed_client.patch(
+            f"/nodes/{body['id']}",
+            json={"library_plan_mode": False},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["library_plan_mode"] is False
+        assert response.json()["node_type"] == "plain_prompt"
+
+    @pytest.mark.parametrize(
+        ("arguments", "status"),
+        [
+            ("{{task.code}}", 201),
+            ("{{task.unknown}}", 422),
+            ("{{env.SECRET}}", 422),
+            ("{{node.llm_output}}", 422),
+            ("{{session.id}}", 422),
+            ("{{unknown.code}}", 422),
+        ],
+    )
+    async def test_argument_variables_validated_on_save(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+        arguments: str,
+        status: int,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, current_user)
+        source = await _library_item(db_session, current_user)
+
+        response = await authed_client.post(
+            "/nodes",
+            json=_linked_node(pipeline, source, library_arguments=arguments),
+        )
+
+        assert response.status_code == status, response.text
+        if status == 201:
+            assert response.json()["library_arguments"] == arguments
+
+    async def test_argument_validation_on_update(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        pipeline = await _own_pipeline(db_session, current_user)
+        source = await _library_item(db_session, current_user)
+        created = await authed_client.post("/nodes", json=_linked_node(pipeline, source))
+        node_url = f"/nodes/{created.json()['id']}"
+
+        updated = await authed_client.patch(node_url, json={"library_arguments": "{{task.code}}"})
+        rejected = await authed_client.patch(node_url, json={"library_arguments": "{{env.SECRET}}"})
+        saved = await authed_client.get(node_url)
+
+        assert updated.status_code == 200, updated.text
+        assert rejected.status_code == 422, rejected.text
+        assert saved.json()["library_arguments"] == "{{task.code}}"
 
     async def test_link_takes_type_and_drops_own_content(
         self,

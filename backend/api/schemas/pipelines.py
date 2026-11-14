@@ -8,7 +8,6 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.schemas.common import MaxRetries, RetryBaseDelaySeconds, TimeoutSeconds
 from db.models.enums import (
     NodeType,
     ReasoningEffort,
@@ -57,21 +56,20 @@ class NodeCreateRequest(BaseModel):
     script_language: ScriptLanguage | None = None
     script_content: str | None = None
     docker_image: str | None = None
-    # Раздел 15.5: не переданные значения берутся из «Системных настроек».
-    timeout_seconds: TimeoutSeconds | None = None
-    max_retries: MaxRetries | None = None
-    retry_base_delay_seconds: RetryBaseDelaySeconds | None = None
     guide_url: str | None = None
     is_skipped: bool = False
+    pause_after: bool = False
     llm_output_last_n: int | None = None
     # Раздел 3.1: None — уровень по умолчанию аккаунта, на котором нода выполняется.
     reasoning_effort: ReasoningEffort | None = None
     # Раздел 7.6: нода пайплайна выполняет промт библиотеки с этими аргументами.
     library_node_id: uuid.UUID | None = None
     library_arguments: str | None = Field(default=None, max_length=MAX_COMMAND_LENGTH)
+    library_plan_mode: bool = False
 
 
 class NodeUpdateRequest(BaseModel):
+    node_type: NodeType | None = None
     order_index: int | None = None
     slash_name: str | None = Field(default=None, max_length=MAX_COMMAND_INPUT_NAME_LENGTH)
     argument_hint: str | None = Field(default=None, max_length=MAX_ARGUMENT_HINT_LENGTH)
@@ -82,17 +80,16 @@ class NodeUpdateRequest(BaseModel):
     script_language: ScriptLanguage | None = None
     script_content: str | None = None
     docker_image: str | None = None
-    timeout_seconds: TimeoutSeconds | None = None
-    max_retries: MaxRetries | None = None
-    retry_base_delay_seconds: RetryBaseDelaySeconds | None = None
     guide_url: str | None = None
     is_skipped: bool | None = None
+    pause_after: bool | None = None
     is_archived: bool | None = None
     llm_output_last_n: int | None = None
     # Явный `null` возвращает уровень по умолчанию аккаунта.
     reasoning_effort: ReasoningEffort | None = None
     # Явный `null` снимает ссылку на промт библиотеки — дальше нода хранит свой текст.
     library_node_id: uuid.UUID | None = None
+    library_plan_mode: bool | None = None
     library_arguments: str | None = Field(default=None, max_length=MAX_COMMAND_LENGTH)
 
 
@@ -113,17 +110,16 @@ class NodeResponse(BaseModel):
     script_language: ScriptLanguage | None
     script_content: str | None
     docker_image: str | None
-    timeout_seconds: int
-    max_retries: int
-    retry_base_delay_seconds: int
     guide_url: str | None
     is_skipped: bool
+    pause_after: bool
     is_library_item: bool
     llm_output_last_n: int | None
     reasoning_effort: ReasoningEffort | None
     is_archived: bool
     library_node_id: uuid.UUID | None = None
     library_arguments: str | None = None
+    library_plan_mode: bool = False
     created_by: uuid.UUID
 
 

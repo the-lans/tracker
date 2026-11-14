@@ -30,9 +30,11 @@ export function PipelineNodesChecklist({
             onCheckedChange={(checked) => onToggle(node, checked === true)}
           />
           <NodeTypeIcon type={node.node_type} className="size-[15px] shrink-0 text-text-2" />
-          <div className="flex-1 truncate text-note font-bold" title={node.name}>{node.name}</div>
-          <div className="text-caption font-bold uppercase tracking-wide text-text-3">
-            {nodeTypeLabel(node)}
+          <div className="flex min-w-0 flex-1 flex-col sm:flex-row sm:items-center sm:gap-2.5">
+            <div className="min-w-0 flex-1 truncate text-note font-bold" title={node.name}>{node.name}</div>
+            <div className="text-caption font-bold uppercase tracking-wide text-text-3 shrink-0">
+              {nodeTypeLabel(node)}
+            </div>
           </div>
         </label>
       ))}

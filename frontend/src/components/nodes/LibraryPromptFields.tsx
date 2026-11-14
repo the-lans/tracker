@@ -1,3 +1,4 @@
+import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -74,14 +75,15 @@ export function LibraryPromptFields({
         <Label htmlFor="node-library-item" required>Промт библиотеки</Label>
         <Select
           value={value.libraryNodeId ?? ""}
-          onValueChange={(libraryNodeId) =>
+          onValueChange={(libraryNodeId) => {
+            const item = candidates.find((candidate) => candidate.id === libraryNodeId);
             onChange({
               ...value,
+              planMode: item?.node_type === NodeType.PLAIN_PROMPT && (value.planMode ?? false),
               libraryNodeId,
-              libraryNodeType:
-                candidates.find((item) => item.id === libraryNodeId)?.node_type ?? null,
-            })
-          }
+              libraryNodeType: item?.node_type ?? null,
+            });
+          }}
         >
           <SelectTrigger id="node-library-item">
             <SelectValue placeholder="Выберите промт" />
@@ -101,6 +103,21 @@ export function LibraryPromptFields({
         )}
       </div>
       {selected && <LibraryItemPreview item={selected} />}
+      {selected?.node_type === NodeType.PLAIN_PROMPT && (
+        <div>
+          <label className="flex min-h-11 items-center gap-2.5 text-body font-semibold">
+            <Checkbox
+              checked={value.planMode ?? false}
+              onCheckedChange={(checked) => onChange({ ...value, planMode: checked === true })}
+            />
+            Режим планирования
+          </label>
+          <p className="text-small text-text-3">
+            При выключенной паузе план принимается автоматически. При включённой — вручную,
+            после принятия пайплайн продолжается без повторной паузы.
+          </p>
+        </div>
+      )}
       <div>
         <Label htmlFor="node-library-arguments">Аргументы</Label>
         <Input
@@ -109,6 +126,11 @@ export function LibraryPromptFields({
           value={value.arguments}
           onChange={(event) => onChange({ ...value, arguments: event.target.value })}
         />
+        {selected && (
+          <p className="mt-1 text-small text-text-3">
+            {"Можно использовать поля задачи: {{task.code}}, {{task.title}}. Значение с пробелами остаётся одним аргументом."}
+          </p>
+        )}
         <p className="mt-1 text-small text-text-3">
           Как после /имя в чате: в промте — $ARGUMENTS и $1, $2…; слэш-команде — через
           пробел после неё; скрипту — позиционные аргументы и TRACKER_COMMAND_ARGUMENTS.

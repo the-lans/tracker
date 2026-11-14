@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from sqlalchemy.engine import make_url
+
 from services.backup.archive import ArchiveOptions
 from services.backup.bundle import BundleSources
 from services.backup.components import ENV_FILE_RELATIVE
@@ -71,7 +73,7 @@ def container_dump_command() -> DumpCommandFactory:
                 "-U",
                 "tracker",
                 "-d",
-                "tracker",
+                make_url(os.environ["DATABASE_URL"]).database or "tracker",
                 *pg_dump_args(snapshot),
             ],
             env=dict(os.environ),

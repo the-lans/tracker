@@ -44,11 +44,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import sqlalchemy as sa
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from app_logging.config import get_logger
-from db.models.enums import NodeLogStatus, PermissionMode, TaskStatus
+from db.models.enums import NodeLogStatus, NodeType, PermissionMode, TaskStatus
 from db.models.logs import NodeLog
+from db.models.pipelines import Node, TaskNode
 from db.models.tasks import Task
 from services.access import get_task_record_or_404
 from services.errors import ConflictError, ValidationError
@@ -724,7 +726,23 @@ class _PermissionCallback:
         context = self.context
         assert context.node_log_id is not None and context.task_id is not None
         plan_text = tool_input.get("plan")
-        if context.auto_accept_plan:
+        # У библиотечного плана пауза означает ручное принятие, а не вторую
+        # остановку после него. Читаем актуальный снимок задачи при ExitPlanMode:
+        # пользователь мог поменять паузу, пока агент составлял план.
+        async with self.session_factory() as db_session:
+            pause_after = await db_session.scalar(
+                sa.select(TaskNode.pause_after)
+                .join(Node, Node.id == TaskNode.node_id)
+                .join(NodeLog, NodeLog.node_id == Node.id)
+                .where(
+                    NodeLog.id == context.node_log_id,
+                    TaskNode.task_id == context.task_id,
+                    Node.library_node_id.is_not(None),
+                    Node.node_type == NodeType.PLAN_PROMPT,
+                )
+            )
+        auto_accept = context.auto_accept_plan if pause_after is None else not pause_after
+        if auto_accept:
             async with self.session_factory() as db_session:
                 await _record_plan_auto_accept(
                     db_session,

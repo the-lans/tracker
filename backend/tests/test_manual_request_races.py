@@ -31,7 +31,7 @@ from services.manual_admission import close_manual_requests
 from services.parent_summary import get_or_request_parent_summary, wait_for_parent_summary
 from services.pipeline_orchestrator import PipelineRunOutcome
 from services.plan_mode import ActiveNodeContext
-from services.system_settings import resolve_node_execution_defaults, resolve_runner_image
+from services.system_settings import resolve_execution_settings, resolve_runner_image
 from services.task_status import reset_task_run
 from tests.factories import make_task, make_user
 from tests.fakes import FakeClaudeAgentClient
@@ -335,9 +335,7 @@ class TestAtomicConfigurationReads:
             assert node
             task.manual_requests_closed = True
             assert await resolve_runner_image(editing, node) == "tracker-runner-python:latest"
-            defaults = await resolve_node_execution_defaults(
-                editing, timeout_seconds=None, max_retries=None, retry_base_delay_seconds=None
-            )
+            defaults = await resolve_execution_settings(editing)
             assert defaults.timeout_seconds == 600
             before_commit = await observer.get(Task, task.id)
             assert before_commit and not before_commit.manual_requests_closed

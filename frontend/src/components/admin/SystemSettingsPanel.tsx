@@ -133,7 +133,7 @@ function SettingsForm({ initial }: { initial: SystemSettings }) {
   );
 }
 
-/** Раздел 15.5: значения по умолчанию для новых нод (уже созданные не меняются), ночное окно, начало дня «Дейли», срок журнала, интеграции и бэкап в S3. */
+/** Общие параметры выполнения, ночное окно, начало дня «Дейли», срок журнала, интеграции и бэкап в S3. */
 export function SystemSettingsPanel() {
   const { data: settings, isLoading } = useSystemSettings();
 
@@ -144,7 +144,7 @@ export function SystemSettingsPanel() {
       </SectionTitle>
       <Card className="text-body text-text-2">
         <div className="mb-3 text-small text-text-3">
-          Таймаут и retry подставляются в новые ноды; уже созданные ноды не меняются.
+          Таймаут действует для всех запросов и нод, повторы — только для нод пайплайна. Изменения применяются со следующего запуска.
         </div>
         {isLoading && <LoadingState />}
         {settings && <SettingsForm initial={settings} />}

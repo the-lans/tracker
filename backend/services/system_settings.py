@@ -1,9 +1,9 @@
 """
 «Системные настройки» админки (раздел 15.5 ТЗ): значения по умолчанию для
-новых нод — таймаут и политика retry.
+выполнения — общий таймаут и политика retry.
 
-Таймаут и retry подставляются в момент создания ноды (раздел 15.5: «для
-новых нод»), поэтому их изменение не трогает уже созданные ноды. Образ
+Таймаут и retry читаются при запуске операции: изменение действует со
+следующего запуска, без пересохранения объектов. Образ
 раннера в ноду не записывается: если у script-ноды он не задан явно, образ
 берётся из стандартных образов в коде по её текущему языку — так смена
 языка в редакторе не оставляет ноду в чужом раннере.
@@ -56,7 +56,7 @@ class SystemSettingsValues:
 
 
 @dataclass(frozen=True, slots=True)
-class NodeExecutionDefaults:
+class ExecutionSettings:
     timeout_seconds: int
     max_retries: int
     retry_base_delay_seconds: int
@@ -105,36 +105,19 @@ async def update_system_settings(
     return settings
 
 
-async def resolve_node_execution_defaults(
-    db_session: AsyncSession,
-    *,
-    timeout_seconds: int | None,
-    max_retries: int | None,
-    retry_base_delay_seconds: int | None,
-) -> NodeExecutionDefaults:
-    """Значения новой ноды: заданные явно остаются, пустые — из настроек."""
-    settings = await db_session.get(SystemSettings, SYSTEM_SETTINGS_ROW_ID)
-    defaults = NodeExecutionDefaults(
+async def resolve_execution_settings(db_session: AsyncSession) -> ExecutionSettings:
+    """
+    Текущая системная политика: перечитывается и в долгоживущей сессии воркера.
+    """
+    settings = await db_session.get(SystemSettings, SYSTEM_SETTINGS_ROW_ID, populate_existing=True)
+    return ExecutionSettings(
         timeout_seconds=settings.default_timeout_seconds
         if settings
         else DEFAULT_NODE_TIMEOUT_SECONDS,
         max_retries=settings.default_max_retries if settings else DEFAULT_NODE_MAX_RETRIES,
-        retry_base_delay_seconds=(
-            settings.default_retry_base_delay_seconds
-            if settings
-            else DEFAULT_NODE_RETRY_BASE_DELAY_SECONDS
-        ),
-    )
-    return NodeExecutionDefaults(
-        timeout_seconds=timeout_seconds
-        if timeout_seconds is not None
-        else defaults.timeout_seconds,
-        max_retries=max_retries if max_retries is not None else defaults.max_retries,
-        retry_base_delay_seconds=(
-            retry_base_delay_seconds
-            if retry_base_delay_seconds is not None
-            else defaults.retry_base_delay_seconds
-        ),
+        retry_base_delay_seconds=settings.default_retry_base_delay_seconds
+        if settings
+        else DEFAULT_NODE_RETRY_BASE_DELAY_SECONDS,
     )
 
 

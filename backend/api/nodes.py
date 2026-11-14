@@ -30,7 +30,11 @@ from db.session import get_session
 from services.access import get_node_for_user, get_pipeline_for_user, owner_filter
 from services.command_arguments import normalize_slash_name
 from services.errors import ConflictError, NotFoundError
-from services.integrity import count_library_prompt_usage, ensure_node_deletable
+from services.integrity import (
+    count_library_prompt_usage,
+    ensure_node_deletable,
+    library_item_is_linked,
+)
 from services.library_commands import validate_command_node
 from services.library_links import attach_library_source
 from services.pipeline_validation import (
@@ -38,11 +42,8 @@ from services.pipeline_validation import (
     validate_node_shape,
     validate_pipeline_templates,
 )
-from services.system_settings import resolve_node_execution_defaults
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
-
-EXECUTION_FIELDS = ("timeout_seconds", "max_retries", "retry_base_delay_seconds")
 
 
 async def _get_node_or_404(db_session: AsyncSession, node_id: uuid.UUID, user: User) -> Node:
@@ -94,35 +95,6 @@ async def _validate_and_flush(
         await validate_pipeline_templates(db_session, node.pipeline_id)
 
 
-async def _apply_execution_values(
-    db_session: AsyncSession,
-    node: Node,
-    body: NodeUpdateRequest,
-) -> None:
-    """
-    Раздел 15.5: явный `null` возвращает таймауту и retry значение из
-    «Системных настроек», не переданное поле остаётся прежним.
-    """
-    passed = body.model_fields_set
-    if not passed.intersection(EXECUTION_FIELDS):
-        return
-
-    def requested(field: str) -> int | None:
-        value: int | None = getattr(body if field in passed else node, field)
-        return value
-
-    with db_session.no_autoflush:
-        defaults = await resolve_node_execution_defaults(
-            db_session,
-            timeout_seconds=requested("timeout_seconds"),
-            max_retries=requested("max_retries"),
-            retry_base_delay_seconds=requested("retry_base_delay_seconds"),
-        )
-    node.timeout_seconds = defaults.timeout_seconds
-    node.max_retries = defaults.max_retries
-    node.retry_base_delay_seconds = defaults.retry_base_delay_seconds
-
-
 async def _apply_library_link(
     db_session: AsyncSession,
     node: Node,
@@ -130,7 +102,7 @@ async def _apply_library_link(
 ) -> None:
     """Раздел 7.6: не переданные поля ссылки остаются прежними."""
     passed = body.model_fields_set
-    if not passed.intersection({"library_node_id", "library_arguments"}):
+    if not passed.intersection({"library_node_id", "library_arguments", "library_plan_mode"}):
         return
     await attach_library_source(
         db_session,
@@ -138,6 +110,7 @@ async def _apply_library_link(
         library_node_id=(
             body.library_node_id if "library_node_id" in passed else node.library_node_id
         ),
+        plan_mode=body.library_plan_mode,
         arguments=(
             body.library_arguments if "library_arguments" in passed else node.library_arguments
         ),
@@ -151,12 +124,6 @@ async def create_node(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Node:
     created_by = await _node_owner_id(db_session, pipeline_id=body.pipeline_id, user=current_user)
-    defaults = await resolve_node_execution_defaults(
-        db_session,
-        timeout_seconds=body.timeout_seconds,
-        max_retries=body.max_retries,
-        retry_base_delay_seconds=body.retry_base_delay_seconds,
-    )
     node = Node(
         id=uuid.uuid4(),
         pipeline_id=body.pipeline_id,
@@ -171,11 +138,9 @@ async def create_node(
         script_language=body.script_language,
         script_content=body.script_content,
         docker_image=body.docker_image,
-        timeout_seconds=defaults.timeout_seconds,
-        max_retries=defaults.max_retries,
-        retry_base_delay_seconds=defaults.retry_base_delay_seconds,
         guide_url=body.guide_url,
         is_skipped=body.is_skipped,
+        pause_after=body.pause_after,
         is_library_item=body.pipeline_id is None,
         llm_output_last_n=body.llm_output_last_n,
         reasoning_effort=body.reasoning_effort,
@@ -186,6 +151,7 @@ async def create_node(
         node,
         library_node_id=body.library_node_id,
         arguments=body.library_arguments,
+        plan_mode=body.library_plan_mode,
     )
     await _validate_and_flush(db_session, node)
     await db_session.commit()
@@ -241,7 +207,13 @@ async def update_node(
 ) -> Node:
     node = await _get_node_or_404(db_session, node_id, current_user)
     await db_session.refresh(node, with_for_update=True)
-    await _apply_execution_values(db_session, node, body)
+    if (
+        node.is_library_item
+        and body.node_type is not None
+        and body.node_type != node.node_type
+        and await library_item_is_linked(db_session, node.id)
+    ):
+        raise ConflictError("Нельзя изменить тип промта, используемого в пайплайнах")
     node.revision += 1
     if "slash_name" in body.model_fields_set:
         node.slash_name = normalize_slash_name(body.slash_name)
@@ -267,6 +239,8 @@ async def update_node(
         node.guide_url = body.guide_url
     if body.is_skipped is not None:
         node.is_skipped = body.is_skipped
+    if body.pause_after is not None:
+        node.pause_after = body.pause_after
     if body.is_archived is not None:
         node.is_archived = body.is_archived
     if body.llm_output_last_n is not None:
@@ -274,6 +248,8 @@ async def update_node(
     if "reasoning_effort" in body.model_fields_set:
         node.reasoning_effort = body.reasoning_effort
     await _apply_library_link(db_session, node, body)
+    if body.node_type is not None and node.library_node_id is None:
+        node.node_type = body.node_type
 
     await _validate_and_flush(
         db_session,

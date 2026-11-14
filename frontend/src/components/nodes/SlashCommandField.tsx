@@ -1,7 +1,7 @@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-/** Правило 2: слэш-команда передаётся в сессию буквально. */
+/** Имя нативной команды буквально; настроенные аргументы могут содержать поля задачи. */
 export function SlashCommandField({
   value,
   onChange,
@@ -18,9 +18,9 @@ export function SlashCommandField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
-      <div className="mt-1 text-caption text-text-3">
-        Команда передаётся в сессию без изменений — шаблонизатор не применяется.
-      </div>
+      <p className="mt-1 text-caption text-text-3">
+        {"В аргументах можно использовать поля задачи, например /review {{task.code}}. Имя команды остаётся буквальным."}
+      </p>
     </div>
   );
 }

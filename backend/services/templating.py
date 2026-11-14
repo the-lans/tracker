@@ -11,19 +11,23 @@
   ``"namespace.field" -> значение`` и просто подставляет значения — сам не
   обращается к БД (правило C, "Архитектурные решения" плана реализации:
   сервисы получают данные через DI, не открывают сессию сами).
+  ``render_arguments`` использует тот же рендер для каждого аргумента,
+  сохраняя границы значений; контекст также передаётся вызывающим кодом.
 
-``command_invocation`` слэш-команд НИКОГДА не проходит ни через одну из этих
-функций — правило раздела 4 реализовано на уровне диспетчеризации по
-``node_type`` (раздел 11.3), не здесь.
+Имя слэш-команды передаётся буквально. У настроенной нативной команды
+``render_slash_arguments`` обрабатывает только аргументы. Ручной ввод
+слэш-команд в чате остаётся буквальным.
 """
 
 from __future__ import annotations
 
 import re
+import shlex
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 
 from db.models.enums import NodeType
+from services.command_arguments import CommandArguments, parse_arguments
 from services.errors import ValidationError
 
 VARIABLE_PATTERN = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
@@ -164,8 +168,8 @@ _SLASH_COMMAND_PREFIX = "/"
 
 def is_slash_command_text(text: str) -> bool:
     """
-    Раздел 4, 22: текст, начинающийся с ``/``, — слэш-команда; шаблонизатор
-    её не трогает ни в пайплайне, ни в свободном вводе.
+    Раздел 4, 22: определяет ручной ввод слэш-команды в чате, который
+    передаётся буквально, в отличие от настроенных аргументов ноды.
     """
     return text.lstrip().startswith(_SLASH_COMMAND_PREFIX)
 
@@ -186,3 +190,50 @@ def render_template(template: str, context: Mapping[str, str]) -> str:
         return context[key]
 
     return VARIABLE_PATTERN.sub(_substitute, template)
+
+
+def render_arguments(raw: str, *, name: str = "", context: Mapping[str, str]) -> CommandArguments:
+    """
+    Общий рендер аргументов с сохранением их границ. Контекст и доступные
+    переменные определяет вызывающий код; значения не интерпретируются повторно.
+    """
+    if not VARIABLE_PATTERN.search(raw):
+        return parse_arguments(raw, name=name)
+    # Убираем пробелы внутри {{ ... }}, чтобы shlex не разбил одну переменную.
+    normalized = VARIABLE_PATTERN.sub(lambda m: "{{" + m[1] + "." + m[2] + "}}", raw)
+    arguments = parse_arguments(normalized, name=name)
+    values = [render_template(value, context) for value in arguments.values]
+    return CommandArguments(name=arguments.name, raw=shlex.join(values), values=values)
+
+
+def validate_task_arguments(raw: str) -> None:
+    """
+    В конфигурации аргументов доступны только поля текущей задачи.
+    """
+    for namespace, field in VARIABLE_PATTERN.findall(raw):
+        if namespace != "task" or field not in TASK_FIELDS:
+            raise ValidationError(
+                "В аргументах доступны только поля задачи {{task.*}}: "
+                + "{{"
+                + namespace
+                + "."
+                + field
+                + "}}"
+            )
+
+
+def slash_command_arguments(invocation: str) -> str:
+    parts = invocation.split(maxsplit=1)
+    return parts[1] if len(parts) == 2 else ""
+
+
+def render_slash_arguments(invocation: str, *, context: Mapping[str, str]) -> str:
+    """
+    Имя команды буквально; только настроенные аргументы подставляются один раз.
+    """
+    raw = slash_command_arguments(invocation)
+    if not VARIABLE_PATTERN.search(raw):
+        return invocation
+    validate_task_arguments(raw)
+    arguments = render_arguments(raw, context=context)
+    return invocation.split(maxsplit=1)[0] + " " + arguments.raw

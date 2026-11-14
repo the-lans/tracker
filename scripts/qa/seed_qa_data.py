@@ -38,7 +38,6 @@ from services.pipeline_validation import validate_node_shape, validate_pipeline_
 from services.repository_validation import validate_git_url, validate_repository_name  # noqa: E402
 from services.system_settings import (  # noqa: E402
     get_system_settings,
-    resolve_node_execution_defaults,
     update_integrations,
 )
 
@@ -72,8 +71,6 @@ class NodeSpec:
     command_invocation: str | None = None
     script_language: ScriptLanguage | None = None
     script_file: str | None = None
-    max_retries: int | None = None
-    retry_base_delay_seconds: int | None = None
 
 
 LIBRARY_NODES = (
@@ -123,8 +120,6 @@ PIPELINE_NODES = (
         node_type=NodeType.SCRIPT,
         script_language=ScriptLanguage.PYTHON,
         script_file="run_tests.py",
-        max_retries=TESTS_MAX_RETRIES,
-        retry_base_delay_seconds=TESTS_RETRY_DELAY_SECONDS,
     ),
     NodeSpec(name="Очистка контекста", node_type=NodeType.CLEAR_CONTEXT),
     NodeSpec(
@@ -236,6 +231,9 @@ async def _gitlab_api(db_session: AsyncSession) -> None:
 
 async def _integrations(db_session: AsyncSession) -> None:
     settings = await get_system_settings(db_session)
+    settings.default_max_retries = TESTS_MAX_RETRIES
+    settings.default_retry_base_delay_seconds = TESTS_RETRY_DELAY_SECONDS
+    await db_session.commit()
     if settings.jira_url:
         return
     await update_integrations(db_session, jira_url=MOCKS_URL)
@@ -249,12 +247,6 @@ async def _node(
     pipeline_id: uuid.UUID | None = None,
     order_index: int | None = None,
 ) -> Node:
-    defaults = await resolve_node_execution_defaults(
-        db_session,
-        timeout_seconds=None,
-        max_retries=spec.max_retries,
-        retry_base_delay_seconds=spec.retry_base_delay_seconds,
-    )
     script = (PIPELINE_DIR / spec.script_file).read_text() if spec.script_file else None
     node = Node(
         pipeline_id=pipeline_id,
@@ -266,9 +258,6 @@ async def _node(
         command_invocation=spec.command_invocation,
         script_language=spec.script_language,
         script_content=script,
-        timeout_seconds=defaults.timeout_seconds,
-        max_retries=defaults.max_retries,
-        retry_base_delay_seconds=defaults.retry_base_delay_seconds,
         is_skipped=False,
         is_library_item=pipeline_id is None,
         is_archived=False,

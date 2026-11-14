@@ -71,14 +71,14 @@ class Node(UUIDPrimaryKeyMixin, Base):
     description: Mapped[str | None] = mapped_column(sa.Text)
     node_type: Mapped[NodeType] = mapped_column(pg_enum(NodeType, name="node_type"))
     prompt_template: Mapped[str | None] = mapped_column(sa.Text)
-    # Литеральная строка вызова слэш-команды — никогда не проходит через
-    # шаблонизатор проекта (раздел 4 ТЗ).
+    # Имя слэш-команды буквально; в её настроенных аргументах доступны {{task.*}}.
     command_invocation: Mapped[str | None] = mapped_column(sa.String)
     script_language: Mapped[ScriptLanguage | None] = mapped_column(
         pg_enum(ScriptLanguage, name="script_language"),
     )
     script_content: Mapped[str | None] = mapped_column(sa.Text)
     docker_image: Mapped[str | None] = mapped_column(sa.String)
+    # Legacy columns retained for rollback compatibility; execution uses SystemSettings.
     timeout_seconds: Mapped[int] = mapped_column(sa.Integer, default=_DEFAULT_TIMEOUT_SECONDS)
     max_retries: Mapped[int] = mapped_column(sa.Integer, default=_DEFAULT_MAX_RETRIES)
     retry_base_delay_seconds: Mapped[int] = mapped_column(
@@ -87,6 +87,8 @@ class Node(UUIDPrimaryKeyMixin, Base):
     )
     guide_url: Mapped[str | None] = mapped_column(sa.String)
     is_skipped: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    # Копируется в TaskNode при привязке пайплайна к задаче.
+    pause_after: Mapped[bool] = mapped_column(sa.Boolean, default=False, server_default=sa.false())
     is_library_item: Mapped[bool] = mapped_column(sa.Boolean)
     # Раздел 3.1, 5: параметр N переменной `{{node.llm_output_last_n}}`. NULL —
     # переменная не настроена для ноды (использование в шаблоне этой ноды не
@@ -109,6 +111,13 @@ class Node(UUIDPrimaryKeyMixin, Base):
     # Раздел 19.2: у ноды пайплайна — автор пайплайна, у промта библиотеки —
     # тот, кто его создал; доступ к любой ноде проверяется по этому полю.
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"), index=True)
+
+    @property
+    def library_plan_mode(self) -> bool:
+        """
+        Режим выполнения ссылки; сам библиотечный промт остаётся обычным.
+        """
+        return self.library_node_id is not None and self.node_type is NodeType.PLAN_PROMPT
 
 
 class TaskNode(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

@@ -1,3 +1,5 @@
+import shlex
+
 import pytest
 
 from db.models.enums import NodeType
@@ -5,6 +7,8 @@ from services.errors import ValidationError
 from services.templating import (
     RenderScope,
     is_slash_command_text,
+    render_arguments,
+    render_slash_arguments,
     render_template,
     validate_template_variables,
 )
@@ -154,3 +158,45 @@ class TestNodeGuideUrl:
     def test_forbidden_in_freeform(self) -> None:
         with pytest.raises(ValidationError, match="свободном поле"):
             validate_template_variables("{{node.guide_url}}", scope=RenderScope.FREEFORM)
+
+
+class TestArgumentRendering:
+    @pytest.mark.parametrize("field", ["task.title", "session.id", "custom.value"])
+    def test_context_is_supplied_by_caller(self, field: str) -> None:
+        value = 'текст с "кавычками", пробелами и {{task.code}}'
+
+        arguments = render_arguments(
+            "{{ " + field + " }} tail", name="command", context={field: value}
+        )
+
+        assert arguments.name == "command"
+        assert arguments.values == shlex.split(arguments.raw) == [value, "tail"]
+
+    def test_literal_arguments_keep_original_text(self) -> None:
+        raw = "  'a b'  c "
+
+        arguments = render_arguments(raw, context={})
+
+        assert arguments.raw == raw
+        assert arguments.values == ["a b", "c"]
+
+    def test_missing_context_value_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            render_arguments("{{custom.missing}}", context={})
+
+
+class TestNativeArguments:
+    def test_name_stays_literal_and_values_keep_their_boundaries(self) -> None:
+        value = 'Название с "кавычками" и {{task.code}}'
+        invocation = "/plugin:review {{task.title}} --fast"
+        rendered = render_slash_arguments(invocation, context={"task.title": value})
+        assert shlex.split(rendered) == ["/plugin:review", value, "--fast"]
+
+    def test_without_templates_preserves_whitespace_and_quotes(self) -> None:
+        invocation = "  /review   'some code'  "
+        assert render_slash_arguments(invocation, context={}) == invocation
+
+    @pytest.mark.parametrize("variable", ["env.TOKEN", "node.llm_output", "task.unknown"])
+    def test_unavailable_context_rejected(self, variable: str) -> None:
+        with pytest.raises(ValidationError):
+            render_slash_arguments("/review {{" + variable + "}}", context={})

@@ -26,9 +26,9 @@ from db.models.enums import MergeStatus, NodeLogTriggerType, RepositoryRole
 from db.models.logs import NodeLog
 from db.models.tasks import TaskRepository
 from services.git_ops import is_rebased_onto_base
-from services.manual_queue import DEFAULT_FREEFORM_TIMEOUT_SECONDS
 from services.node_runs import apply_node_outcome, start_node_log
 from services.nodes.dispatch import execute_llm_node_with_timeout
+from services.system_settings import resolve_execution_settings
 from services.task_workspace import load_task_repositories
 
 if TYPE_CHECKING:
@@ -158,7 +158,7 @@ async def resolve_rebase_conflict(
     outcome = await execute_llm_node_with_timeout(
         claude_session,
         prompt,
-        timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
+        timeout_seconds=(await resolve_execution_settings(db_session)).timeout_seconds,
     )
     still_outdated = await find_outdated_repositories(db_session, task=task, workspace=workspace)
     resolved = outcome.success and not still_outdated

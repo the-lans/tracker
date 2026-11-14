@@ -80,4 +80,3 @@ def downgrade() -> None:
         "limit_wait_from_status",
     ):
         op.execute(f"ALTER TABLE tasks DROP COLUMN IF EXISTS {column}")
-

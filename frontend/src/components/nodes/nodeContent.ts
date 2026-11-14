@@ -18,6 +18,7 @@ export function linkedContentPayload(link: LibraryLinkValue) {
     guide_url: null,
     library_node_id: link.libraryNodeId,
     library_arguments: link.arguments.trim() || null,
+    library_plan_mode: link.libraryNodeType === NodeType.PLAIN_PROMPT && (link.planMode ?? false),
   };
 }
 

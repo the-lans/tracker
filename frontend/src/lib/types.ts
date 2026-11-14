@@ -653,11 +653,9 @@ export interface NodeItem {
   script_language: ScriptLanguage | null;
   script_content: string | null;
   docker_image: string | null;
-  timeout_seconds: number;
-  max_retries: number;
-  retry_base_delay_seconds: number;
   guide_url: string | null;
   is_skipped: boolean;
+  pause_after: boolean;
   is_library_item: boolean;
   llm_output_last_n: number | null;
   /** Раздел 11.1: null — уровень по умолчанию аккаунта задачи. */
@@ -668,6 +666,7 @@ export interface NodeItem {
   library_node_id?: string | null;
   /** Аргументы промта библиотеки — как после `/имя` в чате. */
   library_arguments?: string | null;
+  library_plan_mode?: boolean;
 }
 
 export interface NodeCreateRequest {
@@ -684,16 +683,15 @@ export interface NodeCreateRequest {
   script_content?: string | null;
   docker_image?: string | null;
   /** `null` — значение из «Системных настроек» (раздел 15.5). */
-  timeout_seconds?: number | null;
-  max_retries?: number | null;
-  retry_base_delay_seconds?: number | null;
   guide_url?: string | null;
   is_skipped?: boolean;
+  pause_after?: boolean;
   llm_output_last_n?: number | null;
   reasoning_effort?: ReasoningEffort | null;
   /** `null` — свой текст ноды, без ссылки на библиотеку. */
   library_node_id?: string | null;
   library_arguments?: string | null;
+  library_plan_mode?: boolean;
 }
 
 export type NodeUpdateRequest = Partial<NodeCreateRequest> & { is_archived?: boolean };

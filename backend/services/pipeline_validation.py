@@ -18,7 +18,12 @@ import sqlalchemy as sa
 from db.models.enums import NodeType
 from db.models.pipelines import Node, TaskNode
 from services.errors import ValidationError
-from services.templating import RenderScope, validate_template_variables
+from services.templating import (
+    RenderScope,
+    slash_command_arguments,
+    validate_task_arguments,
+    validate_template_variables,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -52,6 +57,13 @@ def validate_node_shape(node: Node, *, check_description: bool = True) -> None:
     библиотеки: при создании и при изменении описания. Прочие правки (в том
     числе архивация) промтов, заведённых до этого правила, не блокируются.
     """
+    if node.node_type is NodeType.SLASH_COMMAND and node.command_invocation:
+        validate_task_arguments(slash_command_arguments(node.command_invocation))
+    if node.pause_after:
+        if node.pipeline_id is None:
+            raise ValidationError("Пауза по умолчанию задаётся только у ноды пайплайна")
+        if node.node_type is NodeType.CLEAR_CONTEXT:
+            raise ValidationError("Пауза после очистки контекста недоступна")
     if node.reasoning_effort is not None and node.node_type not in REASONING_EFFORT_NODE_TYPES:
         raise ValidationError(
             f"Уровень рассуждений не задаётся у ноды {node.node_type} (раздел 3.1 ТЗ)",

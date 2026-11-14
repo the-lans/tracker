@@ -16,6 +16,7 @@ from db.models.tasks import Task
 from db.models.users import User
 from services.crypto import encrypt
 from services.llm_accounts import account_prefix, next_switch_order
+from services.system_settings import get_system_settings
 
 # Сгенерированы `ssh-keygen` только для тестов; отпечатки — вывод `ssh-keygen -lf`.
 SAMPLE_ED25519_BODY = "AAAAC3NzaC1lZDI1NTE5AAAAIMO38aJ53W0R6XWxn4RcBQx6yBRrPornlkBe44lO/nsV"
@@ -156,3 +157,18 @@ async def make_repository(db_session: AsyncSession, **fields: Any) -> Repository
     db_session.add(repository)
     await db_session.flush()
     return repository
+
+
+async def set_execution_settings(
+    db_session: AsyncSession,
+    *,
+    timeout_seconds: int = 60,
+    max_retries: int = 3,
+    retry_base_delay_seconds: int = 0,
+) -> None:
+    """Лимиты запуска задаются только в системных настройках."""
+    settings = await get_system_settings(db_session)
+    settings.default_timeout_seconds = timeout_seconds
+    settings.default_max_retries = max_retries
+    settings.default_retry_base_delay_seconds = retry_base_delay_seconds
+    await db_session.flush()

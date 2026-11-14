@@ -9,7 +9,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app_logging.config import get_logger
@@ -32,7 +32,7 @@ from services.command_arguments import (
 from services.crypto import decrypt, encrypt
 from services.errors import ConflictError, NotFoundError, ValidationError
 from services.manual_admission import ensure_manual_requests_open
-from services.system_settings import resolve_runner_image
+from services.system_settings import resolve_execution_settings, resolve_runner_image
 from services.task_launch import ensure_llm_for_request
 from services.template_context import RenderedText, render_for_task, render_node_guide_url
 
@@ -57,9 +57,6 @@ class CommandSnapshot(BaseModel):
     script_language: ScriptLanguage | None
     script_content: str | None
     docker_image: str | None
-    timeout_seconds: int
-    max_retries: int
-    retry_base_delay_seconds: int
     llm_output_last_n: int | None
     reasoning_effort: ReasoningEffort | None
     # `{{node.guide_url}}` команды; у снимков, сделанных до появления поля, — нет.
@@ -72,6 +69,15 @@ class CommandSnapshot(BaseModel):
         команду, поставленную в очередь до отката.
         """
         return self.model_dump_json(exclude=_GUIDE_FIELD if self.guide_url is None else None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_limits(cls, value: object) -> object:
+        # Очередь могла быть записана предыдущим релизом с лимитами ноды.
+        if isinstance(value, dict):
+            legacy = {"timeout_seconds", "max_retries", "retry_base_delay_seconds"}
+            return {key: item for key, item in value.items() if key not in legacy}
+        return value
 
     def to_node(self, request: TaskManualRequestQueue) -> Node:
         return Node(
@@ -180,6 +186,15 @@ async def enqueue_command(
     snapshot = await snapshot_command(
         session, node=node, invocation=invocation, arguments=arguments
     )
+    # Предыдущий релиз требует эти ключи в зашифрованной очереди при откате.
+    # Новая версия отбрасывает их при чтении и берёт текущие настройки запуска.
+    settings = await resolve_execution_settings(session)
+    payload = {
+        **json.loads(snapshot.to_json()),
+        "timeout_seconds": settings.timeout_seconds,
+        "max_retries": settings.max_retries,
+        "retry_base_delay_seconds": settings.retry_base_delay_seconds,
+    }
     request = TaskManualRequestQueue(
         task_id=task.id,
         requested_by=requested_by,
@@ -189,7 +204,7 @@ async def enqueue_command(
         command_name=node.slash_name,
         command_revision=node.revision,
         client_request_id=client_request_id,
-        command_snapshot_encrypted=encrypt(snapshot.to_json()),
+        command_snapshot_encrypted=encrypt(json.dumps(payload)),
     )
     session.add(request)
     await session.commit()
@@ -220,9 +235,6 @@ async def snapshot_command(
         script_language=node.script_language,
         script_content=node.script_content,
         docker_image=await resolve_runner_image(session, node),
-        timeout_seconds=node.timeout_seconds,
-        max_retries=node.max_retries,
-        retry_base_delay_seconds=node.retry_base_delay_seconds,
         llm_output_last_n=node.llm_output_last_n,
         reasoning_effort=node.reasoning_effort,
         guide_url=node.guide_url,
