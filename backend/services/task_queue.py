@@ -14,7 +14,6 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 
@@ -31,6 +30,7 @@ from services.task_status import (
     reset_task_run,
     transition_task_status,
 )
+from services.tracker_day import TRACKER_TIMEZONE
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -40,8 +40,6 @@ if TYPE_CHECKING:
 
 logger = get_logger("task_queue")
 
-# Раздел 3.1 `system_settings.night_window_*`: ночное окно задаётся по Москве.
-NIGHT_WINDOW_TIMEZONE = ZoneInfo("Europe/Moscow")
 # Воскресенье: от него отсчитывается день недели crontab.
 _CRON_REFERENCE_SUNDAY = date(2000, 1, 2)
 _DAYS_IN_WEEK = 7
@@ -186,7 +184,7 @@ def night_window_active(now: datetime, *, start: time, end: time) -> bool:
     Раздел 14.4: `now` внутри ночного окна по Москве — начало включительно,
     конец нет; окно может переходить через полночь.
     """
-    moment = now.astimezone(NIGHT_WINDOW_TIMEZONE).time().replace(tzinfo=None)
+    moment = now.astimezone(TRACKER_TIMEZONE).time().replace(tzinfo=None)
     if start < end:
         return start <= moment < end
     return moment >= start or moment < end
@@ -200,7 +198,7 @@ def moscow_cron(at: time, *, weekday: int | None = None) -> str:
     """
     # Московское время без перехода на летнее: сдвиг одинаков в любой день.
     day = _CRON_REFERENCE_SUNDAY + timedelta(days=weekday or 0)
-    utc = datetime.combine(day, at, tzinfo=NIGHT_WINDOW_TIMEZONE).astimezone(UTC)
+    utc = datetime.combine(day, at, tzinfo=TRACKER_TIMEZONE).astimezone(UTC)
     day_of_week = "*" if weekday is None else str(utc.isoweekday() % _DAYS_IN_WEEK)
     return f"{utc.minute} {utc.hour} * * {day_of_week}"
 

@@ -20,6 +20,7 @@ _SETTINGS = {
     "night_window_start": "02:30:00",
     "night_window_end": "06:45:00",
     "app_logs_retention_days": 60,
+    "day_start_time": "09:30:00",
 }
 
 
@@ -29,6 +30,7 @@ class TestSystemSettings:
         assert initial.status_code == 200
         assert initial.json()["default_timeout_seconds"] == 600
         assert initial.json()["app_logs_retention_days"] == 30
+        assert initial.json()["day_start_time"] == "08:00:00"
         assert "default_runner_image_python" not in initial.json()
         assert "default_runner_image_bash" not in initial.json()
 
@@ -46,6 +48,8 @@ class TestSystemSettings:
             ("app_logs_retention_days", -1),
             ("app_logs_retention_days", 3651),
             ("app_logs_retention_days", None),
+            ("day_start_time", None),
+            ("day_start_time", "25:00"),
         ],
     )
     async def test_rejects_out_of_range(

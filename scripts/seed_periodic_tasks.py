@@ -131,6 +131,13 @@ _SEED_TASKS: list[tuple[str, str, str, str, int | str | None]] = [
         _DAY,
     ),
     (
+        "sync_google_calendars",
+        "Синхронизация Google Calendar",
+        "Переносит в «Дейли» события подключённых календарей за 7 прошлых дней, сегодня и завтра",
+        "tasks.periodic.sync_google_calendars",
+        15 * _MINUTE,
+    ),
+    (
         "detect_awaiting_input_timeout",
         "Таймаут ожидания ввода",
         "Повторно уведомляет автора задачи, ожидающей решения дольше порога",

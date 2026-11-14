@@ -243,3 +243,20 @@ class EventCategory(StrEnum):
     PERIODIC = "periodic"
     BACKUP = "backup"
     PROFILE = "profile"
+
+
+class DailyEventSource(StrEnum):
+    """Раздел 15.8: событие дня введено вручную или пришло из Google Calendar."""
+
+    MANUAL = "manual"
+    GOOGLE = "google"
+
+
+class GoogleCalendarStatus(StrEnum):
+    """
+    Раздел 19.8: подключение к Google Calendar работает или Google отозвал
+    доступ — нужно войти заново.
+    """
+
+    CONNECTED = "connected"
+    NEEDS_REAUTH = "needs_reauth"

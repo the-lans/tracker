@@ -77,6 +77,9 @@ ARCHIVE_PERIODIC_TASKS="'archive_finished_tasks','cleanup_finished_task_reposito
 # worker не знает.
 RETENTION_MIGRATION="alembic/versions/b7d4e2a9c615_data_retention.py"
 RETENTION_PERIODIC_TASKS="'cleanup_archived_task_sessions','cleanup_archived_task_artifacts','purge_old_app_logs'"
+# Раздел 20.6: синхронизация Google Calendar «Дейли», которой прежний worker не знает.
+DAILY_MIGRATION="alembic/versions/e5c9a3d7f142_daily_plans.py"
+DAILY_PERIODIC_TASKS="'sync_google_calendars'"
 GUIDE_URL_RESET="UPDATE nodes SET prompt_template = regexp_replace(prompt_template, '[{][{][[:space:]]*node[.]guide_url[[:space:]]*[}][}]', coalesce(guide_url, ''), 'g') WHERE prompt_template LIKE '%node.guide_url%'"
 # Флаг обслуживания (services/maintenance.py::MAINTENANCE_KEY): запуск задач
 # отвечает 503, воркер не берёт задачи из queued. TTL — срок ожидания плюс
@@ -776,7 +779,8 @@ step_wait_idle() {
 # прежний код не прочитал бы задачу с незнакомым статусом. Ждущие лимита
 # задачи уходят в failed (точка перезапуска — нода, которая ждала) или
 # обратно в refining; статусы до запуска — в new, а периодические задачи
-# воркера очереди, замера диска и сроков хранения данных, которых прежний
+# воркера очереди, замера диска, сроков хранения данных и синхронизации
+# календаря, которых прежний
 # worker не знает, удаляются; ноды со ссылкой на библиотеку получают копию её
 # промта; архивные задачи возвращаются в done/failed. Одной
 # транзакцией, после checkout: если checkout не удался, БД не тронута. Сбой
@@ -803,7 +807,11 @@ _reset_unknown_task_statuses() {
   fi
   if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${RETENTION_MIGRATION}" 2>/dev/null; then
     log "Обновление: у версии ${commit} нет сроков хранения данных — их периодические задачи удаляются"
-    query+="DELETE FROM periodic_tasks WHERE name IN (${RETENTION_PERIODIC_TASKS})"
+    query+="DELETE FROM periodic_tasks WHERE name IN (${RETENTION_PERIODIC_TASKS}); "
+  fi
+  if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${DAILY_MIGRATION}" 2>/dev/null; then
+    log "Обновление: у версии ${commit} нет «Дейли» — синхронизация Google Calendar удаляется"
+    query+="DELETE FROM periodic_tasks WHERE name IN (${DAILY_PERIODIC_TASKS}); "
   fi
   [ -n "${query}" ] || return 0
   ( cd "${INSTALL_DIR}" \

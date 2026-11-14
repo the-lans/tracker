@@ -5,7 +5,8 @@
 (решение №17) — личные: `user` видит и меняет только записи со своим
 `created_by`, `admin` — все. Чужая запись неотличима от несуществующей (404):
 ответ не раскрывает, что она есть. Репозитории и переменные окружения —
-общие и здесь не проверяются.
+общие и здесь не проверяются. Записи «Дейли» (раздел 15.8) — только свои,
+в том числе у `admin`.
 """
 
 from __future__ import annotations
@@ -31,6 +32,11 @@ if TYPE_CHECKING:
 class _TaskScoped(Protocol):
     @property
     def task_id(self) -> uuid.UUID: ...
+
+
+class _Personal(Protocol):
+    @property
+    def user_id(self) -> uuid.UUID: ...
 
 
 OwnedRecord = Task | Pipeline | Node | Template | LlmAccount
@@ -102,6 +108,21 @@ async def get_task_record_or_404[TaskScopedT: _TaskScoped](
     """
     record = await db_session.get(model, record_id)
     if record is None or record.task_id != task_id:
+        raise NotFoundError(not_found)
+    return record
+
+
+async def get_personal_or_404[PersonalT: _Personal](
+    db_session: AsyncSession,
+    model: type[PersonalT],
+    record_id: uuid.UUID,
+    *,
+    user: User,
+    not_found: str,
+) -> PersonalT:
+    """Личная запись пользователя: чужая неотличима от отсутствующей, и для `admin`."""
+    record = await db_session.get(model, record_id)
+    if record is None or record.user_id != user.id:
         raise NotFoundError(not_found)
     return record
 

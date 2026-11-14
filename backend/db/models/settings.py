@@ -15,6 +15,8 @@ SYSTEM_SETTINGS_ROW_ID = 1
 # Раздел 14.4: ночное окно по московскому времени.
 DEFAULT_NIGHT_WINDOW_START = time(3, 15)
 DEFAULT_NIGHT_WINDOW_END = time(7, 0)
+# Раздел 15.8: день «Дейли» начинается в это время по Москве.
+DEFAULT_DAY_START_TIME = time(8, 0)
 # Раздел 20.4: папка в бакете и число хранимых копий по умолчанию.
 DEFAULT_BACKUP_FOLDER = "Tracker"
 DEFAULT_BACKUP_RETENTION_COUNT = 7
@@ -32,7 +34,8 @@ class SystemSettings(Base):
     Jira (раздел 15.6: сервер, к которому обращается импорт задач, выбирает
     администратор, личный токен — в профиле пользователя).
     Резервное копирование в S3 (раздел 20.4): хранилище, папка, число копий
-    и пароль шифрования. Срок хранения журнала `app_logs` (раздел 17.2).
+    и пароль шифрования. Срок хранения журнала `app_logs` (раздел 17.2) и
+    начало дня «Дейли» (раздел 15.8).
 
     Одна строка на инстанс: `id` всегда равен `SYSTEM_SETTINGS_ROW_ID`.
     """
@@ -72,6 +75,11 @@ class SystemSettings(Base):
         sa.Time,
         default=DEFAULT_NIGHT_WINDOW_END,
         server_default=DEFAULT_NIGHT_WINDOW_END.isoformat(timespec="minutes"),
+    )
+    day_start_time: Mapped[time] = mapped_column(
+        sa.Time,
+        default=DEFAULT_DAY_START_TIME,
+        server_default=DEFAULT_DAY_START_TIME.isoformat(timespec="minutes"),
     )
     # Раздел 20.4: резервное копирование в S3. Секреты — зашифрованы
     # (services/crypto.py), API их не возвращает.

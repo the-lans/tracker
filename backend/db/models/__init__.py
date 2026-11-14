@@ -16,6 +16,13 @@ from __future__ import annotations
 
 from db.models.backups import BackupRun
 from db.models.categories import TaskCategory, TaskCategoryLibraryPrompt
+from db.models.daily import (
+    DailyEvent,
+    DailyPlan,
+    DailyPlanTemplate,
+    GoogleCalendarConnection,
+    TaskDayMark,
+)
 from db.models.env_vars import EnvVariable, TaskEnvVariable
 from db.models.events import Event
 from db.models.llm import LlmAccount
@@ -34,6 +41,9 @@ __all__ = [
     "AllowedEmail",
     "AppLog",
     "BackupRun",
+    "DailyEvent",
+    "DailyPlan",
+    "DailyPlanTemplate",
     "EnvVariable",
     "Event",
     "LlmAccount",
@@ -44,11 +54,13 @@ __all__ = [
     "Pipeline",
     "PushSubscription",
     "GitCredential",
+    "GoogleCalendarConnection",
     "Repository",
     "SystemSettings",
     "Task",
     "TaskCategory",
     "TaskCategoryLibraryPrompt",
+    "TaskDayMark",
     "TaskEnvVariable",
     "TaskLibraryPrompt",
     "TaskManualRequestQueue",
