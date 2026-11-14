@@ -10,7 +10,7 @@ If the task spans several repositories, commit, push and open a separate PR in e
 
 ## 2. Commit
 
-- Stage only files related to the task. Do not commit local-only and temporary files: `.env`, `docker-compose.override.yml`, `.claude/settings.local.json`, `.playwright-mcp/`, scratch scripts, etc. Show the list of files going into the commit.
+- Stage only files related to the task. Do not commit local-only and temporary files: local environment files, `docker-compose.override.yml`, `.claude/settings.local.json`, `.playwright-mcp/`, scratch scripts, etc. Show the list of files going into the commit.
 - Message: Conventional Commits, as in `CLAUDE.md` section 5 and the repo history — `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`, `ci:`, optional scope (`feat(backend):`), imperative subject in English, no trailing period; body explains what changed and why.
 - If there is nothing to commit and the branch is already pushed — go straight to step 4.
 
