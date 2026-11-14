@@ -109,10 +109,12 @@ backend/
               env_variables, mcp_servers, pipelines, nodes, users, profile,
               periodic_tasks, monitoring — страница «Мониторинг», events —
               лента событий, task_categories — категории задач, push,
-              system_settings, jira,
+              system_settings, jira, daily — «Дейли» (раздел 15.8),
+              calendar — вход и синхронизация Google Calendar (раздел 19.8),
               llm_proxy — состояние LLM-прокси для админки);
               tasks/ — эндпоинты задачи по разделам (crud, lifecycle, nodes,
-              manual, env_variables, artifacts; common.py — доступ к задаче
+              manual, env_variables, artifacts, day_marks — отметки на
+              день; common.py — доступ к задаче
               и сигнал воркеру); dependencies.py — текущий пользователь и
               require_admin; schemas/ — схемы запросов и ответов по разделам
               (импорт — `from api.schemas import …`)
@@ -146,6 +148,14 @@ backend/
               очереди; refining_chat.py — чат с агентом в «Уточняется»;
               template_files.py — файлы шаблона, загруженные с диска;
               jira_import.py — импорт задачи из Jira (раздел 15.6);
+              «Дейли» (раздел 15.8): tracker_day.py — день трекера по
+              началу дня, окно «Истории» (DayWindow); daily_clock.py — окно
+              и начало дня из system_settings; day_marks.py — отметки
+              задач; daily_history.py — итог дня по задаче и прошлый
+              день; daily_events.py — события дня; daily_plans.py —
+              шаблон `{{daily.*}}` и планы; google_calendar.py — вход
+              OAuth и подключение, calendar_sync.py — синхронизация
+              событий (раздел 19.8);
               LLM-прокси (раздел 19.7): llm_providers.py — реестр
               провайдеров (уровни рассуждений, опрос расхода, план-режим);
               llm_accounts.py и llm_account_login.py — аккаунты, порядок
@@ -206,10 +216,13 @@ backend/
               сервис, коммит — тоже за ним): finished_tasks.py — кандидаты
               проходов по завершённым задачам, archived_tasks.py — выборка
               «Архива», parent_summaries.py — идёт ли пересказ для
-              дочерней задачи, app_logs.py — удаление старого журнала
+              дочерней задачи, app_logs.py — удаление старого журнала,
+              daily.py — отметки, работа за день, события и календарь
+              «Дейли»
   clients/   — обёртки над Claude Agent SDK (claude_agent.py, в т. ч.
               OfflineAgentClient для задач без LLM-аккаунта и маршрут хода
               TurnRouter), GitLab API (gitlab.py), Jira REST API (jira.py),
+              Google OAuth и Calendar API (google_calendar.py),
               management API LLM-прокси (cliproxy.py), классы HTTP-сбоев
               внешних API (http_errors.py); конфигурация MCP-серверов
               для сессии — services/mcp_config.py
@@ -272,9 +285,13 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               длинного списка с поиском), feedback/QueryState (загрузка, ошибка
               или содержимое) и ErrorState, tasks/TaskCodeLink (код задачи
               ссылкой), tasks/AutoAcceptPlanField и tasks/OccupiesSlotField
-              (настройки задачи и категории);
+              (настройки задачи и категории), actions/ToggleChip
+              (переключатель-«пилюля»: фильтры дашборда, отметки дня),
+              actions/ConfirmActionButton (действие с подтверждением),
+              inputs/TimeField и lib/clockTime.ts (время «ЧЧ:ММ»);
               по разделам — components/{tasks,nodes,profile,admin,
-              taskCategories,repositories,templates,llmAccounts,envVariables};
+              taskCategories,daily,repositories,templates,llmAccounts,
+              envVariables};
               styles/tokens.css + index.css — токены (цвета, шкала шрифтов
               text-caption…text-display), styles/classes.ts — общие наборы
               классов; lib/labels.ts — все подписи и цвета статусов;
@@ -354,7 +371,10 @@ alembic/
                  archived_from_status, сроки архива и очистки у users;
                  сроки хранения: tasks.session_cleaned_at/
                  artifacts_cleaned_at, users.artifacts_retention_days,
-                 system_settings.app_logs_retention_days);
+                 system_settings.app_logs_retention_days, «Дейли»:
+                 task_day_marks, daily_events, daily_plans,
+                 daily_plan_templates, google_calendar_connections,
+                 system_settings.day_start_time);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
