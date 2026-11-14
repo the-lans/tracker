@@ -82,13 +82,13 @@ describe("NodeForm", () => {
       expect(screen.queryByText(/\{\{node\.\*\}\}/) !== null).toBe(nodeVariables);
     });
 
-    test("слэш-команда — без подсказки переменных, передаётся буквально", async ({ api }) => {
+    test("слэш-команда — аргументы поддерживают поля задачи", async ({ api }) => {
       const { user } = renderForm(api);
 
       await chooseType(user, "Слэш-команда");
 
       expect(screen.queryByText(/Доступные переменные/)).not.toBeInTheDocument();
-      expect(screen.getByText(/шаблонизатор не применяется/)).toBeInTheDocument();
+      expect(screen.getByText(/В аргументах можно использовать поля задачи/)).toBeInTheDocument();
     });
   });
 
@@ -116,9 +116,6 @@ describe("NodeForm", () => {
         guide_url: null,
         library_node_id: null,
         library_arguments: null,
-        timeout_seconds: null,
-        max_retries: null,
-        retry_base_delay_seconds: null,
         is_skipped: false,
         reasoning_effort: null,
       });
@@ -167,7 +164,7 @@ describe("NodeForm", () => {
       expect(api.mutations()).toEqual([
         expect.objectContaining({ method: "PATCH", path: "/nodes/n7" }),
       ]);
-      expect(savedBody(api)).toMatchObject({ name: "Реализация с тестами", order_index: 2, timeout_seconds: 600 });
+      expect(savedBody(api)).toMatchObject({ name: "Реализация с тестами", order_index: 2 });
     });
 
     test("ошибка сервера показывается уведомлением", async ({ api, toasts }) => {
@@ -182,59 +179,17 @@ describe("NodeForm", () => {
     });
   });
 
-  describe("таймаут и retry", () => {
-    test("пока значения не меняли, новая нода берёт их из системных настроек", async ({ api }) => {
-      const { user } = renderForm(api);
-
-      const timeout = screen.getByLabelText("Таймаут (сек.)");
-      await expect.poll(() => timeout.getAttribute("placeholder")).toBe("600");
-      expect(timeout).toHaveValue(null);
-      await user.type(screen.getByLabelText("Название"), "Реализация");
-      await user.click(save());
-
-      expect(savedBody(api)).toMatchObject({
-        timeout_seconds: null,
-        max_retries: null,
-        retry_base_delay_seconds: null,
-      });
-    });
-
-    test("введённые значения уходят числами", async ({ api }) => {
-      const { user } = renderForm(api);
-
-      await user.type(screen.getByLabelText("Название"), "Реализация");
-      for (const [label, value] of [
-        ["Таймаут (сек.)", "1800"],
-        ["Максимум попыток (retry)", "5"],
-        ["Базовая задержка retry (сек.)", "0"],
-      ]) {
-        await user.clear(screen.getByLabelText(label));
-        await user.type(screen.getByLabelText(label), value);
-      }
-      await user.click(screen.getByRole("checkbox", { name: "Пропускать по умолчанию" }));
-      await user.click(save());
-
-      expect(savedBody(api)).toMatchObject({
-        timeout_seconds: 1800,
-        max_retries: 5,
-        retry_base_delay_seconds: 0,
-        is_skipped: true,
-      });
-    });
-
-    test.for([
-      { label: "Таймаут (сек.)", field: "timeout_seconds" },
-      { label: "Максимум попыток (retry)", field: "max_retries" },
-      { label: "Базовая задержка retry (сек.)", field: "retry_base_delay_seconds" },
-    ])("очищенное поле «$label» просит значение по умолчанию", async ({ label, field }, { api }) => {
-      const { user } = renderForm(api, { node: makeNode() });
-
-      await user.clear(screen.getByLabelText(label));
-      await user.click(save());
-
-      expect(screen.getByLabelText(label)).toHaveValue(null);
-      expect(savedBody(api)).toHaveProperty(field, null);
-    });
+  test.for(["pipeline", "library"] as const)("%s: лимиты только в админке", async (mode, { api }) => {
+    const { user } = renderForm(api, { mode });
+    expect(screen.queryByLabelText("Таймаут (сек.)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Максимум попыток (retry)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Базовая задержка retry (сек.)")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("Название"), "Нода");
+    if (mode === "library") await user.type(screen.getByLabelText(/Описание/), "Описание");
+    await user.click(save());
+    for (const field of ["timeout_seconds", "max_retries", "retry_base_delay_seconds"]) {
+      expect(savedBody(api)).not.toHaveProperty(field);
+    }
   });
 
   describe("уровень рассуждений", () => {
@@ -401,6 +356,38 @@ describe("промт из библиотеки", () => {
     await user.click(screen.getByRole("combobox", { name: "Промт библиотеки" }));
     await user.click(await screen.findByRole("option", { name: item }));
   }
+
+  test("режим планирования сохраняется у текстового промта библиотеки", async ({ api }) => {
+    api.respond("GET /nodes", library);
+    const { user } = renderForm(api);
+    await user.type(screen.getByLabelText("Название"), "План");
+    await chooseLibrary(user, "Ревью (/review)");
+    await user.click(screen.getByRole("checkbox", { name: "Режим планирования" }));
+    await user.click(save());
+    expect(savedBody(api)).toMatchObject({ library_node_id: "lib-review", library_plan_mode: true });
+  });
+
+  test("сохранённый режим планирования восстанавливается при редактировании", async ({ api }) => {
+    api.respond("GET /nodes", library);
+    renderForm(api, {
+      node: makeNode({ library_node_id: "lib-review", node_type: NodeType.PLAN_PROMPT, library_plan_mode: true }),
+    });
+    expect(await screen.findByRole("checkbox", { name: "Режим планирования" })).toBeChecked();
+    expect(screen.getByRole("combobox", { name: "Тип ноды" })).toHaveTextContent("Промт из библиотеки");
+  });
+
+  test("переход к скрипту сбрасывает режим планирования", async ({ api }) => {
+    api.respond("GET /nodes", library);
+    const { user } = renderForm(api);
+    await user.type(screen.getByLabelText("Название"), "Линт");
+    await chooseLibrary(user, "Ревью (/review)");
+    await user.click(screen.getByRole("checkbox", { name: "Режим планирования" }));
+    await user.click(screen.getByRole("combobox", { name: "Промт библиотеки" }));
+    await user.click(await screen.findByRole("option", { name: "Линт" }));
+    expect(screen.queryByRole("checkbox", { name: "Режим планирования" })).not.toBeInTheDocument();
+    await user.click(save());
+    expect(savedBody(api)).toMatchObject({ library_plan_mode: false, node_type: NodeType.SCRIPT });
+  });
 
   test("в списке — промты автора пайплайна без архивных", async ({ api }) => {
     api.respond("GET /nodes", library);

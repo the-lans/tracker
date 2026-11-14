@@ -16,7 +16,7 @@ from services.system_settings import (
     DEFAULT_NODE_TIMEOUT_SECONDS,
     SystemSettingsValues,
     get_system_settings,
-    resolve_node_execution_defaults,
+    resolve_execution_settings,
     resolve_runner_image,
     update_system_settings,
 )
@@ -68,28 +68,21 @@ class TestNodeExecutionDefaults:
     async def test_empty_values_from_settings(self, db_session: AsyncSession) -> None:
         await update_system_settings(db_session, values=_CUSTOM_SETTINGS)
 
-        defaults = await resolve_node_execution_defaults(
-            db_session,
-            timeout_seconds=None,
-            max_retries=None,
-            retry_base_delay_seconds=None,
-        )
+        defaults = await resolve_execution_settings(db_session)
 
         assert (defaults.timeout_seconds, defaults.max_retries) == (60, 1)
         assert defaults.retry_base_delay_seconds == 0
 
-    async def test_explicit_values_kept(self, db_session: AsyncSession) -> None:
-        await update_system_settings(db_session, values=_CUSTOM_SETTINGS)
-
-        defaults = await resolve_node_execution_defaults(
-            db_session,
-            timeout_seconds=30,
-            max_retries=0,
-            retry_base_delay_seconds=7,
+    async def test_settings_reread_in_long_lived_session(self, db_session: AsyncSession) -> None:
+        settings = await update_system_settings(db_session, values=_CUSTOM_SETTINGS)
+        assert (await resolve_execution_settings(db_session)).timeout_seconds == 60
+        await db_session.execute(
+            sa.update(SystemSettings)
+            .where(SystemSettings.id == settings.id)
+            .values(default_timeout_seconds=17)
+            .execution_options(synchronize_session=False)
         )
-
-        assert (defaults.timeout_seconds, defaults.max_retries) == (30, 0)
-        assert defaults.retry_base_delay_seconds == 7
+        assert (await resolve_execution_settings(db_session)).timeout_seconds == 17
 
 
 class TestResolveRunnerImage:

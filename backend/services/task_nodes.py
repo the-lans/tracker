@@ -27,7 +27,6 @@ from services.pipeline_validation import (
     validate_custom_node_templates,
     validate_node_shape,
 )
-from services.system_settings import resolve_node_execution_defaults
 from services.task_status import PRE_LAUNCH_STATUSES, lock_task, restart_point_started
 
 if TYPE_CHECKING:
@@ -269,6 +268,7 @@ async def replace_pipeline_snapshot(
                 node_id=node.id,
                 order_index=node.order_index or 0,
                 is_enabled=node.id not in disabled_node_ids,
+                pause_after=node.pause_after,
             ),
         )
     await db_session.flush()
@@ -346,17 +346,8 @@ async def add_custom_task_node(
     )
     await _ensure_position_editable(db_session, task=locked, order_index=position)
 
-    defaults = await resolve_node_execution_defaults(
-        db_session,
-        timeout_seconds=None,
-        max_retries=None,
-        retry_base_delay_seconds=None,
-    )
     node = Node(
         task_id=task.id,
-        timeout_seconds=defaults.timeout_seconds,
-        max_retries=defaults.max_retries,
-        retry_base_delay_seconds=defaults.retry_base_delay_seconds,
         is_skipped=False,
         is_library_item=False,
         is_archived=False,

@@ -1,6 +1,9 @@
 import asyncio
+import json
+import shlex
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pytest
 import sqlalchemy as sa
@@ -30,25 +33,34 @@ from db.models.logs import NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
 from db.models.users import User
+from services import pipeline_orchestrator
 from services.crypto import encrypt
 from services.errors import ValidationError
 from services.node_runs import SESSION_ERROR_MESSAGE
+from services.nodes.dispatch import NodeExecutionOutcome, execute_node
 from services.pipeline_orchestrator import (
     CheckpointDecision,
     StopGuard,
     compute_retry_delay_seconds,
     run_pipeline,
 )
-from services.plan_mode import ActiveNodeContext
+from services.plan_mode import ActiveNodeContext, PlanDecisionOption, build_can_use_tool_callback
 from services.task_control import TaskControlCommand, request_task_control
 from services.task_status import transition_task_status
-from tests.factories import build_git_credential
-from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
+from tests.factories import build_git_credential, set_execution_settings
+from tests.fakes import (
+    FakeClaudeAgentClient,
+    make_assistant_error,
+    make_result_message,
+    patch_plan_mode_signals,
+)
+from tests.test_plan_mode import _TEST_TOOL_CONTEXT, _non_closing_session_factory, _plan_accepted
 
 _GENEROUS_TIMEOUT_SECONDS = 30
 
 
 async def _make_task_with_pipeline(db_session: AsyncSession) -> Task:
+    await set_execution_settings(db_session, timeout_seconds=_GENEROUS_TIMEOUT_SECONDS)
     user = User(email=f"{uuid.uuid4()}@example.com", role=UserRole.USER)
     db_session.add(user)
     await db_session.flush()
@@ -91,6 +103,16 @@ async def _add_node(
     }
     defaults.update(node_kwargs)
     node = Node(**defaults)
+    if any(
+        field in node_kwargs
+        for field in ("timeout_seconds", "max_retries", "retry_base_delay_seconds")
+    ):
+        await set_execution_settings(
+            db_session,
+            timeout_seconds=node.timeout_seconds,
+            max_retries=node.max_retries,
+            retry_base_delay_seconds=node.retry_base_delay_seconds,
+        )
     db_session.add(node)
     await db_session.flush()
     db_session.add(
@@ -209,7 +231,7 @@ async def test_run_pipeline_retries_and_fails_after_exhausting_attempts(
     tmp_path: Path,
 ) -> None:
     task = await _make_task_with_pipeline(db_session)
-    await _add_node(
+    node = await _add_node(
         db_session,
         task,
         order_index=0,
@@ -225,6 +247,9 @@ async def test_run_pipeline_retries_and_fails_after_exhausting_attempts(
         node_type=NodeType.PLAIN_PROMPT,
         prompt_template="никогда не выполнится",
     )
+    # Старые значения ноды не должны влиять на системную политику.
+    node.max_retries = 1
+    node.retry_base_delay_seconds = 99
     fake = FakeClaudeAgentClient(
         messages_per_query=[
             [make_result_message(is_error=True)],
@@ -1084,8 +1109,138 @@ class TestCustomTaskNode:
             )
 
 
+class TestExecutionSettings:
+    async def test_existing_nodes_use_fresh_system_timeout(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        for index in range(2):
+            node = await _add_node(
+                db_session,
+                task,
+                order_index=index,
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template="p",
+            )
+            node.timeout_seconds = 1
+        await set_execution_settings(db_session, timeout_seconds=31)
+        seen: list[int] = []
+        execute = execute_node
+
+        async def record(node: Node, **kwargs: Any) -> NodeExecutionOutcome:
+            seen.append(kwargs["timeout_seconds"])
+            return await execute(node, **kwargs)
+
+        async def checkpoint(index: int) -> CheckpointDecision:
+            if index == 1:
+                await set_execution_settings(db_session, timeout_seconds=17)
+            return CheckpointDecision.CONTINUE
+
+        monkeypatch.setattr(pipeline_orchestrator, "execute_node", record)
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 2)
+        result = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            checkpoint=checkpoint,
+        )
+
+        assert result.completed
+        assert seen == [31, 17]
+
+
 class TestLibraryLink:
     """Раздел 7.6: нода выполняет текущую версию промта библиотеки со своими аргументами."""
+
+    @pytest.mark.parametrize("pause_after", [False, True])
+    @pytest.mark.parametrize("auto_accept", [False, True])
+    async def test_plan_approval_and_next_node(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        tmp_path: Path,
+        pause_after: bool,
+        auto_accept: bool,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        source = await self._library_item(
+            db_session,
+            task,
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="Plan for $1",
+        )
+        await _add_node(
+            db_session,
+            task,
+            order_index=0,
+            node_type=NodeType.PLAN_PROMPT,
+            library_node_id=source.id,
+            library_arguments="{{task.code}}",
+            pause_after=pause_after,
+        )
+        await _add_node(
+            db_session,
+            task,
+            order_index=1,
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="Implement {{node.plan_text}}",
+        )
+        context = ActiveNodeContext(auto_accept_plan=auto_accept)
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=redis_client,
+            decision_wait_timeout_seconds=5,
+        )
+        reviewed = asyncio.Event()
+
+        async def accept_manually(**_kwargs: object) -> bool:
+            assert pause_after
+            log = await db_session.get(NodeLog, context.node_log_id)
+            assert log is not None and log.status is NodeLogStatus.AWAITING_DECISION
+            await db_session.refresh(task)
+            assert task.status is TaskStatus.PLAN_REVIEW
+            assert len(fake.queries) == 1
+            reviewed.set()
+            log.user_input_text = PlanDecisionOption.ACCEPT_AUTO
+            await db_session.commit()
+            return True
+
+        patch_plan_mode_signals(monkeypatch, accept_manually)
+
+        async def agent_turn() -> None:
+            if context.plan_mode:
+                result = await callback(
+                    "ExitPlanMode", {"plan": "1. Add validation"}, _TEST_TOOL_CONTEXT
+                )
+                assert _plan_accepted(result)
+
+        async def unexpected_second_pause() -> CheckpointDecision:
+            raise AssertionError("An accepted plan must not pause twice")
+
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()], [make_result_message()]],
+            on_query=agent_turn,
+        )
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            active_node_context=context,
+            pause_after_node=unexpected_second_pause,
+        )
+        assert outcome.completed
+        assert reviewed.is_set() is pause_after
+        assert fake.permission_modes == ["plan", "acceptEdits"]
+        assert fake.queries == [f"Plan for {task.code}", "Implement 1. Add validation"]
+        logs = await _node_logs_for(db_session, task.id)
+        assert all(log.status is NodeLogStatus.SUCCESS for log in logs)
 
     async def _library_item(self, db_session: AsyncSession, task: Task, **fields: object) -> Node:
         node = Node(
@@ -1099,6 +1254,72 @@ class TestLibraryLink:
         db_session.add(node)
         await db_session.flush()
         return node
+
+    @pytest.mark.parametrize("placeholder", ["$1", "$ARGUMENTS[1]", "$ARGUMENTS"])
+    async def test_task_code_argument(
+        self, db_session: AsyncSession, tmp_path: Path, placeholder: str
+    ) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        source = await self._library_item(
+            db_session,
+            task,
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="https://riorise.atlassian.net/browse/" + placeholder,
+        )
+        await _add_node(
+            db_session,
+            task,
+            order_index=0,
+            node_type=NodeType.PLAIN_PROMPT,
+            library_node_id=source.id,
+            library_arguments="{{ task.code }}",
+        )
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+
+        outcome = await run_pipeline(
+            db_session, task=task, claude_session=ClaudeCodeSession(fake), repos_path=tmp_path
+        )
+
+        assert outcome.completed is True
+        assert fake.queries == [f"https://riorise.atlassian.net/browse/{task.code}"]
+        assert (await _node_logs_for(db_session, task.id))[0].rendered_prompt == fake.queries[0]
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            'Название с "кавычками" и пробелами',
+            "$(touch /tmp/should-not-run) ' \\ \n next",
+            "{{env.SECRET}} $ARGUMENTS[1] {{task.code}}",
+            "",
+        ],
+    )
+    async def test_task_value_stays_one_literal_argument(
+        self, db_session: AsyncSession, tmp_path: Path, title: str
+    ) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        task.title = title
+        source = await self._library_item(
+            db_session,
+            task,
+            node_type=NodeType.PLAIN_PROMPT,
+            prompt_template="Первый: $1; второй: $2",
+        )
+        await _add_node(
+            db_session,
+            task,
+            order_index=0,
+            node_type=NodeType.PLAIN_PROMPT,
+            library_node_id=source.id,
+            library_arguments='"{{task.title}}" tail',
+        )
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+
+        outcome = await run_pipeline(
+            db_session, task=task, claude_session=ClaudeCodeSession(fake), repos_path=tmp_path
+        )
+
+        assert outcome.completed is True
+        assert fake.queries == [f"Первый: {title}; второй: tail"]
 
     async def test_prompt_uses_current_text_and_arguments(
         self,
@@ -1148,15 +1369,16 @@ class TestLibraryLink:
         [
             ("--fast 'модуль оплаты'", "/review src --fast 'модуль оплаты'"),
             (None, "/review src"),
+            ("{{task.code}}", None),
         ],
-        ids=["с-аргументами", "без-аргументов"],
+        ids=["с-аргументами", "без-аргументов", "подстановка-кода"],
     )
     async def test_slash_command_gets_arguments(
         self,
         db_session: AsyncSession,
         tmp_path: Path,
         arguments: str | None,
-        sent: str,
+        sent: str | None,
     ) -> None:
         task = await _make_task_with_pipeline(db_session)
         source = await self._library_item(
@@ -1180,17 +1402,22 @@ class TestLibraryLink:
         )
 
         assert outcome.completed is True
-        assert fake.queries == [sent]
+        assert fake.queries == [sent or f"/review src {task.code}"]
 
-    async def test_script_gets_arguments(self, db_session: AsyncSession, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("arguments", ["'a b' c", "{{task.title}} {{task.code}}"])
+    async def test_script_gets_arguments(
+        self, db_session: AsyncSession, tmp_path: Path, arguments: str
+    ) -> None:
         task = await _make_task_with_pipeline(db_session)
+        task.title = 'Название с "кавычками" и \\ слэшем'
         source = await self._library_item(
             db_session,
             task,
             node_type=NodeType.SCRIPT,
             script_language=ScriptLanguage.PYTHON,
             script_content=(
-                "import os, sys\nprint(sys.argv[1:], os.environ['TRACKER_COMMAND_ARGUMENTS'])"
+                "import json, os, sys\n"
+                "print(json.dumps([sys.argv[1:], os.environ['TRACKER_COMMAND_ARGUMENTS']]))"
             ),
         )
         await _add_node(
@@ -1199,7 +1426,7 @@ class TestLibraryLink:
             order_index=0,
             node_type=NodeType.SCRIPT,
             library_node_id=source.id,
-            library_arguments="'a b' c",
+            library_arguments=arguments,
         )
         session = ClaudeCodeSession(FakeClaudeAgentClient(messages_per_query=[]))
 
@@ -1209,4 +1436,8 @@ class TestLibraryLink:
 
         assert outcome.completed is True
         logs = await _node_logs_for(db_session, task.id)
-        assert (logs[0].script_stdout or "").strip() == "['a b', 'c'] 'a b' c"
+        expected = ["a b", "c"] if arguments == "'a b' c" else [task.title, task.code]
+        positional, raw = json.loads(logs[0].script_stdout or "")
+        assert positional == shlex.split(raw) == expected
+        if arguments == "'a b' c":
+            assert raw == arguments

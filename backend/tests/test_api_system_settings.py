@@ -7,7 +7,10 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from db.models.enums import NodeType, ScriptLanguage
-from services.system_settings import get_jira_url
+from services.system_settings import (
+    get_jira_url,
+    resolve_execution_settings,
+)
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -77,8 +80,10 @@ class TestSystemSettings:
         assert response.status_code == 403
 
 
-class TestNewNodeDefaults:
-    async def test_taken_from_settings(self, admin_client: AsyncClient) -> None:
+class TestExecutionPolicy:
+    async def test_taken_from_settings(
+        self, admin_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         await admin_client.put("/system-settings", json=_SETTINGS)
 
         response = await admin_client.post(
@@ -94,13 +99,19 @@ class TestNewNodeDefaults:
 
         assert response.status_code == 201, response.text
         body = response.json()
-        assert body["timeout_seconds"] == 900
-        assert body["max_retries"] == 2
-        assert body["retry_base_delay_seconds"] == 10
+        assert not {"timeout_seconds", "max_retries", "retry_base_delay_seconds"} & body.keys()
+        settings = await resolve_execution_settings(db_session)
+        assert (
+            settings.timeout_seconds,
+            settings.max_retries,
+            settings.retry_base_delay_seconds,
+        ) == (900, 2, 10)
         # Образ раннера выбирается при запуске, а не записывается в ноду.
         assert body["docker_image"] is None
 
-    async def test_explicit_values_kept(self, admin_client: AsyncClient) -> None:
+    async def test_explicit_values_cannot_override_admin(
+        self, admin_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         await admin_client.put("/system-settings", json=_SETTINGS)
 
         response = await admin_client.post(
@@ -115,8 +126,10 @@ class TestNewNodeDefaults:
             },
         )
 
-        assert response.json()["timeout_seconds"] == 30
-        assert response.json()["max_retries"] == 1
+        assert response.status_code == 201, response.text
+        assert not {"timeout_seconds", "max_retries"} & response.json().keys()
+        settings = await resolve_execution_settings(db_session)
+        assert (settings.timeout_seconds, settings.max_retries) == (900, 2)
         assert response.json()["docker_image"] is None
 
 

@@ -44,7 +44,7 @@ from services.task_control import (
     request_manual_stop,
     request_task_control,
 )
-from tests.factories import make_llm_account, make_task, make_user
+from tests.factories import make_llm_account, make_task, make_user, set_execution_settings
 from tests.fakes import FakeClaudeAgentClient, make_assistant_error, make_result_message
 
 _GENEROUS_TIMEOUT_SECONDS = 30
@@ -69,6 +69,7 @@ async def _make_library_node(
     node_type: NodeType = NodeType.PLAIN_PROMPT,
     prompt_template: str | None = "библиотечный промт",
 ) -> Node:
+    await set_execution_settings(db_session, timeout_seconds=_GENEROUS_TIMEOUT_SECONDS)
     node = Node(
         created_by=created_by,
         name="library-node",
@@ -891,7 +892,7 @@ class TestLibraryPromptTimeout:
         task, task_library_prompt, request = await _enqueue_library_run(db_session)
         node = await db_session.get(Node, task_library_prompt.node_id)
         assert node is not None
-        node.timeout_seconds = 1
+        await set_execution_settings(db_session, timeout_seconds=1)
         node.max_retries = 3
         await db_session.flush()
 

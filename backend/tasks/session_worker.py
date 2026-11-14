@@ -46,7 +46,7 @@ from services.llm_account_choice import LlmLimitWaitError
 from services.llm_routing import llm_session_token
 from services.maintenance import maintenance_active
 from services.manual_admission import close_manual_requests, ensure_manual_requests_drained
-from services.manual_queue import DEFAULT_FREEFORM_TIMEOUT_SECONDS, process_manual_queue_once
+from services.manual_queue import process_manual_queue_once
 from services.mcp_config import build_mcp_server_config
 from services.output_stream import build_output_publisher
 from services.parent_summary import (
@@ -83,6 +83,7 @@ from services.session_heartbeat import (
     keep_session_heartbeat,
 )
 from services.session_lifecycle import plan_session_start
+from services.system_settings import resolve_execution_settings
 from services.task_artifacts import task_artifacts_dir
 from services.task_control import (
     TaskControlCommand,
@@ -922,7 +923,7 @@ async def _summarize_parent_in_fork(
             child=child,
             parent=parent,
             claude_session=fork,
-            timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
+            timeout_seconds=(await resolve_execution_settings(db_session)).timeout_seconds,
         )
     finally:
         await _disconnect_quietly(fork)
@@ -1197,7 +1198,7 @@ async def _run_connected_session(
             child=task,
             summary=parent_summary,
             claude_session=session,
-            timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
+            timeout_seconds=(await resolve_execution_settings(db_session)).timeout_seconds,
             active_node_context=control.active_node_context,
         )
     # Конфликт, оставшийся от прошлого прогона (перезапуск из `failed`,

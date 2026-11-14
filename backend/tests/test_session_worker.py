@@ -75,7 +75,14 @@ from services.task_nodes import CustomNodeDraft, add_custom_task_node
 from services.task_status import transition_task_status
 from services.task_workspace import build_branch_name
 from tasks import session_worker
-from tests.factories import make_llm_account, make_pipeline, make_repository, make_task, make_user
+from tests.factories import (
+    make_llm_account,
+    make_pipeline,
+    make_repository,
+    make_task,
+    make_user,
+    set_execution_settings,
+)
 from tests.fakes import (
     FakeClaudeAgentClient,
     make_assistant_error,
@@ -99,7 +106,6 @@ if TYPE_CHECKING:
 
 _REPOSITORY_NAME = "backend"
 _LIMIT_RESET = datetime(2099, 1, 1, 12, 0, tzinfo=UTC)
-
 
 async def _make_task(
     db_session: AsyncSession,
@@ -149,6 +155,7 @@ async def _add_node(
     node_type: NodeType = NodeType.PLAIN_PROMPT,
     pause_after: bool = False,
 ) -> Node:
+    await set_execution_settings(db_session, max_retries=1)
     node = Node(
         created_by=task.created_by,
         pipeline_id=task.pipeline_id,
@@ -1202,9 +1209,7 @@ class TestAccountSwitching:
     ) -> None:
         task, start, spare = await self._task_with_spare(db_session, nodes=1)
         # Вторая попытка ноды — повтор по retry-политике (раздел 11.7).
-        await db_session.execute(
-            sa.update(Node).where(Node.pipeline_id == task.pipeline_id).values(max_retries=2),
-        )
+        await set_execution_settings(db_session, max_retries=2)
         worker_env.client = FakeClaudeAgentClient(
             messages_per_query=[
                 [make_assistant_error("rate_limit"), make_result_message(is_error=True)],
@@ -1395,7 +1400,7 @@ class TestNodeTimeoutWhileAwaitingDecision:
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
         plan_node = await _add_node(db_session, task, order_index=0, node_type=NodeType.PLAN_PROMPT)
         plan_node.prompt_template = "Составь план"
-        plan_node.timeout_seconds = 1
+        await set_execution_settings(db_session, timeout_seconds=1, max_retries=1)
         await db_session.flush()
 
         async def user_decides_late(*_args: Any, **_kwargs: Any) -> bool:
@@ -1654,8 +1659,8 @@ class TestFailureKinds:
 
         monkeypatch.setattr(task_status_module, "notify_task_event", record)
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
-        node = await _add_node(db_session, task, order_index=0)
-        node.max_retries = 3
+        await _add_node(db_session, task, order_index=0)
+        await set_execution_settings(db_session, max_retries=3)
         failing_turn: list[Message] = [
             make_assistant_error("authentication_failed"),
             make_result_message(is_error=True, session_id="sess-worker"),
@@ -1676,8 +1681,8 @@ class TestFailureKinds:
     ) -> None:
         task = await _make_task(db_session, status=TaskStatus.QUEUED)
         await _add_node(db_session, task, order_index=0)
-        node = await _add_node(db_session, task, order_index=1)
-        node.max_retries = 2
+        await _add_node(db_session, task, order_index=1)
+        await set_execution_settings(db_session, max_retries=2)
         crashed = FakeClaudeAgentClient(
             messages_per_query=_results(1),
             failures_per_query={1: ProcessError("CLI упал", exit_code=1)},
@@ -2094,8 +2099,8 @@ class TestLimitWait:
     ) -> None:
         """Попытка, ждавшая сброса, — вторая из двух: после сброса повторов больше нет."""
         task, account = await self._waiting_task(db_session, worker_env, nodes=0)
-        node = await _add_node(db_session, task, order_index=0)
-        node.max_retries = 2
+        await _add_node(db_session, task, order_index=0)
+        await set_execution_settings(db_session, max_retries=2)
         failing_turn: list[Message] = [
             make_assistant_error("server_error"),
             make_result_message(is_error=True, session_id="sess-worker"),

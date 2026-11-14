@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { Check, Pause, Pencil, Trash2 } from "lucide-react";
+import { Check, Pencil, Trash2 } from "lucide-react";
+import { PauseAfterButton } from "@/components/common/actions/PauseAfterButton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { NODE_TYPE_LABEL } from "@/lib/labels";
@@ -82,20 +83,12 @@ export function TaskNodeRow({
         </>
       )}
       {pausable && (
-        <button
-          type="button"
-          aria-label={`Пауза после ноды ${taskNode.name}`}
-          aria-pressed={taskNode.pause_after}
-          title="Остановиться после этой ноды, чтобы продолжить диалог"
+        <PauseAfterButton
+          name={taskNode.name}
+          pressed={taskNode.pause_after}
           disabled={busy}
-          onClick={() => onTogglePause(!taskNode.pause_after)}
-          className={cn(
-            "touch-hit flex size-6 shrink-0 items-center justify-center rounded-md text-text-3 disabled:opacity-50",
-            taskNode.pause_after && "bg-accent-tint text-accent",
-          )}
-        >
-          <Pause className="size-3.5" />
-        </button>
+          onChange={onTogglePause}
+        />
       )}
       {done && (
         <Check className="size-3.5 shrink-0 text-success" aria-label="выполнено" />

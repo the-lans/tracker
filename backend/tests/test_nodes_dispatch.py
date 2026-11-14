@@ -77,7 +77,7 @@ async def test_resolve_node_prompt_renders_plain_prompt_template(db_session: Asy
     assert prompt.text == f"Задача {task.code}"
 
 
-async def test_resolve_node_prompt_returns_slash_command_literally_unmodified(
+async def test_resolve_node_prompt_expands_only_native_arguments(
     db_session: AsyncSession,
 ) -> None:
     task = await _make_task(db_session)
@@ -97,9 +97,8 @@ async def test_resolve_node_prompt_returns_slash_command_literally_unmodified(
 
     prompt = await resolve_node_prompt(db_session, node=node, task=task)
 
-    # Раздел 4: слэш-команда никогда не проходит через шаблонизатор — если
-    # бы прошла, "{{task.code}}" был бы заменён на реальный код задачи.
-    assert prompt.text == prompt.display == literal_invocation
+    # Позиционные маркеры в нативной команде не интерпретируются.
+    assert prompt.text == prompt.display == f"/review {task.code} '$ARGUMENTS'"
 
 
 async def test_resolve_node_prompt_raises_when_slash_command_missing_invocation(
@@ -198,7 +197,9 @@ async def test_execute_script_node_returns_success_outcome(tmp_path: Path) -> No
         is_archived=False,
     )
 
-    outcome = await execute_script_node(node, repos_path=tmp_path)
+    outcome = await execute_script_node(
+        node, repos_path=tmp_path, timeout_seconds=_GENEROUS_TIMEOUT_SECONDS
+    )
 
     assert outcome.success is True
     assert outcome.script_exit_code == 0
@@ -217,7 +218,9 @@ async def test_execute_script_node_returns_failure_outcome_on_nonzero_exit(tmp_p
         is_archived=False,
     )
 
-    outcome = await execute_script_node(node, repos_path=tmp_path)
+    outcome = await execute_script_node(
+        node, repos_path=tmp_path, timeout_seconds=_GENEROUS_TIMEOUT_SECONDS
+    )
 
     assert outcome.success is False
     assert outcome.script_exit_code == 3
@@ -234,7 +237,9 @@ async def test_execute_script_node_raises_when_missing_content(tmp_path: Path) -
     )
 
     with pytest.raises(ValueError, match="script_content"):
-        await execute_script_node(node, repos_path=tmp_path)
+        await execute_script_node(
+            node, repos_path=tmp_path, timeout_seconds=_GENEROUS_TIMEOUT_SECONDS
+        )
 
 
 async def test_execute_node_dispatches_script_type_to_docker(tmp_path: Path) -> None:
@@ -490,7 +495,12 @@ class TestScriptRunnerImage:
             is_archived=False,
         )
 
-        await execute_script_node(node, repos_path=tmp_path, runner_image=runner_image)
+        await execute_script_node(
+            node,
+            repos_path=tmp_path,
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
+            runner_image=runner_image,
+        )
 
         assert seen == [expected]
 
@@ -662,6 +672,7 @@ class TestScriptTaskPaths:
 
         outcome = await execute_script_node(
             node,
+            timeout_seconds=_GENEROUS_TIMEOUT_SECONDS,
             repos_path=repos_path,
             # Переменная задачи с тем же именем путь не подменяет.
             env={"TASK_ARTIFACTS_PATH": "/tmp"},

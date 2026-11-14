@@ -7,6 +7,8 @@ import { Card } from "@/components/ui/card";
 import { LibraryLinkLabel } from "@/components/nodes/LibraryLinkLabel";
 import { NodeForm } from "@/components/nodes/NodeForm";
 import { NodeReorderButton } from "@/components/nodes/NodeReorderButton";
+import { PipelineNodeActivity } from "@/components/nodes/PipelineNodeActivity";
+import { PipelineNodePause } from "@/components/nodes/PipelineNodePause";
 import { NodeTypeIcon } from "@/components/tasks/NodeTypeIcon";
 import { nodeTypeLabel } from "@/lib/labels";
 import { usePipeline, usePipelineNodes } from "@/hooks/usePipelines";
@@ -48,6 +50,14 @@ export function PipelineDetailPage() {
 
       <div className={cn(PAGE_BODY, "py-5")}>
         {isLoading && <LoadingState />}
+        {sorted.length > 0 && (
+          <p className="mb-3 max-w-2xl text-small text-text-3">
+            Активные ноды включены в задаче по умолчанию. Остальные остаются в пайплайне —
+            их можно включить при выборе пайплайна или в самой задаче.
+            Изменение активности не меняет уже созданные задачи.
+            Кнопка паузы задаёт остановку после ноды по умолчанию для новых задач.
+          </p>
+        )}
         <div className="flex max-w-2xl flex-col gap-2">
           {sorted.map((node, index) => (
             <Card key={node.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -66,7 +76,9 @@ export function PipelineDetailPage() {
                   />
                 )}
               </button>
+              <PipelineNodeActivity node={node} />
               <div className="ml-auto flex shrink-0 items-center">
+              <PipelineNodePause node={node} />
               <NodeReorderButton node={node} neighbor={sorted[index - 1]} direction="up" />
               <NodeReorderButton node={node} neighbor={sorted[index + 1]} direction="down" />
               <ConfirmDeleteButton

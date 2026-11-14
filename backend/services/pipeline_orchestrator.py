@@ -45,7 +45,11 @@ from services.nodes.dispatch import (
     sent_prompt,
 )
 from services.session_context import forget_task_session
-from services.system_settings import resolve_runner_image
+from services.system_settings import (
+    ExecutionSettings,
+    resolve_execution_settings,
+    resolve_runner_image,
+)
 from services.task_control import TaskControlCommand, read_task_control, run_stoppable
 from services.task_nodes import load_task_node_rows
 
@@ -179,6 +183,7 @@ async def run_pipeline_node_with_retry(
     `node_logs`, воркер уводит задачу в `awaiting_limit`. ``first_attempt`` —
     с какой попытки продолжить нода, ждавшая сброса лимита.
     """
+    settings = await resolve_execution_settings(db_session)
     attempt = first_attempt
     while True:
         try:
@@ -190,6 +195,7 @@ async def run_pipeline_node_with_retry(
             task=task,
             node=node,
             attempt=attempt,
+            settings=settings,
             claude_session=claude_session,
             repos_path=repos_path,
             active_node_context=active_node_context,
@@ -205,6 +211,7 @@ async def run_pipeline_node_with_retry(
             attempt=attempt,
             stop_guard=stop_guard,
             can_recover_session=recover_session is not None,
+            max_retries=settings.max_retries,
         )
         if final is not None:
             return final
@@ -213,6 +220,7 @@ async def run_pipeline_node_with_retry(
             node=node,
             attempt=attempt,
             recover_session=recover_session,
+            retry_base_delay_seconds=settings.retry_base_delay_seconds,
         )
         attempt += 1
 
@@ -223,6 +231,7 @@ async def _run_pipeline_attempt(
     task: Task,
     node: Node,
     attempt: int,
+    settings: ExecutionSettings,
     claude_session: ClaudeCodeSession,
     repos_path: Path,
     active_node_context: ActiveNodeContext | None,
@@ -234,7 +243,7 @@ async def _run_pipeline_attempt(
     """
     history = await load_node_context_history(db_session, task)
     # Раздел 7.6: нода со ссылкой выполняет текущую версию промта библиотеки.
-    linked = await resolve_linked_execution(db_session, node)
+    linked = await resolve_linked_execution(db_session, node, task=task)
     prompt = await resolve_node_prompt_or_none(
         db_session,
         node=linked.node,
@@ -269,7 +278,7 @@ async def _run_pipeline_attempt(
                 prompt=sent_prompt(prompt),
                 claude_session=claude_session,
                 repos_path=repos_path,
-                timeout_seconds=node.timeout_seconds,
+                timeout_seconds=settings.timeout_seconds,
                 db_session=db_session,
                 node_log_id=node_log.id,
                 runner_image=await resolve_runner_image(db_session, linked.node),
@@ -305,6 +314,7 @@ async def _final_attempt_outcome(
     attempt: int,
     stop_guard: StopGuard | None,
     can_recover_session: bool,
+    max_retries: int,
 ) -> NodeRunOutcome | None:
     """Итог ноды после попытки; ``None`` — попытку нужно повторить."""
     if outcome.success:
@@ -322,7 +332,7 @@ async def _final_attempt_outcome(
         )
         return NodeRunOutcome(node_log=node_log, success=False)
 
-    if attempt >= node.max_retries:
+    if attempt >= max_retries:
         logger.warning(
             "node_failed_exhausted_retries",
             node_id=str(node.id),
@@ -343,9 +353,10 @@ async def _prepare_retry(
     node: Node,
     attempt: int,
     recover_session: SessionRecovery | None,
+    retry_base_delay_seconds: int,
 ) -> None:
     """Пауза перед повтором (раздел 11.7) и переподключение упавшей сессии."""
-    delay = compute_retry_delay_seconds(attempt, node.retry_base_delay_seconds)
+    delay = compute_retry_delay_seconds(attempt, retry_base_delay_seconds)
     logger.warning(
         "node_retry_scheduled",
         node_id=str(node.id),
@@ -532,7 +543,12 @@ async def run_pipeline(
                 failed_order_index=task_node.order_index,
                 stopped=outcome.stopped,
             )
-        if pause_after_node is not None and await _should_pause_after(db_session, task_node):
+        # У библиотечного плана пауза уже отработала при принятии плана.
+        if (
+            pause_after_node is not None
+            and not node.library_plan_mode
+            and await _should_pause_after(db_session, task_node)
+        ):
             logger.info("pipeline_paused_after_node", order_index=task_node.order_index)
             if await pause_after_node() is CheckpointDecision.STOP:
                 # Раздел 13.2, 14.1: перезапуск продолжит сразу за этой нодой —

@@ -527,3 +527,31 @@ class TestCommandExecution:
                 invocation="/review",
                 client_request_id=uuid.uuid4(),
             )
+
+
+async def test_legacy_queue_snapshot_does_not_restore_execution_limits(
+    db_session: AsyncSession,
+    command_task: Task,
+    command_node: Node,
+) -> None:
+    request = await enqueue_command(
+        db_session,
+        task=command_task,
+        requested_by=command_task.created_by,
+        invocation="/review",
+        client_request_id=uuid.uuid4(),
+    )
+    assert request.command_snapshot_encrypted is not None
+    wire = json.loads(decrypt(request.command_snapshot_encrypted))
+    # Снимок остаётся читаемым предыдущим релизом при откате.
+    assert {"timeout_seconds", "max_retries", "retry_base_delay_seconds"} <= wire.keys()
+    snapshot = load_snapshot(request)
+    legacy = {"timeout_seconds": 1, "max_retries": 10, "retry_base_delay_seconds": 99}
+    assert not legacy.keys() & snapshot.model_dump().keys()
+    # Имитируем зашифрованный снимок предыдущего релиза.
+    request.command_snapshot_encrypted = encrypt(
+        json.dumps({**snapshot.model_dump(mode="json"), **legacy})
+    )
+    loaded = load_snapshot(request)
+    assert not legacy.keys() & loaded.model_dump().keys()
+    assert loaded.prompt_template == command_node.prompt_template

@@ -863,6 +863,52 @@ async def test_failed_task_locks_nodes_up_to_failure_point(
 class TestPauseAfterNode:
     """Раздел 13.1, 13.2: отметка «пауза после» меняется и у запущенной задачи."""
 
+    async def test_pipeline_pause_is_an_independent_snapshot(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task(authed_client)
+        pipeline, nodes = await _make_script_pipeline(db_session, _owner(task_body))
+        for index in [0, 2]:
+            response = await authed_client.patch(
+                f"/nodes/{nodes[index].id}", json={"pause_after": True}
+            )
+            assert response.status_code == 200, response.text
+
+        bound = await authed_client.post(
+            f"/tasks/{task_body['id']}/pipeline",
+            json={"pipeline_id": str(pipeline.id)},
+        )
+        assert bound.status_code == 200, bound.text
+        task_nodes = (await authed_client.get(f"/tasks/{task_body['id']}/nodes")).json()
+        assert [(n["is_enabled"], n["pause_after"]) for n in task_nodes] == [
+            (True, True),
+            (True, False),
+            (False, True),
+        ]
+
+        updated = await authed_client.patch(f"/nodes/{nodes[0].id}", json={"pause_after": False})
+        assert updated.status_code == 200, updated.text
+        unchanged = (await authed_client.get(f"/tasks/{task_body['id']}/nodes")).json()
+        assert unchanged[0]["pause_after"] is True
+        another_task = await _create_task(authed_client)
+        rebound = await authed_client.post(
+            f"/tasks/{another_task['id']}/pipeline",
+            json={"pipeline_id": str(pipeline.id)},
+        )
+        assert rebound.status_code == 200, rebound.text
+        fresh_nodes = (await authed_client.get(f"/tasks/{another_task['id']}/nodes")).json()
+        assert [n["pause_after"] for n in fresh_nodes] == [False, False, True]
+
+        changed = await authed_client.patch(
+            f"/tasks/{task_body['id']}/nodes/{task_nodes[2]['id']}",
+            json={"pause_after": False},
+        )
+        assert changed.status_code == 200, changed.text
+        source = (await authed_client.get(f"/nodes/{nodes[2].id}")).json()
+        assert source["pause_after"] is True
+
     async def test_set_while_running(
         self,
         authed_client: AsyncClient,

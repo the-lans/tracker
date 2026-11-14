@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input, Textarea } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -12,14 +13,12 @@ import {
   ownContentPayload,
 } from "@/components/nodes/nodeContent";
 import { NodeEffortField } from "@/components/nodes/NodeEffortField";
-import { NodeExecutionFields } from "@/components/nodes/NodeExecutionFields";
 import { PromptTemplateField } from "@/components/nodes/PromptTemplateField";
 import { ScriptFields } from "@/components/nodes/ScriptFields";
 import { SlashCommandField } from "@/components/nodes/SlashCommandField";
 import {
   LIBRARY_PROMPT_TYPE,
   type LibraryLinkValue,
-  type NodeExecutionValues,
   type NodeFormType,
 } from "@/components/nodes/nodeForm.types";
 import { useCreateNode, useUpdateNode } from "@/hooks/useNodes";
@@ -85,16 +84,14 @@ export function NodeForm({
   const [scriptContent, setScriptContent] = useState(node?.script_content ?? "");
   const [guideUrl, setGuideUrl] = useState(node?.guide_url ?? "");
   const [effort, setEffort] = useState<ReasoningEffort | null>(node?.reasoning_effort ?? null);
-  const [execution, setExecution] = useState<NodeExecutionValues>({
-    timeoutSeconds: node?.timeout_seconds ?? null,
-    maxRetries: node?.max_retries ?? null,
-    retryBaseDelaySeconds: node?.retry_base_delay_seconds ?? null,
-    isSkipped: node?.is_skipped ?? false,
-  });
+  const [isSkipped, setIsSkipped] = useState(node?.is_skipped ?? false);
 
   const [libraryLink, setLibraryLink] = useState<LibraryLinkValue>({
     libraryNodeId: node?.library_node_id ?? null,
-    libraryNodeType: node?.library_node_id ? node.node_type : null,
+    libraryNodeType: node?.library_node_id
+      ? (node.library_plan_mode ? NodeType.PLAIN_PROMPT : node.node_type)
+      : null,
+    planMode: node?.library_plan_mode ?? false,
     arguments: node?.library_arguments ?? "",
   });
 
@@ -139,10 +136,7 @@ export function NodeForm({
         argument_hint: slashName.trim() ? argumentHint.trim() || null : null,
       } : {}),
       ...contentFields(),
-      timeout_seconds: execution.timeoutSeconds,
-      max_retries: isPipeline ? execution.maxRetries : undefined,
-      retry_base_delay_seconds: isPipeline ? execution.retryBaseDelaySeconds : undefined,
-      is_skipped: isPipeline ? execution.isSkipped : false,
+      is_skipped: isPipeline ? isSkipped : false,
       reasoning_effort: withEffort ? effort : null,
     };
     const callbacks = { onSuccess: onSaved, onError: toastError("Не удалось сохранить ноду") };
@@ -231,11 +225,12 @@ export function NodeForm({
         <NodeEffortField id="node-effort" value={effort} onChange={setEffort} />
       )}
 
-      <NodeExecutionFields
-        values={execution}
-        withRetries={isPipeline}
-        onChange={(patch) => setExecution((current) => ({ ...current, ...patch }))}
-      />
+      {isPipeline && (
+        <label className="flex min-h-11 items-center gap-2.5 text-body font-semibold">
+          <Checkbox checked={!isSkipped} onCheckedChange={(checked) => setIsSkipped(checked !== true)} />
+          Активна по умолчанию
+        </label>
+      )}
 
       <DialogFooter>
         <Button type="button" variant="secondary" onClick={onCancel}>

@@ -1,12 +1,5 @@
 import { NodeType, type ScriptLanguage } from "@/lib/types";
 
-/** `null` — поле пустое: backend возьмёт значение из «Системных настроек» и у новой ноды, и при правке. */
-export interface NodeExecutionValues {
-  timeoutSeconds: number | null;
-  maxRetries: number | null;
-  retryBaseDelaySeconds: number | null;
-  isSkipped: boolean;
-}
 
 /**
  * Раздел 7.6: «Промт из библиотеки» — тип в форме ноды пайплайна. Нода
@@ -20,6 +13,7 @@ export interface LibraryLinkValue {
   /** Тип выбранного промта — его получит нода пайплайна. */
   libraryNodeType: NodeType | null;
   arguments: string;
+  planMode?: boolean;
 }
 
 /** Промты библиотеки, которые нода пайплайна может выполнить по ссылке. */

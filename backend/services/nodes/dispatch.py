@@ -1,9 +1,7 @@
-"""Диспетчеризация по `node_type` (раздел 4, 11 ТЗ).
+"""Диспетчеризация по типу ноды.
 
-Реализует буквально раздел 4: обычный промт рендерится шаблонизатором,
-слэш-команда — никогда. Один явный if/else здесь и есть та самая
-"диспетчеризация по node_type", о которой план реализации говорит как о
-механизме, обеспечивающем правило раздела 4 (а не отдельная опция ноды).
+Текстовый промт рендерится целиком. У настроенной нативной слэш-команды
+рендерятся только аргументы; имя и ручной ввод в чате остаются буквальными.
 """
 
 from __future__ import annotations
@@ -27,7 +25,13 @@ from services.llm_routing import TurnRoute
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.nodes.script import ScriptExecutionResult, run_script_node
 from services.task_artifacts import task_artifacts_dir
-from services.template_context import RenderedText, render_for_task, resolve_task_env
+from services.template_context import (
+    RenderedText,
+    build_task_context,
+    render_for_task,
+    resolve_task_env,
+)
+from services.templating import render_slash_arguments
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -50,17 +54,22 @@ async def resolve_node_prompt(
 ) -> RenderedText:
     """Возвращает итоговый текст для отправки в сессию и его показываемый вид.
 
-    ``slash_command``: `command_invocation` буквально, БЕЗ шаблонизатора
-    (раздел 4) — единственная ветка, минующая `render_for_task`.
+    ``slash_command``: имя буквально, настроенные аргументы — через общий
+    рендер полей задачи, без повторной обработки значений.
     ``arguments`` — аргументы промта библиотеки, на который ссылается нода
     пайплайна (раздел 7.6); слэш-команде они дописываются через пробел, как
-    при вызове `/имя аргументы`, и тоже не шаблонизируются.
+    при вызове `/имя аргументы`; к этому моменту они уже подставлены.
     """
     if node.node_type is NodeType.SLASH_COMMAND:
         if node.command_invocation is None:
             message = "У ноды slash_command не заполнен command_invocation"
             raise ValueError(message)
-        return RenderedText.literal(_with_arguments(node.command_invocation, arguments))
+        return RenderedText.literal(
+            _with_arguments(
+                render_slash_arguments(node.command_invocation, context=build_task_context(task)),
+                arguments,
+            )
+        )
 
     if node.prompt_template is None:
         message = f"У ноды {node.node_type} не заполнен prompt_template"
@@ -84,7 +93,11 @@ def _with_arguments(invocation: str, arguments: CommandArguments | None) -> str:
 
 def node_guide_url(node: Node) -> str | None:
     """Раздел 5: `{{node.guide_url}}` — гайд «Обычного промта»; у прочих типов поля нет."""
-    return node.guide_url if node.node_type is NodeType.PLAIN_PROMPT else None
+    return (
+        node.guide_url
+        if node.node_type is NodeType.PLAIN_PROMPT or node.library_plan_mode
+        else None
+    )
 
 
 async def resolve_node_prompt_or_none(
@@ -312,6 +325,7 @@ async def execute_script_node(
     node: Node,
     *,
     repos_path: Path,
+    timeout_seconds: int,
     runner_image: str | None = None,
     env: Mapping[str, str] | None = None,
     arguments: tuple[str, ...] = (),
@@ -334,7 +348,7 @@ async def execute_script_node(
         script_language=node.script_language,
         docker_image=runner_image or node.docker_image,
         repos_path=repos_path,
-        timeout_seconds=node.timeout_seconds,
+        timeout_seconds=timeout_seconds,
         # Текст скрипта шаблонизатор не обрабатывает — пути задачи скрипт
         # узнаёт из окружения; переменные задачи их не перекрывают.
         env={
@@ -428,7 +442,7 @@ async def execute_node(
     prompt: str | None,
     claude_session: ClaudeCodeSession,
     repos_path: Path,
-    timeout_seconds: float,
+    timeout_seconds: int,
     db_session: AsyncSession | None = None,
     node_log_id: uuid.UUID | None = None,
     runner_image: str | None = None,
@@ -450,6 +464,7 @@ async def execute_node(
         return await execute_script_node(
             node,
             repos_path=repos_path,
+            timeout_seconds=timeout_seconds,
             runner_image=runner_image,
             env=script_env,
             arguments=script_args,

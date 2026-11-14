@@ -56,7 +56,7 @@ from services.nodes.dispatch import (
 from services.notifications import NotificationEvent, notify_task_event
 from services.parent_summary import run_parent_summary_request
 from services.pipeline_orchestrator import StopGuard, run_node_execution
-from services.system_settings import resolve_runner_image
+from services.system_settings import resolve_execution_settings, resolve_runner_image
 from services.task_control import clear_manual_stop, is_manual_stop_requested
 from services.task_launch import ensure_llm_for_request, requires_llm_account
 from services.task_status import SESSION_ACTIVE_STATUSES
@@ -89,12 +89,6 @@ logger = get_logger(_LOG_SOURCE)
 # (это разовые пайплайн-действия) и не должны предлагаться при создании
 # библиотечного промта."
 LIBRARY_FORBIDDEN_NODE_TYPES = frozenset({NodeType.CLEAR_CONTEXT, NodeType.PLAN_PROMPT})
-
-# Раздел 8 не называет таймаут для свободного промта отдельно (в отличие от
-# раздела 7.4 для библиотеки, где используется nodes.timeout_seconds) —
-# нода у свободного промта отсутствует. Значение — то же умолчание, что и
-# у ноды пайплайна (nodes.timeout_seconds, раздел 3.1).
-DEFAULT_FREEFORM_TIMEOUT_SECONDS = 600
 
 
 async def attach_library_prompt(
@@ -394,7 +388,7 @@ async def _run_library_prompt(
             prompt=sent_prompt(prompt),
             claude_session=claude_session,
             repos_path=repos_path,
-            timeout_seconds=node.timeout_seconds,
+            timeout_seconds=(await resolve_execution_settings(db_session)).timeout_seconds,
             runner_image=await resolve_runner_image(db_session, node),
             script_env=script_env,
             script_args=tuple(snapshot.arguments) if snapshot else (),
@@ -470,7 +464,7 @@ async def _run_freeform_prompt(
         execute_llm_node_with_timeout(
             claude_session,
             prompt.text,
-            timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
+            timeout_seconds=(await resolve_execution_settings(db_session)).timeout_seconds,
         ),
         request=request,
         node_type=None,
@@ -527,7 +521,7 @@ async def _process_single_request(
             request=request,
             claude_session=claude_session,
             redis_client=redis_client,
-            timeout_seconds=DEFAULT_FREEFORM_TIMEOUT_SECONDS,
+            timeout_seconds=(await resolve_execution_settings(db_session)).timeout_seconds,
             active_node_context=active_node_context,
         )
     elif request.request_type is ManualRequestType.LIBRARY_PROMPT:
