@@ -31,7 +31,7 @@ services:
   # Раздел 19.7, 20.3: LLM-прокси CLIProxyAPI. Конфигурацию с ключами из
   # .env раскладывает в его volume одноразовый cliproxy-init при каждом старте.
   cliproxy-init:
-    image: alpine:3.22
+    image: alpine:3.24
     restart: "no"
     command: ["sh", "/opt/cliproxy/init.sh"]
     environment:
