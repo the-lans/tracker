@@ -189,11 +189,21 @@ services:
 в [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
 В **Authorized JavaScript origins** добавьте ровно `https://` и выбранный домен
 ([официальная инструкция Google](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid)).
-Tracker принимает Google ID token; специальный redirect URI приложения не нужен.
+Вход в Tracker принимает Google ID token и redirect URI не требует.
+
+Тот же клиент подключает Google Calendar для «Дейли» (раздел 19.8 ТЗ):
+- в **Authorized redirect URIs** добавьте `https://<домен>/api/calendar/google/callback`;
+- в проекте включите **Google Calendar API** (APIs & Services → Library);
+- в OAuth consent screen добавьте право `.../auth/calendar.readonly`
+  (Data access → Add or remove scopes).
+
+Без этих настроек вход в Tracker работает, а подключение календаря в профиле
+завершается ошибкой Google `redirect_uri_mismatch` или `access_denied`.
 
 Если это ручной шаг, проведите пользователя последовательно: выбрать Google Cloud
 project → настроить OAuth consent screen/audience → при режиме Testing добавить
-нужные test users → создать Web client → добавить origin → сохранить Client ID
+нужные test users → создать Web client → добавить origin и redirect URI
+календаря → включить Google Calendar API и право `calendar.readonly` → сохранить Client ID
 и Secret в согласованном защищённом файле. Не просите пароль Google-аккаунта.
 После каждого блока уточняйте только недостающий результат, а не весь список заново.
 Email администратора — адрес аккаунта, с которым пользователь будет входить.
@@ -458,10 +468,10 @@ deploy/install.sh --update --ref "$(cat .deploy/previous_ref)" --wait-idle 60
 ## 10. Смена домена и завершение работы агента
 
 Для смены домена сохраните данные, `.env` и ключи. Подготовьте DNS нового имени,
-добавьте новый Google origin и измените только связанные настройки (`DOMAIN`,
+добавьте новый Google origin и redirect URI календаря (раздел 5) и измените только связанные настройки (`DOMAIN`,
 при необходимости контакты TLS/OAuth и `DEPLOY_DOMAIN`). Пересоздайте сервисы,
 использующие изменённое окружение; при смене OAuth Client ID пересоберите frontend.
-Проверьте новый HTTPS и вход. Старый origin/DNS удаляйте только по поручению.
+Проверьте новый HTTPS и вход. Старый origin, redirect URI и DNS удаляйте только по поручению.
 Не запускайте первичную установку поверх работающего сервера ради смены домена.
 
 При ручном шаге агент сообщает конкретное место в панели, поля и ожидаемый

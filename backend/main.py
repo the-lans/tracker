@@ -14,6 +14,8 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.auth import router as auth_router
+from api.calendar import router as calendar_router
+from api.daily import router as daily_router
 from api.env_variables import router as env_variables_router
 from api.events import router as events_router
 from api.git_credentials import router as git_credentials_router
@@ -68,6 +70,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Tracker API", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(tasks_router)
+app.include_router(daily_router)
+app.include_router(calendar_router)
 app.include_router(task_categories_router)
 app.include_router(repositories_router)
 app.include_router(git_credentials_router)

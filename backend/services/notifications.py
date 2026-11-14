@@ -62,6 +62,8 @@ class NotificationEvent(StrEnum):
     STALE_SSH_KEY = "stale_ssh_key"
     # Раздел 19.7: аккаунту нужен повторный вход — владельцу аккаунта.
     LLM_LOGIN_REQUIRED = "llm_login_required"
+    # Раздел 19.8: Google отозвал доступ к календарю — нужен повторный вход.
+    CALENDAR_LOGIN_REQUIRED = "calendar_login_required"
     # Раздел 19.7: все аккаунты автора на пороге — задача ждёт сброса лимита.
     LLM_LIMIT_WAIT = "llm_limit_wait"
     # Раздел 20.4: сбой бэкапа в S3 или проверки восстановления — администраторам.
@@ -90,6 +92,7 @@ _TITLES: dict[NotificationEvent, str] = {
     NotificationEvent.AWAITING_DECISION_REMINDER: "Задача всё ещё ждёт решения",
     NotificationEvent.STALE_SSH_KEY: "SSH-ключ давно не использовался",
     NotificationEvent.LLM_LOGIN_REQUIRED: "LLM-аккаунту нужен повторный вход",
+    NotificationEvent.CALENDAR_LOGIN_REQUIRED: "Google Calendar: нужен повторный вход",
     NotificationEvent.LLM_LIMIT_WAIT: "Задача ждёт сброса лимита LLM-аккаунтов",
     NotificationEvent.BACKUP_FAILED: "Резервное копирование в S3 не удалось",
     NotificationEvent.BACKUP_VERIFY_FAILED: "Проверка резервной копии не прошла",
@@ -113,6 +116,7 @@ EVENT_CATEGORIES: dict[NotificationEvent, EventCategory] = {
     NotificationEvent.AWAITING_DECISION_REMINDER: EventCategory.TASK,
     NotificationEvent.STALE_SSH_KEY: EventCategory.PROFILE,
     NotificationEvent.LLM_LOGIN_REQUIRED: EventCategory.LLM_ACCOUNT,
+    NotificationEvent.CALENDAR_LOGIN_REQUIRED: EventCategory.PROFILE,
     NotificationEvent.LLM_LIMIT_WAIT: EventCategory.LLM_ACCOUNT,
     NotificationEvent.BACKUP_FAILED: EventCategory.BACKUP,
     NotificationEvent.BACKUP_VERIFY_FAILED: EventCategory.BACKUP,

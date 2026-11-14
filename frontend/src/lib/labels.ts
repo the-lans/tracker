@@ -17,6 +17,7 @@ import {
   type NodeItem,
 } from "@/lib/types";
 import { EventCategory } from "@/lib/events.types";
+import type { DayFact, GoogleCalendarStatus } from "@/lib/daily.types";
 import { ContainerKind, ServerDependency, StatsPeriod, VolumeName } from "@/lib/monitoring.types";
 
 /** Человекочитаемые подписи значений enum — в интерфейсе не показываем внутренние коды. */
@@ -256,6 +257,7 @@ const EVENT_TYPE_TONE: Record<string, BadgeTone> = {
   manual_queue_request_expired: "warning",
   gitlab_sync_failed: "warning",
   stale_ssh_key: "warning",
+  calendar_login_required: "warning",
 };
 
 export function eventTone(eventType: string): BadgeTone {
@@ -268,3 +270,31 @@ export const CLEANED_DATA_LABEL = {
   session_cleaned_at: "История сессии удалена",
   artifacts_cleaned_at: "Артефакты удалены",
 } as const;
+
+/** Раздел 15.8: что было по отмеченной задаче за день; день ещё не наступил — «запланирована». */
+export const DAY_FACT_LABEL: Record<DayFact, string> = {
+  done: "завершена",
+  failed: "упала",
+  worked: "была работа",
+  no_work: "без работы",
+};
+
+export const DAY_FACT_TONE: Record<DayFact, BadgeTone> = {
+  done: "success",
+  failed: "danger",
+  worked: "info",
+  no_work: "neutral",
+};
+
+export const PLANNED_DAY_LABEL = "запланирована";
+
+/** Раздел 19.8: состояние подключения Google Calendar. */
+export const GOOGLE_CALENDAR_STATUS_LABEL: Record<GoogleCalendarStatus, string> = {
+  connected: "подключён",
+  needs_reauth: "нужен повторный вход",
+};
+
+export const GOOGLE_CALENDAR_STATUS_TONE: Record<GoogleCalendarStatus, BadgeTone> = {
+  connected: "success",
+  needs_reauth: "warning",
+};

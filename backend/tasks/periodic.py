@@ -37,8 +37,10 @@ from services import gitlab_sync, maintenance_tasks, users
 from services.app_log_retention import purge_old_app_logs as purge_old_app_logs_pass
 from services.autostart import run_scheduled_autostart_check
 from services.backup.jobs import backup_job, verify_job
+from services.calendar_sync import sync_all_calendars
 from services.claude_config import resolve_sessions_root
 from services.events import purge_old_events
+from services.google_calendar import open_google_calendar_client
 from services.limit_wait import limit_waits_to_resume
 from services.llm_account_checks import check_llm_accounts
 from services.log_rotation import prune_log_archive, resolve_archive_root, rotate_node_logs
@@ -327,6 +329,23 @@ def purge_old_app_logs() -> None:
         logger.info("app_logs_purged", deleted=deleted)
 
     _run_periodic("purge_old_app_logs", body)
+
+
+@celery_app.task(name="sync_google_calendars")
+def sync_google_calendars() -> None:
+    """Раздел 19.8: события подключённых Google Calendar — в «Дейли»."""
+
+    async def body(db_session: AsyncSession) -> None:
+        async with redis_connection() as redis_client, open_google_calendar_client() as client:
+            synced = await sync_all_calendars(
+                db_session,
+                redis_client,
+                client,
+                now=datetime.now(UTC),
+            )
+        logger.info("google_calendars_synced", synced=synced)
+
+    _run_periodic("sync_google_calendars", body)
 
 
 @celery_app.task(name="detect_awaiting_input_timeout")

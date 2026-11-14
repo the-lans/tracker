@@ -38,6 +38,8 @@ class SystemSettingsBody(BaseModel):
     night_window_end: time
     # Раздел 17.2: сколько дней хранится журнал `app_logs`; 0 — бессрочно.
     app_logs_retention_days: int = Field(ge=MIN_RETENTION_DAYS, le=MAX_RETENTION_DAYS)
+    # Раздел 15.8: начало дня «Дейли» по московскому времени.
+    day_start_time: time
 
 
 class IntegrationsResponse(BaseModel):

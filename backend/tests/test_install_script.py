@@ -139,6 +139,10 @@ case "$*" in
     [ -f "$STUB_DIR/old-target" ] || [ -f "$STUB_DIR/pre-limit-target" ] \
       || [ -f "$STUB_DIR/pre-library-target" ] || [ -f "$STUB_DIR/pre-archive-target" ] \
       || [ -f "$STUB_DIR/pre-retention-target" ] && exit 1 ;;
+  *"cat-file -e"*daily_plans*)
+    [ -f "$STUB_DIR/old-target" ] || [ -f "$STUB_DIR/pre-limit-target" ] \
+      || [ -f "$STUB_DIR/pre-library-target" ] || [ -f "$STUB_DIR/pre-archive-target" ] \
+      || [ -f "$STUB_DIR/pre-retention-target" ] || [ -f "$STUB_DIR/pre-daily-target" ] && exit 1 ;;
   *"cat-file -e"*) [ -f "$STUB_DIR/old-target" ] && exit 1 ;;
   *"checkout --detach"*) for last; do :; done; echo "$last" > "$STUB_DIR/git-head" ;;
 esac
@@ -852,6 +856,34 @@ class TestUpdate:
             call
             for call in _calls(stubs)
             if "psql" in call and f"WHERE name IN ({RETENTION_TASK_NAMES})" in call
+        ]
+        assert bool(deletes) is deleted
+
+    @pytest.mark.parametrize(
+        ("target", "deleted"),
+        [
+            pytest.param("pre-daily-target", True, id="версия без дейли"),
+            pytest.param("pre-retention-target", True, id="версия без сроков хранения"),
+            pytest.param(None, False, id="версия со всеми изменениями"),
+        ],
+    )
+    def test_calendar_sync_deleted(
+        self,
+        stubs: Path,
+        install_dir: Path,
+        target: str | None,
+        deleted: bool,
+    ) -> None:
+        if target is not None:
+            (stubs / target).touch()
+
+        result = _update(stubs, install_dir, "--ref", "abc1234")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        deletes = [
+            call
+            for call in _calls(stubs)
+            if "psql" in call and "WHERE name IN ('sync_google_calendars')" in call
         ]
         assert bool(deletes) is deleted
 

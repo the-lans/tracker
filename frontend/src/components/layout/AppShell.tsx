@@ -10,6 +10,7 @@ import { ensurePushSubscription } from "@/lib/push";
 
 const TITLES: Record<string, string> = {
   "/": "Дашборд",
+  "/daily": "Дейли",
   "/pipelines": "Пайплайны",
   "/library": "Библиотека промтов",
   "/categories": "Категории",

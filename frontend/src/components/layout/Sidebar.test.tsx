@@ -28,12 +28,14 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("link", { name: "Администрирование" }) !== null).toBe(admin);
   });
 
-  test("«Категории» — перед «Шаблонами»", () => {
+  test("Дашборд → Дейли → Категории → Пайплайны", () => {
     renderSidebar(UserRole.USER);
 
     const names = screen.getAllByRole("link").map((link) => link.textContent);
+    const start = names.indexOf("Дашборд");
+    expect(screen.getByRole("link", { name: "Дейли" })).toHaveAttribute("href", "/daily");
     expect(screen.getByRole("link", { name: "Категории" })).toHaveAttribute("href", "/categories");
-    expect(names.indexOf("Категории") + 1).toBe(names.indexOf("Шаблоны"));
+    expect(names.slice(start, start + 4)).toEqual(["Дашборд", "Дейли", "Категории", "Пайплайны"]);
   });
 
   test("«Архив» — сразу после «События»", () => {

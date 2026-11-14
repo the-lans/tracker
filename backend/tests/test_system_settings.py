@@ -32,6 +32,7 @@ _CUSTOM_SETTINGS = SystemSettingsValues(
     night_window_start=time(3, 15),
     night_window_end=time(7, 0),
     app_logs_retention_days=45,
+    day_start_time=time(9, 30),
 )
 
 

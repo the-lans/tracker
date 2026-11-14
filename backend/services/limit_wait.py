@@ -32,12 +32,12 @@ from services.errors import ConflictError
 from services.library_commands import load_snapshot
 from services.llm_account_choice import LlmLimitWaitError
 from services.notifications import NotificationEvent, notify_task_event
-from services.task_queue import NIGHT_WINDOW_TIMEZONE
 from services.task_status import (
     LIMIT_WAIT_RETURN_STATUSES,
     first_unfinished_order_index,
     transition_task_status,
 )
+from services.tracker_day import TRACKER_TIMEZONE
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -215,7 +215,7 @@ async def _notify_once(
         first = True
     if not first:
         return
-    local = until.astimezone(NIGHT_WINDOW_TIMEZONE)
+    local = until.astimezone(TRACKER_TIMEZONE)
     await notify_task_event(
         db_session,
         event=NotificationEvent.LLM_LIMIT_WAIT,

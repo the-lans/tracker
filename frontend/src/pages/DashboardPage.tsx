@@ -7,12 +7,14 @@ import { QueueSummaryLine } from "@/components/tasks/QueueSummaryLine";
 import { CreateTaskDialog } from "@/components/tasks/CreateTaskDialog";
 import { Button } from "@/components/ui/button";
 import { FilterSelect } from "@/components/common/filters/FilterSelect";
+import { ToggleChip } from "@/components/common/actions/ToggleChip";
 import { NO_CATEGORY_LABEL } from "@/components/taskCategories/TaskCategorySelect";
+import { useDailyCalendar, useDayMarks } from "@/hooks/useDaily";
 import { useTasks } from "@/hooks/useTasks";
+import { MARK_DAY_KEYS, MARK_DAY_LABEL, type MarkDayKey } from "@/lib/dailyDays";
 import { useTaskCategories } from "@/hooks/useTaskCategories";
 import { TaskStatus } from "@/lib/types";
 import { PRE_LAUNCH_STATUSES, QUEUE_STATUSES } from "@/lib/taskStatusTransitions";
-import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
 
@@ -56,20 +58,26 @@ export function DashboardPage() {
   const categoryFilter =
     chosenCategory !== undefined && chosenCategory in categoryLabels ? chosenCategory : undefined;
   const [createOpen, setCreateOpen] = useState(false);
+  const [markDayKey, setMarkDayKey] = useState<MarkDayKey | undefined>(undefined);
+  const { data: calendar } = useDailyCalendar();
+  const { data: dayMarks } = useDayMarks();
+  // Раздел 15.1: дата «вчера/сегодня/завтра» — по началу дня из настроек, а не по часам браузера.
+  const markDay = markDayKey && calendar?.[markDayKey];
 
-  const categoryTasks = useMemo(
+  const scopedTasks = useMemo(
     () =>
       (tasks ?? []).filter((task) => {
+        if (markDay !== undefined && !dayMarks?.get(task.id)?.has(markDay)) return false;
         if (categoryFilter === undefined) return true;
         if (categoryFilter === WITHOUT_CATEGORY) return !task.category_id;
         return task.category_id === categoryFilter;
       }),
-    [tasks, categoryFilter],
+    [tasks, categoryFilter, markDay, dayMarks],
   );
 
   const counts = useMemo(() => {
     const result: Record<FilterKey, number> = {
-      all: categoryTasks.length,
+      all: scopedTasks.length,
       pre_launch: 0,
       queue: 0,
       in_progress: 0,
@@ -77,7 +85,7 @@ export function DashboardPage() {
       done: 0,
       failed: 0,
     };
-    for (const task of categoryTasks) {
+    for (const task of scopedTasks) {
       for (const filterDef of FILTERS) {
         if (filterDef.statuses?.includes(task.status)) {
           result[filterDef.key] += 1;
@@ -85,12 +93,12 @@ export function DashboardPage() {
       }
     }
     return result;
-  }, [categoryTasks]);
+  }, [scopedTasks]);
 
   const filtered = useMemo(() => {
     const activeFilter = FILTERS.find((f) => f.key === filter);
     const searchLower = search.trim().toLowerCase();
-    return categoryTasks.filter((task) => {
+    return scopedTasks.filter((task) => {
       if (activeFilter?.statuses && !activeFilter.statuses.includes(task.status)) return false;
       if (
         searchLower &&
@@ -101,7 +109,7 @@ export function DashboardPage() {
       }
       return true;
     });
-  }, [categoryTasks, filter, search]);
+  }, [scopedTasks, filter, search]);
 
   return (
     <div className={PAGE_ROOT}>
@@ -131,17 +139,13 @@ export function DashboardPage() {
       <QueueSummaryLine />
       <div className="flex flex-wrap items-center gap-2 px-5 pb-4 lg:px-8">
         {FILTERS.map((filterDef) => (
-          <button
+          <ToggleChip
             key={filterDef.key}
-            type="button"
-            onClick={() => setFilter(filterDef.key)}
-            className={cn(
-              "touch-target rounded-full bg-surface-2 px-3.5 py-1.5 text-body font-bold text-text",
-              filter === filterDef.key && "bg-text text-bg",
-            )}
+            pressed={filter === filterDef.key}
+            onToggle={() => setFilter(filterDef.key)}
           >
             {filterDef.label} · {counts[filterDef.key]}
-          </button>
+          </ToggleChip>
         ))}
         <FilterSelect
           value={categoryFilter}
@@ -151,6 +155,15 @@ export function DashboardPage() {
           allLabel="Все категории"
           label="Категория"
           className="w-48"
+        />
+        <FilterSelect
+          value={markDayKey}
+          onChange={setMarkDayKey}
+          values={MARK_DAY_KEYS}
+          labels={MARK_DAY_LABEL}
+          allLabel="Все дни"
+          label="Отмечены на день"
+          className="w-36"
         />
       </div>
 

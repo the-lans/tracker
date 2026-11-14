@@ -128,3 +128,16 @@ class TestBackupSchedules:
             (name, interval_seconds, PeriodicScheduleType.INTERVAL, f"tasks.periodic.{name}")
             for name in names
         }
+
+
+class TestCalendarSync:
+    async def test_every_quarter_hour(self, seed: ModuleType) -> None:
+        """Раздел 19.8: события Google Calendar переносятся в «Дейли» раз в 15 минут."""
+        await seed._seed()
+
+        (row,) = await _seeded_rows(["sync_google_calendars"])
+        assert (row.interval_seconds, row.schedule_type, row.task_path) == (
+            900,
+            PeriodicScheduleType.INTERVAL,
+            "tasks.periodic.sync_google_calendars",
+        )
