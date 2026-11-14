@@ -108,7 +108,8 @@ backend/
               (auth, tasks, repositories, templates, preview, llm_accounts,
               env_variables, mcp_servers, pipelines, nodes, users, profile,
               periodic_tasks, monitoring — страница «Мониторинг», events —
-              лента событий, push, system_settings, jira,
+              лента событий, task_categories — категории задач, push,
+              system_settings, jira,
               llm_proxy — состояние LLM-прокси для админки);
               tasks/ — эндпоинты задачи по разделам (crud, lifecycle, nodes,
               manual, env_variables, artifacts; common.py — доступ к задаче
@@ -126,6 +127,19 @@ backend/
               репозиториев и веток, безопасные для путей и git (раздел 3.1);
               task_launch.py — проверки перед запуском, в т. ч. LLM-аккаунт
               только для LLM-нод; task_editing.py — правка полей задачи;
+              task_categories.py — категории задач и копирование их
+              настроек в новую задачу (раздел 15.7);
+              task_archive.py — архив задач (раздел 14.2): уход в
+              `archived` и автоочистка репозиториев по срокам автора,
+              выборка раздела «Архив» (ArchivePass, RepositoryCleanupPass);
+              task_passes.py — общий каркас проходов по завершённым
+              задачам: базовый класс TaskPass (блокировка прохода,
+              кандидаты, пропуск до следующего запуска), PassResult,
+              remove_directory; task_retention.py — удаление истории
+              сессии (180 дней в архиве) и артефактов (срок автора)
+              архивных задач (SessionHistoryPass, ArtifactsPass, разделы
+              6.4, 14.3); app_log_retention.py — срок хранения app_logs
+              (раздел 17.2);
               очередь задач (раздел 14.4): task_queue.py — слоты автора,
               порядок очереди, ночное окно, ручная смена статуса;
               task_dispatcher.py — проход дневного и ночного воркера
@@ -187,7 +201,12 @@ backend/
               redis_connection.py — клиент Redis на операцию; integrity.py —
               запреты удаления (раздел 3.2) и commit_or_conflict
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
-              (db/session.py — engine/session из DATABASE_URL)
+              (db/session.py — engine/session из DATABASE_URL); queries/ —
+              запросы к БД без бизнес-решений (статусы и сроки передаёт
+              сервис, коммит — тоже за ним): finished_tasks.py — кандидаты
+              проходов по завершённым задачам, archived_tasks.py — выборка
+              «Архива», parent_summaries.py — идёт ли пересказ для
+              дочерней задачи, app_logs.py — удаление старого журнала
   clients/   — обёртки над Claude Agent SDK (claude_agent.py, в т. ч.
               OfflineAgentClient для задач без LLM-аккаунта и маршрут хода
               TurnRouter), GitLab API (gitlab.py), Jira REST API (jira.py),
@@ -234,23 +253,28 @@ backend/
               worker_support.py — обвязка воркера сессии для его тестов и E2E)
 frontend/    — React SPA: дашборд, страница задачи (обзор + диалог),
               конструктор пайплайна/библиотека, CRUD-страницы
-              (репозитории/шаблоны/LLM-аккаунты/переменные окружения),
+              (категории задач/репозитории/шаблоны/LLM-аккаунты/переменные
+              окружения),
               админка (раздел 15.5, в т. ч. вкладка «LLM-прокси»), страница
-              «Мониторинг» (components/monitoring) и лента «События»
-              (components/events, раздел 18.4), Web Push (public/service-worker.js,
+              «Мониторинг» (components/monitoring), лента «События»
+              (components/events, раздел 18.4) и «Архив» (components/archive,
+              pages/ArchivePage.tsx, раздел 15.1), Web Push (public/service-worker.js,
               src/lib/push.ts, раздел 18.1); Dockerfile + nginx.conf —
               продовый образ (сборка на Node, раздача nginx с SPA-фолбэком
               на index.html для клиентских маршрутов). Общие элементы — по
-              типам: components/ui (примитивы), components/common/{actions,
-              avatar,dialogs,feedback,filters,navigation,typography},
+              типам: components/ui (примитивы; `Label required` — красная «*»
+              обязательного поля), components/common/{actions,
+              avatar,dialogs,feedback,filters,inputs,navigation,typography},
               components/layout; повторяющиеся механики — общими
               компонентами: navigation/PageTabs (вкладки страницы в `?tab=`,
               хук hooks/useUrlTab.ts) и SegmentedControl, filters/FilterSelect
-              (фильтр «Все/значение»), feedback/QueryState (загрузка, ошибка
+              (фильтр «Все/значение»), inputs/SearchSelect (выбор из
+              длинного списка с поиском), feedback/QueryState (загрузка, ошибка
               или содержимое) и ErrorState, tasks/TaskCodeLink (код задачи
-              ссылкой);
+              ссылкой), tasks/AutoAcceptPlanField и tasks/OccupiesSlotField
+              (настройки задачи и категории);
               по разделам — components/{tasks,nodes,profile,admin,
-              repositories,templates,llmAccounts,envVariables};
+              taskCategories,repositories,templates,llmAccounts,envVariables};
               styles/tokens.css + index.css — токены (цвета, шкала шрифтов
               text-caption…text-display), styles/classes.ts — общие наборы
               классов; lib/labels.ts — все подписи и цвета статусов;
@@ -278,14 +302,19 @@ deploy/
   install.sh — единственный скрипт установки по разделу 20.2 ТЗ;
               `--restore <каталог>` — перенос на новый сервер (раздел 20.4):
               дамп БД и архивы volume task_repos, user_files, log_archive,
-              claude_sessions, cliproxy_data, claude_accounts, sftp_host_keys;
+              claude_sessions, cliproxy_data, sftp_host_keys (архив
+              claude_accounts прежней версии — во временный том для
+              переноса истории сессий);
               `--update [--ref <sha>] [--wait-idle <мин>]` — обновление
               установленного сервера (раздел 20.6): флаг обслуживания,
               ожидание живых сессий, коммит из origin/main, пересборка всех
               образов (в т. ч. раннеров и tracker-session), дамп БД,
               `.deploy/previous_ref`, `DEPLOYED_AT` в `.env`, миграции,
-              перенос истории сессий; при откате — данные новой версии в
-              понятный прежней вид (статусы, ссылки на библиотеку); код
+              перенос истории сессий, после перезапуска сервисов —
+              удаление тома claude_accounts и висячих образов трекера
+              (без -a) и кеша сборки старше недели; при откате — данные
+              новой версии в понятный прежней вид (статусы, ссылки на
+              библиотеку, новые периодические задачи); код
               выхода 3 — отменено, сервер не изменён
   ci_deploy.sh — принудительная команда SSH-ключа развёртывания (раздел
               20.7): только `deploy <sha> [--force | --wait-idle <мин>]` и
@@ -318,7 +347,14 @@ alembic/
                  и стоимость хода аккаунта, сжатие при смене аккаунта,
                  бэкап в S3: настройки в system_settings и backup_runs,
                  таблица events, nodes.library_node_id и library_arguments,
-                 индекс app_logs.created_at);
+                 индекс app_logs.created_at, repositories.default_branch,
+                 категории задач
+                 task_categories и tasks.category_id, архив задач:
+                 статус archived, tasks.finished_at/archived_at/
+                 archived_from_status, сроки архива и очистки у users;
+                 сроки хранения: tasks.session_cleaned_at/
+                 artifacts_cleaned_at, users.artifacts_retention_days,
+                 system_settings.app_logs_retention_days);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
@@ -536,9 +572,12 @@ Postgres из `backend/tests/conftest.py`:
    внутренней сети сервисов.
    Git воркера не исполняет код из репозитория: без хуков, без системного и
    глобального конфига, локальный `.git/config` — по белому списку.
-5. **Очистка рабочей директории репозиториев — только вручную и только в
-   терминальном статусе** (`done`/`failed`). Автоматическое удаление
-   запрещено.
+5. **Очистка рабочей директории репозиториев — только в завершённом
+   статусе** (`done`/`failed`/`archived`): кнопкой или по сроку автора
+   `users.cleanup_repos_after_days` (`services/task_archive.py`, тот же код,
+   что у кнопки). Другое автоматическое удаление запрещено. История сессии
+   и артефакты удаляются автоматически только у задачи в `archived`
+   (`services/task_retention.py`); для всех сроков 0 — бессрочно.
 6. **Очистка контекста сессии (`clear_context`) запрещена**, пока существует
    хотя бы одна запись `node_logs` со статусом `running`/`awaiting_decision`.
 7. **Retry применяется только к нодам пайплайна** (`trigger_type = pipeline`)

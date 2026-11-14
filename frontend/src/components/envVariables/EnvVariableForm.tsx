@@ -76,7 +76,7 @@ export function EnvVariableForm({
           </div>
         ) : (
           <div>
-            <Label htmlFor="env-key">Ключ</Label>
+            <Label htmlFor="env-key" required>Ключ</Label>
             <Input
               id="env-key"
               placeholder="GITLAB_API_TOKEN"
@@ -86,7 +86,7 @@ export function EnvVariableForm({
           </div>
         )}
         <div>
-          <Label htmlFor="env-value">
+          <Label htmlFor="env-value" required={!envVariable}>
             {envVariable ? "Новое значение (оставьте пустым, чтобы не менять)" : "Значение"}
           </Label>
           <Input
@@ -116,7 +116,7 @@ export function EnvVariableForm({
         )}
         {!envVariable && scope === EnvVariableScope.REPOSITORY && (
           <div>
-            <Label>Репозиторий</Label>
+            <Label required>Репозиторий</Label>
             <Select value={repositoryId} onValueChange={setRepositoryId}>
               <SelectTrigger>
                 <SelectValue placeholder="Выберите репозиторий" />

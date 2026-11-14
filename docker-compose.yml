@@ -128,9 +128,6 @@ services:
       # Раздел 6.4: конфигурационные каталоги сессий задач с историей
       # диалогов — volume claude_sessions ниже.
       CLAUDE_SESSIONS_ROOT: /data/claude-sessions
-      # Каталоги прежних LLM-аккаунтов: из них install.sh --update переносит
-      # историю сессий задач (scripts/migrate_claude_sessions.py).
-      CLAUDE_ACCOUNTS_ROOT: /data/claude-accounts
       # Раздел 19.7: management API LLM-прокси (вход в аккаунты, расход окон).
       CLIPROXY_MANAGEMENT_URL: http://cliproxy:8317
       CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY}
@@ -167,7 +164,6 @@ services:
       - user_files:/data/user-files
       # Через backend `install.sh --restore` распаковывает архивы всех volume.
       - log_archive:/data/log-archive
-      - claude_accounts:/data/claude-accounts
       - claude_sessions:/data/claude-sessions
       # Раздел 15.1: отпечаток ключа SFTP-шлюза для профиля.
       - sftp_host_keys:/data/sftp-host-keys:ro
@@ -253,7 +249,6 @@ services:
       - log_archive:/data/backup-src/log_archive:ro
       - claude_sessions:/data/backup-src/claude_sessions:ro
       - cliproxy_data:/data/backup-src/cliproxy_data:ro
-      - claude_accounts:/data/backup-src/claude_accounts:ro
       - sftp_host_keys:/data/backup-src/sftp_host_keys:ro
       # Каталог с .env сервера, а не сам файл: install.sh правит .env через
       # `sed -i` (новый файл), а смонтированный файл остался бы прежним.
@@ -380,9 +375,6 @@ volumes:
   # и пользовательские файлы задач — именованные Docker-volumes, раздельный жизненный цикл.
   task_repos:
   user_files:
-  # Каталоги прежних LLM-аккаунтов (вход в CLI): источник переноса истории
-  # сессий в claude_sessions; новых данных сюда не пишется.
-  claude_accounts:
   # Раздел 6.4: конфигурационные каталоги сессий задач с историей диалогов.
   claude_sessions:
   # Раздел 19.4, 20.4: конфигурация LLM-прокси и его учётки с токенами OAuth.

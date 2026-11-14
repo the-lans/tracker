@@ -17,6 +17,7 @@ from db.models.settings import (
     MAX_BACKUP_RETENTION_COUNT,
     MIN_BACKUP_RETENTION_COUNT,
 )
+from db.models.users import MAX_RETENTION_DAYS, MIN_RETENTION_DAYS
 from services.backup.settings import (
     MAX_ACCESS_KEY_LENGTH,
     MAX_FOLDER_LENGTH,
@@ -35,6 +36,8 @@ class SystemSettingsBody(BaseModel):
     # Раздел 14.4: ночное окно по московскому времени.
     night_window_start: time
     night_window_end: time
+    # Раздел 17.2: сколько дней хранится журнал `app_logs`; 0 — бессрочно.
+    app_logs_retention_days: int = Field(ge=MIN_RETENTION_DAYS, le=MAX_RETENTION_DAYS)
 
 
 class IntegrationsResponse(BaseModel):

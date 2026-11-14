@@ -125,7 +125,7 @@ async def duplicate_task(
     created_by: uuid.UUID,
 ) -> Task:
     """Новая задача и все копируемые данные — одной транзакцией (правило 10)."""
-    if source.status is not TaskStatus.DONE:
+    if TaskStatus.DONE not in (source.status, source.archived_from_status):
         raise ConflictError("Дублировать можно только выполненную задачу")
     if source.pipeline_id is not None:
         pipeline = await db_session.get(Pipeline, source.pipeline_id)
@@ -134,6 +134,9 @@ async def duplicate_task(
     task = await add_task_with_repositories(db_session, draft=draft, created_by=created_by)
     task.pipeline_id = source.pipeline_id
     task.auto_accept_plan = source.auto_accept_plan
+    if source.created_by == created_by:
+        # Раздел 15.7: категория — автора; копия чужой задачи остаётся без неё.
+        task.category_id = source.category_id
     await _copy_task_nodes(db_session, source=source, target=task)
     await _copy_env_variables(db_session, source=source, target=task)
     await _copy_library_prompts(db_session, source=source, target=task, added_by=created_by)

@@ -20,6 +20,7 @@ from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
 from services.node_runs import SESSION_ERROR_MESSAGE
 from services.task_status import (
+    PRE_LAUNCH_STATUSES,
     fail_task_after_error,
     first_unfinished_order_index,
     reset_task_run,
@@ -488,3 +489,152 @@ class TestRunAfterReset:
             to_status=TaskStatus.DONE,
         )
         assert updated.status is TaskStatus.DONE
+
+
+class TestArchiveTransitions:
+    """Раздел 14.2: архив — из итога прогона, из архива — только в статус до запуска."""
+
+    @pytest.mark.parametrize(
+        ("from_status", "to_status"),
+        [
+            (TaskStatus.DONE, TaskStatus.ARCHIVED),
+            (TaskStatus.FAILED, TaskStatus.ARCHIVED),
+            *((TaskStatus.ARCHIVED, status) for status in PRE_LAUNCH_STATUSES),
+        ],
+    )
+    async def test_allowed(
+        self,
+        db_session: AsyncSession,
+        from_status: TaskStatus,
+        to_status: TaskStatus,
+    ) -> None:
+        task = await make_task(db_session, status=from_status)
+
+        updated = await transition_task_status(
+            db_session,
+            task_id=task.id,
+            from_status=from_status,
+            to_status=to_status,
+        )
+
+        assert updated.status is to_status
+
+    @pytest.mark.parametrize(
+        ("from_status", "to_status"),
+        [
+            (TaskStatus.ARCHIVED, TaskStatus.IN_PROGRESS),
+            (TaskStatus.ARCHIVED, TaskStatus.DONE),
+            (TaskStatus.ARCHIVED, TaskStatus.QUEUED),
+            (TaskStatus.IN_PROGRESS, TaskStatus.ARCHIVED),
+            (TaskStatus.NEW, TaskStatus.ARCHIVED),
+            (TaskStatus.AWAITING_LIMIT, TaskStatus.ARCHIVED),
+        ],
+    )
+    async def test_rejected(
+        self,
+        db_session: AsyncSession,
+        from_status: TaskStatus,
+        to_status: TaskStatus,
+    ) -> None:
+        task = await make_task(db_session, status=from_status)
+
+        with pytest.raises(ValidationError):
+            await transition_task_status(
+                db_session,
+                task_id=task.id,
+                from_status=from_status,
+                to_status=to_status,
+            )
+
+    async def test_reset_from_archive(self, db_session: AsyncSession) -> None:
+        task = await make_task(
+            db_session,
+            status=TaskStatus.ARCHIVED,
+            archived_from_status=TaskStatus.DONE,
+        )
+
+        reset = await reset_task_run(db_session, task_id=task.id, to_status=TaskStatus.READY)
+
+        assert reset.status is TaskStatus.READY
+        assert reset.reset_at is not None
+
+
+class TestFinishedAt:
+    """Раздел 3.1 `tasks.finished_at`: от него считаются сроки архива и очистки."""
+
+    @pytest.mark.parametrize(
+        ("to_status", "failed_order_index"),
+        [(TaskStatus.DONE, None), (TaskStatus.FAILED, 0)],
+    )
+    async def test_set_by_final_status(
+        self,
+        db_session: AsyncSession,
+        to_status: TaskStatus,
+        failed_order_index: int | None,
+    ) -> None:
+        task = await make_task(db_session, status=TaskStatus.IN_PROGRESS)
+        before = datetime.now(UTC)
+
+        updated = await transition_task_status(
+            db_session,
+            task_id=task.id,
+            from_status=TaskStatus.IN_PROGRESS,
+            to_status=to_status,
+            failed_order_index=failed_order_index,
+        )
+
+        assert updated.finished_at is not None
+        assert updated.finished_at >= before
+
+    async def test_kept_in_archive(self, db_session: AsyncSession) -> None:
+        finished_at = datetime.now(UTC) - timedelta(days=20)
+        task = await make_task(db_session, status=TaskStatus.DONE, finished_at=finished_at)
+
+        updated = await transition_task_status(
+            db_session,
+            task_id=task.id,
+            from_status=TaskStatus.DONE,
+            to_status=TaskStatus.ARCHIVED,
+        )
+
+        assert updated.finished_at == finished_at
+
+    @pytest.mark.parametrize(
+        ("from_status", "to_status"),
+        [
+            (TaskStatus.ARCHIVED, TaskStatus.NEW),
+            (TaskStatus.DONE, TaskStatus.READY),
+            (TaskStatus.FAILED, TaskStatus.IN_PROGRESS),
+        ],
+    )
+    async def test_cleared_by_new_run(
+        self,
+        db_session: AsyncSession,
+        from_status: TaskStatus,
+        to_status: TaskStatus,
+    ) -> None:
+        now = datetime.now(UTC)
+        task = await make_task(
+            db_session,
+            status=from_status,
+            finished_at=now,
+            archived_at=now,
+            archived_from_status=TaskStatus.DONE,
+            session_cleaned_at=now,
+            artifacts_cleaned_at=now,
+        )
+
+        updated = await transition_task_status(
+            db_session,
+            task_id=task.id,
+            from_status=from_status,
+            to_status=to_status,
+        )
+
+        assert (
+            updated.finished_at,
+            updated.archived_at,
+            updated.archived_from_status,
+            updated.session_cleaned_at,
+            updated.artifacts_cleaned_at,
+        ) == (None, None, None, None, None)

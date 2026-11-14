@@ -3,21 +3,13 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useAppLogs } from "@/hooks/useAdmin";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, localDayBoundary } from "@/lib/utils";
 import { AppLogLevel } from "@/lib/types";
 import { APP_LOG_LEVEL_LABEL, APP_LOG_LEVEL_TONE } from "@/lib/labels";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { QueryState } from "@/components/common/feedback/QueryState";
 import { FilterSelect } from "@/components/common/filters/FilterSelect";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
-
-/** Граница дня `<input type="date">` в локальной зоне — в ISO для API. */
-function dayBoundary(value: string, endOfDay: boolean): string | undefined {
-  if (!value) return undefined;
-  const date = new Date(`${value}T00:00:00`);
-  if (endOfDay) date.setDate(date.getDate() + 1);
-  return date.toISOString();
-}
 
 /** Раздел 15.5, 17.2: `app_logs` с фильтрами по уровню, источнику, задаче и дате. */
 export function AppLogsSection() {
@@ -30,8 +22,8 @@ export function AppLogsSection() {
     level,
     source: source.trim() || undefined,
     taskCode: taskCode.trim() || undefined,
-    createdFrom: dayBoundary(dateFrom, false),
-    createdTo: dayBoundary(dateTo, true),
+    createdFrom: localDayBoundary(dateFrom, false),
+    createdTo: localDayBoundary(dateTo, true),
   });
 
   return (

@@ -9,6 +9,7 @@ import { renderWithProviders } from "@/test/renderWithProviders";
 const nodes = [
   makeNode({ id: "n1", name: "Анализ задачи", node_type: NodeType.PLAN_PROMPT }),
   makeNode({ id: "n2", name: "Тесты и линтеры", node_type: NodeType.SCRIPT }),
+  makeNode({ id: "n3", name: "Ревью", node_type: NodeType.SCRIPT, library_node_id: "lib-review" }),
 ];
 
 function renderChecklist({ disabled = false, enabled = new Set(["n1"]) } = {}) {
@@ -31,8 +32,10 @@ describe("PipelineNodesChecklist", () => {
     expect(screen.getAllByRole("checkbox").map((box) => box.getAttribute("aria-label"))).toEqual([
       "Включить ноду Анализ задачи",
       "Включить ноду Тесты и линтеры",
+      "Включить ноду Ревью",
     ]);
     expect(screen.getByText("Скрипт")).toBeInTheDocument();
+    expect(screen.getByText("Промт из библиотеки")).toBeInTheDocument();
   });
 
   test.for([

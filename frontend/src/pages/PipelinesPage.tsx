@@ -127,7 +127,7 @@ export function PipelinesPage() {
             <DialogTitle>Новый пайплайн</DialogTitle>
           </DialogHeader>
           <div>
-            <Label htmlFor="pipeline-name">Название</Label>
+            <Label htmlFor="pipeline-name" required>Название</Label>
             <Input id="pipeline-name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <DialogFooter>

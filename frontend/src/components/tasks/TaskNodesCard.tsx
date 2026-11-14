@@ -26,7 +26,7 @@ import {
   type TaskNodeUpdateRequest,
 } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
-import { isPreLaunch } from "@/lib/taskStatusTransitions";
+import { isFinished, isPreLaunch } from "@/lib/taskStatusTransitions";
 
 /** Раздел 13.2, 15.2: пояснение к блокировке чекбоксов нод. */
 function nodesHint({ status, chat_active }: Task): string {
@@ -35,7 +35,7 @@ function nodesHint({ status, chat_active }: Task): string {
   if (status === TaskStatus.FAILED) {
     return "Пройденные и упавшая ноды уже выполнены — менять можно только ноды после точки сбоя. Чтобы сменить пайплайн, переведите задачу в статус до запуска";
   }
-  if (status === TaskStatus.DONE) {
+  if (isFinished(status)) {
     return "Задача завершена — чтобы сменить пайплайн и запустить заново, переведите её в статус до запуска";
   }
   // Раздел 14.4: вопрос агента в чате «Уточняется» — пайплайн ещё не запускался.

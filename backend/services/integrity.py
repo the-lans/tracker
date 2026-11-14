@@ -22,10 +22,10 @@ from db.models.repositories import Repository, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
 from services.errors import ConflictError
 
-# Репозиторий очищается вручную только в этих двух статусах (CLAUDE.md,
-# правило 5) — во всех остальных задача считается "активной" применительно
-# к запрету удаления привязанного репозитория (раздел 3.2 ТЗ).
-_TERMINAL_TASK_STATUSES = (TaskStatus.DONE, TaskStatus.FAILED)
+# Репозиторий очищается только у завершённого прогона (CLAUDE.md, правило 5)
+# — во всех остальных статусах задача считается "активной" применительно к
+# запрету удаления привязанного репозитория (раздел 3.2 ТЗ).
+_TERMINAL_TASK_STATUSES = (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ARCHIVED)
 
 TEMPLATE_IS_REPOSITORY_DEFAULT = (
     "Шаблон назначен репозиторию по умолчанию — сначала снимите его в репозитории"

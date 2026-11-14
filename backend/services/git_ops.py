@@ -36,11 +36,15 @@ from db.models.tasks import TaskRepository
 from services.crypto import decrypt
 from services.errors import ExternalServiceError, ValidationError
 from services.git_credentials import git_host
+from services.repository_validation import validate_branch_name
 from services.task_codes import validate_task_code
 
 logger = get_logger("git_ops")
 
 _HEAD_REF_PREFIX = "refs/heads/"
+# `git ls-remote --symref`: строка `ref: refs/heads/<ветка>\tHEAD` — ветка HEAD сервера.
+_SYMREF_PREFIX = "ref: "
+_SYMREF_TARGET = "HEAD"
 
 _KEY_FILE_MODE = 0o600
 _HELPER_FILE_MODE = 0o700
@@ -484,15 +488,20 @@ async def is_rebased_onto_base(
     return returncode == 0
 
 
-async def check_git_access(repository: Repository) -> None:
+async def _ls_remote(repository: Repository, *args: str) -> str:
+    """
+    `git ls-remote` по адресу репозитория с его учётными данными, без
+    рабочей директории; отказ и таймаут — ошибка проверки для пользователя.
+    """
     try:
         with tempfile.TemporaryDirectory(prefix="tracker-git-check-") as directory:
             async with _deploy_key_env(repository) as env:
                 async with asyncio.timeout(_GIT_CHECK_TIMEOUT_SECONDS):
-                    code, _stdout, _stderr = await _run_git(
+                    code, stdout, _stderr = await _run_git(
                         "ls-remote",
+                        *args,
                         repository.git_url,
-                        "HEAD",
+                        _SYMREF_TARGET,
                         cwd=Path(directory),
                         env=env,
                         check=False,
@@ -501,3 +510,24 @@ async def check_git_access(repository: Repository) -> None:
         raise ValidationError("Проверка Git не завершилась: проверьте адрес и доступ") from exc
     if code != 0:
         raise ValidationError("Git отказал в доступе: проверьте URL, ключ или токен")
+    return stdout
+
+
+async def check_git_access(repository: Repository) -> None:
+    await _ls_remote(repository)
+
+
+def _parse_head_branch(listing: str) -> str | None:
+    for line in listing.splitlines():
+        ref, _, target = line.partition("\t")
+        if target == _SYMREF_TARGET and ref.startswith(_SYMREF_PREFIX + _HEAD_REF_PREFIX):
+            return ref.removeprefix(_SYMREF_PREFIX + _HEAD_REF_PREFIX)
+    return None
+
+
+async def fetch_default_branch(repository: Repository) -> str:
+    """Раздел 3.1: ветка, на которую указывает HEAD git-сервера, — ветка по умолчанию."""
+    branch = _parse_head_branch(await _ls_remote(repository, "--symref"))
+    if branch is None:
+        raise ValidationError("Git-сервер не сообщил ветку по умолчанию: репозиторий пуст?")
+    return validate_branch_name(branch)

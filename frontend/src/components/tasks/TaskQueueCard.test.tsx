@@ -3,17 +3,11 @@ import { describe, expect, vi } from "vitest";
 import { TaskQueueCard } from "@/components/tasks/TaskQueueCard";
 import { TaskStatus, type Task } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
-import { makeTask } from "@/test/factories";
+import { makeSystemSettings, makeTask } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
-const SETTINGS = {
-  default_timeout_seconds: 900,
-  default_max_retries: 2,
-  default_retry_base_delay_seconds: 10,
-  night_window_start: "03:15:00",
-  night_window_end: "07:00:00",
-};
+const SETTINGS = makeSystemSettings();
 
 function renderCard(api: MockedApi, task: Partial<Task> = {}) {
   api.respond("GET /system-settings", SETTINGS);

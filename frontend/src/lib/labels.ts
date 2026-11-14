@@ -14,6 +14,7 @@ import {
   RemoteControlStatus,
   RepositoryRole,
   UserRole,
+  type NodeItem,
 } from "@/lib/types";
 import { EventCategory } from "@/lib/events.types";
 import { ContainerKind, ServerDependency, StatsPeriod, VolumeName } from "@/lib/monitoring.types";
@@ -125,6 +126,14 @@ export const NODE_TYPE_LABEL: Record<NodeType, string> = {
   [NodeType.CLEAR_CONTEXT]: "Очистить контекст",
   [NodeType.PLAN_PROMPT]: "Режим планирования",
 };
+
+/** Раздел 7.6: тип ноды пайплайна, которая выполняет промт библиотеки. */
+export const LIBRARY_PROMPT_LABEL = "Промт из библиотеки";
+
+/** Тип ноды в списках: нода со ссылкой на библиотеку — «Промт из библиотеки» (раздел 7.6). */
+export function nodeTypeLabel(node: Pick<NodeItem, "node_type" | "library_node_id">): string {
+  return node.library_node_id ? LIBRARY_PROMPT_LABEL : NODE_TYPE_LABEL[node.node_type];
+}
 
 /** Раздел 13.4: источник записи истории — для фильтров и таблицы «Логи». */
 export const NODE_LOG_TRIGGER_LABEL: Record<NodeLogTriggerType, string> = {
@@ -252,3 +261,10 @@ const EVENT_TYPE_TONE: Record<string, BadgeTone> = {
 export function eventTone(eventType: string): BadgeTone {
   return EVENT_TYPE_TONE[eventType] ?? "info";
 }
+
+/** Разделы 6.4, 14.2, 14.3: что у завершённой задачи уже удалено — вручную или по сроку хранения. */
+export const CLEANED_DATA_LABEL = {
+  repo_cleaned_at: "Репозитории очищены",
+  session_cleaned_at: "История сессии удалена",
+  artifacts_cleaned_at: "Артефакты удалены",
+} as const;

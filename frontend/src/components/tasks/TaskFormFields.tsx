@@ -38,7 +38,7 @@ export function TaskFormFields({
   return (
     <>
       <div>
-        <Label htmlFor="task-code">Код задачи</Label>
+        <Label htmlFor="task-code" required>Код задачи</Label>
         <Input
           id="task-code"
           placeholder="RR-10240"
@@ -61,7 +61,7 @@ export function TaskFormFields({
         </div>
       </div>
       <div>
-        <Label htmlFor="task-title">Название</Label>
+        <Label htmlFor="task-title" required>Название</Label>
         <Input
           id="task-title"
           value={value.title}
@@ -70,7 +70,7 @@ export function TaskFormFields({
         />
       </div>
       <div>
-        <Label htmlFor="task-description">Описание</Label>
+        <Label htmlFor="task-description" required>Описание</Label>
         <Textarea
           id="task-description"
           rows={4}
@@ -80,7 +80,7 @@ export function TaskFormFields({
         />
       </div>
       <div>
-        <Label htmlFor="task-guide">Гайд (URL Confluence, опционально)</Label>
+        <Label htmlFor="task-guide">Гайд (URL Confluence)</Label>
         <Input
           id="task-guide"
           value={value.guideUrl}

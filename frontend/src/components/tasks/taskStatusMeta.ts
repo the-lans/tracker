@@ -34,6 +34,7 @@ export const TASK_STATUS_META: Record<TaskStatus, StatusMeta> = {
   },
   [TaskStatus.FAILED]: { label: "Ошибка", tone: "danger", borderVar: "var(--danger)" },
   [TaskStatus.DONE]: { label: "Готово", tone: "success", borderVar: "var(--success)" },
+  [TaskStatus.ARCHIVED]: { label: "Архив", tone: "neutral", borderVar: "var(--border)" },
 };
 
 /** Раздел 8.2: ручные промты принимаются, пока сессия задачи активна. */

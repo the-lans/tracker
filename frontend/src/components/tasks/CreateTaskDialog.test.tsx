@@ -1,9 +1,9 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, vi } from "vitest";
 import { CreateTaskDialog } from "@/components/tasks/CreateTaskDialog";
-import { LlmAccountStatus, UserRole, type JiraIssueDraft } from "@/lib/types";
+import { LlmAccountStatus, TaskStatus, UserRole, type JiraIssueDraft } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
-import { makeCurrentUser, makeLlmAccount, makeTask, makeUser } from "@/test/factories";
+import { makeCurrentUser, makeLlmAccount, makeRepository, makeTask, makeTaskCategory, makeUser } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
@@ -41,6 +41,20 @@ async function fillRequired(user: ReturnType<typeof renderDialog>["user"], code 
 }
 
 describe("CreateTaskDialog", () => {
+  test.for([
+    { field: "Код задачи", required: true },
+    { field: "Название", required: true },
+    { field: "Описание", required: true },
+    { field: "Гайд (URL Confluence)", required: false },
+    { field: "Стартовый LLM-аккаунт", required: false },
+    { field: "Категория", required: false },
+  ])("«$field» — обязательное: $required", ({ field, required }, { api }) => {
+    renderDialog(api);
+
+    const label = screen.getByText(field, { selector: "label" });
+    expect(label.hasAttribute("data-required")).toBe(required);
+  });
+
   describe("создание", () => {
     test("необязательные поля уходят как null, задача без LLM-аккаунта допустима", async ({ api }) => {
       const { user, onOpenChange } = renderDialog(api);
@@ -58,6 +72,7 @@ describe("CreateTaskDialog", () => {
         parent_task_id: null,
         use_parent_summary: false,
         jira_issue_key: null,
+        category_id: null,
       });
       await expect.poll(() => onOpenChange.mock.calls).toEqual([[false]]);
     });
@@ -84,22 +99,46 @@ describe("CreateTaskDialog", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
+    test("базовая ветка по умолчанию — из настроек репозитория", async ({ api }) => {
+      api.respond("GET /repositories", [makeRepository({ default_branch: "develop" })]);
+      const { user } = renderDialog(api);
+
+      await fillRequired(user);
+      await user.click(await screen.findByRole("checkbox", { name: "web-app" }));
+
+      expect(screen.getByLabelText("Базовая ветка")).toHaveValue("develop");
+      await user.click(screen.getByRole("button", { name: "Создать" }));
+      expect(createRequest(api)?.body).toMatchObject({
+        repositories: [{ repository_id: "r1", role: "read_write", base_branch: "develop" }],
+      });
+    });
+
     test("выбранный репозиторий уходит с ролью и базовой веткой", async ({ api }) => {
-      api.respond("GET /repositories", [
-        { id: "r1", name: "web-app", git_url: "git@gitlab.example.com:shop/web-app.git", default_template_id: null },
-      ]);
+      api.respond("GET /repositories", [makeRepository()]);
       const { user } = renderDialog(api);
 
       await fillRequired(user);
       await user.click(await screen.findByRole("checkbox", { name: "web-app" }));
       const branch = screen.getByLabelText("Базовая ветка");
       await user.clear(branch);
-      await user.type(branch, "develop");
+      await user.type(branch, "release/1.2");
       await user.click(screen.getByRole("button", { name: "Создать" }));
 
       expect(createRequest(api)?.body).toMatchObject({
-        repositories: [{ repository_id: "r1", role: "read_write", base_branch: "develop" }],
+        repositories: [{ repository_id: "r1", role: "read_write", base_branch: "release/1.2" }],
       });
+    });
+
+    test("выбранная категория уходит в запросе", async ({ api }) => {
+      api.respond("GET /task-categories", [makeTaskCategory({ id: "cat1", name: "Бэкенд" })]);
+      const { user } = renderDialog(api);
+
+      await fillRequired(user);
+      await user.click(screen.getByRole("combobox", { name: "Категория" }));
+      await user.click(await screen.findByRole("option", { name: "Бэкенд" }));
+      await user.click(screen.getByRole("button", { name: "Создать" }));
+
+      expect(createRequest(api)?.body).toMatchObject({ category_id: "cat1" });
     });
 
     test("ошибка сервера оставляет форму открытой с введёнными данными", async ({ api, toasts }) => {
@@ -213,6 +252,44 @@ describe("CreateTaskDialog", () => {
       expect(
         screen.getByRole("checkbox", { name: "Передать саммари родителя первым сообщением сессии" }),
       ).toBeDisabled();
+    });
+
+    test("родителя находит поиск по коду или названию", async ({ api }) => {
+      api.respond("GET /tasks", [
+        makeTask({ id: "t5", code: "RR-12300", title: "Каталог товаров" }),
+        makeTask({ id: "t6", code: "RR-12301", title: "Корзина" }),
+      ]);
+      const { user } = renderDialog(api);
+
+      await user.type(screen.getByRole("combobox", { name: "Родительская задача" }), "корз");
+      await user.click(await screen.findByRole("option", { name: "RR-12301 · Корзина" }));
+      await fillRequired(user);
+      await user.click(screen.getByRole("button", { name: "Создать" }));
+
+      expect(createRequest(api)?.body).toMatchObject({ parent_task_id: "t6" });
+    });
+
+    test("родителем выбирается и задача из архива", async ({ api }) => {
+      api.respond("GET /tasks", [
+        makeTask({ id: "t7", code: "RR-12302", title: "Старый отчёт", status: TaskStatus.ARCHIVED }),
+      ]);
+      const { user } = renderDialog(api);
+
+      await user.click(screen.getByRole("combobox", { name: "Родительская задача" }));
+
+      expect(await screen.findByRole("option", { name: "RR-12302 · Старый отчёт" })).toBeInTheDocument();
+      expect(api.queriesOf("GET /tasks")).toContainEqual({ include_archived: "true" });
+    });
+
+    test("Escape в поиске родителя закрывает список, а не диалог", async ({ api }) => {
+      api.respond("GET /tasks", [makeTask({ id: "t5", code: "RR-12300", title: "Каталог товаров" })]);
+      const { user, onOpenChange } = renderDialog(api);
+
+      await user.type(screen.getByRole("combobox", { name: "Родительская задача" }), "кат");
+      await user.keyboard("{Escape}");
+
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+      expect(onOpenChange).not.toHaveBeenCalled();
     });
 
     test("отказ от родителя сбрасывает передачу саммари", async ({ api }) => {

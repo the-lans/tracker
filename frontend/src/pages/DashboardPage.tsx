@@ -6,12 +6,18 @@ import { TaskCard } from "@/components/tasks/TaskCard";
 import { QueueSummaryLine } from "@/components/tasks/QueueSummaryLine";
 import { CreateTaskDialog } from "@/components/tasks/CreateTaskDialog";
 import { Button } from "@/components/ui/button";
+import { FilterSelect } from "@/components/common/filters/FilterSelect";
+import { NO_CATEGORY_LABEL } from "@/components/taskCategories/TaskCategorySelect";
 import { useTasks } from "@/hooks/useTasks";
+import { useTaskCategories } from "@/hooks/useTaskCategories";
 import { TaskStatus } from "@/lib/types";
 import { PRE_LAUNCH_STATUSES, QUEUE_STATUSES } from "@/lib/taskStatusTransitions";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { PAGE_BODY, PAGE_ROOT } from "@/styles/classes";
+
+/** Фильтр «Без категории» — задачи, у которых категория не выбрана. */
+const WITHOUT_CATEGORY = "none";
 
 type FilterKey = "all" | "pre_launch" | "queue" | "in_progress" | "awaiting" | "done" | "failed";
 
@@ -37,11 +43,33 @@ export function DashboardPage() {
   const { data: tasks, isLoading } = useTasks();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [search, setSearch] = useState("");
+  const [chosenCategory, setChosenCategory] = useState<string | undefined>(undefined);
+  const { data: categories } = useTaskCategories();
+  const categoryLabels = useMemo<Record<string, string>>(
+    () => ({
+      [WITHOUT_CATEGORY]: NO_CATEGORY_LABEL,
+      ...Object.fromEntries((categories ?? []).map((category) => [category.id, category.name])),
+    }),
+    [categories],
+  );
+  // Удалённая категория — снова все задачи, а не пустой фильтр.
+  const categoryFilter =
+    chosenCategory !== undefined && chosenCategory in categoryLabels ? chosenCategory : undefined;
   const [createOpen, setCreateOpen] = useState(false);
+
+  const categoryTasks = useMemo(
+    () =>
+      (tasks ?? []).filter((task) => {
+        if (categoryFilter === undefined) return true;
+        if (categoryFilter === WITHOUT_CATEGORY) return !task.category_id;
+        return task.category_id === categoryFilter;
+      }),
+    [tasks, categoryFilter],
+  );
 
   const counts = useMemo(() => {
     const result: Record<FilterKey, number> = {
-      all: tasks?.length ?? 0,
+      all: categoryTasks.length,
       pre_launch: 0,
       queue: 0,
       in_progress: 0,
@@ -49,7 +77,7 @@ export function DashboardPage() {
       done: 0,
       failed: 0,
     };
-    for (const task of tasks ?? []) {
+    for (const task of categoryTasks) {
       for (const filterDef of FILTERS) {
         if (filterDef.statuses?.includes(task.status)) {
           result[filterDef.key] += 1;
@@ -57,12 +85,12 @@ export function DashboardPage() {
       }
     }
     return result;
-  }, [tasks]);
+  }, [categoryTasks]);
 
   const filtered = useMemo(() => {
     const activeFilter = FILTERS.find((f) => f.key === filter);
     const searchLower = search.trim().toLowerCase();
-    return (tasks ?? []).filter((task) => {
+    return categoryTasks.filter((task) => {
       if (activeFilter?.statuses && !activeFilter.statuses.includes(task.status)) return false;
       if (
         searchLower &&
@@ -73,7 +101,7 @@ export function DashboardPage() {
       }
       return true;
     });
-  }, [tasks, filter, search]);
+  }, [categoryTasks, filter, search]);
 
   return (
     <div className={PAGE_ROOT}>
@@ -115,6 +143,15 @@ export function DashboardPage() {
             {filterDef.label} · {counts[filterDef.key]}
           </button>
         ))}
+        <FilterSelect
+          value={categoryFilter}
+          onChange={setChosenCategory}
+          values={[WITHOUT_CATEGORY, ...(categories ?? []).map((category) => category.id)]}
+          labels={categoryLabels}
+          allLabel="Все категории"
+          label="Категория"
+          className="w-48"
+        />
       </div>
 
       <div className={PAGE_BODY}>
@@ -129,7 +166,7 @@ export function DashboardPage() {
           <EmptyState
             icon={SearchX}
             title="Задачи не найдены"
-            hint="Выберите фильтр «Все» или измените текст поиска."
+            hint="Выберите фильтр «Все», «Все категории» или измените текст поиска."
           />
         ))}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">

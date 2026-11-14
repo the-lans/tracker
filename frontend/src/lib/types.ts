@@ -25,6 +25,8 @@ export const TaskStatus = {
   AWAITING_LIMIT: "awaiting_limit",
   FAILED: "failed",
   DONE: "done",
+  /** Раздел 14.2: завершённая задача через N дней автора; на дашборде не видна. */
+  ARCHIVED: "archived",
 } as const;
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
@@ -234,7 +236,18 @@ export interface User {
   llm_compact_on_switch: boolean;
   /** Раздел 14.4: лимит параллельных задач, задаёт администратор (1–50). */
   max_parallel_tasks: number;
+  /** Раздел 14.2: через сколько дней после завершения задача уходит в архив; 0 — никогда. */
+  archive_after_days: number;
+  /** Раздел 14.2: через сколько дней после завершения очищаются репозитории; 0 — никогда. */
+  cleanup_repos_after_days: number;
+  /** Раздел 14.3: через сколько дней после завершения удаляются артефакты архивной задачи; 0 — никогда. */
+  artifacts_retention_days: number;
 }
+
+/** Разделы 14.2, 14.3, 17.2: срок хранения выключен — данные хранятся бессрочно. */
+export const RETENTION_FOREVER = 0;
+/** Верхняя граница сроков хранения — как `MAX_RETENTION_DAYS` backend. */
+export const MAX_RETENTION_DAYS = 3650;
 
 export interface LlmThresholdsUpdate {
   five_hour_pct: number;
@@ -292,6 +305,10 @@ export interface UserUpdateRequest {
   is_active?: boolean | null;
   os_username?: string | null;
   max_parallel_tasks?: number | null;
+  /** 0 — срок выключен; поле не передано — не меняется. */
+  archive_after_days?: number;
+  cleanup_repos_after_days?: number;
+  artifacts_retention_days?: number;
 }
 
 export interface AllowedEmail {
@@ -328,6 +345,14 @@ export interface Task {
   auto_start_enabled: boolean;
   last_failed_order_index: number | null;
   repo_cleaned_at: string | null;
+  /** Раздел 14.2: переход в `done`/`failed`; от него считаются сроки архива и очистки. */
+  finished_at?: string | null;
+  archived_at?: string | null;
+  /** Итоговый статус задачи в архиве — `done` или `failed`. */
+  archived_from_status?: TaskStatus | null;
+  /** Раздел 6.4, 14.3: история сессии и артефакты архивной задачи удалены по сроку хранения. */
+  session_cleaned_at?: string | null;
+  artifacts_cleaned_at?: string | null;
   /** Раздел 14.4: больше — раньше в очереди автора. */
   queue_priority: number;
   /** Когда задача встала в `ready`/`night_worker`. */
@@ -343,10 +368,31 @@ export interface Task {
   limit_wait_from_status?: TaskStatus | null;
   /** Ближайший сброс лимита, которого ждёт задача. */
   limit_wait_until?: string | null;
+  /** Раздел 15.7: категория автора; null — без категории. */
+  category_id?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
 }
+
+/** Раздел 15.7: категория задачи — личная, её настройки копируются в новую задачу. */
+export interface TaskCategory {
+  id: string;
+  name: string;
+  pipeline_id: string | null;
+  auto_accept_plan: boolean;
+  library_prompt_ids: string[];
+  queue_priority: number;
+  occupies_slot: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TaskCategoryRequest = Pick<
+  TaskCategory,
+  "name" | "pipeline_id" | "auto_accept_plan" | "library_prompt_ids" | "queue_priority" | "occupies_slot"
+>;
 
 /** Раздел 15.1: слоты пользователя над списком задач дашборда. */
 export interface QueueSummary {
@@ -377,11 +423,13 @@ export interface TaskCreateRequest extends TaskDuplicateRequest {
   use_parent_summary?: boolean;
   /** Раздел 15.6: ссылка и вложения задачи Jira берутся по ключу. */
   jira_issue_key?: string | null;
+  /** Раздел 15.7: настройки категории копируются в новую задачу. */
+  category_id?: string | null;
 }
 
 /**
- * PATCH /tasks/{id}: auto_accept_plan — до `done`, приоритет и слот — всегда,
- * остальное — только в статусах до запуска.
+ * PATCH /tasks/{id}: auto_accept_plan — до `done`, приоритет, слот и
+ * категория — всегда, остальное — только в статусах до запуска.
  */
 export interface TaskUpdateRequest {
   title?: string;
@@ -394,6 +442,8 @@ export interface TaskUpdateRequest {
   /** Раздел 14.4: приоритет и галочка слота меняются в любом статусе. */
   queue_priority?: number;
   occupies_slot?: boolean;
+  /** Раздел 15.7: задаче до запуска без пайплайна достаётся пайплайн категории. */
+  category_id?: string | null;
 }
 
 export interface TaskRepository {
@@ -655,14 +705,27 @@ export interface Repository {
   id: string;
   name: string;
   git_url: string;
+  /** Базовая ветка, которую форма задачи подставляет при выборе репозитория. */
+  default_branch: string;
   default_template_id: string | null;
 }
 
 export interface RepositoryCreateRequest {
   name: string;
   git_url: string;
+  default_branch?: string;
   default_template_id?: string | null;
   git_credential_id?: string | null;
+}
+
+/** Раздел 3.1: адрес и доступ из формы репозитория — её можно ещё не сохранять. */
+export interface RepositoryDefaultBranchRequest {
+  git_url: string;
+  git_credential_id: string | null;
+}
+
+export interface RepositoryDefaultBranchResponse {
+  default_branch: string;
 }
 
 export type RepositoryUpdateRequest = Partial<RepositoryCreateRequest>;
@@ -908,6 +971,8 @@ export interface SystemSettings {
   /** Раздел 14.4: ночное окно по МСК, «ЧЧ:ММ:СС». */
   night_window_start: string;
   night_window_end: string;
+  /** Раздел 17.2: сколько дней хранится журнал приложения; 0 — бессрочно. */
+  app_logs_retention_days: number;
 }
 
 /**

@@ -82,7 +82,7 @@ export function SshKeyCard() {
               hint="Вставьте публичный ключ — содержимое файла ~/.ssh/id_ed25519.pub. Приватный ключ остаётся у вас."
             />
           )}
-          <Label htmlFor="ssh-public-key">Публичный ключ</Label>
+          <Label htmlFor="ssh-public-key" required>Публичный ключ</Label>
           <Textarea
             id="ssh-public-key"
             rows={3}

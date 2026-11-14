@@ -12,12 +12,16 @@ const TITLES: Record<string, string> = {
   "/": "Дашборд",
   "/pipelines": "Пайплайны",
   "/library": "Библиотека промтов",
+  "/categories": "Категории",
   "/templates": "Шаблоны",
   "/repositories": "Репозитории",
+  "/events": "События",
+  "/archive": "Архив",
   "/llm-accounts": "LLM-аккаунты",
   "/env-variables": "Переменные окружения",
   "/profile": "Профиль",
   "/admin": "Администрирование",
+  "/admin/monitoring": "Мониторинг",
 };
 
 export function AppShell() {

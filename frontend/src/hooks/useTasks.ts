@@ -3,6 +3,7 @@ import { api } from "@/lib/apiClient";
 import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
 import { RemoteControlStatus } from "@/lib/types";
+import type { ArchiveFilters } from "@/lib/archive.types";
 import type {
   BindPipelineRequest,
   DecisionRequest,
@@ -48,7 +49,8 @@ function taskRefetchInterval(task: Task | undefined): number | false {
 
 export const taskKeys = {
   all: ["tasks"] as const,
-  list: (statusFilter?: string) => ["tasks", "list", statusFilter ?? "all"] as const,
+  list: (statusFilter?: string, includeArchived = false) =>
+    ["tasks", "list", statusFilter ?? "all", includeArchived ? "with-archive" : "active"] as const,
   detail: (id: string) => ["tasks", "detail", id] as const,
   nodeLogs: (id: string) => ["tasks", id, "node-logs"] as const,
   repositories: (id: string) => ["tasks", id, "repositories"] as const,
@@ -56,13 +58,20 @@ export const taskKeys = {
   libraryPrompts: (id: string) => ["tasks", id, "library-prompts"] as const,
   manualQueue: (id: string) => ["tasks", id, "manual-queue"] as const,
   queueSummary: ["tasks", "queue-summary"] as const,
+  /** Под `all`: мутации задач (сброс статуса и т. п.) перечитывают и архив. */
+  archive: (filters: ArchiveFilters) => ["tasks", "archive", filters] as const,
   llmLimit: (authorId: string) => ["tasks", "llm-limit", authorId] as const,
 };
 
-export function useTasks(statusFilter?: string) {
+/** Раздел 14.2: без статуса список не содержит архивных задач, если их не попросить. */
+export function useTasks(statusFilter?: string, { includeArchived = false } = {}) {
   return useQuery({
-    queryKey: taskKeys.list(statusFilter),
-    queryFn: () => api.get<Task[]>("/tasks", { status_filter: statusFilter }),
+    queryKey: taskKeys.list(statusFilter, includeArchived),
+    queryFn: () =>
+      api.get<Task[]>("/tasks", {
+        status_filter: statusFilter,
+        include_archived: includeArchived || undefined,
+      }),
     refetchInterval: 15_000,
   });
 }

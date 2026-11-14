@@ -79,11 +79,11 @@ export function McpServerForm({
   return (
     <div className="flex flex-col gap-3">
       <div>
-        <Label htmlFor="mcp-name">Название</Label>
+        <Label htmlFor="mcp-name" required>Название</Label>
         <Input id="mcp-name" value={name} onChange={(e) => setName(e.target.value)} />
       </div>
       <div>
-        <Label htmlFor="mcp-url">URL</Label>
+        <Label htmlFor="mcp-url" required>URL</Label>
         <Input id="mcp-url" value={url} onChange={(e) => setUrl(e.target.value)} />
       </div>
       <div>
@@ -126,7 +126,7 @@ export function McpServerForm({
       {hasStatefulResource && (
         <>
           <div>
-            <Label htmlFor="mcp-isolation-mode">Режим изоляции</Label>
+            <Label htmlFor="mcp-isolation-mode" required>Режим изоляции</Label>
             <Select
               value={isolationMode}
               onValueChange={(v) => setIsolationMode(v as McpIsolationMode)}
@@ -146,7 +146,7 @@ export function McpServerForm({
           </div>
           {isolationMode === McpIsolationMode.PER_TASK_DATA_DIR && (
             <div>
-              <Label htmlFor="mcp-path">Шаблон пути профиля</Label>
+              <Label htmlFor="mcp-path" required>Шаблон пути профиля</Label>
               <Input
                 id="mcp-path"
                 placeholder="{{task.repos_path}}/.mcp-profiles/playwright"

@@ -35,6 +35,9 @@ class TaskStatus(StrEnum):
     AWAITING_LIMIT = "awaiting_limit"
     FAILED = "failed"
     DONE = "done"
+    # Раздел 14.2: завершённая или упавшая задача через N дней автора уходит
+    # с дашборда в раздел «Архив».
+    ARCHIVED = "archived"
 
 
 class PermissionMode(StrEnum):

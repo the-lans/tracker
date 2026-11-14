@@ -218,10 +218,6 @@ async def bind_pipeline_to_task(
     Пока задача до запуска, пайплайн можно сменить: прежний снимок заменяется
     новым в той же транзакции. Строка задачи блокируется до коммита, поэтому
     две одновременные привязки не складывают снимки (решение №19 плана).
-
-    ``disabled_node_ids`` — чекбоксы, снятые пользователем при выборе
-    пайплайна; `None` — выбор не делался, и выключены ноды с `is_skipped`
-    (раздел 15.4, «пропуск по умолчанию»).
     """
     locked = await lock_task(db_session, task.id)
     if locked is None or locked.status not in PRE_LAUNCH_STATUSES:
@@ -229,6 +225,30 @@ async def bind_pipeline_to_task(
             "Пайплайн можно выбрать или сменить только у задачи до запуска — "
             "запущенную задачу сначала верните в новые",
         )
+    await replace_pipeline_snapshot(
+        db_session,
+        task=task,
+        pipeline_id=pipeline_id,
+        disabled_node_ids=disabled_node_ids,
+    )
+    await db_session.commit()
+
+
+async def replace_pipeline_snapshot(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    pipeline_id: uuid.UUID,
+    disabled_node_ids: set[uuid.UUID] | None = None,
+) -> None:
+    """
+    Заменяет снимок нод задачи нодами пайплайна без коммита — вызывающий код
+    фиксирует его в своей транзакции вместе с `tasks.pipeline_id`.
+
+    ``disabled_node_ids`` — чекбоксы, снятые пользователем при выборе
+    пайплайна; `None` — выбор не делался, и выключены ноды с `is_skipped`
+    (раздел 15.4, «пропуск по умолчанию»).
+    """
     nodes_stmt = sa.select(Node).where(Node.pipeline_id == pipeline_id).order_by(Node.order_index)
     nodes = list((await db_session.execute(nodes_stmt)).scalars().all())
     if not nodes:
@@ -251,7 +271,7 @@ async def bind_pipeline_to_task(
                 is_enabled=node.id not in disabled_node_ids,
             ),
         )
-    await db_session.commit()
+    await db_session.flush()
     logger.info(
         "pipeline_bound_to_task",
         task_id=str(task.id),

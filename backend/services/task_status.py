@@ -70,6 +70,13 @@ PRE_LAUNCH_STATUSES = frozenset(
 QUEUE_STATUSES = frozenset({TaskStatus.READY, TaskStatus.NIGHT_WORKER})
 # Раздел 14.4: чат с агентом в «Уточняется» уходит в ожидание решения и возвращается.
 REFINING_DECISION_STATUSES = frozenset({TaskStatus.AWAITING_INPUT, TaskStatus.PLAN_REVIEW})
+# Раздел 14.2: итог прогона — от перехода в эти статусы считаются сроки архива.
+FINAL_STATUSES = frozenset({TaskStatus.DONE, TaskStatus.FAILED})
+# Прогон завершён: итоговые статусы и архив, куда задача уходит из них.
+FINISHED_STATUSES = FINAL_STATUSES | {TaskStatus.ARCHIVED}
+# Перезапустить нельзя — только вернуть в статус до запуска: настройки и
+# переменные прогона уже не меняются.
+READ_ONLY_STATUSES = frozenset({TaskStatus.DONE, TaskStatus.ARCHIVED})
 
 
 def _pre_launch_targets(status: TaskStatus) -> frozenset[TaskStatus]:
@@ -128,8 +135,12 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.AWAITING_LIMIT: LIMIT_WAIT_RETURN_STATUSES | {TaskStatus.FAILED},
     # `-> статус до запуска` — «Вернуть в новые» и меню статуса (раздел 14.1):
     # сменить пайплайн и запустить заново, в том числе из очереди.
-    TaskStatus.FAILED: frozenset({TaskStatus.IN_PROGRESS}) | PRE_LAUNCH_STATUSES,
-    TaskStatus.DONE: PRE_LAUNCH_STATUSES,
+    # `-> archived` — через N дней автора (раздел 14.2, `services/task_archive.py`).
+    TaskStatus.FAILED: (
+        frozenset({TaskStatus.IN_PROGRESS, TaskStatus.ARCHIVED}) | PRE_LAUNCH_STATUSES
+    ),
+    TaskStatus.DONE: PRE_LAUNCH_STATUSES | {TaskStatus.ARCHIVED},
+    TaskStatus.ARCHIVED: PRE_LAUNCH_STATUSES,
 }
 
 
@@ -141,6 +152,29 @@ def _queue_values(from_status: TaskStatus, to_status: TaskStatus) -> dict[str, o
     if to_status in QUEUE_STATUSES:
         return {} if from_status in QUEUE_STATUSES else {"ready_at": datetime.now(UTC)}
     return {"ready_at": None} if from_status in QUEUE_STATUSES else {}
+
+
+_FINISHED_RUN_FIELDS = (
+    "finished_at",
+    "archived_at",
+    "archived_from_status",
+    "session_cleaned_at",
+    "artifacts_cleaned_at",
+)
+
+
+def _finish_values(from_status: TaskStatus, to_status: TaskStatus) -> dict[str, object]:
+    """
+    Раздел 3.1 `tasks.finished_at`: итог прогона ставит момент завершения,
+    уход в архив его сохраняет, новый прогон (перезапуск, возврат в статус до
+    запуска) сбрасывает вместе с отметками архива и удаления данных по сроку
+    хранения (раздел 6.4, 14.3): у нового прогона свой срок.
+    """
+    if to_status in FINAL_STATUSES:
+        return {"finished_at": datetime.now(UTC)}
+    if from_status in FINISHED_STATUSES and to_status not in FINISHED_STATUSES:
+        return dict.fromkeys(_FINISHED_RUN_FIELDS)
+    return {}
 
 
 async def lock_task(db_session: AsyncSession, task_id: uuid.UUID) -> Task | None:
@@ -244,6 +278,7 @@ async def transition_task_status(
 
     values: dict[str, object] = {
         **_queue_values(from_status, to_status),
+        **_finish_values(from_status, to_status),
         **(extra_values or {}),
         "status": to_status,
     }
@@ -454,7 +489,7 @@ async def close_turn_after_error(
 
 
 # Раздел 14.2 «Вернуть в новые»: только у задачи без живой сессии.
-RESETTABLE_STATUSES = frozenset({TaskStatus.FAILED, TaskStatus.DONE})
+RESETTABLE_STATUSES = FINISHED_STATUSES
 
 
 async def reset_task_run(

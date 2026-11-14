@@ -4,9 +4,12 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Button } from "@/components/ui/button";
 import { JiraImportField } from "@/components/tasks/JiraImportField";
 import { ParentTaskFields } from "@/components/tasks/ParentTaskFields";
+import { TaskCategorySelect } from "@/components/taskCategories/TaskCategorySelect";
+import { Label } from "@/components/ui/label";
 import { TaskFormFields } from "@/components/tasks/TaskFormFields";
 import { EMPTY_TASK_FORM, toTaskRequest, type TaskFormValues } from "@/components/tasks/taskForm.types";
 import { useCreateTask } from "@/hooks/useTasks";
+import { useTaskCategories } from "@/hooks/useTaskCategories";
 import { useTaskCodeError } from "@/hooks/useTaskCodeError";
 
 export function CreateTaskDialog({
@@ -22,6 +25,8 @@ export function CreateTaskDialog({
   const [parentTaskId, setParentTaskId] = useState("");
   const [useParentSummary, setUseParentSummary] = useState(false);
   const [jiraIssueKey, setJiraIssueKey] = useState<string | null>(null);
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const { data: categories } = useTaskCategories();
   const { codeError, onFieldsChange, onSaveError } = useTaskCodeError("Не удалось создать задачу");
 
   function changeFields(patch: Partial<TaskFormValues>) {
@@ -34,6 +39,7 @@ export function CreateTaskDialog({
     setParentTaskId("");
     setUseParentSummary(false);
     setJiraIssueKey(null);
+    setCategoryId(null);
   }
 
   function handleSubmit(event: FormEvent) {
@@ -44,6 +50,7 @@ export function CreateTaskDialog({
         parent_task_id: parentTaskId || null,
         use_parent_summary: useParentSummary,
         jira_issue_key: jiraIssueKey,
+        category_id: categoryId,
       },
       {
         onSuccess: (task) => {
@@ -74,6 +81,19 @@ export function CreateTaskDialog({
             }}
           />
           <TaskFormFields value={values} onChange={changeFields} codeError={codeError} />
+          <div>
+            <Label htmlFor="task-category">Категория</Label>
+            <TaskCategorySelect
+              id="task-category"
+              value={categoryId}
+              categories={categories ?? []}
+              onChange={setCategoryId}
+            />
+            <div className="mt-1 text-meta text-text-3">
+              Задача получит настройки категории: пайплайн, системные промты, приоритет, слот и
+              автопринятие плана.
+            </div>
+          </div>
           <ParentTaskFields
             parentTaskId={parentTaskId}
             useParentSummary={useParentSummary}

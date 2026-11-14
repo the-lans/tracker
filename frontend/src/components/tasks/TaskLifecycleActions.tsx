@@ -6,12 +6,14 @@ import { DuplicateTaskDialog } from "@/components/tasks/DuplicateTaskDialog";
 import { HEADER_BUTTON } from "@/styles/classes";
 import { useCleanupRepositories, useClearContext } from "@/hooks/useTasks";
 import { toastError } from "@/lib/errors";
+import { CLEANED_DATA_LABEL } from "@/lib/labels";
+import { isDuplicable, isFinished } from "@/lib/taskStatusTransitions";
 import { TaskStatus, type Task } from "@/lib/types";
 import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
 
 type PendingAction = "cleanup" | "clear-context" | null;
 
-/** Раздел 14.2, 14.3: действия над задачей в `done`/`failed` — очистка
+/** Раздел 14.2, 14.3: действия над завершённой задачей — очистка
  * директории репозиториев, очистка контекста, дублирование. Возврат в статус
  * до запуска — в меню статуса (`TaskStatusMenu`). */
 export function TaskLifecycleActions({ task }: { task: Task }) {
@@ -19,7 +21,7 @@ export function TaskLifecycleActions({ task }: { task: Task }) {
   const [duplicateOpen, setDuplicateOpen] = useState(false);
   const cleanupRepositories = useCleanupRepositories(task.id);
   const clearContext = useClearContext(task.id);
-  const isTerminal = task.status === TaskStatus.DONE || task.status === TaskStatus.FAILED;
+  const finished = isFinished(task.status);
 
   function handleCleanup() {
     cleanupRepositories.mutate(undefined, {
@@ -55,7 +57,7 @@ export function TaskLifecycleActions({ task }: { task: Task }) {
           <ButtonLabel>Очистить контекст</ButtonLabel>
         </button>
       )}
-      {isTerminal && !task.repo_cleaned_at && (
+      {finished && !task.repo_cleaned_at && (
         <button
           type="button"
           className={HEADER_BUTTON}
@@ -67,10 +69,10 @@ export function TaskLifecycleActions({ task }: { task: Task }) {
           <ButtonLabel>Очистить репозитории</ButtonLabel>
         </button>
       )}
-      {isTerminal && task.repo_cleaned_at && (
-        <span className="hidden text-small text-text-3 sm:inline">Репозитории очищены</span>
+      {finished && task.repo_cleaned_at && (
+        <span className="hidden text-small text-text-3 sm:inline">{CLEANED_DATA_LABEL.repo_cleaned_at}</span>
       )}
-      {task.status === TaskStatus.DONE && (
+      {isDuplicable(task) && (
         <button
           type="button"
           className={HEADER_BUTTON}

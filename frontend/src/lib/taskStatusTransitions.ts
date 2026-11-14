@@ -13,8 +13,18 @@ export const PRE_LAUNCH_STATUSES: readonly TaskStatus[] = [
 /** Раздел 14.4: очередь автора — дневная и ночная. */
 export const QUEUE_STATUSES: readonly TaskStatus[] = [TaskStatus.READY, TaskStatus.NIGHT_WORKER];
 
-/** Из итоговых статусов задачу возвращают в статус до запуска со сбросом прогона. */
-export const RESETTABLE_STATUSES: readonly TaskStatus[] = [TaskStatus.FAILED, TaskStatus.DONE];
+/** Раздел 14.2: завершённая задача — итоговый статус или архив. */
+export const FINISHED_STATUSES: readonly TaskStatus[] = [
+  TaskStatus.FAILED,
+  TaskStatus.DONE,
+  TaskStatus.ARCHIVED,
+];
+
+/** Из завершённой задачу возвращают в статус до запуска со сбросом прогона. */
+export const RESETTABLE_STATUSES: readonly TaskStatus[] = FINISHED_STATUSES;
+
+/** Зеркало `READ_ONLY_STATUSES` backend: переменные и автопринятие плана не меняются. */
+export const READ_ONLY_STATUSES: readonly TaskStatus[] = [TaskStatus.DONE, TaskStatus.ARCHIVED];
 
 export function isPreLaunch(status: TaskStatus): boolean {
   return PRE_LAUNCH_STATUSES.includes(status);
@@ -22,6 +32,19 @@ export function isPreLaunch(status: TaskStatus): boolean {
 
 export function isQueued(status: TaskStatus): boolean {
   return QUEUE_STATUSES.includes(status);
+}
+
+export function isFinished(status: TaskStatus): boolean {
+  return FINISHED_STATUSES.includes(status);
+}
+
+export function isReadOnly(status: TaskStatus): boolean {
+  return READ_ONLY_STATUSES.includes(status);
+}
+
+/** Раздел 14.3: дублируется выполненная задача — и в архиве, если она ушла туда из `done`. */
+export function isDuplicable(task: Task): boolean {
+  return task.status === TaskStatus.DONE || task.archived_from_status === TaskStatus.DONE;
 }
 
 export function isResettable(status: TaskStatus): boolean {

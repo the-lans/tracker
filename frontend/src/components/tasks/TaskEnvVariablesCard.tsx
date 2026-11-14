@@ -6,19 +6,20 @@ import { Input } from "@/components/ui/input";
 import { TaskEnvVariableRow } from "@/components/tasks/TaskEnvVariableRow";
 import { useCreateTaskEnvVariable, useTaskEnvVariables } from "@/hooks/useTaskEnvVariables";
 import { toastError } from "@/lib/errors";
-import { TaskStatus, type Task } from "@/lib/types";
+import { isReadOnly } from "@/lib/taskStatusTransitions";
+import type { Task } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 
 /** Раздел 5, 15.2: переменные уровня задачи — приоритет над репозиторием и
  * глобальными; подставляются в момент отправки, поэтому меняются и во время
- * выполнения (кроме выполненной задачи). */
+ * выполнения (кроме выполненной задачи и задачи в архиве). */
 export function TaskEnvVariablesCard({ task }: { task: Task }) {
   const { data: variables, isLoading } = useTaskEnvVariables(task.id);
   const create = useCreateTaskEnvVariable(task.id);
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
-  const readOnly = task.status === TaskStatus.DONE;
+  const readOnly = isReadOnly(task.status);
 
   function handleAdd(event: FormEvent) {
     event.preventDefault();

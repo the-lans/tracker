@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -16,7 +17,7 @@ from db.models.logs import NodeLog
 from db.models.tasks import Task
 from db.models.users import User
 from services import log_rotation
-from services.log_rotation import rotate_node_logs
+from services.log_rotation import prune_log_archive, rotate_node_logs
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -119,3 +120,61 @@ class TestRotateNodeLogs:
 
         assert result.archived_files == []
         assert result.deleted_count == 0
+
+
+def _archive_file(directory: Path, name: str, *, age: timedelta) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_bytes(b"")
+    moment = (_NOW - age).timestamp()
+    os.utime(path, (moment, moment))
+    return path
+
+
+class TestPruneLogArchive:
+    @pytest.mark.parametrize(
+        ("age", "kept"),
+        [
+            (timedelta(days=181), False),
+            (timedelta(days=180, seconds=1), False),
+            (timedelta(days=180), True),
+            (timedelta(days=10), True),
+        ],
+        ids=["old", "just_over", "boundary", "recent"],
+    )
+    async def test_threshold(self, tmp_path: Path, age: timedelta, kept: bool) -> None:
+        old = _archive_file(tmp_path / "RR-1", "node_logs-a.jsonl.gz", age=age)
+        _archive_file(tmp_path / "RR-1", "node_logs-b.jsonl.gz", age=timedelta(days=1))
+
+        await prune_log_archive(archive_root=tmp_path, now=_NOW)
+
+        assert old.exists() is kept
+
+    async def test_empty_task_dir_removed(self, tmp_path: Path) -> None:
+        _archive_file(tmp_path / "RR-1", "node_logs-a.jsonl.gz", age=timedelta(days=400))
+
+        removed = await prune_log_archive(archive_root=tmp_path, now=_NOW)
+
+        assert removed == 1
+        assert not (tmp_path / "RR-1").exists()
+
+    async def test_foreign_files_and_links_kept(self, tmp_path: Path) -> None:
+        """Удаляются только файлы архива: чужие имена и ссылки остаются."""
+        old_age = timedelta(days=400)
+        target = _archive_file(tmp_path / "outside", "node_logs-x.jsonl.gz", age=old_age)
+        task_dir = tmp_path / "archive" / "RR-1"
+        foreign = [
+            _archive_file(task_dir, name, age=old_age)
+            for name in ("notes.txt", "backup.jsonl.gz", "node_logs-a.json")
+        ]
+        link = task_dir / "node_logs-link.jsonl.gz"
+        link.symlink_to(target)
+
+        removed = await prune_log_archive(archive_root=tmp_path / "archive", now=_NOW)
+
+        assert removed == 0
+        assert all(path.exists() for path in foreign)
+        assert (link.is_symlink(), target.exists()) == (True, True)
+
+    async def test_missing_root(self, tmp_path: Path) -> None:
+        assert await prune_log_archive(archive_root=tmp_path / "missing", now=_NOW) == 0

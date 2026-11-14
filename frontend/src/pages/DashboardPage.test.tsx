@@ -3,14 +3,16 @@ import { describe, expect } from "vitest";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { TaskStatus, type Task } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
-import { makeTask } from "@/test/factories";
+import { makeTask, makeTaskCategory } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
-/** По задаче в каждом статусе: код — `RR-<статус>`. */
-const tasksByStatus: Task[] = Object.values(TaskStatus).map((status, index) =>
-  makeTask({ id: `t${index}`, code: `RR-${status}`, title: `Задача ${status}`, status }),
-);
+/** По задаче в каждом статусе дашборда (архивные сервер не отдаёт): код — `RR-<статус>`. */
+const tasksByStatus: Task[] = Object.values(TaskStatus)
+  .filter((status) => status !== TaskStatus.ARCHIVED)
+  .map((status, index) =>
+    makeTask({ id: `t${index}`, code: `RR-${status}`, title: `Задача ${status}`, status }),
+  );
 
 function renderDashboard(api: MockedApi, tasks: Task[] = tasksByStatus) {
   api.respond("GET /tasks", tasks);
@@ -120,5 +122,47 @@ describe("DashboardPage", () => {
 
     expect(await screen.findByText("Задач пока нет")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Все · 0" })).toBeInTheDocument();
+  });
+
+  describe("фильтр по категории", () => {
+    const categorized: Task[] = [
+      makeTask({ id: "c1", code: "RR-back", status: TaskStatus.NEW, category_id: "back" }),
+      makeTask({ id: "c2", code: "RR-front", status: TaskStatus.DONE, category_id: "front" }),
+      makeTask({ id: "c3", code: "RR-plain", status: TaskStatus.NEW, category_id: null }),
+    ];
+
+    function renderWithCategories(api: MockedApi) {
+      api.respond("GET /task-categories", [
+        makeTaskCategory({ id: "back", name: "Бэкенд" }),
+        makeTaskCategory({ id: "front", name: "Фронтенд" }),
+      ]);
+      return renderDashboard(api, categorized);
+    }
+
+    test.for([
+      { option: "Бэкенд", codes: ["RR-back"] },
+      { option: "Без категории", codes: ["RR-plain"] },
+      { option: "Все категории", codes: ["RR-back", "RR-front", "RR-plain"] },
+    ])("«$option» → $codes", async ({ option, codes }, { api }) => {
+      const { user } = renderWithCategories(api);
+      await screen.findByText("RR-back");
+
+      await user.click(screen.getByRole("combobox", { name: "Категория" }));
+      await user.click(await screen.findByRole("option", { name: option }));
+
+      expect(shownCodes().sort()).toEqual([...codes].sort());
+    });
+
+    test("счётчики статусов — внутри выбранной категории", async ({ api }) => {
+      const { user } = renderWithCategories(api);
+      await screen.findByText("RR-back");
+
+      await user.click(screen.getByRole("combobox", { name: "Категория" }));
+      await user.click(await screen.findByRole("option", { name: "Фронтенд" }));
+
+      expect(screen.getByRole("button", { name: "Все · 1" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Завершено · 1" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "До запуска · 0" })).toBeInTheDocument();
+    });
   });
 });

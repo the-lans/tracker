@@ -34,12 +34,14 @@ from db.models.repositories import Repository
 from db.models.tasks import Task, TaskRepository
 from db.session import async_session_factory
 from services import gitlab_sync, maintenance_tasks, users
+from services.app_log_retention import purge_old_app_logs as purge_old_app_logs_pass
 from services.autostart import run_scheduled_autostart_check
 from services.backup.jobs import backup_job, verify_job
+from services.claude_config import resolve_sessions_root
 from services.events import purge_old_events
 from services.limit_wait import limit_waits_to_resume
 from services.llm_account_checks import check_llm_accounts
-from services.log_rotation import resolve_archive_root, rotate_node_logs
+from services.log_rotation import prune_log_archive, resolve_archive_root, rotate_node_logs
 from services.maintenance import maintenance_active
 from services.maintenance_tasks import DEFAULT_LOG_ROTATION_THRESHOLD_DAYS
 from services.manual_queue import STALE_QUEUED_REQUEST_AGE, expire_stale_manual_queue_requests
@@ -50,7 +52,12 @@ from services.periodic_tasks import (
 )
 from services.redis_connection import redis_connection
 from services.remote_control import check_session_bridges
+from services.system_settings import get_system_settings
+from services.task_archive import ArchivePass, RepositoryCleanupPass
+from services.task_artifacts import resolve_user_files_root
 from services.task_dispatcher import dispatch_queued_tasks, pending_queue_session_ids
+from services.task_retention import ArtifactsPass, SessionHistoryPass
+from services.task_workspace import resolve_repos_root
 from services.volume_usage import store_volume_usage
 from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import (
@@ -66,6 +73,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from services.task_passes import TaskPass
 
 logger = get_logger("tasks.periodic")
 
@@ -228,6 +237,98 @@ def cleanup_stale_worktrees() -> None:
     _run_periodic("cleanup_stale_worktrees", body)
 
 
+def _run_task_pass(
+    name: str,
+    event: str,
+    make_pass: Callable[[AsyncSession, datetime], TaskPass],
+) -> None:
+    """
+    Проход по завершённым задачам (`services/task_passes.py`) и его итог в лог.
+    """
+
+    async def body(db_session: AsyncSession) -> None:
+        async with redis_connection() as redis_client:
+            result = await make_pass(db_session, datetime.now(UTC)).run(redis_client)
+        logger.info(
+            event,
+            done=len(result.done),
+            skipped=len(result.skipped),
+            lock_busy=result.lock_busy,
+        )
+
+    _run_periodic(name, body)
+
+
+@celery_app.task(name="archive_finished_tasks")
+def archive_finished_tasks() -> None:
+    """Раздел 14.2: завершённые задачи старше срока автора уходят в архив."""
+    _run_task_pass(
+        "archive_finished_tasks",
+        "finished_tasks_archived",
+        lambda db_session, now: ArchivePass(db_session, now=now),
+    )
+
+
+@celery_app.task(name="cleanup_finished_task_repositories")
+def cleanup_finished_task_repositories() -> None:
+    """Раздел 14.2: репозитории завершённых задач очищаются через срок автора."""
+    _run_task_pass(
+        "cleanup_finished_task_repositories",
+        "finished_task_repositories_cleaned",
+        lambda db_session, now: RepositoryCleanupPass(
+            db_session,
+            now=now,
+            repos_root=resolve_repos_root(),
+        ),
+    )
+
+
+@celery_app.task(name="cleanup_archived_task_sessions")
+def cleanup_archived_task_sessions() -> None:
+    """Раздел 6.4: история сессии задачи, давно лежащей в архиве, удаляется."""
+    _run_task_pass(
+        "cleanup_archived_task_sessions",
+        "archived_task_sessions_cleaned",
+        lambda db_session, now: SessionHistoryPass(
+            db_session,
+            now=now,
+            root=resolve_sessions_root(),
+        ),
+    )
+
+
+@celery_app.task(name="cleanup_archived_task_artifacts")
+def cleanup_archived_task_artifacts() -> None:
+    """Раздел 14.3: артефакты архивной задачи удаляются через срок автора."""
+    _run_task_pass(
+        "cleanup_archived_task_artifacts",
+        "archived_task_artifacts_cleaned",
+        lambda db_session, now: ArtifactsPass(
+            db_session,
+            now=now,
+            root=resolve_user_files_root(),
+        ),
+    )
+
+
+@celery_app.task(name="purge_old_app_logs")
+def purge_old_app_logs() -> None:
+    """
+    Раздел 17.2: записи `app_logs` старше срока из системных настроек удаляются.
+    """
+
+    async def body(db_session: AsyncSession) -> None:
+        settings = await get_system_settings(db_session)
+        deleted = await purge_old_app_logs_pass(
+            db_session,
+            now=datetime.now(UTC),
+            days=settings.app_logs_retention_days,
+        )
+        logger.info("app_logs_purged", deleted=deleted)
+
+    _run_periodic("purge_old_app_logs", body)
+
+
 @celery_app.task(name="detect_awaiting_input_timeout")
 def detect_awaiting_input_timeout() -> None:
     async def body(db_session: AsyncSession) -> None:
@@ -328,6 +429,7 @@ def rotate_task_logs() -> None:
             threshold_days=DEFAULT_LOG_ROTATION_THRESHOLD_DAYS,
         )
         logger.info("events_purged", deleted=purged)
+        await prune_log_archive(archive_root=resolve_archive_root(), now=now)
 
     _run_periodic("rotate_task_logs", body)
 

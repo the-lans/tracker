@@ -533,7 +533,49 @@ async def test_create_task_attaches_repositories_and_llm_account(
     assert attached["repository_id"] == str(repository.id)
     assert attached["role"] == RepositoryRole.READ_WRITE.value
     assert attached["branch_name"] == "feature/RR-10001"
-    assert attached["base_branch"] == "main"
+    assert attached["base_branch"] == repository.default_branch
+
+
+class TestRepositoryBaseBranch:
+    @pytest.mark.parametrize(
+        ("requested", "expected"),
+        [(None, "develop"), ("release/1.2", "release/1.2")],
+    )
+    async def test_default_from_repository(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        requested: str | None,
+        expected: str,
+    ) -> None:
+        repository = await make_repository(db_session, default_branch="develop")
+        attached = {"repository_id": str(repository.id), "role": "read_write"}
+        if requested is not None:
+            attached["base_branch"] = requested
+
+        response = await authed_client.post(
+            "/tasks",
+            json={"code": "RR-10011", "title": "t", "description": "d", "repositories": [attached]},
+        )
+
+        assert response.status_code == 201, response.text
+        repositories = await authed_client.get(f"/tasks/{response.json()['id']}/repositories")
+        assert repositories.json()[0]["base_branch"] == expected
+
+    async def test_invalid_branch_rejected(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        repository = await make_repository(db_session)
+        attached = {"repository_id": str(repository.id), "role": "read_write", "base_branch": "-x"}
+
+        response = await authed_client.post(
+            "/tasks",
+            json={"code": "RR-10012", "title": "t", "description": "d", "repositories": [attached]},
+        )
+
+        assert response.status_code == 422
 
 
 async def test_create_task_rejects_unknown_repository(authed_client: AsyncClient) -> None:

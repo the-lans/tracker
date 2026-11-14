@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import {
+  Archive,
   LayoutGrid,
   GitBranch,
   BookText,
@@ -10,6 +11,7 @@ import {
   ShieldCheck,
   Activity,
   Bell,
+  Tags,
 } from "lucide-react";
 import { BrandMark } from "@/components/layout/BrandMark";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
@@ -74,9 +76,11 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <NavItem to="/" label="Дашборд" icon={LayoutGrid} badge={awaitingCount?.count} />
         <NavItem to="/pipelines" label="Пайплайны" icon={GitBranch} />
         <NavItem to="/library" label="Библиотека промтов" icon={BookText} />
+        <NavItem to="/categories" label="Категории" icon={Tags} />
         <NavItem to="/templates" label="Шаблоны" icon={FileStack} />
         <NavItem to="/repositories" label="Репозитории" icon={FolderGit2} />
         <NavItem to="/events" label="События" icon={Bell} />
+        <NavItem to="/archive" label="Архив" icon={Archive} />
       </nav>
 
       <div className="mb-4.5 mt-4 flex flex-col gap-0.5">

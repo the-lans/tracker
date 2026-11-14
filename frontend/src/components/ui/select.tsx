@@ -13,14 +13,15 @@ export const SelectTrigger = forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      "flex h-10 w-full short:h-9 touch-target items-center justify-between gap-2 rounded-md border border-border bg-surface px-3 text-sm text-text disabled:opacity-50",
+      // Длинное значение — в одну строку с многоточием, полностью оно видно в списке.
+      "flex h-10 w-full short:h-9 touch-target items-center justify-between gap-2 rounded-md border border-border bg-surface px-3 text-left text-sm text-text disabled:opacity-50 [&>span]:min-w-0 [&>span]:truncate",
       className,
     )}
     {...props}
   >
     {children}
     <SelectPrimitive.Icon asChild>
-      <ChevronDown className="size-4 text-text-3" />
+      <ChevronDown className="size-4 shrink-0 text-text-3" />
     </SelectPrimitive.Icon>
   </SelectPrimitive.Trigger>
 ));

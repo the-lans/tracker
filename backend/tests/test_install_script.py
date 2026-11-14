@@ -29,7 +29,14 @@ from services.maintenance import MAINTENANCE_KEY
 from services.periodic_tasks import NIGHT_DISPATCH_TASK
 from services.task_status import SESSION_ACTIVE_STATUSES
 from tasks.celery_app import DISPATCH_READY_TASKS
-from tasks.periodic import measure_volume_usage
+from tasks.periodic import (
+    archive_finished_tasks,
+    cleanup_archived_task_artifacts,
+    cleanup_archived_task_sessions,
+    cleanup_finished_task_repositories,
+    measure_volume_usage,
+    purge_old_app_logs,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,6 +70,12 @@ _SYSTEM_TOOLS = (
     "wc",
 )
 _PREVIOUS_SHA = "1" * 40
+_RETENTION_TASKS = (
+    cleanup_archived_task_sessions,
+    cleanup_archived_task_artifacts,
+    purge_old_app_logs,
+)
+RETENTION_TASK_NAMES = ",".join(f"'{task.name}'" for task in _RETENTION_TASKS)
 _TARGET_SHA = "2" * 40
 _REDIS_PASSWORD = "redis-pass-from-env"
 
@@ -76,12 +89,21 @@ if [ "$1 $2 $3" = "compose exec -T" ]; then
 fi
 case "$*" in
   *seed_periodic_tasks*) [ -f "$STUB_DIR/fail-seed" ] && exit 1 ;;
+  *migrate_claude_sessions*) [ -f "$STUB_DIR/fail-migrate" ] && exit 1 ;;
   *"UPDATE tasks SET status"*) [ -f "$STUB_DIR/fail-reset" ] && exit 1 ;;
 esac
 if [ "$1" = "version" ]; then
   cat "$STUB_DIR/engine-version" 2>/dev/null || echo "27.3.1"
 fi
 case "$*" in
+  "compose config") echo "name: tracker"; echo "services:" ;;
+  # Том каталогов прежних LLM-аккаунтов: есть, пока лежит файл legacy-volume.
+  "volume create "*) echo "$3" > "$STUB_DIR/legacy-volume" ;;
+  "volume ls "*) cat "$STUB_DIR/legacy-volume" 2>/dev/null ;;
+  "volume rm "*)
+    [ -f "$STUB_DIR/fail-volume-rm" ] && exit 1
+    rm -f "$STUB_DIR/legacy-volume" ;;
+  "image prune"*|"builder prune"*) [ -f "$STUB_DIR/fail-prune" ] && exit 1 ;;
   *"redis-cli SET"*) echo "OK" ;;
   *psql*)
     # Число живых сессий: по строке файла на опрос, последняя повторяется.
@@ -110,6 +132,13 @@ case "$*" in
   *"cat-file -e"*events_and_library_links*)
     [ -f "$STUB_DIR/old-target" ] || [ -f "$STUB_DIR/pre-limit-target" ] \
       || [ -f "$STUB_DIR/pre-library-target" ] && exit 1 ;;
+  *"cat-file -e"*task_archive*)
+    [ -f "$STUB_DIR/old-target" ] || [ -f "$STUB_DIR/pre-limit-target" ] \
+      || [ -f "$STUB_DIR/pre-library-target" ] || [ -f "$STUB_DIR/pre-archive-target" ] && exit 1 ;;
+  *"cat-file -e"*data_retention*)
+    [ -f "$STUB_DIR/old-target" ] || [ -f "$STUB_DIR/pre-limit-target" ] \
+      || [ -f "$STUB_DIR/pre-library-target" ] || [ -f "$STUB_DIR/pre-archive-target" ] \
+      || [ -f "$STUB_DIR/pre-retention-target" ] && exit 1 ;;
   *"cat-file -e"*) [ -f "$STUB_DIR/old-target" ] && exit 1 ;;
   *"checkout --detach"*) for last; do :; done; echo "$last" > "$STUB_DIR/git-head" ;;
 esac
@@ -324,6 +353,7 @@ class TestSharedConstants:
             ("LIMIT_WAIT_MIGRATION", "LIMIT_SWITCH_REASONS_RESET", "_RESTORE_SWITCH_REASONS"),
             ("LIBRARY_LINKS_MIGRATION", "LIBRARY_CONTENT_RESET", "_RESTORE_LIBRARY_CONTENT"),
             ("LIBRARY_LINKS_MIGRATION", "GUIDE_URL_RESET", "_RESTORE_GUIDE_URL"),
+            ("ARCHIVE_MIGRATION", "ARCHIVE_RESET", "_RESTORE_ARCHIVED"),
         ],
     )
     def test_downgrade_reset(
@@ -376,6 +406,14 @@ class TestSharedConstants:
         names = {item.strip("'") for item in raw.split(",")}
         assert names == {measure_volume_usage.name}
 
+    def test_archive_periodic_tasks(self, stubs: Path, install_dir: Path) -> None:
+        """Откат удаляет периодические задачи архивации и очистки репозиториев."""
+        raw = self._value(stubs, install_dir, "ARCHIVE_PERIODIC_TASKS")
+        assert {item.strip("'") for item in raw.split(",")} == {
+            archive_finished_tasks.name,
+            cleanup_finished_task_repositories.name,
+        }
+
     def test_queue_periodic_tasks(self, stubs: Path, install_dir: Path) -> None:
         """Откат удаляет ровно периодические задачи воркера очереди."""
         raw = self._value(stubs, install_dir, "QUEUE_PERIODIC_TASKS")
@@ -415,16 +453,22 @@ class TestRestore:
                 "log_archive.tar.gz",
                 "claude_sessions.tar.gz",
                 "cliproxy_data.tar.gz",
-                "claude_accounts.tar.gz",
                 "sftp_host_keys.tar.gz",
+                # Каталоги аккаунтов копии прежней версии — во временный том.
+                "docker volume create tracker_claude_accounts",
+                "-v tracker_claude_accounts:/data/claude-accounts -v",
                 "docker compose run --rm backend alembic upgrade head",
                 # Дамп прежней версии не знает новых периодических задач.
                 "seed_periodic_tasks.py",
-                "migrate_claude_sessions.py",
+                "-v tracker_claude_accounts:/data/claude-accounts:ro backend python "
+                "/app/scripts/migrate_claude_sessions.py",
                 "docker compose up -d cliproxy llm-gateway backend worker session-worker"
                 " backup-worker beat sftp frontend caddy backup",
+                "docker volume rm tracker_claude_accounts",
             ],
         )
+        # Восстановление — не обновление: образов прежней версии на сервере нет.
+        assert not any(" prune " in call for call in docker_calls)
         # Администратор и allowlist — из дампа.
         assert not any("seed_admin" in call for call in docker_calls)
         # Роль SFTP-шлюза — до дампа: в нём есть права на неё (раздел 20.4).
@@ -489,10 +533,7 @@ class TestRestore:
         assert missing in result.stdout
         assert _calls(stubs) == []
 
-    @pytest.mark.parametrize(
-        "archive",
-        ["claude_accounts.tar.gz", "claude_sessions.tar.gz", "cliproxy_data.tar.gz"],
-    )
+    @pytest.mark.parametrize("archive", ["claude_sessions.tar.gz", "cliproxy_data.tar.gz"])
     def test_optional_archive_missing(
         self,
         tmp_path: Path,
@@ -516,6 +557,32 @@ class TestRestore:
         docker_calls = [call for call in _calls(stubs) if call.startswith("docker")]
         assert any("log_archive.tar.gz" in call for call in docker_calls)
         assert not any(archive in call for call in docker_calls)
+
+    def test_without_legacy_accounts(
+        self,
+        tmp_path: Path,
+        stubs: Path,
+        install_dir: Path,
+    ) -> None:
+        """Копия текущей версии: каталогов аккаунтов нет — переносить нечего."""
+        restore_dir = _make_restore_dir(tmp_path, skip="claude_accounts.tar.gz")
+
+        result = _run_bash(
+            f'exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--restore",
+            str(restore_dir),
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "перенос истории сессий не нужен" in result.stdout
+        docker_calls = [call for call in _calls(stubs) if call.startswith("docker")]
+        assert not any(
+            fragment in call
+            for call in docker_calls
+            for fragment in ("volume create", "volume rm", "migrate_claude_sessions")
+        )
 
     def test_ref(self, tmp_path: Path, stubs: Path, install_dir: Path) -> None:
         """Копия из S3 восстанавливается на той версии кода, на которой снята."""
@@ -603,20 +670,24 @@ class TestUpdate:
                 f"merge-base --is-ancestor {_TARGET_SHA} origin/main",
                 f"checkout --detach {_TARGET_SHA}",
                 "docker compose build",
-                "docker build -t tracker-runner-python:latest",
-                "docker build -t tracker-runner-bash:latest",
-                "docker build -t tracker-session:latest",
+                "docker build --label tracker.image=runner -t tracker-runner-python:latest",
+                "docker build --label tracker.image=runner -t tracker-runner-bash:latest",
+                "docker build --label tracker.image=runner -t tracker-session:latest",
                 "docker compose up -d --wait postgres redis",
                 "redis-cli SET maintenance:deploy",
                 "exec -T backup /usr/local/bin/backup.sh",
                 "alembic upgrade head",
                 "seed_periodic_tasks.py",
-                "migrate_claude_sessions.py",
                 "docker compose up -d cliproxy llm-gateway backend worker session-worker"
                 " backup-worker beat sftp",
+                "docker image prune -f --filter label=com.docker.compose.project=tracker",
+                "docker image prune -f --filter label=tracker.image=runner",
+                "docker builder prune -f --filter until=168h",
                 "redis-cli DEL maintenance:deploy",
             ],
         )
+        # Тома прежних аккаунтов нет — переносить нечего.
+        assert not any("migrate_claude_sessions" in call for call in calls)
         assert not any("seed_admin_allowlist" in call or "git clone" in call for call in calls)
         assert not any(_REDIS_PASSWORD in call for call in calls)
         assert not any("psql" in call for call in calls)
@@ -683,22 +754,36 @@ class TestUpdate:
         assert not (install_dir / ".deploy").exists()
 
     @pytest.mark.parametrize(
-        ("target", "limit_reset", "pre_launch_reset", "library_reset"),
+        ("target", "limit_reset", "pre_launch_reset", "library_reset", "archive_reset"),
         [
             pytest.param(
-                "old-target", True, True, True, id="откат на версию без статусов до запуска",
+                "old-target", True, True, True, True, id="откат на версию без статусов до запуска",
             ),
             pytest.param(
-                "pre-limit-target", True, False, True, id="откат на версию без ожидания лимита",
+                "pre-limit-target",
+                True,
+                False,
+                True,
+                True,
+                id="откат на версию без ожидания лимита",
             ),
             pytest.param(
                 "pre-library-target",
                 False,
                 False,
                 True,
+                True,
                 id="откат на версию без ссылок на библиотеку",
             ),
-            pytest.param(None, False, False, False, id="версия со всеми изменениями"),
+            pytest.param(
+                "pre-archive-target",
+                False,
+                False,
+                False,
+                True,
+                id="откат на версию без архива задач",
+            ),
+            pytest.param(None, False, False, False, False, id="версия со всеми изменениями"),
         ],
     )
     def test_unknown_statuses_reset(
@@ -709,6 +794,7 @@ class TestUpdate:
         limit_reset: bool,
         pre_launch_reset: bool,
         library_reset: bool,
+        archive_reset: bool,
     ) -> None:
         if target is not None:
             (stubs / target).touch()
@@ -719,7 +805,9 @@ class TestUpdate:
         calls = _calls(stubs)
         assert any("cat-file -e" in call for call in calls)
         resets_seen = [call for call in calls if "psql" in call and "UPDATE" in call]
-        assert len(resets_seen) == int(limit_reset or pre_launch_reset or library_reset)
+        assert len(resets_seen) == int(
+            limit_reset or pre_launch_reset or library_reset or archive_reset,
+        )
         reset = resets_seen[0] if resets_seen else ""
         assert ("FROM nodes AS library_items" in reset) is library_reset
         assert ("node[.]guide_url" in reset) is library_reset
@@ -727,6 +815,10 @@ class TestUpdate:
         assert ("WHERE status::text = 'awaiting_limit'" in reset) is limit_reset
         assert ("UPDATE node_logs SET llm_switch_reason" in reset) is limit_reset
         assert ("UPDATE tasks SET status = 'new'" in reset) is pre_launch_reset
+        assert ("status = archived_from_status" in reset) is archive_reset
+        assert (
+            "WHERE name IN ('archive_finished_tasks','cleanup_finished_task_repositories')" in reset
+        ) is archive_reset
         if pre_launch_reset:
             assert "'refining','defined','ready','night_worker'" in reset
             assert "'dispatch_ready_tasks','dispatch_night_tasks'" in reset
@@ -734,6 +826,34 @@ class TestUpdate:
             assert reset.index("awaiting_limit") < reset.index("status = 'new'")
         if resets_seen:
             _assert_in_order(calls, ["checkout --detach", "cat-file -e", "UPDATE"])
+
+    @pytest.mark.parametrize(
+        ("target", "deleted"),
+        [
+            pytest.param("pre-retention-target", True, id="версия без сроков хранения"),
+            pytest.param("pre-archive-target", True, id="версия без архива задач"),
+            pytest.param(None, False, id="версия со всеми изменениями"),
+        ],
+    )
+    def test_retention_periodic_tasks_deleted(
+        self,
+        stubs: Path,
+        install_dir: Path,
+        target: str | None,
+        deleted: bool,
+    ) -> None:
+        if target is not None:
+            (stubs / target).touch()
+
+        result = _update(stubs, install_dir, "--ref", "abc1234")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        deletes = [
+            call
+            for call in _calls(stubs)
+            if "psql" in call and f"WHERE name IN ({RETENTION_TASK_NAMES})" in call
+        ]
+        assert bool(deletes) is deleted
 
     def test_failed_reset_restores_code(self, stubs: Path, install_dir: Path) -> None:
         (stubs / "old-target").touch()
@@ -810,6 +930,87 @@ class TestUpdate:
 
         assert result.returncode == 2
         assert _calls(stubs) == []
+
+
+def _prune_calls(stubs: Path) -> list[str]:
+    return [call for call in _calls(stubs) if call.startswith("docker") and " prune " in call]
+
+
+class TestUpdateCleanup:
+    """Раздел 20.6: после обновления — висячие образы, кеш сборки и том прежних аккаунтов."""
+
+    @pytest.fixture(autouse=True)
+    def installed(self, install_dir: Path) -> None:
+        (install_dir / ".env").write_text(_installed_env(REDIS_PASSWORD=_REDIS_PASSWORD))
+        (install_dir / "deploy").mkdir()
+        shutil.copy(_INSTALL_SCRIPT, install_dir / "deploy" / "install.sh")
+
+    def test_prune_only_dangling_tracker_images(self, stubs: Path, install_dir: Path) -> None:
+        """Без -a: образ, на котором есть контейнер сессии или ноды, Docker не удаляет."""
+        result = _update(stubs, install_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        prunes = _prune_calls(stubs)
+        assert prunes == [
+            "docker image prune -f --filter label=com.docker.compose.project=tracker",
+            "docker image prune -f --filter label=tracker.image=runner",
+            "docker builder prune -f --filter until=168h",
+        ]
+
+    def test_prune_failure_keeps_update(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "fail-prune").touch()
+
+        result = _update(stubs, install_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "не удалось очистить кеш сборки" in result.stdout
+        assert "Обновление завершено" in result.stdout
+        _assert_in_order(_calls(stubs), ["builder prune", "redis-cli DEL maintenance:deploy"])
+
+    def test_no_prune_after_failed_update(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "fail-seed").touch()
+
+        result = _update(stubs, install_dir)
+
+        assert result.returncode != 0
+        assert _prune_calls(stubs) == []
+
+    def test_legacy_volume_migrated_then_removed(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "legacy-volume").write_text("tracker_claude_accounts\n")
+
+        result = _update(stubs, install_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        _assert_in_order(
+            _calls(stubs),
+            [
+                "-v tracker_claude_accounts:/data/claude-accounts:ro backend python "
+                "/app/scripts/migrate_claude_sessions.py",
+                "docker compose up -d cliproxy llm-gateway backend",
+                "docker volume rm tracker_claude_accounts",
+                "docker image prune",
+            ],
+        )
+        assert not (stubs / "legacy-volume").exists()
+
+    def test_failed_migration_keeps_volume(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "legacy-volume").write_text("tracker_claude_accounts\n")
+        (stubs / "fail-migrate").touch()
+
+        result = _update(stubs, install_dir)
+
+        assert result.returncode != 0
+        assert not any("volume rm" in call for call in _calls(stubs))
+        assert (stubs / "legacy-volume").exists()
+
+    def test_volume_in_use_warns(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "legacy-volume").write_text("tracker_claude_accounts\n")
+        (stubs / "fail-volume-rm").touch()
+
+        result = _update(stubs, install_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "не удалён — повтор при следующем обновлении" in result.stdout
 
 
 class TestPrepareEnv:

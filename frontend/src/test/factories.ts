@@ -14,6 +14,7 @@ import {
   UserRole,
   type BackupRun,
   type BackupSettings,
+  type SystemSettings,
   type CurrentUser,
   type LlmAccount,
   type LlmProvider,
@@ -21,7 +22,9 @@ import {
   type NodeItem,
   type NodeLog,
   type PendingOption,
+  type Repository,
   type Task,
+  type TaskCategory,
   type TaskLibraryPromptItem,
   type TaskNodeItem,
   type Template,
@@ -192,6 +195,9 @@ export function makeUser(overrides: Partial<User> = {}): User {
     llm_switch_threshold_5h_pct: 93,
     llm_compact_on_switch: true,
     max_parallel_tasks: 3,
+    archive_after_days: 14,
+    cleanup_repos_after_days: 30,
+    artifacts_retention_days: 90,
     ...overrides,
   };
 }
@@ -242,6 +248,34 @@ export function makeTemplate(overrides: Partial<Template> = {}): Template {
   };
 }
 
+export function makeRepository(overrides: Partial<Repository> = {}): Repository {
+  return {
+    id: "r1",
+    name: "web-app",
+    git_url: "git@gitlab.example.com:shop/web-app.git",
+    default_branch: "master",
+    default_template_id: null,
+    git_credential_id: "cred1",
+    ...overrides,
+  };
+}
+
+export function makeTaskCategory(overrides: Partial<TaskCategory> = {}): TaskCategory {
+  return {
+    id: "cat1",
+    name: "Бэкенд",
+    pipeline_id: null,
+    auto_accept_plan: false,
+    library_prompt_ids: [],
+    queue_priority: 100,
+    occupies_slot: false,
+    created_by: "u1",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
 export function makeBackupRun(overrides: Partial<BackupRun> = {}): BackupRun {
   return {
     status: BackupRunStatus.SUCCESS,
@@ -256,6 +290,18 @@ export function makeBackupRun(overrides: Partial<BackupRun> = {}): BackupRun {
 }
 
 /** Настройки бэкапа в S3: всё заполнено, секреты сохранены, запусков ещё не было. */
+export function makeSystemSettings(overrides: Partial<SystemSettings> = {}): SystemSettings {
+  return {
+    default_timeout_seconds: 900,
+    default_max_retries: 2,
+    default_retry_base_delay_seconds: 10,
+    night_window_start: "03:15:00",
+    night_window_end: "07:00:00",
+    app_logs_retention_days: 30,
+    ...overrides,
+  };
+}
+
 export function makeBackupSettings(overrides: Partial<BackupSettings> = {}): BackupSettings {
   return {
     enabled: true,

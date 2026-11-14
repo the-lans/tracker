@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FolderGit2, Plus } from "lucide-react";
+import { FolderGit2, GitBranch, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -63,6 +63,10 @@ export function RepositoriesPage() {
                 />
               </div>
               <div className="truncate font-mono text-small text-text-3" title={repository.git_url}>{repository.git_url}</div>
+              <div className="flex min-w-0 items-center gap-1 text-small text-text-3" title="Ветка по умолчанию">
+                <GitBranch className="size-3.5 shrink-0" />
+                <span className="truncate font-mono">{repository.default_branch}</span>
+              </div>
             </Card>
           ))}
         </div>

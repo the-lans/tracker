@@ -45,6 +45,7 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
             sa.text("queue_priority DESC"),
             "ready_at",
         ),
+        sa.Index("ix_tasks_status_finished_at", "status", "finished_at"),
     )
 
     code: Mapped[str] = mapped_column(sa.String, unique=True)
@@ -102,6 +103,18 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     # прежней сессии (очистка контекста, смена LLM-аккаунта).
     context_cleared_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     repo_cleaned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Раздел 14.2: переход в `done`/`failed` — от него считаются сроки архивации
+    # и очистки репозиториев; уход в архив его сохраняет, новый прогон сбрасывает.
+    finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Итоговый статус до архива: по нему откат релиза возвращает задачу (раздел 20.6).
+    archived_from_status: Mapped[TaskStatus | None] = mapped_column(
+        pg_enum(TaskStatus, name="task_status"),
+    )
+    # Раздел 6.4, 14.3: история сессии и артефакты архивной задачи удалены по
+    # сроку хранения; новый прогон отметки сбрасывает.
+    session_cleaned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    artifacts_cleaned_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     # Раздел 14.4: очередь автора — `ready`/`night_worker` по приоритету, затем
     # по времени постановки; слот ручного запуска и чата — по `occupies_slot`.
     queue_priority: Mapped[int] = mapped_column(
@@ -140,6 +153,11 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     limit_wait_order_index: Mapped[int | None] = mapped_column(sa.Integer)
     # Попытка ноды, ждавшей сброса: после него повторы продолжают счёт с неё.
     limit_wait_attempt: Mapped[int | None] = mapped_column(sa.Integer)
+    # Раздел 15.7: категория автора; удалённая категория оставляет задачу без категории.
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.ForeignKey("task_categories.id", ondelete="SET NULL"),
+        index=True,
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("users.id"))
 
 

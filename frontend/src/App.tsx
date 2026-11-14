@@ -12,6 +12,7 @@ import { TaskPage } from "@/pages/TaskPage";
 import { PipelinesPage } from "@/pages/PipelinesPage";
 import { PipelineDetailPage } from "@/pages/PipelineDetailPage";
 import { LibraryPage } from "@/pages/LibraryPage";
+import { TaskCategoriesPage } from "@/pages/TaskCategoriesPage";
 import { TemplatesPage } from "@/pages/TemplatesPage";
 import { RepositoriesPage } from "@/pages/RepositoriesPage";
 import { LlmAccountsPage } from "@/pages/LlmAccountsPage";
@@ -19,6 +20,7 @@ import { EnvVariablesPage } from "@/pages/EnvVariablesPage";
 import { ProfilePage } from "@/pages/ProfilePage";
 import { AdminPage } from "@/pages/AdminPage";
 import { EventsPage } from "@/pages/EventsPage";
+import { ArchivePage } from "@/pages/ArchivePage";
 import { MonitoringPage } from "@/pages/MonitoringPage";
 
 export function App() {
@@ -36,10 +38,12 @@ export function App() {
                   <Route path="pipelines" element={<PipelinesPage />} />
                   <Route path="pipelines/:pipelineId" element={<PipelineDetailPage />} />
                   <Route path="library" element={<LibraryPage />} />
+                  <Route path="categories" element={<TaskCategoriesPage />} />
                   <Route path="templates" element={<TemplatesPage />} />
                   <Route path="repositories" element={<RepositoriesPage />} />
                   <Route path="llm-accounts" element={<LlmAccountsPage />} />
                   <Route path="events" element={<EventsPage />} />
+                  <Route path="archive" element={<ArchivePage />} />
                   <Route path="profile" element={<ProfilePage />} />
                   <Route element={<AdminRoute />}>
                     <Route path="admin" element={<AdminPage />} />

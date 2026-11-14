@@ -2,11 +2,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useRepositories } from "@/hooks/useRepositories";
-import { RepositoryRole, type TaskRepositoryAttach } from "@/lib/types";
+import { RepositoryRole, type Repository, type TaskRepositoryAttach } from "@/lib/types";
 import { REPOSITORY_ROLE_LABEL } from "@/lib/labels";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
-
-const DEFAULT_BASE_BRANCH = "main";
 
 /** Раздел 1.2 (сценарий 1): репозитории задачи с ролью и базовой веткой. */
 export function TaskRepositoryPicker({
@@ -19,14 +17,19 @@ export function TaskRepositoryPicker({
   const { data: repositories, isLoading } = useRepositories();
   const selected = new Map(value.map((attached) => [attached.repository_id, attached]));
 
-  function toggle(repositoryId: string, checked: boolean) {
+  /** Базовая ветка — по умолчанию ветка из настроек репозитория (раздел 3.1). */
+  function toggle(repository: Repository, checked: boolean) {
     if (checked) {
       onChange([
         ...value,
-        { repository_id: repositoryId, role: RepositoryRole.READ_WRITE, base_branch: DEFAULT_BASE_BRANCH },
+        {
+          repository_id: repository.id,
+          role: RepositoryRole.READ_WRITE,
+          base_branch: repository.default_branch,
+        },
       ]);
     } else {
-      onChange(value.filter((attached) => attached.repository_id !== repositoryId));
+      onChange(value.filter((attached) => attached.repository_id !== repository.id));
     }
   }
 
@@ -60,7 +63,7 @@ export function TaskRepositoryPicker({
             <label className="flex items-center gap-2.5 text-body font-bold">
               <Checkbox
                 checked={Boolean(attached)}
-                onCheckedChange={(checked) => toggle(repository.id, checked === true)}
+                onCheckedChange={(checked) => toggle(repository, checked === true)}
               />
               {repository.name}
             </label>

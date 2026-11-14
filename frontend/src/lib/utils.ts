@@ -23,6 +23,19 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }
 
+/** Граница дня `<input type="date">` в локальной зоне — в ISO для API; конец дня — начало следующего. */
+export function localDayBoundary(value: string, endOfDay: boolean): string | undefined {
+  if (!value) return undefined;
+  const date = new Date(`${value}T00:00:00`);
+  if (endOfDay) date.setDate(date.getDate() + 1);
+  return date.toISOString();
+}
+
+/** Число страниц списка; пустой список — одна страница. */
+export function pageCountOf(total: number, pageSize: number): number {
+  return Math.max(1, Math.ceil(total / pageSize));
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);

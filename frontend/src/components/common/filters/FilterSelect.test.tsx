@@ -29,7 +29,10 @@ describe("FilterSelect", () => {
   ])("значение $value → «$shown»", ({ value, shown }) => {
     renderFilter(value);
 
-    expect(screen.getByRole("combobox", { name: "Цвет" })).toHaveTextContent(shown);
+    const trigger = screen.getByRole("combobox", { name: "Цвет" });
+    expect(trigger).toHaveTextContent(shown);
+    // Обрезанная в поле подпись целиком видна в подсказке.
+    expect(trigger).toHaveAttribute("title", shown);
   });
 
   test("пункты — «Все …», затем значения в заданном порядке", async () => {

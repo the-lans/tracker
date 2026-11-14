@@ -40,7 +40,8 @@ class TaskRepositoryAttachRequest(BaseModel):
 
     repository_id: uuid.UUID
     role: RepositoryRole
-    base_branch: str = "main"
+    # Не задана — ветка по умолчанию репозитория (`repositories.default_branch`).
+    base_branch: str | None = None
 
 
 class TaskDuplicateRequest(BaseModel):
@@ -59,13 +60,16 @@ class TaskCreateRequest(TaskDuplicateRequest):
     use_parent_summary: bool = False
     # Раздел 15.6: задача заполнена из Jira — ссылка и вложения берутся по ключу.
     jira_issue_key: str | None = None
+    # Раздел 15.7: настройки категории копируются в новую задачу.
+    category_id: uuid.UUID | None = None
 
 
 class TaskUpdateRequest(BaseModel):
     """Поля задачи, редактируемые после создания (раздел 12.1, 14.2).
 
     ``auto_accept_plan`` меняется в любой момент до `done` (раздел 15.2),
-    ``queue_priority`` и ``occupies_slot`` — в любом статусе (раздел 14.4);
+    ``queue_priority`` и ``occupies_slot`` — в любом статусе (раздел 14.4),
+    ``category_id`` — тоже (раздел 15.7);
     остальные — только пока задача в статусе до запуска.
     """
 
@@ -79,6 +83,8 @@ class TaskUpdateRequest(BaseModel):
     # Раздел 14.4: меняются в любом статусе — управление прогоном, а не поля задачи.
     queue_priority: int | None = Field(None, ge=MIN_QUEUE_PRIORITY, le=MAX_QUEUE_PRIORITY)
     occupies_slot: bool | None = None
+    # Раздел 15.7: в любом статусе; null — без категории.
+    category_id: uuid.UUID | None = None
 
 
 class TaskRepositoryResponse(BaseModel):
@@ -120,6 +126,13 @@ class TaskResponse(BaseModel):
     limit_wait_from_status: TaskStatus | None = None
     limit_wait_until: datetime | None = None
     repo_cleaned_at: datetime | None
+    # Раздел 14.2: завершение прогона и архив.
+    finished_at: datetime | None = None
+    archived_at: datetime | None = None
+    archived_from_status: TaskStatus | None = None
+    # Раздел 6.4, 14.3: история сессии и артефакты удалены по сроку хранения.
+    session_cleaned_at: datetime | None = None
+    artifacts_cleaned_at: datetime | None = None
     queue_priority: int
     ready_at: datetime | None
     occupies_slot: bool
@@ -128,6 +141,7 @@ class TaskResponse(BaseModel):
     chat_active: bool = False
     # Раздел 14.4: место в очереди автора (с 1) у задачи в `ready`/`night_worker`.
     queue_position: int | None = None
+    category_id: uuid.UUID | None = None
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
@@ -319,3 +333,29 @@ class ArtifactResponse(BaseModel):
     path: str
     size: int
     modified_at: datetime
+
+
+class ArchivedTaskResponse(BaseModel):
+    """Раздел 15.1: строка раздела «Архив»."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    code: str
+    title: str
+    archived_from_status: TaskStatus | None
+    # Название категории подставляет выборка архива (JOIN), у задачи его нет.
+    category_name: str | None = None
+    finished_at: datetime | None
+    archived_at: datetime | None
+    repo_cleaned_at: datetime | None
+    session_cleaned_at: datetime | None
+    artifacts_cleaned_at: datetime | None
+    created_by: uuid.UUID
+
+
+class ArchivedTaskPageResponse(BaseModel):
+    items: list[ArchivedTaskResponse]
+    total: int
+    page: int
+    page_size: int

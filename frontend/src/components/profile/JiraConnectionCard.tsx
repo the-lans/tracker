@@ -51,7 +51,7 @@ function JiraConnectionForm({ profile, serverUrl }: { profile: User; serverUrl: 
         />
       </div>
       <div>
-        <Label htmlFor="jira-token">Личный токен</Label>
+        <Label htmlFor="jira-token" required={!profile.jira_token_set}>Личный токен</Label>
         <Input
           id="jira-token"
           type="password"

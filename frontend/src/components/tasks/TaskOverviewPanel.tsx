@@ -9,6 +9,7 @@ import { AutoStartSummaryCard } from "@/components/tasks/AutoStartSummaryCard";
 import { ParentTaskCard } from "@/components/tasks/ParentTaskCard";
 import { PipelinePickerDialog } from "@/components/tasks/PipelinePickerDialog";
 import { TaskArtifactsCard } from "@/components/tasks/TaskArtifactsCard";
+import { TaskCategoryCard } from "@/components/tasks/TaskCategoryCard";
 import { TaskDescriptionCard } from "@/components/tasks/TaskDescriptionCard";
 import { TaskEnvVariablesCard } from "@/components/tasks/TaskEnvVariablesCard";
 import { TaskLibraryPromptsCard } from "@/components/tasks/TaskLibraryPromptsCard";
@@ -54,6 +55,7 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
       </div>
 
       <TaskDescriptionCard task={task} />
+      <TaskCategoryCard task={task} pending={updateTask.isPending} onUpdate={update} />
 
       {task.parent_task_id && <ParentTaskCard task={task} />}
 

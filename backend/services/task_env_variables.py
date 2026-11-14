@@ -17,11 +17,11 @@ from typing import TYPE_CHECKING
 import sqlalchemy as sa
 
 from app_logging.config import get_logger
-from db.models.enums import TaskStatus
 from db.models.env_vars import TaskEnvVariable
 from services.access import get_task_record_or_404
 from services.crypto import decrypt, encrypt
 from services.errors import ConflictError, ValidationError
+from services.task_status import READ_ONLY_STATUSES
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +35,7 @@ ENV_KEY_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
 def _ensure_editable(task: Task) -> None:
-    if task.status is TaskStatus.DONE:
+    if task.status in READ_ONLY_STATUSES:
         raise ConflictError("Переменные выполненной задачи менять нельзя")
 
 

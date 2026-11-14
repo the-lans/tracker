@@ -22,15 +22,15 @@ def commit_file(repo_dir: Path, filename: str, content: str, *, message: str) ->
     run("git", *GIT_AUTHOR_ARGS, "commit", "-m", message, cwd=repo_dir)
 
 
-def init_bare_origin(tmp_path: Path, name: str = "origin") -> Path:
-    """Bare-репозиторий с веткой `main` и одним коммитом (`README.md`)."""
+def init_bare_origin(tmp_path: Path, name: str = "origin", *, branch: str = "main") -> Path:
+    """Bare-репозиторий с веткой `branch` (HEAD) и одним коммитом (`README.md`)."""
     origin = tmp_path / f"{name}.git"
-    run("git", "init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
+    run("git", "init", "--bare", f"--initial-branch={branch}", str(origin), cwd=tmp_path)
     seed_dir = tmp_path / f"{name}-seed"
     run("git", "clone", str(origin), str(seed_dir), cwd=tmp_path)
-    run("git", "checkout", "-B", "main", cwd=seed_dir)
+    run("git", "checkout", "-B", branch, cwd=seed_dir)
     commit_file(seed_dir, "README.md", "исходный файл\n", message="начальный коммит")
-    run("git", "push", "origin", "main", cwd=seed_dir)
+    run("git", "push", "origin", branch, cwd=seed_dir)
     return origin
 
 

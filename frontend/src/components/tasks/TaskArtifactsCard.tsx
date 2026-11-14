@@ -14,7 +14,9 @@ import {
 } from "@/hooks/useTaskArtifacts";
 import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { errorMessage } from "@/lib/errors";
+import { CLEANED_DATA_LABEL } from "@/lib/labels";
 import type { Task } from "@/lib/types";
+import { formatDateTime } from "@/lib/utils";
 
 // Пока задача работает, агент сохраняет файлы и между сменами статуса.
 const ACTIVE_REFETCH_INTERVAL_MS = 15_000;
@@ -22,7 +24,8 @@ const ACTIVE_REFETCH_INTERVAL_MS = 15_000;
 /**
  * Раздел 14.3, 15.2: артефакты задачи — файлы для агента и результаты его
  * работы. Доступны в любом статусе задачи и не удаляются очисткой
- * репозиториев; те же файлы видны по SFTP в `<код>/artifacts`.
+ * репозиториев (у архивной задачи — по сроку хранения автора); те же файлы
+ * видны по SFTP в `<код>/artifacts`.
  */
 export function TaskArtifactsCard({ task }: { task: Task }) {
   const { data: jiraCopy } = useJiraAttachmentCopy(task.id, task.jira_issue_url !== null);
@@ -83,7 +86,13 @@ export function TaskArtifactsCard({ task }: { task: Task }) {
             <TaskArtifactRow key={artifact.path} taskId={task.id} artifact={artifact} />
           ))}
         </div>
-      ) : copyingFromJira ? null : (
+      ) : copyingFromJira ? null : task.artifacts_cleaned_at ? (
+        <EmptyState
+          compact
+          title={CLEANED_DATA_LABEL.artifacts_cleaned_at}
+          hint={`Файлы архивной задачи удалены ${formatDateTime(task.artifacts_cleaned_at)} по сроку хранения, который задаёт администратор.`}
+        />
+      ) : (
         <EmptyState
           compact
           title="Файлов нет"

@@ -3,7 +3,7 @@ import { Input, Textarea } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { DialogFooter } from "@/components/ui/dialog";
-import { LibrarySourceField } from "@/components/nodes/LibrarySourceField";
+import { LibraryPromptFields } from "@/components/nodes/LibraryPromptFields";
 import { NodeGuideField } from "@/components/nodes/NodeGuideField";
 import { NodeTypeField } from "@/components/nodes/NodeTypeField";
 import {
@@ -17,9 +17,10 @@ import { PromptTemplateField } from "@/components/nodes/PromptTemplateField";
 import { ScriptFields } from "@/components/nodes/ScriptFields";
 import { SlashCommandField } from "@/components/nodes/SlashCommandField";
 import {
-  NodeSource,
-  type LibrarySourceValue,
+  LIBRARY_PROMPT_TYPE,
+  type LibraryLinkValue,
   type NodeExecutionValues,
+  type NodeFormType,
 } from "@/components/nodes/nodeForm.types";
 import { useCreateNode, useUpdateNode } from "@/hooks/useNodes";
 import { toastError } from "@/lib/errors";
@@ -31,8 +32,12 @@ import {
   type TemplatePreviewRequest,
 } from "@/lib/types";
 
-const PIPELINE_ONLY_TYPES = Object.values(NodeType);
-const LIBRARY_ALLOWED_TYPES = [NodeType.PLAIN_PROMPT, NodeType.SLASH_COMMAND, NodeType.SCRIPT];
+const PIPELINE_TYPES: readonly NodeFormType[] = [...Object.values(NodeType), LIBRARY_PROMPT_TYPE];
+const LIBRARY_ALLOWED_TYPES: readonly NodeFormType[] = [
+  NodeType.PLAIN_PROMPT,
+  NodeType.SLASH_COMMAND,
+  NodeType.SCRIPT,
+];
 /** Раздел 11.1: уровень рассуждений — у нод, которые выполняет модель. */
 const EFFORT_TYPES: readonly NodeType[] = [
   NodeType.PLAIN_PROMPT,
@@ -69,7 +74,9 @@ export function NodeForm({
   const [slashName, setSlashName] = useState(node?.slash_name ?? "");
   const [argumentHint, setArgumentHint] = useState(node?.argument_hint ?? "");
   const [description, setDescription] = useState(node?.description ?? "");
-  const [nodeType, setNodeType] = useState<NodeType>(node?.node_type ?? NodeType.PLAIN_PROMPT);
+  const [formType, setFormType] = useState<NodeFormType>(
+    node?.library_node_id ? LIBRARY_PROMPT_TYPE : (node?.node_type ?? NodeType.PLAIN_PROMPT),
+  );
   const [promptTemplate, setPromptTemplate] = useState(node?.prompt_template ?? "");
   const [commandInvocation, setCommandInvocation] = useState(node?.command_invocation ?? "");
   const [scriptLanguage, setScriptLanguage] = useState<ScriptLanguage>(
@@ -85,18 +92,19 @@ export function NodeForm({
     isSkipped: node?.is_skipped ?? false,
   });
 
-  const [librarySource, setLibrarySource] = useState<LibrarySourceValue>({
-    source: node?.library_node_id ? NodeSource.LIBRARY : NodeSource.OWN,
+  const [libraryLink, setLibraryLink] = useState<LibraryLinkValue>({
     libraryNodeId: node?.library_node_id ?? null,
     libraryNodeType: node?.library_node_id ? node.node_type : null,
     arguments: node?.library_arguments ?? "",
   });
 
   const isPipeline = mode === "pipeline";
-  const availableTypes = isPipeline ? PIPELINE_ONLY_TYPES : LIBRARY_ALLOWED_TYPES;
-  const linked = isPipeline && librarySource.source === NodeSource.LIBRARY;
-  const effectiveType = linked ? (librarySource.libraryNodeType ?? nodeType) : nodeType;
-  const withGuide = !linked && nodeType === NodeType.PLAIN_PROMPT;
+  const availableTypes = isPipeline ? PIPELINE_TYPES : LIBRARY_ALLOWED_TYPES;
+  /** Тип своего содержимого; `null` — нода выполняет промт библиотеки. */
+  const nodeType = formType === LIBRARY_PROMPT_TYPE ? null : formType;
+  const effectiveType = nodeType ?? libraryLink.libraryNodeType;
+  const withEffort = effectiveType !== null && EFFORT_TYPES.includes(effectiveType);
+  const withGuide = nodeType === NodeType.PLAIN_PROMPT;
 
   function previewRequest(): TemplatePreviewRequest {
     const guide = withGuide ? { guide_url: guideUrl || null } : {};
@@ -113,7 +121,7 @@ export function NodeForm({
   }
 
   function contentFields() {
-    if (linked) return linkedContentPayload(librarySource, effectiveType);
+    if (nodeType === null) return linkedContentPayload(libraryLink);
     return ownContentPayload(
       { nodeType, promptTemplate, commandInvocation, scriptLanguage, scriptContent, guideUrl },
       { isPipeline },
@@ -135,7 +143,7 @@ export function NodeForm({
       max_retries: isPipeline ? execution.maxRetries : undefined,
       retry_base_delay_seconds: isPipeline ? execution.retryBaseDelaySeconds : undefined,
       is_skipped: isPipeline ? execution.isSkipped : false,
-      reasoning_effort: EFFORT_TYPES.includes(effectiveType) ? effort : null,
+      reasoning_effort: withEffort ? effort : null,
     };
     const callbacks = { onSuccess: onSaved, onError: toastError("Не удалось сохранить ноду") };
     if (node) {
@@ -150,11 +158,11 @@ export function NodeForm({
   return (
     <div className="flex flex-col gap-3">
       <div>
-        <Label htmlFor="node-name">Название</Label>
+        <Label htmlFor="node-name" required>Название</Label>
         <Input id="node-name" value={name} onChange={(e) => setName(e.target.value)} />
       </div>
       {!isPipeline && (nodeType === NodeType.PLAIN_PROMPT || nodeType === NodeType.SCRIPT) && <>
-        <div><Label htmlFor="node-slash-name">Slash-команда (необязательно)</Label>
+        <div><Label htmlFor="node-slash-name">Slash-команда</Label>
           <Input id="node-slash-name" placeholder="/review" maxLength={65}
             value={slashName} onChange={(event) => setSlashName(event.target.value)} />
           <p className="text-small text-text-3">Доступна во всех ваших задачах. Имеет приоритет над одноимённой командой агента.</p>
@@ -169,8 +177,8 @@ export function NodeForm({
         </div>
       </>}
       <div>
-        <Label htmlFor="node-description">
-          Описание{mode === "library" ? " (обязательно)" : ""}
+        <Label htmlFor="node-description" required={mode === "library"}>
+          Описание
         </Label>
         <Textarea
           id="node-description"
@@ -179,16 +187,15 @@ export function NodeForm({
           onChange={(e) => setDescription(e.target.value)}
         />
       </div>
-      {isPipeline && (
-        <LibrarySourceField
-          ownerId={pipelineOwnerId ?? node?.created_by}
-          value={librarySource}
-          onChange={setLibrarySource}
-        />
-      )}
-      {!linked && <>
-        <NodeTypeField value={nodeType} types={availableTypes} onChange={setNodeType} />
+      <NodeTypeField value={formType} types={availableTypes} onChange={setFormType} />
 
+      {nodeType === null ? (
+        <LibraryPromptFields
+          ownerId={pipelineOwnerId ?? node?.created_by}
+          value={libraryLink}
+          onChange={setLibraryLink}
+        />
+      ) : <>
         {PROMPT_TYPES.includes(nodeType) && (
           <PromptTemplateField
             value={promptTemplate}
@@ -220,7 +227,7 @@ export function NodeForm({
         {withGuide && <NodeGuideField value={guideUrl} onChange={setGuideUrl} />}
       </>}
 
-      {EFFORT_TYPES.includes(effectiveType) && (
+      {withEffort && (
         <NodeEffortField id="node-effort" value={effort} onChange={setEffort} />
       )}
 
@@ -240,7 +247,7 @@ export function NodeForm({
           disabled={
             !name ||
             (mode === "library" && !node && !description.trim()) ||
-            (linked && !librarySource.libraryNodeId) ||
+            (nodeType === null && !libraryLink.libraryNodeId) ||
             isPending
           }
         >
