@@ -76,9 +76,9 @@ async def google_calendar_callback(
     async with redis_connection() as redis_client:
         try:
             await complete_login(
-                db_session,
-                redis_client,
-                google_calendar,
+                db_session=db_session,
+                redis_client=redis_client,
+                client=google_calendar,
                 state=state,
                 code=code,
                 now=datetime.now(UTC),

@@ -19,7 +19,7 @@ export function TaskDayMarks({ task }: { task: Task }) {
   const marked = marks?.get(task.id);
 
   return (
-    <div className="flex items-center gap-1.5" role="group" aria-label="Отметить на день">
+    <div className="flex shrink-0 items-center gap-1.5" role="group" aria-label="Отметить на день">
       {MARKABLE_DAYS.map((key) => {
         const day = calendar[key];
         const pressed = marked?.has(day) ?? false;

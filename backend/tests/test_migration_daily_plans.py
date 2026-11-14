@@ -24,9 +24,7 @@ _TABLES = (
     "daily_plan_templates",
     "google_calendar_connections",
 )
-_USER_INSERT = (
-    "INSERT INTO users (id, email, role, is_active) VALUES (:id, :email, 'user', true)"
-)
+_USER_INSERT = "INSERT INTO users (id, email, role, is_active) VALUES (:id, :email, 'user', true)"
 _SETTINGS_INSERT = (
     "INSERT INTO system_settings (id, default_timeout_seconds, default_max_retries, "
     "default_retry_base_delay_seconds, default_runner_image_python, default_runner_image_bash) "

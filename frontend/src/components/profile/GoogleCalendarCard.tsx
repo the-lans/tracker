@@ -147,7 +147,8 @@ function ConnectedCalendar({ connection }: { connection: GoogleCalendarConnectio
             disabled={sync.isPending}
             onClick={() =>
               sync.mutate(undefined, {
-                onSuccess: ({ events }) => toast.success(`Загружено событий: ${events}`),
+                onSuccess: ({ synced, events }) =>
+                  synced ? toast.success(`Загружено событий: ${events}`) : toast.error("Календарь не обновлён"),
                 onError: toastError("Не удалось обновить календарь"),
               })}
           >

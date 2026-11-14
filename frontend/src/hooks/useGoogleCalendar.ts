@@ -1,7 +1,7 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { dailyKeys } from "@/hooks/useDaily";
 import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
-import { api } from "@/lib/apiClient";
+import { ApiError, api } from "@/lib/apiClient";
 import type { GoogleCalendarConnection, GoogleCalendarInfo, GoogleCalendarSyncResult } from "@/lib/daily.types";
 
 const KEY = ["google-calendar"] as const;
@@ -15,10 +15,24 @@ export function useGoogleCalendar() {
   });
 }
 
+/**
+ * Календари аккаунта. 409 — Google отозвал доступ: подключение уже в статусе
+ * «нужен повторный вход», карточка перечитывает его и предлагает войти снова.
+ */
 export function useGoogleCalendars(enabled: boolean) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: CALENDARS_KEY,
-    queryFn: () => api.get<GoogleCalendarInfo[]>("/profile/google-calendar/calendars"),
+    queryFn: async () => {
+      try {
+        return await api.get<GoogleCalendarInfo[]>("/profile/google-calendar/calendars");
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) {
+          void queryClient.invalidateQueries({ queryKey: KEY, exact: true });
+        }
+        throw error;
+      }
+    },
     enabled,
   });
 }

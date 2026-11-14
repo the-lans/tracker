@@ -79,7 +79,8 @@ class DayWindow:
 
     def history_days(self) -> list[date]:
         """Завтра, сегодня и прошлые дни — от новых к старым."""
-        return [self.tomorrow - timedelta(days=offset) for offset in range(HISTORY_PAST_DAYS + 2)]
+        days = (self.tomorrow - self.first_history_day).days + 1
+        return [self.tomorrow - timedelta(days=offset) for offset in range(days)]
 
     def contains(self, day: date) -> bool:
         return self.first_history_day <= day <= self.tomorrow

@@ -243,10 +243,10 @@ async def sync_all_calendars(
 
 
 async def complete_login(
+    *,
     db_session: AsyncSession,
     redis_client: Redis,
     client: GoogleCalendarClient,
-    *,
     state: str,
     code: str,
     now: datetime,

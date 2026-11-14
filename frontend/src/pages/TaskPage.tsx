@@ -53,8 +53,9 @@ export function TaskPage() {
           <ArrowLeft className="size-4" />
         </Link>
         <div className="min-w-0 flex-1 basis-56">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-small font-bold text-text-3">{task.code}</span>
+          {/* Отметки дня переносятся на свою строку, а не сжимают код и статус. */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="max-w-full break-all font-mono text-small font-bold text-text-3">{task.code}</span>
             <TaskStatusMenu task={task} />
             <TaskDayMarks task={task} />
           </div>

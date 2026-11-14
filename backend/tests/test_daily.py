@@ -13,6 +13,7 @@ import pytest
 from db.models.daily import DailyEvent
 from db.models.enums import DailyEventSource, NodeLogStatus, NodeLogTriggerType, TaskStatus
 from db.models.logs import NodeLog
+from db.queries.daily import insert_mark
 from services.daily_clock import DailyClock, load_daily_clock
 from services.daily_events import (
     ManualEventValues,
@@ -67,8 +68,6 @@ async def _task(db_session: AsyncSession, user: User, title: str = "t", **fields
 
 async def _mark(db_session: AsyncSession, user: User, task: Task, day: date) -> None:
     """Отметка прошлого дня напрямую: API ставит только сегодня и завтра."""
-    from db.queries.daily import insert_mark
-
     await insert_mark(db_session, user_id=user.id, task_id=task.id, day=day)
     await db_session.flush()
 
@@ -95,6 +94,7 @@ async def _work(
 async def _event(
     db_session: AsyncSession,
     user: User,
+    *,
     day: date,
     title: str,
     **fields: object,
@@ -302,8 +302,8 @@ class TestPreviousDay:
         assert [item.title for item in previous.done] == ["worked"]
 
     async def test_event_counts_as_activity(self, db_session: AsyncSession, user: User) -> None:
-        await _event(db_session, user, date(2026, 11, 12), "Ретро")
-        await _event(db_session, user, date(2026, 11, 14), "Скрытое", hidden=True)
+        await _event(db_session, user, day=date(2026, 11, 12), title="Ретро")
+        await _event(db_session, user, day=date(2026, 11, 14), title="Скрытое", hidden=True)
 
         previous = await previous_day(db_session, user=user, before=TODAY, clock=CLOCK)
 
@@ -384,8 +384,8 @@ class TestDayEvents:
         event = await _event(
             db_session,
             user,
-            TODAY,
-            "Планёрка",
+            day=TODAY,
+            title="Планёрка",
             source=DailyEventSource.GOOGLE,
             calendar_id="primary",
             external_id="evt-1",
@@ -406,15 +406,17 @@ class TestDayEvents:
         assert hidden.hidden is True
 
     async def test_foreign_event_hidden(self, db_session: AsyncSession, user: User) -> None:
-        event = await _event(db_session, await make_user(db_session), TODAY, "Чужое")
+        event = await _event(db_session, await make_user(db_session), day=TODAY, title="Чужое")
 
         with pytest.raises(NotFoundError):
             await set_event_hidden(db_session, user=user, event_id=event.id, hidden=True)
 
     async def test_day_view_order_and_multiday(self, db_session: AsyncSession, user: User) -> None:
-        await _event(db_session, user, TODAY, "Встреча", starts_at=TODAY_START + timedelta(hours=2))
-        await _event(db_session, user, YESTERDAY, "Отпуск", end_day=TOMORROW)
-        await _event(db_session, user, TODAY, "Скрытое", hidden=True)
+        await _event(
+            db_session, user, day=TODAY, title="Встреча", starts_at=TODAY_START + timedelta(hours=2)
+        )
+        await _event(db_session, user, day=YESTERDAY, title="Отпуск", end_day=TOMORROW)
+        await _event(db_session, user, day=TODAY, title="Скрытое", hidden=True)
 
         view = await day_view(db_session, user=user, day=TODAY, clock=CLOCK, include_hidden=False)
         with_hidden = await day_view(
@@ -460,13 +462,13 @@ class TestDailyPlans:
         planned = await _task(db_session, user, "Профиль игрока", code="RR-15592")
         await _mark(db_session, user, done, YESTERDAY)
         await _work(db_session, done.id, YESTERDAY_START + timedelta(hours=1))
-        await _event(db_session, user, YESTERDAY, "Ревью кода")
+        await _event(db_session, user, day=YESTERDAY, title="Ревью кода")
         await _mark(db_session, user, planned, TODAY)
         await _event(
             db_session,
             user,
-            TODAY,
-            "All Hands",
+            day=TODAY,
+            title="All Hands",
             source=DailyEventSource.GOOGLE,
             calendar_id="primary",
             external_id="evt-1",

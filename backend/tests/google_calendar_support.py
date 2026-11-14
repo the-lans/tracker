@@ -40,6 +40,8 @@ class FakeGoogle:
     email: str = GOOGLE_EMAIL
     revoked: bool = False
     issue_refresh_token: bool = True
+    # Код входа истёк или уже использован: обмен кода — `invalid_grant`.
+    reject_code: bool = False
     events: dict[str, list[list[dict[str, Any]]]] = field(default_factory=dict)
     # Календари, удалённые в Google: их события — 404.
     missing: set[str] = field(default_factory=set)
@@ -50,7 +52,9 @@ class FakeGoogle:
 
     def _token(self, form: dict[str, list[str]]) -> httpx.Response:
         grant = form["grant_type"][0]
-        if grant == "refresh_token" and self.revoked:
+        if (grant == "refresh_token" and self.revoked) or (
+            grant == "authorization_code" and self.reject_code
+        ):
             return httpx.Response(400, json={"error": "invalid_grant"})
         body: dict[str, Any] = {"access_token": ACCESS_TOKEN}
         if grant == "authorization_code":

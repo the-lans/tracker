@@ -39,7 +39,7 @@ from db.queries.daily import (
     swap_calendar_status,
 )
 from services.crypto import decrypt, encrypt
-from services.errors import ExternalServiceError, NotFoundError, ValidationError
+from services.errors import ConflictError, ExternalServiceError, NotFoundError, ValidationError
 from services.notifications import NotificationEvent, notify_user_event
 
 if TYPE_CHECKING:
@@ -226,7 +226,7 @@ async def list_account_calendars(
     connection = await require_connection(db_session, user=user)
     access_token = await access_token_for(db_session, client, connection=connection)
     if access_token is None:
-        return []
+        raise ConflictError(_REAUTH_DETAIL.format(email=connection.google_email))
     calendars = await client.list_calendars(access_token=access_token)
     # Основной календарь хранится как `primary` (выбор по умолчанию), а Google
     # отдаёт его под адресом аккаунта — один и тот же календарь не должен

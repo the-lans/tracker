@@ -5,6 +5,8 @@ access-токена, список календарей и событий за п
 
 Отказ Google обновить токен (`invalid_grant`: доступ отозван, пароль сменён,
 токен истёк) — `CalendarAuthRevokedError`: подключение нужно войти заново.
+Тот же ответ на обмен кода входа (код истёк или уже использован) — обычный
+сбой входа `ExternalServiceError`: подключения ещё нет.
 Адреса Google задаются `GoogleEndpoints` — стенд подменяет их моком.
 """
 
@@ -27,6 +29,9 @@ _EVENTS_PAGE_SIZE = 250
 _CANCELLED = "cancelled"
 _INVALID_GRANT = "invalid_grant"
 _JWT_PARTS = 3
+# base64 без выравнивания: длина дополняется «=» до кратной блоку.
+_BASE64_BLOCK = 4
+_CODE_REJECTED = "Google не принял код входа — подключите календарь заново"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +101,7 @@ def _email_from_id_token(id_token: str | None) -> str | None:
     parts = id_token.split(".")
     if len(parts) != _JWT_PARTS:
         return None
-    payload = parts[1] + "=" * (-len(parts[1]) % 4)
+    payload = parts[1] + "=" * (-len(parts[1]) % _BASE64_BLOCK)
     try:
         claims = json.loads(base64.urlsafe_b64decode(payload))
     except (ValueError, json.JSONDecodeError):
@@ -230,13 +235,16 @@ class GoogleCalendarClient:
         return self._json(response)
 
     async def exchange_code(self, code: str) -> GoogleTokens:
-        body = await self._token_request(
-            {
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": self._config.redirect_uri,
-            },
-        )
+        try:
+            body = await self._token_request(
+                {
+                    "code": code,
+                    "grant_type": "authorization_code",
+                    "redirect_uri": self._config.redirect_uri,
+                },
+            )
+        except CalendarAuthRevokedError as exc:
+            raise ExternalServiceError(_CODE_REJECTED, is_transient=False) from exc
         access_token = body.get("access_token")
         if not access_token:
             raise ExternalServiceError("Google не вернул access-токен", is_transient=False)

@@ -64,6 +64,29 @@ describe("GoogleCalendarCard", () => {
     await vi.waitFor(() => expect(toasts.success).toHaveBeenCalledWith("Загружено событий: 4"));
   });
 
+  test("Google отозвал доступ при загрузке календарей — карточка предлагает войти снова", async ({ api }) => {
+    const connections = [
+      makeGoogleCalendarConnection(),
+      makeGoogleCalendarConnection({ status: "needs_reauth", last_error: "Доступ отозван" }),
+    ];
+    api.respond("GET /profile/google-calendar", () => connections.shift() ?? connections[0]);
+    api.respond("GET /profile/google-calendar/calendars", { error: { status: 409, message: "Доступ отозван" } });
+    renderWithProviders(<GoogleCalendarCard />, { path: "/profile" });
+
+    expect(await screen.findByRole("button", { name: "Войти снова" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Сохранить выбор" })).not.toBeInTheDocument();
+  });
+
+  test("синхронизация не состоялась — ошибка вместо «Загружено событий»", async ({ api, toasts }) => {
+    api.respond("POST /profile/google-calendar/sync", { synced: false, events: 0 });
+    const { user } = renderCard(api, makeGoogleCalendarConnection());
+
+    await user.click(await screen.findByRole("button", { name: "Обновить сейчас" }));
+
+    await vi.waitFor(() => expect(toasts.error).toHaveBeenCalledWith("Календарь не обновлён"));
+    expect(toasts.success).not.toHaveBeenCalled();
+  });
+
   test.for([
     { result: "connected", kind: "success", text: "Google Calendar подключён" },
     { result: "error", kind: "error", text: "Не удалось подключить Google Calendar" },

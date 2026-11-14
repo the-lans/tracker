@@ -13,14 +13,16 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 import sqlalchemy as sa
 
+from api.dependencies import get_google_calendar
 from clients.google_calendar import CalendarAuthRevokedError
 from db.models.daily import DailyEvent, GoogleCalendarConnection
 from db.models.enums import DailyEventSource, GoogleCalendarStatus
 from db.models.events import Event
+from main import app
 from services import calendar_sync
 from services.calendar_sync import sync_all_calendars, sync_user_calendar
 from services.crypto import decrypt
-from services.errors import ConflictError, ValidationError
+from services.errors import ConflictError, ExternalServiceError, ValidationError
 from services.google_calendar import (
     complete_authorization,
     disconnect,
@@ -119,6 +121,13 @@ class TestClient:
 
         with pytest.raises(CalendarAuthRevokedError):
             await google.client().refresh_access_token(REFRESH_TOKEN)
+
+    async def test_rejected_code(self, google: FakeGoogle) -> None:
+        """`invalid_grant` на обмене кода — сбой входа, а не «нужен повторный вход»."""
+        google.reject_code = True
+
+        with pytest.raises(ExternalServiceError, match="код входа"):
+            await google.client().exchange_code("expired")
 
     def test_authorization_url_offline_readonly(self, google: FakeGoogle) -> None:
         query = parse_qs(urlsplit(google.client().authorization_url(state="s")).query)
@@ -457,9 +466,6 @@ class TestSync:
 class TestCalendarApi:
     @pytest.fixture
     def api_google(self, google: FakeGoogle) -> Iterator[FakeGoogle]:
-        from api.dependencies import get_google_calendar
-        from main import app
-
         async def _client() -> AsyncIterator[Any]:
             yield google.client()
 
@@ -515,5 +521,46 @@ class TestCalendarApi:
             "/profile?calendar=error",
         )
 
+    async def test_callback_rejected_code(
+        self,
+        authed_client: AsyncClient,
+        api_google: FakeGoogle,
+    ) -> None:
+        """Google не принял код входа — переход в профиль с ошибкой, а не 500."""
+        api_google.reject_code = True
+        url = (await authed_client.post("/profile/google-calendar/login")).json()["url"]
+        state = parse_qs(urlsplit(url).query)["state"][0]
+
+        response = await authed_client.get(
+            "/calendar/google/callback",
+            params={"state": state, "code": "expired"},
+        )
+
+        assert (response.status_code, response.headers["location"]) == (
+            303,
+            "/profile?calendar=error",
+        )
+        assert (await authed_client.get("/profile/google-calendar")).json() is None
+
     async def test_not_connected(self, authed_client: AsyncClient, api_google: FakeGoogle) -> None:
         assert (await authed_client.get("/profile/google-calendar/calendars")).status_code == 404
+
+    async def test_revoked_calendar_list(
+        self,
+        authed_client: AsyncClient,
+        api_google: FakeGoogle,
+    ) -> None:
+        """Отозванный доступ — 409 с причиной, а не пустой список календарей."""
+        url = (await authed_client.post("/profile/google-calendar/login")).json()["url"]
+        state = parse_qs(urlsplit(url).query)["state"][0]
+        await authed_client.get(
+            "/calendar/google/callback", params={"state": state, "code": "code"}
+        )
+        api_google.revoked = True
+
+        calendars = await authed_client.get("/profile/google-calendar/calendars")
+        profile = await authed_client.get("/profile/google-calendar")
+
+        assert calendars.status_code == 409
+        assert GOOGLE_EMAIL in calendars.json()["error"]["message"]
+        assert profile.json()["status"] == "needs_reauth"

@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from db.models.enums import TaskStatus
+from db.models.daily import DailyEvent, DailyPlan
+from db.models.enums import DailyEventSource, TaskStatus
 from services.tracker_day import DayWindow
 from tests.factories import make_task, make_user
 
@@ -159,9 +160,6 @@ class TestEventsApi:
         db_session: AsyncSession,
     ) -> None:
         """Записи «Дейли» личные: администратор чужое событие не видит."""
-        from db.models.daily import DailyEvent
-        from db.models.enums import DailyEventSource
-
         other = await make_user(db_session)
         today = _window().today
         event = DailyEvent(
@@ -202,8 +200,6 @@ class TestPlansApi:
         assert (await authed_client.get(f"/daily/plans/{plan_id}")).status_code == 404
 
     async def test_foreign_plan(self, authed_client: AsyncClient, db_session: AsyncSession) -> None:
-        from db.models.daily import DailyPlan
-
         other = await make_user(db_session)
         plan = DailyPlan(user_id=other.id, day=_window().today, content="чужой")
         db_session.add(plan)
