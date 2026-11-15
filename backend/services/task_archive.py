@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
 
 from app_logging.config import get_logger
@@ -53,6 +54,25 @@ MAX_ARCHIVE_PAGE_SIZE = 100
 MAX_ARCHIVE_SEARCH_LENGTH = 200
 
 
+async def archive_finished_task(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    from_status: TaskStatus,
+    now: datetime,
+) -> Task:
+    """Перенести завершённую задачу в архив, сохранив её прежний статус."""
+    if from_status not in FINAL_STATUSES:
+        raise ConflictError("Архивировать можно только завершённую задачу или задачу с ошибкой")
+    return await transition_task_status(
+        db_session=db_session,
+        task_id=task_id,
+        from_status=from_status,
+        to_status=TaskStatus.ARCHIVED,
+        extra_values={"archived_at": now, "archived_from_status": from_status},
+    )
+
+
 class ArchivePass(TaskPass):
     """
     Задачи в `done`/`failed` старше `users.archive_after_days` уходят в `archived`.
@@ -75,12 +95,11 @@ class ArchivePass(TaskPass):
         False — статус успел смениться (перезапуск, возврат в статус до запуска).
         """
         try:
-            await transition_task_status(
+            await archive_finished_task(
                 self.db_session,
                 task_id=task.id,
                 from_status=task.status,
-                to_status=TaskStatus.ARCHIVED,
-                extra_values={"archived_at": self.now, "archived_from_status": task.status},
+                now=self.now,
             )
         except ConflictError as exc:
             return await self.skip(task.id, exc)

@@ -76,7 +76,7 @@ async def _enter_rebase_conflict(db_session: AsyncSession, task: Task) -> None:
         return
     try:
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=task.status,
             to_status=TaskStatus.REBASE_CONFLICT,

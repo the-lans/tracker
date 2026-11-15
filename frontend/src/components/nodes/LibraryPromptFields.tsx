@@ -2,7 +2,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect } from "@/components/common/inputs/SearchSelect";
 import { useNodes } from "@/hooks/useNodes";
 import { NODE_TYPE_LABEL } from "@/lib/labels";
 import { NodeType, type NodeItem } from "@/lib/types";
@@ -73,9 +73,14 @@ export function LibraryPromptFields({
     <>
       <div>
         <Label htmlFor="node-library-item" required>Промт библиотеки</Label>
-        <Select
-          value={value.libraryNodeId ?? ""}
-          onValueChange={(libraryNodeId) => {
+        <SearchSelect
+          id="node-library-item"
+          value={value.libraryNodeId}
+          options={candidates.map((item) => ({ value: item.id, label: itemTitle(item) }))}
+          clearLabel="Выберите промт"
+          placeholder="Название или слэш-команда"
+          showClearOption={false}
+          onChange={(libraryNodeId) => {
             const item = candidates.find((candidate) => candidate.id === libraryNodeId);
             onChange({
               ...value,
@@ -84,18 +89,7 @@ export function LibraryPromptFields({
               libraryNodeType: item?.node_type ?? null,
             });
           }}
-        >
-          <SelectTrigger id="node-library-item">
-            <SelectValue placeholder="Выберите промт" />
-          </SelectTrigger>
-          <SelectContent>
-            {candidates.map((item) => (
-              <SelectItem key={item.id} value={item.id}>
-                {itemTitle(item)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        />
         {items && candidates.length === 0 && (
           <p className="mt-1 text-small text-text-3">
             В библиотеке автора пайплайна нет промтов, скриптов или слэш-команд.

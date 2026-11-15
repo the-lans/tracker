@@ -495,7 +495,7 @@ class TestCalendarApi:
 
         assert (callback.status_code, callback.headers["location"]) == (
             303,
-            "/profile?calendar=connected",
+            "/profile?tab=connections&calendar=connected",
         )
         assert profile.json()["google_email"] == GOOGLE_EMAIL
         assert REFRESH_TOKEN not in profile.text
@@ -518,7 +518,7 @@ class TestCalendarApi:
 
         assert (response.status_code, response.headers["location"]) == (
             303,
-            "/profile?calendar=error",
+            "/profile?tab=connections&calendar=error",
         )
 
     async def test_callback_rejected_code(
@@ -538,7 +538,7 @@ class TestCalendarApi:
 
         assert (response.status_code, response.headers["location"]) == (
             303,
-            "/profile?calendar=error",
+            "/profile?tab=connections&calendar=error",
         )
         assert (await authed_client.get("/profile/google-calendar")).json() is None
 

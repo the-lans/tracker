@@ -72,7 +72,7 @@ async def run_scheduled_autostart_check(
         try:
             await ensure_task_launchable(db_session, task)
             await transition_task_status(
-                db_session,
+                db_session=db_session,
                 task_id=task.id,
                 from_status=task.status,
                 to_status=TaskStatus.READY,

@@ -15,7 +15,7 @@ export const PAGE_BODY =
 
 /** Кнопка действия в шапке страницы задачи (раздел 14.2). */
 export const HEADER_BUTTON =
-  "flex touch-target items-center justify-center gap-2 whitespace-nowrap rounded-md border border-border bg-surface px-3 py-2 text-body font-bold short:py-1 text-text-2 disabled:opacity-50";
+  "flex touch-target items-center justify-center gap-2 whitespace-nowrap rounded-md border border-border bg-surface px-3 py-2 text-body font-bold text-text-2 transition-colors hover:border-accent hover:bg-accent-tint hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:pointer-events-none disabled:opacity-50 short:py-1";
 
 /** Градиент аватара пользователя — один и тот же в меню, профиле и ленте. */
 export const USER_AVATAR_GRADIENT = "bg-gradient-to-br from-avatar-from to-avatar-to text-white";

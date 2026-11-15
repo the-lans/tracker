@@ -402,6 +402,16 @@ describe("промт из библиотеки", () => {
     ]);
   });
 
+  test("поиск промта по слэш-команде", async ({ api }) => {
+    api.respond("GET /nodes", library);
+    const { user } = renderForm(api);
+    await chooseType(user, "Промт из библиотеки");
+    const search = screen.getByRole("combobox", { name: "Промт библиотеки" });
+    await user.type(search, "review{Enter}");
+    expect(search).toHaveValue("Ревью (/review)");
+    expect(screen.getByText("Проверь $1")).toBeInTheDocument();
+  });
+
   test("выбор скрывает свои поля и показывает промт; уходит ссылка с аргументами", async ({ api }) => {
     api.respond("GET /nodes", library);
     const { user } = renderForm(api);

@@ -69,9 +69,21 @@ describe("SearchSelect", () => {
     const { user, input, onChange } = renderSelect();
 
     await user.type(input, "rr");
-    await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    await user.keyboard("{ArrowDown}{Enter}");
 
     expect(onChange).toHaveBeenCalledExactlyOnceWith("t2");
+  });
+
+  test("Enter выбирает первый найденный вариант", async () => {
+    const { user, input, onChange } = renderSelect();
+    await user.type(input, "корз{Enter}");
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("t2");
+  });
+
+  test("Enter без результатов не сбрасывает выбранное значение", async () => {
+    const { user, input, onChange } = renderSelect(tasks, "t1");
+    await user.type(input, "несуществующая задача{Enter}");
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   test("наведённый мышью пункт выбирается по Enter", async () => {
@@ -102,6 +114,23 @@ describe("SearchSelect", () => {
 
     expect(onChange).toHaveBeenCalledExactlyOnceWith(null);
     expect(input).toHaveValue("Без родителя");
+  });
+
+  test("крестик очищает запрос, не теряя выбранную задачу", async () => {
+    const { user, input, onChange } = renderSelect(tasks, "t1");
+    await user.type(input, "корз");
+    await user.click(screen.getByRole("button", { name: "Очистить поиск" }));
+    expect(input).toHaveValue("");
+    expect(input).toHaveFocus();
+    expect(screen.getByRole("option", { name: "RR-200 · Корзина" })).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  test("крестик после выбора сбрасывает выбранную задачу", async () => {
+    const { user, input, onChange } = renderSelect(tasks, "t1");
+    await user.click(screen.getByRole("button", { name: "Очистить поиск" }));
+    expect(onChange).toHaveBeenCalledWith(null);
+    expect(input).toHaveFocus();
   });
 
   test("Escape закрывает список и возвращает выбранное", async () => {

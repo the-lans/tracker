@@ -57,6 +57,7 @@ from services.account_router import TaskAccountRouter
 from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
 from services.llm_routing import resolve_session_token
+from services.manual_admission import close_manual_requests
 from services.manual_queue import enqueue_freeform_prompt_run
 from services.notifications import NotificationEvent
 from services.plan_mode import (
@@ -426,7 +427,7 @@ async def test_pause_holds_session_runs_manual_prompts_and_resumes(
     assert await read_task_control(redis_client, task.id) is None
 
 
-async def test_stop_while_paused_fails_task_at_next_node(
+async def test_stop_while_paused_completes_task(
     db_session: AsyncSession,
     worker_env: WorkerEnv,
     redis_client: Redis,
@@ -451,13 +452,12 @@ async def test_stop_while_paused_fails_task_at_next_node(
     await _run_worker(task)
 
     await db_session.refresh(task)
-    assert task.status is TaskStatus.FAILED
-    # «Перезапустить с текущей ноды» продолжит с ещё не выполненной ноды.
-    assert task.last_failed_order_index == 1
+    assert task.status is TaskStatus.DONE
+    assert task.last_failed_order_index is None
     assert worker_env.client.queries == ["шаг 0"]
 
 
-async def test_stop_during_node_interrupts_session_and_fails_task(
+async def test_stop_during_node_interrupts_session_and_completes_task(
     db_session: AsyncSession,
     worker_env: WorkerEnv,
     redis_client: Redis,
@@ -485,8 +485,8 @@ async def test_stop_during_node_interrupts_session_and_fails_task(
     await asyncio.gather(*pending)
 
     await db_session.refresh(task)
-    assert task.status is TaskStatus.FAILED
-    assert task.last_failed_order_index == 0
+    assert task.status is TaskStatus.DONE
+    assert task.last_failed_order_index is None
     assert worker_env.client.interrupted is True
     statuses = (
         (await db_session.execute(sa.select(NodeLog.status).where(NodeLog.task_id == task.id)))
@@ -494,6 +494,37 @@ async def test_stop_during_node_interrupts_session_and_fails_task(
         .all()
     )
     assert statuses == [NodeLogStatus.STOPPED]
+
+
+class TestStopFinalization:
+    async def test_stop_before_finalization_skips_push(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        original = close_manual_requests
+        pushed = False
+
+        async def stop_before_close(session: AsyncSession, task_id: uuid.UUID) -> None:
+            await request_task_control(redis_client, task_id, TaskControlCommand.STOP)
+            await original(session, task_id)
+
+        async def record_push(*_args: Any, **_kwargs: Any) -> None:
+            nonlocal pushed
+            pushed = True
+
+        monkeypatch.setattr(session_worker, "close_manual_requests", stop_before_close)
+        monkeypatch.setattr(session_worker, "push_task_workspace", record_push)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+        await _run_worker(task)
+        await db_session.refresh(task)
+
+        assert task.status is TaskStatus.DONE
+        assert pushed is False
 
 
 def _push_conflicting_base_update(tmp_path: Path, origin: Path) -> None:
@@ -530,7 +561,7 @@ async def test_rebase_conflict_is_resolved_by_agent_before_next_node(
             run_command("git", *GIT_AUTHOR_ARGS, "commit", "-m", "работа агента", cwd=repo_dir)
             _push_conflicting_base_update(tmp_path, origin)
             await transition_task_status(
-                db_session,
+                db_session=db_session,
                 task_id=task.id,
                 from_status=TaskStatus.IN_PROGRESS,
                 to_status=TaskStatus.REBASE_CONFLICT,
@@ -634,7 +665,7 @@ class TestConflictAfterRestart:
                 .values(merge_status=MergeStatus.CONFLICT),
             )
             await transition_task_status(
-                db_session,
+                db_session=db_session,
                 task_id=task.id,
                 from_status=TaskStatus.IN_PROGRESS,
                 to_status=TaskStatus.REBASE_CONFLICT,
@@ -806,7 +837,7 @@ class TestPauseRace:
         async def periodic_task_marks_conflict(from_status: TaskStatus) -> None:
             raced.append(from_status)
             await transition_task_status(
-                db_session,
+                db_session=db_session,
                 task_id=task.id,
                 from_status=from_status,
                 to_status=TaskStatus.REBASE_CONFLICT,
@@ -1758,7 +1789,7 @@ class TestPauseAfterNode:
         ("command", "final_status", "resume_at"),
         [
             (TaskControlCommand.RESUME, TaskStatus.DONE, None),
-            (TaskControlCommand.STOP, TaskStatus.FAILED, 1),
+            (TaskControlCommand.STOP, TaskStatus.DONE, None),
         ],
         ids=["resume", "stop"],
     )
@@ -1790,73 +1821,6 @@ class TestPauseAfterNode:
         await db_session.refresh(task)
         assert task.status is final_status
         assert task.last_failed_order_index == resume_at
-
-    async def test_restart_after_stop_on_last_node_finishes(
-        self,
-        db_session: AsyncSession,
-        worker_env: WorkerEnv,
-        redis_client: Redis,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Раздел 14.1: перезапуск после «Остановить» на последней ноде ничего не повторяет."""
-        task = await _make_task(db_session, status=TaskStatus.QUEUED)
-        await _add_node(db_session, task, order_index=0, pause_after=True)
-
-        async def while_paused(observed: list[TaskStatus]) -> None:
-            await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
-
-        _patch_pause_wait(monkeypatch, while_paused)
-        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
-        await _run_worker(task)
-        await db_session.refresh(task)
-        assert (task.status, task.last_failed_order_index) == (TaskStatus.FAILED, 1)
-
-        await _run_worker(task, start_after_order_index=0)
-
-        assert worker_env.client.queries == ["шаг 0"]
-        await db_session.refresh(task)
-        assert task.status is TaskStatus.DONE
-
-    async def test_prompt_at_stop_point_runs_on_restart(
-        self,
-        db_session: AsyncSession,
-        worker_env: WorkerEnv,
-        redis_client: Redis,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Раздел 13.2: после «Остановить» на паузе свой промт вставляется сразу за нодой."""
-        task = await _make_task(db_session, status=TaskStatus.QUEUED)
-        await _add_node(db_session, task, order_index=0, pause_after=True)
-        await _add_node(db_session, task, order_index=1)
-
-        async def while_paused(observed: list[TaskStatus]) -> None:
-            await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
-
-        _patch_pause_wait(monkeypatch, while_paused)
-        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
-        await _run_worker(task)
-        await db_session.refresh(task)
-        first = await db_session.scalar(
-            sa.select(TaskNode).where(TaskNode.task_id == task.id, TaskNode.order_index == 0),
-        )
-        assert first is not None
-        await add_custom_task_node(
-            db_session,
-            task=task,
-            after_task_node_id=first.id,
-            draft=CustomNodeDraft(
-                name="Уточнения",
-                node_type=NodeType.PLAIN_PROMPT,
-                prompt_template="уточни",
-            ),
-        )
-
-        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(2))
-        await _run_worker(task, start_after_order_index=0)
-
-        assert worker_env.client.queries == ["уточни", "шаг 1"]
-        await db_session.refresh(task)
-        assert task.status is TaskStatus.DONE
 
     async def test_button_pause_not_doubled(
         self,
@@ -2034,7 +1998,7 @@ class TestLimitWait:
             account.usage_checked_at = datetime.now(UTC)
             await db_session.flush()
             await transition_task_status(
-                db_session,
+                db_session=db_session,
                 task_id=task.id,
                 from_status=TaskStatus.IN_PROGRESS,
                 to_status=TaskStatus.REBASE_CONFLICT,
@@ -2155,7 +2119,7 @@ class TestLimitWait:
     @pytest.mark.parametrize(
         ("command", "status", "from_status"),
         [
-            (TaskControlCommand.STOP, TaskStatus.FAILED, None),
+            (TaskControlCommand.STOP, TaskStatus.DONE, None),
             (TaskControlCommand.PAUSE, TaskStatus.AWAITING_LIMIT, TaskStatus.PAUSED),
         ],
         ids=["stop", "pause"],
@@ -2185,7 +2149,7 @@ class TestLimitWait:
 
         await db_session.refresh(task)
         assert (task.status, task.limit_wait_from_status) == (status, from_status)
-        assert task.last_failed_order_index == (0 if command is TaskControlCommand.STOP else None)
+        assert task.last_failed_order_index is None
 
     async def test_paused_wait_resumes_on_pause(
         self,

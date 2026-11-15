@@ -332,6 +332,28 @@ class TestManualStatusChange:
         assert updated.ready_at == ready_at
 
     @pytest.mark.parametrize("from_status", [TaskStatus.FAILED, TaskStatus.DONE])
+    async def test_archive_terminal_task(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        from_status: TaskStatus,
+    ) -> None:
+        finished_at = datetime.now(UTC) - timedelta(days=1)
+        task = await make_task(db_session, status=from_status, finished_at=finished_at)
+
+        updated = await change_task_status_manually(
+            db_session,
+            redis_client,
+            task=task,
+            to_status=TaskStatus.ARCHIVED,
+        )
+
+        assert updated.status is TaskStatus.ARCHIVED
+        assert updated.archived_from_status is from_status
+        assert updated.archived_at is not None
+        assert updated.finished_at == finished_at
+
+    @pytest.mark.parametrize("from_status", [TaskStatus.FAILED, TaskStatus.DONE])
     async def test_from_terminal_resets_run(
         self,
         db_session: AsyncSession,
@@ -364,6 +386,13 @@ class TestManualStatusChange:
             pytest.param(TaskStatus.QUEUED, TaskStatus.READY, ConflictError, id="queued"),
             pytest.param(TaskStatus.NEW, TaskStatus.QUEUED, ValidationError, id="в queued"),
             pytest.param(TaskStatus.FAILED, TaskStatus.DONE, ValidationError, id="в done"),
+            pytest.param(
+                TaskStatus.IN_PROGRESS,
+                TaskStatus.ARCHIVED,
+                ConflictError,
+                id="архив работающей",
+            ),
+            pytest.param(TaskStatus.NEW, TaskStatus.ARCHIVED, ConflictError, id="архив новой"),
         ],
     )
     async def test_rejected(
@@ -422,7 +451,7 @@ async def test_status_cas_rechecks_chat_flag(
     await start_chat(db_session, task_id=task.id)
     with pytest.raises(ConflictError):
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=TaskStatus.REFINING,
             to_status=target,

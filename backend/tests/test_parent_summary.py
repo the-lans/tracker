@@ -242,7 +242,7 @@ class TestBusyParent:
         assert worker_env.options[0].fork_session is True
         assert _SUMMARY in worker_env.client.queries[0]
 
-    async def test_stop_while_waiting_fails_child(
+    async def test_stop_while_waiting_completes_child(
         self,
         db_session: AsyncSession,
         worker_env: WorkerEnv,
@@ -267,8 +267,8 @@ class TestBusyParent:
         await _run_child(child)
 
         await db_session.refresh(child)
-        assert child.status is TaskStatus.FAILED
-        assert child.last_failed_order_index == 0
+        assert child.status is TaskStatus.DONE
+        assert child.last_failed_order_index is None
         assert worker_env.client.connected is False
 
 

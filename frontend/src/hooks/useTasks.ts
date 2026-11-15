@@ -318,11 +318,11 @@ export function useRunLibraryPrompt(taskId: string) {
   return useMutation({
     mutationFn: (taskLibraryPromptId: string) =>
       api.post<ManualRequest>(`/tasks/${taskId}/library-prompts/${taskLibraryPromptId}/run`),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: taskKeys.nodeLogs(taskId) });
-      void queryClient.invalidateQueries({ queryKey: taskKeys.libraryPrompts(taskId) });
-      void queryClient.invalidateQueries({ queryKey: taskKeys.manualQueue(taskId) });
-    },
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: taskKeys.nodeLogs(taskId) }),
+      queryClient.invalidateQueries({ queryKey: taskKeys.libraryPrompts(taskId) }),
+      queryClient.invalidateQueries({ queryKey: taskKeys.manualQueue(taskId) }),
+    ]),
   });
 }
 

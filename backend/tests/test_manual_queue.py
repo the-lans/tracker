@@ -524,6 +524,18 @@ async def _enqueue_library_run(
 class TestLibraryPromptAfterCancel:
     """Раздел 7.3: отменённый запрос не оставляет промт «в очереди»."""
 
+    async def test_duplicate_run_is_rejected(self, db_session: AsyncSession) -> None:
+        task, prompt, _request = await _enqueue_library_run(db_session)
+        node = await db_session.get(Node, prompt.node_id)
+        assert node is not None
+        with pytest.raises(ConflictError, match="уже выполняется"):
+            await enqueue_library_prompt_run(
+                db_session,
+                task_library_prompt=prompt,
+                node=node,
+                requested_by=task.created_by,
+            )
+
     async def test_cancel_marks_stopped(self, db_session: AsyncSession) -> None:
         _task, task_library_prompt, request = await _enqueue_library_run(db_session)
 
@@ -536,12 +548,18 @@ class TestLibraryPromptAfterCancel:
         task, task_library_prompt, first = await _enqueue_library_run(db_session)
         node = await db_session.get(Node, task_library_prompt.node_id)
         assert node is not None
-        await enqueue_library_prompt_run(
-            db_session,
-            task_library_prompt=task_library_prompt,
-            node=node,
-            requested_by=task.created_by,
+        # Очереди, созданные до запрета повторного запуска, остаются совместимыми.
+        db_session.add(
+            TaskManualRequestQueue(
+                task_id=task.id,
+                request_type=ManualRequestType.LIBRARY_PROMPT,
+                node_id=node.id,
+                requested_by=task.created_by,
+                status=ManualRequestStatus.QUEUED,
+                requested_at=datetime.now(UTC),
+            )
         )
+        await db_session.flush()
 
         await cancel_manual_request(db_session, first)
 

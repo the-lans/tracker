@@ -544,8 +544,8 @@ class TestLimitWaitControl:
     @pytest.mark.parametrize(
         ("from_status", "status", "restart"),
         [
-            pytest.param(TaskStatus.IN_PROGRESS, TaskStatus.FAILED, 2, id="из работы"),
-            pytest.param(TaskStatus.REFINING, TaskStatus.REFINING, None, id="из чата"),
+            pytest.param(TaskStatus.IN_PROGRESS, TaskStatus.DONE, None, id="из работы"),
+            pytest.param(TaskStatus.REFINING, TaskStatus.DONE, None, id="из чата"),
         ],
     )
     async def test_stop(

@@ -6,7 +6,7 @@ import { makeTask } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
-const ACTIONS = ["Очистить контекст", "Очистить репозитории", "Дублировать"];
+const ACTIONS = ["Архивировать задачу", "Очистить контекст", "Очистить репозитории", "Дублировать"];
 
 function shownActions(): string[] {
   return ACTIONS.filter((name) => screen.queryByRole("button", { name }) !== null);
@@ -15,8 +15,8 @@ function shownActions(): string[] {
 describe("TaskLifecycleActions", () => {
   test.for([
     { status: TaskStatus.IN_PROGRESS, from: null, actions: [] },
-    { status: TaskStatus.FAILED, from: null, actions: ["Очистить контекст", "Очистить репозитории"] },
-    { status: TaskStatus.DONE, from: null, actions: ["Очистить репозитории", "Дублировать"] },
+    { status: TaskStatus.FAILED, from: null, actions: ["Архивировать задачу", "Очистить контекст", "Очистить репозитории"] },
+    { status: TaskStatus.DONE, from: null, actions: ["Архивировать задачу", "Очистить репозитории", "Дублировать"] },
     { status: TaskStatus.ARCHIVED, from: TaskStatus.DONE, actions: ["Очистить репозитории", "Дублировать"] },
     { status: TaskStatus.ARCHIVED, from: TaskStatus.FAILED, actions: ["Очистить репозитории"] },
   ])("$status из $from → $actions", ({ status, from, actions }) => {

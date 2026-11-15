@@ -22,6 +22,7 @@ from services.access import get_pipeline_for_user
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_pipeline_attachable
 from services.limit_wait import pause_limit_wait, stop_limit_wait
+from services.manual_admission import lock_manual_task
 from services.redis_connection import redis_connection
 from services.refining_chat import CHAT_BUSY_MESSAGE
 from services.remote_control import start_bridge_reconnect
@@ -86,7 +87,7 @@ async def start_task(
         raise ConflictError(CHAT_BUSY_MESSAGE)
     await ensure_task_launchable(db_session, task)
     updated = await transition_task_status(
-        db_session,
+        db_session=db_session,
         task_id=task_id,
         from_status=task.status,
         to_status=TaskStatus.QUEUED,
@@ -143,7 +144,7 @@ async def change_task_status(
 ) -> Task:
     """
     Раздел 14.1: пользователь сам переводит задачу между статусами до запуска,
-    а завершённую или упавшую — в статус до запуска со сбросом прогона.
+    а завершённую или упавшую — в архив или в статус до запуска со сбросом прогона.
     """
     task = await get_task_or_404(db_session, task_id, current_user)
     previous = task.status
@@ -237,9 +238,10 @@ async def stop_task(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    """Раздел 14.2 «Остановить»: текущее обращение к сессии прерывается,
-    задача переходит в `failed` и перезапускается штатной кнопкой. Ждущую
-    лимита задачу останавливает сам API — воркера у неё нет (правило 16)."""
+    """
+    Раздел 14.2 «Остановить»: текущее обращение прерывается, задача переходит
+    в `done`. Ждущую лимита задачу останавливает API — воркера у неё нет.
+    """
     task = await get_task_or_404(db_session, task_id, current_user)
     require_status(
         task,
@@ -250,6 +252,14 @@ async def stop_task(
         await stop_limit_wait(db_session, task=task)
         wake_task_dispatcher()
         return
+    task = await lock_manual_task(db_session, task_id)
+    require_status(
+        task,
+        frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED}),
+        "Задача уже завершает выполнение",
+    )
+    if task.manual_requests_closed:
+        raise ConflictError("Задача уже завершает выполнение")
     await _send_task_control(task_id, TaskControlCommand.STOP)
 
 
@@ -285,7 +295,7 @@ async def cancel_queued_task(
     task = await get_task_or_404(db_session, task_id, current_user)
     try:
         updated = await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task_id,
             from_status=TaskStatus.QUEUED,
             to_status=cancel_target_status(task.queued_from_status),

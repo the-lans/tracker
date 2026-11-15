@@ -50,6 +50,7 @@ class MarkedTask:
     status: TaskStatus
     # None — день ещё не наступил.
     fact: DayFact | None
+    jira_issue_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +93,10 @@ async def _marked_with_facts(
 ) -> list[MarkedTask]:
     rows = await select_marked_tasks(db_session, user_id=user.id, day=day)
     if day > clock.window.today:
-        return [MarkedTask(row.id, row.code, row.title, row.status, None) for row in rows]
+        return [
+            MarkedTask(row.id, row.code, row.title, row.status, None, row.jira_issue_url)
+            for row in rows
+        ]
     start, end = clock.bounds(day)
     worked = await select_worked_task_ids(
         db_session,
@@ -107,6 +111,7 @@ async def _marked_with_facts(
             row.title,
             row.status,
             day_fact(row, worked=row.id in worked, start=start, end=end),
+            row.jira_issue_url,
         )
         for row in rows
     ]

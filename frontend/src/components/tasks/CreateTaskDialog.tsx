@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -21,24 +21,29 @@ export function CreateTaskDialog({
 }) {
   const navigate = useNavigate();
   const createTask = useCreateTask();
+  const autoFilledCode = useRef<string | null>(null);
+  const importedFields = useRef<{ title: string; description: string } | null>(null);
   const [values, setValues] = useState<TaskFormValues>(EMPTY_TASK_FORM);
   const [parentTaskId, setParentTaskId] = useState("");
   const [useParentSummary, setUseParentSummary] = useState(false);
-  const [jiraIssueKey, setJiraIssueKey] = useState<string | null>(null);
+  const [jiraIssueKey, setJiraIssueKey] = useState("");
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const { data: categories } = useTaskCategories();
   const { codeError, onFieldsChange, onSaveError } = useTaskCodeError("Не удалось создать задачу");
 
   function changeFields(patch: Partial<TaskFormValues>) {
+    if (patch.code !== undefined) autoFilledCode.current = null;
     onFieldsChange(patch);
     setValues((prev) => ({ ...prev, ...patch }));
   }
 
   function reset() {
+    autoFilledCode.current = null;
+    importedFields.current = null;
     setValues(EMPTY_TASK_FORM);
     setParentTaskId("");
     setUseParentSummary(false);
-    setJiraIssueKey(null);
+    setJiraIssueKey("");
     setCategoryId(null);
   }
 
@@ -49,7 +54,7 @@ export function CreateTaskDialog({
         ...toTaskRequest(values),
         parent_task_id: parentTaskId || null,
         use_parent_summary: useParentSummary,
-        jira_issue_key: jiraIssueKey,
+        jira_issue_key: jiraIssueKey.trim() || null,
         category_id: categoryId,
       },
       {
@@ -71,13 +76,33 @@ export function CreateTaskDialog({
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <JiraImportField
+            value={jiraIssueKey}
+            onKeyChange={(key) => {
+              setJiraIssueKey(key);
+              const imported = importedFields.current;
+              if (imported) {
+                changeFields({
+                  ...(values.title === imported.title ? { title: "" } : {}),
+                  ...(values.description === imported.description ? { description: "" } : {}),
+                });
+                importedFields.current = null;
+              }
+              if (!values.code.trim() || values.code === autoFilledCode.current) {
+                const code = key.trim();
+                changeFields({ code });
+                autoFilledCode.current = code;
+              }
+            }}
             onImported={(draft) => {
               setJiraIssueKey(draft.code);
+              importedFields.current = { title: draft.title, description: draft.description };
+              const autoFill = !values.code.trim() || values.code === autoFilledCode.current;
               changeFields({
-                code: draft.code,
+                ...(autoFill ? { code: draft.code } : {}),
                 title: draft.title,
                 description: draft.description,
               });
+              if (autoFill) autoFilledCode.current = draft.code;
             }}
           />
           <TaskFormFields value={values} onChange={changeFields} codeError={codeError} />

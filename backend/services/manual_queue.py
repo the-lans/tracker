@@ -36,6 +36,7 @@ from db.models.logs import NodeLog
 from db.models.pipelines import Node
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
+from db.queries.manual_requests import active_prompt_request
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
 from services.errors import ConflictError, ValidationError
 from services.integrity import ensure_library_prompt_attachable
@@ -145,6 +146,9 @@ async def enqueue_library_prompt_run(
 ) -> TaskManualRequestQueue:
     task = await lock_manual_task(db_session, task_library_prompt.task_id)
     ensure_manual_requests_open(task)
+    existing = await active_prompt_request(db_session, task_id=task.id, node_id=node.id)
+    if existing is not None:
+        raise ConflictError("Промт уже выполняется или ожидает выполнения")
     if node.node_type in LIBRARY_FORBIDDEN_NODE_TYPES:
         raise ValidationError(f"Тип ноды {node.node_type} недопустим для библиотеки промтов")
     await ensure_llm_for_request(db_session, task, needs_llm=requires_llm_account(node))

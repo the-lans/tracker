@@ -133,10 +133,10 @@ async def test_run_scheduled_autostart_check_one_failure_does_not_block_others(
 
     real_transition = autostart_module.transition_task_status  # type: ignore[attr-defined]
 
-    async def _flaky_transition(session: AsyncSession, **kwargs: object) -> Task:
+    async def _flaky_transition(*, db_session: AsyncSession, **kwargs: object) -> Task:
         if kwargs.get("task_id") == bad_task.id:
             raise ConflictError("симулированная гонка статуса")
-        return await real_transition(session, **kwargs)  # type: ignore[arg-type]
+        return await real_transition(db_session=db_session, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(autostart_module, "transition_task_status", _flaky_transition)
 

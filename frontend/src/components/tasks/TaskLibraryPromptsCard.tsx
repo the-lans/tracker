@@ -10,7 +10,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect } from "@/components/common/inputs/SearchSelect";
+import { Label } from "@/components/ui/label";
 import {
   useAddLibraryPrompt,
   useRunLibraryPrompt,
@@ -114,38 +115,41 @@ export function TaskLibraryPromptsCard({
       <div className="flex flex-col">
         {(prompts ?? []).map((prompt) => {
           const activeRequestId = prompt.active_request_id;
-          const blockReason = runBlockReason(prompt);
+          const blockReason = activeRequestId ? "Промт уже выполняется или ожидает выполнения" : runBlockReason(prompt);
           return (
             <div
               key={prompt.id}
-              className="flex items-center gap-2 border-t border-border py-1.5 first:border-t-0"
+              className="flex flex-wrap items-center gap-2 border-t border-border py-1.5 first:border-t-0"
             >
-              <button
-                type="button"
+              <Button
+                size="icon"
+                variant="secondary"
                 onClick={() => handleRun(prompt.id)}
                 disabled={blockReason !== null || runLibraryPrompt.isPending}
-                className="flex touch-target size-6 shrink-0 items-center justify-center rounded-[7px] border border-border text-text-2 disabled:opacity-40"
+                className="shrink-0 hover:border-accent hover:bg-accent-tint hover:text-accent"
                 aria-label={`Выполнить промт ${prompt.name}`}
                 title={blockReason ?? "Выполнить"}
               >
-                <Play className="size-2.5" fill="currentColor" />
-              </button>
-              <button
-                type="button"
+                <Play fill="currentColor" />
+              </Button>
+              <Button
+                size="icon"
+                variant="secondary"
                 onClick={() => activeRequestId && handleStop(activeRequestId)}
                 disabled={!activeRequestId || stopManualRequest.isPending}
-                className="flex touch-target size-6 shrink-0 items-center justify-center rounded-[7px] border border-border text-text-2 disabled:opacity-40"
+                className="shrink-0 hover:border-accent hover:bg-accent-tint hover:text-accent"
                 aria-label={`Остановить промт ${prompt.name}`}
+                title={activeRequestId ? "Остановить" : "Нет активного запуска"}
               >
-                <Square className="size-2.5" fill="currentColor" />
-              </button>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-note font-bold" title={prompt.name}>{prompt.name}</div>
+                <Square fill="currentColor" />
+              </Button>
+              <div className="min-w-32 flex-1">
+                <div className="break-words text-note font-bold [overflow-wrap:anywhere]" title={prompt.name}>{prompt.name}</div>
                 {prompt.last_run_at && (
                   <div className="text-caption text-text-3">{formatDateTime(prompt.last_run_at)}</div>
                 )}
               </div>
-              <span className="rounded-full bg-surface-2 px-2 py-0.5 text-caption font-bold text-text-3">
+              <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-caption font-bold text-text-3">
                 {RUN_STATUS_LABEL[prompt.last_run_status]}
               </span>
             </div>
@@ -165,22 +169,26 @@ export function TaskLibraryPromptsCard({
       </Button>
 
       <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
-        <DialogContent>
+        <DialogContent className="flex flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Добавить промт из библиотеки</DialogTitle>
           </DialogHeader>
-          <Select value={selectedNodeId} onValueChange={setSelectedNodeId}>
-            <SelectTrigger>
-              <SelectValue placeholder="Выберите промт" />
-            </SelectTrigger>
-            <SelectContent>
-              {libraryNodes.map((node) => (
-                <SelectItem key={node.id} value={node.id}>
-                  {node.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex min-h-0 flex-col">
+            <Label htmlFor="task-library-prompt">Промт библиотеки</Label>
+            <SearchSelect
+              id="task-library-prompt"
+              value={selectedNodeId || null}
+              options={libraryNodes.map((node) => ({
+                value: node.id,
+                label: node.slash_name ? `${node.name} (/${node.slash_name})` : node.name,
+              }))}
+              onChange={(id) => setSelectedNodeId(id ?? "")}
+              clearLabel="Выберите промт"
+              placeholder="Название или слэш-команда"
+              inlineList
+              showClearOption={false}
+            />
+          </div>
           {libraryNodes.length === 0 && (
             <EmptyState
               compact

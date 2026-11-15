@@ -168,7 +168,7 @@ async def enter_limit_wait(
     )
     try:
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=from_status,
             to_status=TaskStatus.AWAITING_LIMIT,
@@ -240,7 +240,7 @@ async def leave_limit_wait(db_session: AsyncSession, *, task: Task) -> LimitResu
     attempt = task.limit_wait_attempt or 1
     try:
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=TaskStatus.AWAITING_LIMIT,
             to_status=from_status,
@@ -255,30 +255,17 @@ async def leave_limit_wait(db_session: AsyncSession, *, task: Task) -> LimitResu
 
 async def stop_limit_wait(db_session: AsyncSession, *, task: Task) -> Task:
     """
-    «Остановить» в ожидании (раздел 14.2): `failed` с точкой перезапуска на
-    ноде, которая ждала; ожидание чата возвращает задачу в `refining`.
+    «Остановить» в ожидании: завершить задачу и снять параметры ожидания.
     """
     from_status = task.limit_wait_from_status
-    if from_status is TaskStatus.REFINING:
-        stopped = await transition_task_status(
-            db_session,
-            task_id=task.id,
-            from_status=TaskStatus.AWAITING_LIMIT,
-            to_status=TaskStatus.REFINING,
-            extra_values=_CLEARED_WAIT,
-        )
-    else:
-        order_index = task.limit_wait_order_index
-        if order_index is None:
-            order_index = await first_unfinished_order_index(db_session, task.id)
-        stopped = await transition_task_status(
-            db_session,
-            task_id=task.id,
-            from_status=TaskStatus.AWAITING_LIMIT,
-            to_status=TaskStatus.FAILED,
-            failed_order_index=order_index,
-            extra_values=_CLEARED_WAIT,
-        )
+    stopped = await transition_task_status(
+        db_session=db_session,
+        task_id=task.id,
+        from_status=TaskStatus.AWAITING_LIMIT,
+        to_status=TaskStatus.DONE,
+        extra_values=_CLEARED_WAIT,
+        stopped_by_user=True,
+    )
     logger.info("task_limit_wait_stopped", task_id=str(task.id), from_status=from_status)
     return stopped
 

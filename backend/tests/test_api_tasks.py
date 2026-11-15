@@ -743,6 +743,25 @@ async def test_task_control_actions_reject_wrong_status(
     assert await read_task_control(redis_client, uuid.UUID(task_body["id"])) is None
 
 
+class TestStopFinalization:
+    async def test_stop_rejected_after_finalization_started(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        redis_client: Redis,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
+        task = await db_session.get(Task, uuid.UUID(task_body["id"]))
+        assert task is not None
+        task.manual_requests_closed = True
+        await db_session.flush()
+
+        response = await authed_client.post(f"/tasks/{task.id}/stop")
+
+        assert response.status_code == 409
+        assert await read_task_control(redis_client, task.id) is None
+
+
 async def test_cancel_queued_task_returns_it_to_new_and_disables_autostart(
     authed_client: AsyncClient,
     db_session: AsyncSession,

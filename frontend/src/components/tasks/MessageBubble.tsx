@@ -1,6 +1,8 @@
 import { cn } from "@/lib/utils";
 import { CollapsibleText } from "@/components/tasks/CollapsibleText";
 import { AgentMessageText } from "@/components/tasks/AgentMessageText";
+import { AgentInline } from "@/components/tasks/AgentInline";
+import { linkParts } from "@/lib/agentMarkdown";
 import { MESSAGE_KINDS, type MessageKind } from "@/components/tasks/messageKinds";
 import { USER_AVATAR_GRADIENT } from "@/styles/classes";
 
@@ -66,7 +68,9 @@ export function MessageBubble({
               live={streaming}
               defaultExpanded={defaultExpanded}
               renderText={
-                role === "llm" && !danger ? (shown) => <AgentMessageText text={shown} /> : undefined
+                role === "llm" && !danger
+                  ? (shown) => <AgentMessageText text={shown} />
+                  : (shown) => <span className="whitespace-pre-wrap"><AgentInline parts={linkParts(shown)} /></span>
               }
             />
           )}

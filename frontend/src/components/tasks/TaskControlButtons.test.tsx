@@ -229,7 +229,7 @@ describe("TaskControlButtons", () => {
       expect(screen.queryByText(HINT)).not.toBeInTheDocument();
     });
 
-    test("остановка ожидания чата оставляет «Уточняется»", async () => {
+    test("остановка ожидания чата завершает задачу", async () => {
       const { user } = renderButtons({
         status: TaskStatus.AWAITING_LIMIT,
         limit_wait_from_status: TaskStatus.REFINING,
@@ -238,7 +238,7 @@ describe("TaskControlButtons", () => {
       await user.click(screen.getByRole("button", { name: Button.STOP }));
 
       expect(screen.getByRole("dialog")).toHaveTextContent(
-        "Ожидание лимита прекратится, задача останется в статусе «Уточняется».",
+        "Задача перейдёт в статус «Готово».",
       );
     });
   });

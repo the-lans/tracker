@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { highlightCode, parseInline, parseMarkdown } from "@/lib/agentMarkdown";
 
 describe("parseInline", () => {
+  it("сохраняет скобки внутри адреса markdown-ссылки", () => {
+    expect(parseInline("[Документация](https://example.com/a_(b))")).toEqual([
+      { kind: "link", text: "Документация", href: "https://example.com/a_(b)" },
+    ]);
+  });
+  it("не превращает обрезанную ссылку в превью в неправильный адрес", () => {
+    expect(parseInline("Открыть https://example.com/unfinished…")).toEqual([
+      { kind: "text", text: "Открыть https://example.com/unfinished…" },
+    ]);
+  });
   it.each([
     ["просто текст", [{ kind: "text", text: "просто текст" }]],
     [

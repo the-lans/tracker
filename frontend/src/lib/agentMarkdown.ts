@@ -5,13 +5,14 @@
  * исполняется.
  */
 
-export type InlineKind = "text" | "bold" | "code";
+export type InlineKind = "text" | "bold" | "code" | "link";
 
 export interface InlinePart {
   kind: InlineKind;
   text: string;
   /** Код внутри жирного текста (`**\`calc.py\`**`). */
   bold?: boolean;
+  href?: string;
 }
 
 export type TableAlign = "left" | "center" | "right";
@@ -36,9 +37,39 @@ const ORDERED_RE = /^\s*\d+[.)]\s+(.*)$/;
 const FENCE_RE = /^\s*```\s*([\w+-]*)\s*$/;
 const INLINE_RE = /(\*\*[^*\n]+\*\*)|(`[^`\n]+`)/g;
 const CODE_SPAN_RE = /`[^`\n]+`/g;
+const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)|https?:\/\/[^\s<>"`]+/gi;
 // Разделитель шапки таблицы: `---`, `:---`, `:---:`, `---:` в каждой ячейке.
 const TABLE_SEPARATOR_CELL_RE = /^:?-+:?$/;
 const TABLE_CELL_SPLIT_RE = /(?<!\\)\|/;
+
+/** Ссылки преобразуются только вне кода; пунктуация после URL остаётся текстом. */
+export function linkParts(text: string, bold = false): InlinePart[] {
+  const parts: InlinePart[] = [];
+  let last = 0;
+  for (const match of text.matchAll(LINK_RE)) {
+    const index = match.index;
+    let url = match[2] ?? match[0];
+    // В свёрнутом превью обрезанный адрес не должен вести на другой ресурс.
+    if (!match[2] && url.endsWith("…")) continue;
+    if (!match[2]) {
+      url = url.replace(/[.,!?;:\]}»”]+$/, "");
+      while (url.endsWith(")") && (url.match(/\)/g)?.length ?? 0) > (url.match(/\(/g)?.length ?? 0)) {
+        url = url.slice(0, -1);
+      }
+    }
+    try {
+      const parsed = new URL(url);
+      if (!parsed.hostname || !["http:", "https:"].includes(parsed.protocol)) continue;
+    } catch {
+      continue;
+    }
+    if (index > last) parts.push({ kind: bold ? "bold" : "text", text: text.slice(last, index) });
+    parts.push({ kind: "link", text: match[1] ?? url, href: url, ...(bold ? { bold: true } : {}) });
+    last = index + (match[2] ? match[0].length : url.length);
+  }
+  if (last < text.length) parts.push({ kind: bold ? "bold" : "text", text: text.slice(last) });
+  return parts;
+}
 
 /** Части жирного текста: код внутри остаётся кодом, но тоже жирным. */
 function boldParts(text: string): InlinePart[] {
@@ -46,11 +77,11 @@ function boldParts(text: string): InlinePart[] {
   let last = 0;
   for (const match of text.matchAll(CODE_SPAN_RE)) {
     const index = match.index ?? 0;
-    if (index > last) parts.push({ kind: "bold", text: text.slice(last, index) });
+    if (index > last) parts.push(...linkParts(text.slice(last, index), true));
     parts.push({ kind: "code", text: match[0].slice(1, -1), bold: true });
     last = index + match[0].length;
   }
-  if (last < text.length) parts.push({ kind: "bold", text: text.slice(last) });
+  if (last < text.length) parts.push(...linkParts(text.slice(last), true));
   return parts;
 }
 
@@ -59,12 +90,12 @@ export function parseInline(text: string): InlinePart[] {
   let last = 0;
   for (const match of text.matchAll(INLINE_RE)) {
     const index = match.index ?? 0;
-    if (index > last) parts.push({ kind: "text", text: text.slice(last, index) });
+    if (index > last) parts.push(...linkParts(text.slice(last, index)));
     if (match[1]) parts.push(...boldParts(match[1].slice(2, -2)));
     else parts.push({ kind: "code", text: match[0].slice(1, -1) });
     last = index + match[0].length;
   }
-  if (last < text.length) parts.push({ kind: "text", text: text.slice(last) });
+  if (last < text.length) parts.push(...linkParts(text.slice(last)));
   return parts;
 }
 

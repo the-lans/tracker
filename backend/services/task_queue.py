@@ -4,8 +4,8 @@
 Очередь — задачи автора в `ready`/`night_worker` по ручному приоритету, затем
 по времени постановки. Слот занимает задача в работе или в `failed`, если её
 запустил воркер очереди или у неё стоит галочка `occupies_slot`, и задача в
-`refining` с идущим чатом при той же галочке. Ручная смена статуса — только в
-статусы до запуска (раздел 14.1).
+`refining` с идущим чатом при той же галочке. Вручную задачу можно перевести
+в статус до запуска или архивировать после завершения.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from db.models.tasks import Task
 from services.errors import ConflictError, ValidationError
 from services.refining_chat import CHAT_BUSY_MESSAGE
 from services.session_heartbeat import is_session_alive
+from services.task_archive import archive_finished_task
 from services.task_status import (
     PRE_LAUNCH_STATUSES,
     QUEUE_STATUSES,
@@ -222,9 +223,16 @@ async def change_task_status_manually(
 ) -> Task:
     """
     Раздел 14.1: пользователь переводит задачу между статусами до запуска, а
-    завершённую или упавшую — в статус до запуска со сбросом прогона. Статусы
-    выполнения меняет только система (409).
+    завершённую или упавшую — в архив либо в статус до запуска со сбросом
+    прогона. Статусы выполнения меняет только система (409).
     """
+    if to_status is TaskStatus.ARCHIVED:
+        return await archive_finished_task(
+            db_session,
+            task_id=task.id,
+            from_status=task.status,
+            now=datetime.now(UTC),
+        )
     if to_status not in PRE_LAUNCH_STATUSES:
         raise ValidationError("Вручную задачу можно перевести только в статус до запуска")
     if task.status is to_status:
@@ -238,7 +246,7 @@ async def change_task_status_manually(
     ):
         raise ConflictError(CHAT_BUSY_MESSAGE)
     updated = await transition_task_status(
-        db_session,
+        db_session=db_session,
         task_id=task.id,
         from_status=task.status,
         to_status=to_status,

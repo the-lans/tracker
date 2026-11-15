@@ -13,6 +13,10 @@ export function useUrlTab<T extends string>(
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get(TAB_PARAM);
   const tab = values.find((value) => value === requested) ?? defaultValue;
-  const setTab = (value: string) => setSearchParams({ [TAB_PARAM]: value }, { replace: true });
+  const setTab = (value: string) => setSearchParams((previous) => {
+    const next = new URLSearchParams(previous);
+    next.set(TAB_PARAM, value);
+    return next;
+  }, { replace: true });
   return [tab, setTab];
 }

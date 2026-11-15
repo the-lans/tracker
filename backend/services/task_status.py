@@ -36,6 +36,11 @@ from db.models.logs import AppLog, NodeLog
 from db.models.pipelines import TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
+from db.queries.manual_requests import (
+    active_prompt_request,
+    cancel_queued_requests,
+    mark_queued_prompt_stopped,
+)
 from services.errors import ConflictError, ValidationError
 from services.node_runs import SESSION_ERROR_MESSAGE
 from services.notifications import NotificationEvent, notify_task_event
@@ -131,7 +136,7 @@ ALLOWED_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.REBASE_CONFLICT: frozenset(
         {TaskStatus.IN_PROGRESS, TaskStatus.FAILED, TaskStatus.AWAITING_LIMIT},
     ),
-    # «Остановить» в ожидании — `failed` (раздел 14.2).
+    # «Остановить» в ожидании завершает задачу.
     TaskStatus.AWAITING_LIMIT: LIMIT_WAIT_RETURN_STATUSES | {TaskStatus.FAILED},
     # `-> статус до запуска` — «Вернуть в новые» и меню статуса (раздел 14.1):
     # сменить пайплайн и запустить заново, в том числе из очереди.
@@ -252,16 +257,32 @@ async def _ensure_done_invariant(db_session: AsyncSession, task_id: uuid.UUID) -
         )
 
 
+async def _cancel_queued_on_stop(db_session: AsyncSession, task_id: uuid.UUID) -> None:
+    """Отменить ещё не начатые запросы в той же транзакции, что остановка."""
+    cancelled_nodes = await cancel_queued_requests(
+        db_session,
+        task_id=task_id,
+        now=datetime.now(UTC),
+    )
+    for node_id, command_name in cancelled_nodes:
+        if node_id is None or command_name is not None:
+            continue
+        if await active_prompt_request(db_session, task_id=task_id, node_id=node_id) is None:
+            await mark_queued_prompt_stopped(db_session, task_id=task_id, node_id=node_id)
+
+
 async def transition_task_status(
-    db_session: AsyncSession,
     *,
+    db_session: AsyncSession,
     task_id: uuid.UUID,
     from_status: TaskStatus,
     to_status: TaskStatus,
     failed_order_index: int | None = None,
     extra_values: dict[str, object] | None = None,
+    stopped_by_user: bool = False,
 ) -> Task:
-    """Compare-and-swap переход `tasks.status` (раздел 17.4).
+    """
+    Compare-and-swap переход `tasks.status` (раздел 17.4).
 
     ``failed_order_index`` обязателен при переходе в `failed` (раздел
     17.5: "обязан сохранять точный order_index сбоя в
@@ -269,11 +290,20 @@ async def transition_task_status(
     перехода. ``extra_values`` — поля, меняемые в том же UPDATE, что и
     статус (отмена постановки заодно выключает автозапуск).
     """
+    if stopped_by_user and (
+        to_status is not TaskStatus.DONE
+        or from_status
+        not in {
+            TaskStatus.IN_PROGRESS,
+            TaskStatus.PAUSED,
+            TaskStatus.AWAITING_LIMIT,
+        }
+    ):
+        raise ValidationError("Ручная остановка недоступна для этого перехода")
     allowed = ALLOWED_TRANSITIONS.get(from_status, frozenset())
-    if to_status not in allowed:
+    if to_status not in allowed and not stopped_by_user:
         raise ValidationError(f"Переход {from_status} -> {to_status} запрещён (раздел 14.1)")
-
-    if to_status is TaskStatus.DONE:
+    if to_status is TaskStatus.DONE and not stopped_by_user:
         await _ensure_done_invariant(db_session, task_id)
 
     values: dict[str, object] = {
@@ -306,6 +336,8 @@ async def transition_task_status(
             f"Задача {task_id} уже не в статусе {from_status} — переход отменён "
             "(compare-and-swap, раздел 17.4)",
         )
+    if stopped_by_user:
+        await _cancel_queued_on_stop(db_session, task_id)
     await db_session.commit()
     logger.info(
         "task_status_transitioned",
@@ -313,7 +345,11 @@ async def transition_task_status(
         from_status=from_status,
         to_status=to_status,
     )
-    event = _NOTIFICATION_EVENTS_BY_STATUS.get(to_status)
+    event = (
+        NotificationEvent.STOPPED
+        if stopped_by_user
+        else _NOTIFICATION_EVENTS_BY_STATUS.get(to_status)
+    )
     if event is not None:
         await notify_task_event(db_session, event=event, task=task)
     return task
@@ -395,7 +431,7 @@ async def fail_task_from_current_status(
     from_status = task.status
     if from_status in _AWAITING_STATUSES:
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task_id,
             from_status=from_status,
             to_status=TaskStatus.IN_PROGRESS,
@@ -409,7 +445,7 @@ async def fail_task_from_current_status(
         )
         return False
     await transition_task_status(
-        db_session,
+        db_session=db_session,
         task_id=task_id,
         from_status=from_status,
         to_status=TaskStatus.FAILED,
@@ -512,7 +548,7 @@ async def reset_task_run(
     if task is None or task.status not in RESETTABLE_STATUSES:
         raise ConflictError("Вернуть в новые можно только завершённую или упавшую задачу")
     return await transition_task_status(
-        db_session,
+        db_session=db_session,
         task_id=task_id,
         from_status=task.status,
         to_status=to_status,

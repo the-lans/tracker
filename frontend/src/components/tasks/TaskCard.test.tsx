@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect } from "vitest";
 import { TaskCard } from "@/components/tasks/TaskCard";
 import { TaskStatus, UserRole, type Task } from "@/lib/types";
@@ -105,6 +105,19 @@ describe("TaskCard", () => {
         ["У задачи нет LLM-аккаунта — доступны только скрипты"],
       ]);
     });
+  });
+
+  test.for([TaskStatus.DONE, TaskStatus.FAILED])("архивирование из карточки: %s", async (status, { api }) => {
+    const { user } = renderCard({ status });
+    await user.click(screen.getByRole("button", { name: "Архивировать задачу" }));
+    expect(api.mutations()).toEqual([]);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "В архив" }));
+    expect(api.mutations()).toEqual([{ method: "POST", path: "/tasks/t1/status", body: { to_status: TaskStatus.ARCHIVED } }]);
+  });
+
+  test("у незавершённой задачи нет архивирования", () => {
+    renderCard({ status: TaskStatus.IN_PROGRESS });
+    expect(screen.queryByRole("button", { name: "Архивировать задачу" })).not.toBeInTheDocument();
   });
 
   describe("автор (раздел 19.2)", () => {

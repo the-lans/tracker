@@ -35,6 +35,7 @@ from services.daily_plans import (
 )
 from services.day_marks import clear_day_mark, recent_day_marks, set_day_mark
 from services.errors import ConflictError, NotFoundError, ValidationError
+from services.system_settings import update_integrations
 from services.tracker_day import DayWindow
 from tests.factories import make_task, make_user
 
@@ -458,6 +459,7 @@ class TestDailyPlans:
         db_session: AsyncSession,
         user: User,
     ) -> None:
+        await update_integrations(db_session, jira_url="https://jira.example.com/")
         done = await _task(db_session, user, "Подключить вебхуки", code="RR-19384")
         planned = await _task(db_session, user, "Профиль игрока", code="RR-15592")
         await _mark(db_session, user, done, YESTERDAY)
@@ -480,12 +482,59 @@ class TestDailyPlans:
         assert plan.content == (
             "Доброго всем утра!\n\n"
             "Вчера:\n"
-            "• RR-19384: Подключить вебхуки.\n"
+            "• [RR-19384](https://jira.example.com/browse/RR-19384): Подключить вебхуки.\n"
             "• Ревью кода.\n\n"
             "Сегодня:\n"
             "• Встреча: All Hands.\n"
-            "• RR-15592: Профиль игрока.\n"
+            "• [RR-15592](https://jira.example.com/browse/RR-15592): Профиль игрока.\n"
         )
+
+    @pytest.mark.parametrize("jira_url", [None, "https://jira.example.com"])
+    async def test_task_links_in_template_variables(
+        self,
+        db_session: AsyncSession,
+        user: User,
+        jira_url: str | None,
+    ) -> None:
+        await update_integrations(db_session, jira_url=jira_url)
+        await _mark(db_session, user, await _task(db_session, user, "Профиль", code="RR-1"), TODAY)
+        await _mark(
+            db_session, user, await _task(db_session, user, "Локальная", code="local"), TODAY
+        )
+
+        content = await preview_daily_template(
+            db_session,
+            user=user,
+            content="{{daily.planned}}",
+            clock=CLOCK,
+        )
+
+        code = "[RR-1](https://jira.example.com/browse/RR-1)" if jira_url else "RR-1"
+        assert f"• {code}: Профиль." in content
+        assert "• local: Локальная." in content
+
+    @pytest.mark.parametrize("jira_url", [None, "https://other.example.com"])
+    @pytest.mark.parametrize("day", [TODAY, TOMORROW])
+    async def test_saved_jira_link_takes_priority(
+        self,
+        db_session: AsyncSession,
+        user: User,
+        jira_url: str | None,
+        day: date,
+    ) -> None:
+        await update_integrations(db_session, jira_url=jira_url)
+        task = await _task(
+            db_session,
+            user,
+            "Профиль",
+            code="RR-15592",
+            jira_issue_url="https://jira.example.com/browse/RR-15592",
+        )
+        await _mark(db_session, user, task, day)
+
+        plan = await create_daily_plan(db_session, user=user, day=day, clock=CLOCK)
+
+        assert "[RR-15592](https://jira.example.com/browse/RR-15592): Профиль." in plan.content
 
     async def test_custom_template_and_empty_lists(
         self,

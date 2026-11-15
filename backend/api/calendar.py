@@ -52,10 +52,13 @@ PROFILE_PATH = "/profile"
 _RESULT_PARAM = "calendar"
 _CONNECTED = "connected"
 _FAILED = "error"
+_CONNECTIONS_TAB = "connections"
 
 
 def _profile_redirect(result: str) -> RedirectResponse:
-    return RedirectResponse(f"{PROFILE_PATH}?{_RESULT_PARAM}={result}", status_code=303)
+    return RedirectResponse(
+        f"{PROFILE_PATH}?tab={_CONNECTIONS_TAB}&{_RESULT_PARAM}={result}", status_code=303
+    )
 
 
 @router.get("/calendar/google/callback", include_in_schema=False)
