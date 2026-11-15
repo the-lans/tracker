@@ -7,10 +7,11 @@ import type { useKnowledgeEditor } from "@/hooks/useKnowledgeEditor";
 const MAP_TEMPLATE = "# Карта ресурсов\n\n## Документация\nДобавьте ссылки на источники и название MCP-подключения.\n\n## Репозитории\nДобавьте ссылки и назначение проектов.\n\n## Правила поиска\nУкажите, где проверять актуальность информации.\n";
 type Editor = ReturnType<typeof useKnowledgeEditor>;
 
-export function useKnowledgeActions({ editor, sectionId, onError }: {
+export function useKnowledgeActions({ editor, sectionId, onError, onDirectoryCreated }: {
   editor: Editor;
   sectionId: string;
   onError: (message: string) => void;
+  onDirectoryCreated: (path: string) => void;
 }) {
   const cache = useQueryClient();
   const mutation = useMutation({
@@ -38,15 +39,16 @@ export function useKnowledgeActions({ editor, sectionId, onError }: {
         path: editor.path, content: sentText, expected_version: editor.entry?.version ?? 0,
         is_directory: editor.directory,
       });
+      if (!editor.entry && saved.is_directory && editor.generation() === generation) onDirectoryCreated(saved.path);
       editor.acceptSaved(saved, sentText, generation);
     });
   }
 
   async function trash() {
     const entry = editor.entry;
-    if (!entry) return;
+    if (!entry) return false;
     const generation = editor.generation();
-    await perform(async () => {
+    return perform(async () => {
       await api.patch(`/knowledge/entries/${entry.id}/deleted`, {
         expected_version: entry.version, deleted: !entry.deleted_at,
       });
@@ -56,9 +58,9 @@ export function useKnowledgeActions({ editor, sectionId, onError }: {
 
   async function move(destinationSection: string, path: string) {
     const entry = editor.entry;
-    if (!entry) return;
+    if (!entry) return false;
     const generation = editor.generation();
-    await perform(async () => {
+    return perform(async () => {
       await api.patch(`/knowledge/entries/${entry.id}/location`, {
         section_id: destinationSection, path, expected_version: entry.version,
       });
@@ -66,10 +68,11 @@ export function useKnowledgeActions({ editor, sectionId, onError }: {
     });
   }
 
-  async function upload(file: File) {
+  async function upload(file: File, directory = "") {
     const body = new FormData();
     body.append("file", file);
-    await perform(() => api.post(`/knowledge/sections/${sectionId}/upload?path=${encodeURIComponent(file.name)}`, body));
+    const path = directory ? `${directory}/${file.name}` : file.name;
+    await perform(() => api.post(`/knowledge/sections/${sectionId}/upload?path=${encodeURIComponent(path)}`, body));
   }
 
   async function download() {

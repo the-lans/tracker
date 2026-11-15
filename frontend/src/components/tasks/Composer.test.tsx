@@ -1,5 +1,5 @@
-import { screen } from "@testing-library/react";
-import { describe, expect } from "vitest";
+import { fireEvent, screen } from "@testing-library/react";
+import { describe, expect, vi } from "vitest";
 import { Composer } from "@/components/tasks/Composer";
 import { ManualRequestStatus, ManualRequestType, TaskStatus } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
@@ -113,6 +113,44 @@ describe("Composer", () => {
   });
 
   describe("отправка", () => {
+    test("поле расширяется за верхнюю ручку и стрелками клавиатуры", async ({ onTestFinished }) => {
+      class TestPointerEvent extends MouseEvent {
+        pointerId: number;
+        constructor(type: string, init: PointerEventInit) {
+          super(type, init);
+          this.pointerId = init.pointerId ?? 0;
+        }
+      }
+      vi.stubGlobal("PointerEvent", TestPointerEvent);
+      onTestFinished(() => { vi.unstubAllGlobals(); });
+      const { user, field } = await openComposer();
+      vi.spyOn(field, "getBoundingClientRect").mockReturnValue({ height: 64 } as DOMRect);
+      const handle = screen.getByRole("button", { name: "Изменить высоту поля ввода" });
+      handle.setPointerCapture = vi.fn();
+      fireEvent.pointerDown(handle, { pointerId: 1, button: 0, clientY: 300 });
+      fireEvent.pointerMove(handle, { pointerId: 1, clientY: 220 });
+      fireEvent.pointerUp(handle, { pointerId: 1 });
+      expect(field).toHaveStyle({ height: "144px" });
+      handle.focus();
+      await user.keyboard("{ArrowUp}");
+      expect(field).toHaveStyle({ height: "88px" });
+    });
+
+    test("на телефоне Enter вставляет строку, а кнопка отправляет сообщение", async ({ api, onTestFinished }) => {
+      const userAgent = vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)");
+      onTestFinished(() => userAgent.mockRestore());
+      const { user, field } = await openComposer();
+      await user.type(field, "Первая{Enter}Вторая");
+      expect(field).toHaveValue("Первая\nВторая");
+      expect(field).toHaveAttribute("enterkeyhint", "enter");
+      expect(api.mutations()).toEqual([]);
+      expect(screen.getByRole("button", { name: "Отправить" })).toHaveAttribute("title", "Отправить сообщение; Enter — новая строка");
+      await user.click(screen.getByRole("button", { name: "Отправить" }));
+      expect(api.mutations()).toEqual([
+        { method: "POST", path: FREEFORM_PATH, body: { raw_prompt_text: "Первая\nВторая" } },
+      ]);
+    });
+
     test("Enter отправляет сообщение, Ctrl + Enter вставляет строку в позиции курсора", async ({ api }) => {
       const { user, field } = await openComposer();
       await user.type(field, "ПерваяВторая");
@@ -184,6 +222,33 @@ describe("Composer", () => {
           body: { text: "Ключ {{env.API_TOKEN}} для {{task.code}}", scope: "freeform", task_id: "t1" },
         },
       ]);
+    });
+
+    test("кнопка скрывает и повторно открывает предпросмотр", async ({ api }) => {
+      const { user } = await previewWith(api, "Результат подстановки");
+      await screen.findByText("Результат подстановки");
+      const button = screen.getByRole("button", { name: "Предпросмотр подстановки" });
+      expect(button).toHaveAttribute("aria-pressed", "true");
+      expect(button).toHaveAttribute("title", "Скрыть предпросмотр");
+      await user.click(button);
+      expect(screen.queryByText("Результат подстановки")).not.toBeInTheDocument();
+      expect(button).toHaveAttribute("aria-pressed", "false");
+      await user.click(button);
+      expect(await screen.findByText("Результат подстановки")).toBeInTheDocument();
+      expect(api.mutations()).toHaveLength(2);
+    });
+
+    test("ответ на старый запрос не показывает предпросмотр после правки", async ({ api }) => {
+      let resolvePreview!: (value: { rendered_text: string }) => void;
+      api.respond(`POST ${PREVIEW_PATH}`, () => new Promise((resolve) => { resolvePreview = resolve; }));
+      const { user, field } = await openComposer();
+      await user.type(field, "Первый текст");
+      await user.click(screen.getByRole("button", { name: "Предпросмотр подстановки" }));
+      await user.type(field, " изменён");
+      resolvePreview({ rendered_text: "Устаревший результат" });
+      await expect.poll(() => screen.getByRole("button", { name: "Предпросмотр подстановки" })).not.toBeDisabled();
+      expect(screen.queryByText("Устаревший результат")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Предпросмотр подстановки" })).toHaveAttribute("aria-pressed", "false");
     });
 
     test("правка текста убирает устаревший предпросмотр", async ({ api }) => {

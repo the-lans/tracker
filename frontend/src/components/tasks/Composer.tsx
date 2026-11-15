@@ -12,6 +12,12 @@ import { errorMessage } from "@/lib/errors";
 import { NO_LLM_ACCOUNT } from "@/lib/llmAccounts";
 import { ManualRequestStatus, ManualRequestType, TaskStatus } from "@/lib/types";
 import { isPreLaunch } from "@/lib/taskStatusTransitions";
+import { ComposerResizeHandle } from "@/components/tasks/ComposerResizeHandle";
+
+function isMobileDevice() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
 
 /** Раздел 8, 15.2: свободный параметризованный промт — отдельно от поля
  * ответа на awaiting_input/plan_review (см. `DecisionWidget`). Не привязан к
@@ -33,10 +39,13 @@ export function Composer({
   manualRequestsClosed?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const mobile = isMobileDevice();
   const [text, setText] = useState("");
+  const [fieldHeight, setFieldHeight] = useState<number>();
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [unknownCommand, setUnknownCommand] = useState(false);
   const requestIdentity = useRef<{ text: string; id: string } | null>(null);
+  const previewVersion = useRef(0);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const isCommand = text.trimStart().startsWith("/");
   const prefix = isCommand ? text.trimStart().split(/\s/, 1)[0].slice(1, 65) : "";
@@ -59,6 +68,7 @@ export function Composer({
   ).length;
 
   function handleTextChange(value: string) {
+    previewVersion.current += 1;
     setText(value);
     setSelectedIndex(0);
     setUnknownCommand(false);
@@ -71,18 +81,24 @@ export function Composer({
   }
 
   function handlePreview() {
+    if (previewText !== null) {
+      setPreviewText(null);
+      return;
+    }
+    const version = previewVersion.current;
     if (isCommand) {
       commandPreview.mutate(text.trim(), {
-        onSuccess: (data) => setPreviewText(data.rendered_text),
-        onError: (error) => toast.error(errorMessage(error, "Ошибка предпросмотра команды")),
+        onSuccess: (data) => { if (version === previewVersion.current) setPreviewText(data.rendered_text); },
+        onError: (error) => { if (version === previewVersion.current) toast.error(errorMessage(error, "Ошибка предпросмотра команды")); },
       });
       return;
     }
     preview.mutate(
       { text: text.trim(), scope: "freeform", task_id: taskId },
       {
-        onSuccess: (data) => setPreviewText(data.rendered_text),
+        onSuccess: (data) => { if (version === previewVersion.current) setPreviewText(data.rendered_text); },
         onError: (error) => {
+          if (version !== previewVersion.current) return;
           toast.error(errorMessage(error, "Ошибка предпросмотра"));
           setPreviewText(null);
         },
@@ -100,7 +116,7 @@ export function Composer({
       runCommand.mutate({ invocation, client_request_id: requestIdentity.current.id }, {
         onSuccess: () => {
           toast.success("Команда поставлена в очередь");
-          setText(""); setPreviewText(null); setOpen(false); setUnknownCommand(false);
+          handleTextChange(""); setOpen(false);
           requestIdentity.current = null;
         },
         onError: (error) => {
@@ -114,8 +130,7 @@ export function Composer({
     submitFreeform.mutate(text.trim(), {
       onSuccess: () => {
         toast.success("Промт поставлен в очередь");
-        setText("");
-        setPreviewText(null);
+        handleTextChange("");
         setOpen(false);
       },
       onError: (error) => {
@@ -201,6 +216,7 @@ export function Composer({
           {unknownCommand && llmAvailable && <Button variant="secondary" onClick={() => handleSend(true)}
             disabled={submitFreeform.isPending}>Отправить напрямую агенту</Button>}
           <div className="flex items-end gap-2">
+            <div className="relative min-w-0 flex-1">
             <Textarea
               autoFocus
               ref={fieldRef}
@@ -210,6 +226,7 @@ export function Composer({
               aria-activedescendant={showCommands && commands[selectedIndex] ? `task-command-${selectedIndex}` : undefined}
               onKeyDown={(event) => {
                 if (event.nativeEvent.isComposing) return;
+                if (mobile && event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.altKey) return;
                 if (event.key === "Enter" && event.ctrlKey && !event.metaKey && !event.altKey) {
                   event.preventDefault();
                   const field = event.currentTarget;
@@ -230,15 +247,23 @@ export function Composer({
                 }
               }}
               rows={2}
+              enterKeyHint={mobile ? "enter" : "send"}
               placeholder="Текст промта… Доступны {{task.*}}, {{session.id}}, {{env.*}}"
               value={text}
               onChange={(event) => handleTextChange(event.target.value)}
-              className="flex-1"
+              className="block min-h-16 max-h-[55dvh] resize-none pr-8"
+              style={{ height: fieldHeight }}
             />
+            <ComposerResizeHandle fieldRef={fieldRef} onResize={setFieldHeight} />
+            </div>
+            <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
             <Button
               size="icon"
               variant="secondary"
               aria-label="Предпросмотр подстановки"
+              aria-pressed={previewText !== null}
+              title={previewText !== null ? "Скрыть предпросмотр" : "Показать предпросмотр"}
+              className={previewText !== null ? "border-accent bg-accent text-on-accent hover:bg-accent-hov" : undefined}
               disabled={!text.trim() || preview.isPending || commandPreview.isPending || (!isCommand && !llmAvailable)}
               onClick={handlePreview}
             >
@@ -247,12 +272,13 @@ export function Composer({
             <Button
               size="icon"
               aria-label="Отправить"
-              title="Enter — отправить; Ctrl + Enter — новая строка"
+              title={mobile ? "Отправить сообщение; Enter — новая строка" : "Enter — отправить; Ctrl + Enter — новая строка"}
               disabled={sendDisabled}
               onClick={() => handleSend()}
             >
               <Send className="size-4" />
             </Button>
+            </div>
           </div>
         </div>
       )}

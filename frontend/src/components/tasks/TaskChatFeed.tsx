@@ -102,7 +102,7 @@ export function TaskChatFeed({
         </Button>
       </div>
 
-      <div ref={feedRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-6 py-5 short:flex-none short:gap-3 short:overflow-visible short:py-3">
+      <div ref={feedRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-2.5 py-5 sm:px-6 short:flex-none short:gap-3 short:overflow-visible short:py-3">
         {nodeLogs.length === 0 && (
           <EmptyState
             icon={MessagesSquare}
