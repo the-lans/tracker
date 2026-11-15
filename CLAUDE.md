@@ -55,7 +55,7 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | Celery | 5.7.0 |
 | redis-py | 8.1.0 |
 | structlog | 26.1.0 |
-| claude-agent-sdk | 0.2.178 |
+| claude-agent-sdk | 0.2.180 |
 | asyncssh | 2.24.1* (SFTP-шлюз, раздел 19.6) |
 | httpx | 0.28.1* (клиенты GitLab и Jira, тесты API) |
 | cryptography | 50.0.2* (шифрование секретов и токена сессии, раздел 19.4) |

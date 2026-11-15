@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "AI-трекер задач — backend API и оркестрация Celery-задач"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi==0.162.0",
+    "fastapi==0.162.4",
     "uvicorn[standard]==0.54.0",
     "sqlalchemy[asyncio]==2.1.8",
     "asyncpg==0.32.0",
@@ -14,16 +14,16 @@ dependencies = [
     "packaging==26.3",
     "redis==8.1.0",
     "structlog==26.1.0",
-    "claude-agent-sdk==0.2.178",
+    "claude-agent-sdk==0.2.180",
     "cryptography==50.0.2",
     "httpx==0.28.1",
-    "croniter==6.2.4",
-    "google-auth==2.62.1",
+    "croniter==7.0.0",
+    "google-auth==2.62.2",
     "requests==2.34.2",
     "pywebpush==2.5.0",
     "asyncssh==2.24.1",
     # Раздел 20.4: бэкап в S3-совместимое хранилище.
-    "boto3==1.43.127",
+    "boto3==1.44.1",
 ]
 
 [project.optional-dependencies]
@@ -31,12 +31,12 @@ dev = [
     "pytest==9.2.0",
     "pytest-asyncio==1.4.1.post1",
     "pytest-cov==7.1.0",
-    "ruff==0.17.3",
+    "ruff==0.17.4",
     "mypy==2.4.1",
     # Тесты конфигурации стека читают docker-compose.yml.
     "pyyaml==6.0.3",
-    "types-PyYAML==6.0.12.20261103",
-    "boto3-stubs[s3]==1.43.127",
+    "types-PyYAML==6.0.12.20261111",
+    "boto3-stubs[s3]==1.44.0",
     # Известные уязвимости зависимостей (`make audit`, .github/workflows/security.yml).
     "pip-audit==2.10.1",
 ]
