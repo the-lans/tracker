@@ -12,6 +12,7 @@ export function useKnowledgeEditor() {
   const [path, setPath] = useState("");
   const [text, setText] = useState("");
   const [originalText, setOriginalText] = useState("");
+  const [viewedVersion, setViewedVersion] = useState<number | null>(null);
   const [binary, setBinary] = useState(false);
   const [directory, setDirectory] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -21,7 +22,12 @@ export function useKnowledgeEditor() {
   function reset() {
     sequence.current++;
     setEntry(null); setPath(""); setText(""); setOriginalText("");
-    setBinary(false); setDirectory(false); setLoading(false); setError("");
+    setBinary(false); setDirectory(false); setLoading(false); setError(""); setViewedVersion(null);
+  }
+
+  function selectDirectory(file: KnowledgeEntry) {
+    reset();
+    setEntry(file); setPath(file.path); setDirectory(true);
   }
 
   async function open(file: KnowledgeEntry, version?: number): Promise<boolean> {
@@ -35,6 +41,7 @@ export function useKnowledgeEditor() {
       const result = await api.get<FileContent>(`/knowledge/entries/${file.id}/content`, {version});
       if (request !== sequence.current) return false;
       setText(result.content); setBinary(false);
+      setViewedVersion(version ?? null);
       if (version === undefined) {
         setEntry({...file, version: result.version});
         setOriginalText(result.content);
@@ -52,12 +59,12 @@ export function useKnowledgeEditor() {
 
   function acceptSaved(file: KnowledgeEntry, sentText: string, request: number) {
     if (request !== sequence.current) return;
-    setEntry(file); setOriginalText(sentText);
+    setEntry(file); setOriginalText(sentText); setViewedVersion(null);
   }
 
   return {
-    entry, path, text, originalText, binary, directory, loading, error,
-    setPath, setText, setDirectory, open, reset, acceptSaved,
+    entry, path, text, originalText, viewedVersion, binary, directory, loading, error,
+    setPath, setText, setDirectory, open, reset, selectDirectory, acceptSaved,
     generation: () => sequence.current,
     resetIfCurrent: (request: number) => { if (request === sequence.current) reset(); },
   };
