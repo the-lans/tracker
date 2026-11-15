@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
+import { TaskJiraLink } from "@/components/tasks/TaskJiraLink";
 import { TaskStatusMenu } from "@/components/tasks/TaskStatusMenu";
 import { TaskOverviewPanel } from "@/components/tasks/TaskOverviewPanel";
 import { TaskChatFeed } from "@/components/tasks/TaskChatFeed";
@@ -59,8 +60,11 @@ export function TaskPage() {
             <TaskStatusMenu task={task} />
             <TaskDayMarks task={task} />
           </div>
-          <div className="truncate text-title font-extrabold tracking-tight" title={task.title}>
-            {task.title}
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 truncate text-title font-extrabold tracking-tight" title={task.title}>
+              {task.title}
+            </div>
+            <TaskJiraLink task={task} />
           </div>
           <TaskLlmAccountBadge task={task} />
         </div>

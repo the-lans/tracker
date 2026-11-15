@@ -1,5 +1,5 @@
-import { useEffect, useId, useState, type KeyboardEvent } from "react";
-import { Input } from "@/components/ui/input";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { SearchInput } from "@/components/common/inputs/SearchInput";
 import { cn } from "@/lib/utils";
 import type { SearchSelectOption } from "@/components/common/inputs/searchSelect.types";
 
@@ -22,6 +22,8 @@ export function SearchSelect({
   onChange,
   clearLabel,
   placeholder = "Поиск",
+  inlineList = false,
+  showClearOption = true,
 }: {
   id: string;
   value: string | null;
@@ -29,15 +31,19 @@ export function SearchSelect({
   onChange: (value: string | null) => void;
   clearLabel: string;
   placeholder?: string;
+  inlineList?: boolean;
+  showClearOption?: boolean;
 }) {
   const listId = useId();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLUListElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const found = options.filter((option) => matches(option, query));
   const shown: SearchSelectOption[] = [
-    { value: null, label: clearLabel },
+    ...(showClearOption ? [{ value: null, label: clearLabel }] : []),
     ...found.slice(0, SEARCH_SELECT_LIMIT),
   ];
   const selectedLabel = options.find((option) => option.value === value)?.label ?? clearLabel;
@@ -77,17 +83,29 @@ export function SearchSelect({
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
+      if (shown.length === 0) return;
       const step = event.key === "ArrowDown" ? 1 : -1;
-      setActive((current) => (current + step + shown.length) % shown.length);
+      const next = (active + step + shown.length) % shown.length;
+      setActive(next);
+      const list = listRef.current;
+      const option = list?.querySelectorAll<HTMLElement>('[role="option"]')[next];
+      if (list && option) {
+        const top = option.offsetTop - list.offsetTop;
+        if (top < list.scrollTop) list.scrollTop = top;
+        else if (top + option.offsetHeight > list.scrollTop + list.clientHeight) {
+          list.scrollTop = top + option.offsetHeight - list.clientHeight;
+        }
+      }
     } else if (event.key === "Enter") {
       event.preventDefault();
-      choose(shown[active]);
+      if (shown[active] && (!query.trim() || found.length > 0)) choose(shown[active]);
     }
   }
 
   return (
-    <div className="relative">
-      <Input
+    <div className={cn("relative", inlineList && "flex min-h-0 flex-col")}>
+      <SearchInput
+        ref={inputRef}
         id={id}
         role="combobox"
         aria-expanded={open}
@@ -96,12 +114,22 @@ export function SearchSelect({
         autoComplete="off"
         placeholder={placeholder}
         value={open ? query : selectedLabel}
+        clearVisible={open ? Boolean(query) : value !== null}
+        onClear={() => {
+          if (!open && value !== null) onChange(null);
+          setQuery("");
+          setActive(0);
+          inputRef.current?.focus();
+        }}
         onFocus={openList}
         onClick={() => !open && openList()}
-        onBlur={() => setOpen(false)}
+        onContainerBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+        }}
         onChange={(event) => {
-          setQuery(event.target.value);
-          setActive(0);
+          const nextQuery = event.target.value;
+          setQuery(nextQuery);
+          setActive(showClearOption && nextQuery.trim() && options.some((option) => matches(option, nextQuery)) ? 1 : 0);
           setOpen(true);
         }}
         onKeyDown={handleKeyDown}
@@ -109,8 +137,12 @@ export function SearchSelect({
       {open && (
         <ul
           id={listId}
+          ref={listRef}
           role="listbox"
-          className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md border border-border bg-surface py-1 shadow-lg"
+          className={cn(
+            "z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-border bg-surface py-1 shadow-lg",
+            inlineList ? "min-h-0 shrink" : "absolute",
+          )}
         >
           {shown.map((option, index) => (
             <li

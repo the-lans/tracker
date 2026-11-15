@@ -35,6 +35,7 @@ class MarkedTaskRow:
     status: TaskStatus
     archived_from_status: TaskStatus | None
     finished_at: datetime | None
+    jira_issue_url: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +117,7 @@ async def select_marked_tasks(
             Task.status,
             Task.archived_from_status,
             Task.finished_at,
+            Task.jira_issue_url,
         )
         .join(TaskDayMark, TaskDayMark.task_id == Task.id)
         .where(TaskDayMark.user_id == user_id, TaskDayMark.day == day)

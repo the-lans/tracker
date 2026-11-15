@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import date
@@ -27,6 +28,7 @@ from services.access import get_personal_or_404
 from services.daily_history import MarkedTask, day_view, previous_day
 from services.errors import ConflictError, ValidationError
 from services.integrity import commit_or_conflict
+from services.system_settings import get_jira_url
 from services.templating import VARIABLE_PATTERN, render_template
 from services.tracker_day import ensure_in_history
 
@@ -62,6 +64,7 @@ BULLET = "• "
 # Событие из календаря — встреча; ручное событие выводится как записано.
 MEETING_PREFIX = "Встреча: "
 _SENTENCE_END = ".!?…"
+_JIRA_KEY_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]*-\d+")
 
 DEFAULT_DAILY_TEMPLATE = """Доброго всем утра!
 
@@ -111,8 +114,14 @@ def _sentence(text: str) -> str:
     return text if text.endswith(tuple(_SENTENCE_END)) else f"{text}."
 
 
-def _task_line(task: MarkedTask) -> str:
-    return _sentence(f"{task.code}: {task.title}")
+def _task_line(task: MarkedTask, jira_url: str | None) -> str:
+    code = task.code
+    href = task.jira_issue_url
+    if href is None and jira_url and _JIRA_KEY_PATTERN.fullmatch(code):
+        href = f"{jira_url.rstrip('/')}/browse/{code}"
+    if href:
+        code = f"[{code}]({href})"
+    return _sentence(f"{code}: {task.title}")
 
 
 def _event_line(event: DailyEvent) -> str:
@@ -138,22 +147,23 @@ async def _render(
 ) -> str:
     view = await day_view(db_session, user=user, day=day, clock=clock, include_hidden=False)
     previous = await previous_day(db_session, user=user, before=day, clock=clock)
+    jira_url = await get_jira_url(db_session)
     context = {
         "daily.date": _format_day(day),
         "daily.previous_date": _format_day(previous.day),
-        "daily.done": _bullets([_task_line(task) for task in previous.done]),
-        "daily.planned": _bullets([_task_line(task) for task in view.tasks]),
+        "daily.done": _bullets([_task_line(task, jira_url) for task in previous.done]),
+        "daily.planned": _bullets([_task_line(task, jira_url) for task in view.tasks]),
         "daily.events": _bullets([_event_line(event) for event in view.events]),
         "daily.previous_events": _bullets([_event_line(event) for event in previous.events]),
         # Раздел 15.8: «Вчера» — сделанные задачи и события прошлого дня,
         # «Сегодня» — события дня, затем отмеченные задачи.
         "daily.yesterday": _bullets(
-            [_task_line(task) for task in previous.done]
+            [_task_line(task, jira_url) for task in previous.done]
             + [_event_line(event) for event in previous.events],
         ),
         "daily.today": _bullets(
             [_event_line(event) for event in view.events]
-            + [_task_line(task) for task in view.tasks],
+            + [_task_line(task, jira_url) for task in view.tasks],
         ),
     }
     return render_template(template, context)

@@ -17,8 +17,10 @@ from db.models.logs import AppLog, NodeLog
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
+from services import task_status
 from services.errors import ConflictError, ValidationError
 from services.node_runs import SESSION_ERROR_MESSAGE
+from services.notifications import NotificationEvent
 from services.task_status import (
     PRE_LAUNCH_STATUSES,
     fail_task_after_error,
@@ -31,6 +33,29 @@ from tests.factories import make_llm_account, make_task
 
 async def _make_task(db_session: AsyncSession, *, status: TaskStatus = TaskStatus.NEW) -> Task:
     return await make_task(db_session, status=status)
+
+
+class TestStopNotification:
+    async def test_manual_stop_sends_stopped_notification(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        events: list[NotificationEvent] = []
+
+        async def record(_session: AsyncSession, *, event: NotificationEvent, task: Task) -> None:
+            events.append(event)
+
+        monkeypatch.setattr(task_status, "notify_task_event", record)
+        task = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
+        await transition_task_status(
+            db_session=db_session,
+            task_id=task.id,
+            from_status=task.status,
+            to_status=TaskStatus.DONE,
+            stopped_by_user=True,
+        )
+        assert events == [NotificationEvent.STOPPED]
 
 
 async def _add_enabled_node(db_session: AsyncSession, task: Task, *, order_index: int) -> Node:
@@ -102,7 +127,7 @@ async def test_allowed_transitions_succeed(
     task = await _make_task(db_session, status=from_status)
 
     updated = await transition_task_status(
-        db_session,
+        db_session=db_session,
         task_id=task.id,
         from_status=from_status,
         to_status=to_status,
@@ -138,7 +163,7 @@ async def test_disallowed_transitions_are_rejected(
 
     with pytest.raises(ValidationError):
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=from_status,
             to_status=to_status,
@@ -151,7 +176,7 @@ async def test_extra_values_are_written_in_the_same_update(db_session: AsyncSess
     await db_session.flush()
 
     updated = await transition_task_status(
-        db_session,
+        db_session=db_session,
         task_id=task.id,
         from_status=TaskStatus.QUEUED,
         to_status=TaskStatus.NEW,
@@ -170,7 +195,7 @@ async def test_failed_reachable_from_paused_and_rebase_conflict(
     task = await _make_task(db_session, status=from_status)
 
     updated = await transition_task_status(
-        db_session,
+        db_session=db_session,
         task_id=task.id,
         from_status=from_status,
         to_status=TaskStatus.FAILED,
@@ -185,7 +210,7 @@ async def test_compare_and_swap_rejects_stale_from_status(db_session: AsyncSessi
     task = await _make_task(db_session, status=TaskStatus.NEW)
     # Кто-то другой уже перевёл задачу в queued до нас.
     await transition_task_status(
-        db_session,
+        db_session=db_session,
         task_id=task.id,
         from_status=TaskStatus.NEW,
         to_status=TaskStatus.QUEUED,
@@ -193,7 +218,7 @@ async def test_compare_and_swap_rejects_stale_from_status(db_session: AsyncSessi
 
     with pytest.raises(ConflictError):
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=TaskStatus.NEW,
             to_status=TaskStatus.QUEUED,
@@ -205,7 +230,7 @@ async def test_failed_transition_requires_order_index(db_session: AsyncSession) 
 
     with pytest.raises(ValidationError):
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=TaskStatus.IN_PROGRESS,
             to_status=TaskStatus.FAILED,
@@ -216,7 +241,7 @@ async def test_failed_transition_records_order_index(db_session: AsyncSession) -
     task = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
 
     updated = await transition_task_status(
-        db_session,
+        db_session=db_session,
         task_id=task.id,
         from_status=TaskStatus.IN_PROGRESS,
         to_status=TaskStatus.FAILED,
@@ -244,7 +269,7 @@ async def test_done_transition_blocked_until_all_enabled_nodes_succeed(
 
     with pytest.raises(ValidationError):
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=TaskStatus.IN_PROGRESS,
             to_status=TaskStatus.DONE,
@@ -269,7 +294,7 @@ async def test_done_transition_succeeds_when_all_enabled_nodes_succeeded(
     await db_session.flush()
 
     updated = await transition_task_status(
-        db_session,
+        db_session=db_session,
         task_id=task.id,
         from_status=TaskStatus.IN_PROGRESS,
         to_status=TaskStatus.DONE,
@@ -284,7 +309,7 @@ async def test_done_transition_succeeds_trivially_with_no_enabled_nodes(
     task = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
 
     updated = await transition_task_status(
-        db_session,
+        db_session=db_session,
         task_id=task.id,
         from_status=TaskStatus.IN_PROGRESS,
         to_status=TaskStatus.DONE,
@@ -465,7 +490,7 @@ class TestRunAfterReset:
 
         with pytest.raises(ValidationError):
             await transition_task_status(
-                db_session,
+                db_session=db_session,
                 task_id=task.id,
                 from_status=TaskStatus.IN_PROGRESS,
                 to_status=TaskStatus.DONE,
@@ -483,7 +508,7 @@ class TestRunAfterReset:
             )
         await db_session.flush()
         updated = await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=TaskStatus.IN_PROGRESS,
             to_status=TaskStatus.DONE,
@@ -511,7 +536,7 @@ class TestArchiveTransitions:
         task = await make_task(db_session, status=from_status)
 
         updated = await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=from_status,
             to_status=to_status,
@@ -540,7 +565,7 @@ class TestArchiveTransitions:
 
         with pytest.raises(ValidationError):
             await transition_task_status(
-                db_session,
+                db_session=db_session,
                 task_id=task.id,
                 from_status=from_status,
                 to_status=to_status,
@@ -576,7 +601,7 @@ class TestFinishedAt:
         before = datetime.now(UTC)
 
         updated = await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=TaskStatus.IN_PROGRESS,
             to_status=to_status,
@@ -591,7 +616,7 @@ class TestFinishedAt:
         task = await make_task(db_session, status=TaskStatus.DONE, finished_at=finished_at)
 
         updated = await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=TaskStatus.DONE,
             to_status=TaskStatus.ARCHIVED,
@@ -625,7 +650,7 @@ class TestFinishedAt:
         )
 
         updated = await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=from_status,
             to_status=to_status,

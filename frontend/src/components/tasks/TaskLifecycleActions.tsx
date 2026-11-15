@@ -10,6 +10,7 @@ import { CLEANED_DATA_LABEL } from "@/lib/labels";
 import { isDuplicable, isFinished } from "@/lib/taskStatusTransitions";
 import { TaskStatus, type Task } from "@/lib/types";
 import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
+import { TaskArchiveButton } from "@/components/tasks/TaskArchiveButton";
 
 type PendingAction = "cleanup" | "clear-context" | null;
 
@@ -45,6 +46,7 @@ export function TaskLifecycleActions({ task }: { task: Task }) {
 
   return (
     <>
+      <TaskArchiveButton task={task} />
       {task.status === TaskStatus.FAILED && (
         <button
           type="button"

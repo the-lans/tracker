@@ -34,7 +34,7 @@ function TaskRepositoryRow({
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-border py-2 first:border-t-0">
-      <div className="min-w-0 flex-1 truncate text-note font-bold" title={name}>
+      <div className="w-full min-w-0 break-words text-note font-bold [overflow-wrap:anywhere]" title={name}>
         {name}
       </div>
       {taskRepository.cloned_at === null && <Badge>ещё не склонирован</Badge>}
@@ -51,9 +51,11 @@ function TaskRepositoryRow({
           }
         />
       )}
-      <div className="flex w-full items-center gap-1.5 font-mono text-meta text-text-3">
-        <GitBranch className="size-3" />
-        {taskRepository.branch_name} ← {taskRepository.base_branch}
+      <div className="flex w-full min-w-0 flex-wrap items-center gap-1.5 font-mono text-meta text-text-3">
+        <GitBranch className="size-3 shrink-0" />
+        <span className="min-w-0 [overflow-wrap:anywhere]">
+          {taskRepository.branch_name} ← {taskRepository.base_branch}
+        </span>
         <span className="ml-auto font-sans">{MERGE_STATUS_LABELS[taskRepository.merge_status]}</span>
       </div>
     </div>

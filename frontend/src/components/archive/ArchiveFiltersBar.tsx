@@ -1,7 +1,8 @@
-import { Search, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { X } from "lucide-react";
+import { SearchInput } from "@/components/common/inputs/SearchInput";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { HEADER_BUTTON } from "@/styles/classes";
 
 export interface ArchiveFiltersValue {
   search: string;
@@ -23,17 +24,15 @@ export function ArchiveFiltersBar({
 
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
-      <label className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-surface-2 px-3 text-body-lg text-text-3 sm:basis-64">
-        <Search className="size-4 shrink-0" />
-        <input
-          type="search"
-          aria-label="Найти задачу по коду или названию"
-          className="h-11 min-w-0 flex-1 bg-transparent text-text outline-none placeholder:text-text-3"
-          placeholder="Код или название задачи..."
-          value={value.search}
-          onChange={(event) => onChange({ search: event.target.value })}
-        />
-      </label>
+      <SearchInput
+        type="search"
+        aria-label="Найти задачу по коду или названию"
+        containerClassName="flex-1 sm:basis-64"
+        placeholder="Код или название задачи..."
+        value={value.search}
+        onChange={(event) => onChange({ search: event.target.value })}
+        onClear={() => onChange({ search: "" })}
+      />
       <div className="grid grid-cols-2 gap-2 sm:flex">
         <div className="flex min-w-0 flex-col gap-1">
           <Label htmlFor="archive-from" className="text-meta font-normal text-text-3">
@@ -64,10 +63,10 @@ export function ArchiveFiltersBar({
         </div>
       </div>
       {filtered && (
-        <Button variant="ghost" className="h-11 self-start sm:self-end" onClick={onReset}>
+        <button type="button" className={`${HEADER_BUTTON} h-11 self-start sm:self-end`} onClick={onReset}>
           <X className="size-4" />
           Сбросить
-        </Button>
+        </button>
       )}
     </div>
   );

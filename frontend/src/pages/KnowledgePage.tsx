@@ -13,6 +13,7 @@ import { useKnowledgeActions } from "@/hooks/useKnowledgeActions";
 import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import type { KnowledgeEntry, KnowledgeSection, KnowledgeVersion } from "@/lib/knowledge.types";
+import { SearchInput } from "@/components/common/inputs/SearchInput";
 
 export function KnowledgePage() {
   const admin = useIsAdmin();
@@ -74,7 +75,8 @@ export function KnowledgePage() {
           <option value="">Выберите раздел</option>
           {sections.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select></label>
-        <Input aria-label="Поиск файлов" placeholder="Поиск по названию и содержимому" value={filter} onChange={(event) => setFilter(event.target.value)} />
+        <SearchInput aria-label="Поиск файлов" placeholder="Поиск по названию и содержимому" value={filter}
+          onChange={(event) => setFilter(event.target.value)} onClear={() => setFilter("")} />
         <label><input type="checkbox" checked={trash} onChange={(event) => setTrash(event.target.checked)} /> Корзина</label>
         <KnowledgeTree entries={files.data?.filter((file) => Boolean(file.deleted_at) === trash) ?? []}
           onOpen={(file) => guard(() => { void open(file); })} />

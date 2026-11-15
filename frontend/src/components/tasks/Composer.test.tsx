@@ -113,6 +113,22 @@ describe("Composer", () => {
   });
 
   describe("отправка", () => {
+    test("Enter отправляет сообщение, Ctrl + Enter вставляет строку в позиции курсора", async ({ api }) => {
+      const { user, field } = await openComposer();
+      await user.type(field, "ПерваяВторая");
+      (field as HTMLTextAreaElement).setSelectionRange(6, 6);
+      await user.keyboard("{Control>}{Enter}{/Control}");
+      expect(field).toHaveValue("Первая\nВторая");
+      expect(api.mutations()).toEqual([]);
+      expect(screen.getByRole("button", { name: "Отправить" })).toHaveAttribute(
+        "title", "Enter — отправить; Ctrl + Enter — новая строка",
+      );
+      await user.keyboard("{Enter}");
+      expect(api.mutations()).toEqual([
+        { method: "POST", path: FREEFORM_PATH, body: { raw_prompt_text: "Первая\nВторая" } },
+      ]);
+    });
+
     test.for(["", "   "])("текст «%s» отправить нельзя", async (text) => {
       const { user, field } = await openComposer();
 

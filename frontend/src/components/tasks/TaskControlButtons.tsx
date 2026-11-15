@@ -27,9 +27,7 @@ const PAUSABLE_LIMIT_WAIT_FROM: (TaskStatus | null | undefined)[] = [
 ];
 
 const STOP_DESCRIPTION =
-  "Текущее обращение к сессии будет прервано, задача перейдёт в статус «Ошибка». Продолжить можно кнопкой «Перезапустить с текущей ноды».";
-const STOP_CHAT_WAIT_DESCRIPTION =
-  "Ожидание лимита прекратится, задача останется в статусе «Уточняется».";
+  "Текущее выполнение будет прервано, оставшиеся ноды и автоматический пуш не выполнятся. Задача перейдёт в статус «Готово».";
 
 /** Раздел 14.2: действия пользователя, доступные в текущем статусе задачи. */
 export function TaskControlButtons({ task }: { task: Task }) {
@@ -45,7 +43,6 @@ export function TaskControlButtons({ task }: { task: Task }) {
     task.status === TaskStatus.IN_PROGRESS ||
     (limitWait && PAUSABLE_LIMIT_WAIT_FROM.includes(task.limit_wait_from_status));
   const canStop = task.status === TaskStatus.IN_PROGRESS || task.status === TaskStatus.PAUSED || limitWait;
-  const chatWait = limitWait && task.limit_wait_from_status === TaskStatus.REFINING;
   const preLaunch = isPreLaunch(task.status);
   const { data: llmLimit } = useLlmLimit(task.created_by, preLaunch);
   const launchWaitUntil = preLaunch ? llmLimit?.wait_until : null;
@@ -178,7 +175,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
         open={stopConfirmOpen}
         onOpenChange={setStopConfirmOpen}
         title="Остановить задачу?"
-        description={chatWait ? STOP_CHAT_WAIT_DESCRIPTION : STOP_DESCRIPTION}
+        description={STOP_DESCRIPTION}
         confirmLabel="Остановить"
         danger
         pending={stopTask.isPending}

@@ -7,6 +7,13 @@ import { renderWithProviders } from "@/test/renderWithProviders";
 const TABLE = "Итог:\n\n| Файл | Тестов |\n|:---|---:|\n| **`calc.py`** | 9 |";
 
 describe("AgentMessageText", () => {
+  test("ссылки в тексте, markdown и таблице кликабельны, код остаётся кодом", () => {
+    renderWithProviders(<AgentMessageText text={'Ссылка https://example.com/a?q=1. [Jira](https://example.org/b) `https://example.net/code`\n\n| Сервис | Адрес |\n|---|---|\n| Оплата | https://example.com/pay |'} />);
+    expect(screen.getByRole("link", { name: "https://example.com/a?q=1" })).toHaveAttribute("href", "https://example.com/a?q=1");
+    expect(screen.getByRole("link", { name: "Jira" })).toHaveAttribute("href", "https://example.org/b");
+    expect(screen.getByRole("link", { name: "https://example.com/pay" })).toHaveAttribute("target", "_blank");
+    expect(screen.queryByRole("link", { name: "https://example.net/code" })).not.toBeInTheDocument();
+  });
   test("таблица — с шапкой, ячейками и выравниванием колонок", () => {
     renderWithProviders(<AgentMessageText text={TABLE} />);
 

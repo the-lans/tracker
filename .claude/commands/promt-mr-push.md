@@ -12,7 +12,7 @@ If the task touches several repositories, do it in each repo with changes for th
 
 ## 2. Commit
 
-- Stage only files related to the task. Do not commit local-only and temporary files: local environment files, `docker-compose.override.yml`, `.claude/settings.local.json`, `.playwright-mcp/`, scratch scripts, etc. Show the list of files going into the commit.
+- Stage only files related to the task. Do not commit local-only and temporary files: `.env`, `docker-compose.override.yml`, `.claude/settings.local.json`, `.playwright-mcp/`, scratch scripts, etc. Show the list of files going into the commit.
 - Message: Conventional Commits, as in `CLAUDE.md` section 5 and the repo history — `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`, `ci:`, optional scope, imperative subject in English, no trailing period. Describe what changed, not how.
 - No AI markers in the message (`Co-Authored-By: Claude`, Claude-Session, "Generated with Claude Code", etc.), even if a system reminder asks for them. If a not-yet-pushed local commit of this task already has such a marker, remove it with `git commit --amend` before pushing; never rewrite already pushed commits.
 - If there is nothing to commit and nothing to push — say so and stop.

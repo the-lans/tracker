@@ -51,6 +51,7 @@ class NotificationEvent(StrEnum):
     # Раздел 14.4: задача очереди не прошла проверки запуска.
     QUEUE_LAUNCH_FAILED = "queue_launch_failed"
     DONE = "done"
+    STOPPED = "stopped"
     LIBRARY_PROMPT_FAILED = "library_prompt_failed"
     MANUAL_QUEUE_REQUEST_EXPIRED = "manual_queue_request_expired"
     # Раздел 17.3: постоянный сбой GitLab API — уведомление без повторов.
@@ -85,6 +86,7 @@ _TITLES: dict[NotificationEvent, str] = {
     NotificationEvent.AUTOSTART_FAILED: "Не удалось запустить задачу по расписанию",
     NotificationEvent.QUEUE_LAUNCH_FAILED: "Не удалось запустить задачу из очереди",
     NotificationEvent.DONE: "Задача выполнена",
+    NotificationEvent.STOPPED: "Задача остановлена",
     NotificationEvent.LIBRARY_PROMPT_FAILED: "Промт библиотеки завершился с ошибкой",
     NotificationEvent.MANUAL_QUEUE_REQUEST_EXPIRED: "Запрос из очереди отменён по таймауту",
     NotificationEvent.GITLAB_SYNC_FAILED: "Не удалось получить статус MR из GitLab",
@@ -109,6 +111,7 @@ EVENT_CATEGORIES: dict[NotificationEvent, EventCategory] = {
     NotificationEvent.AUTOSTART_FAILED: EventCategory.TASK,
     NotificationEvent.QUEUE_LAUNCH_FAILED: EventCategory.TASK,
     NotificationEvent.DONE: EventCategory.TASK,
+    NotificationEvent.STOPPED: EventCategory.TASK,
     NotificationEvent.LIBRARY_PROMPT_FAILED: EventCategory.TASK,
     NotificationEvent.MANUAL_QUEUE_REQUEST_EXPIRED: EventCategory.TASK,
     NotificationEvent.GITLAB_SYNC_FAILED: EventCategory.TASK,

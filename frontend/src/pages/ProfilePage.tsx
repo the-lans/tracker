@@ -1,3 +1,4 @@
+import { PageTabs, type PageTab } from "@/components/common/navigation/PageTabs";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ActiveSessionsCard } from "@/components/profile/ActiveSessionsCard";
 import { LogoutActions } from "@/components/profile/LogoutActions";
@@ -17,35 +18,61 @@ export function ProfilePage() {
   const { user } = useAuth();
   if (!user) return null;
 
+  const tabs: PageTab[] = [
+    {
+      value: "account",
+      label: "Аккаунт и безопасность",
+      content: (
+        <div className="flex max-w-lg flex-col gap-4">
+          <Card className="flex min-w-0 items-center gap-3.5">
+            <UserAvatar email={user.email} size="lg" />
+            <div className="min-w-0">
+              <div className="break-words font-bold">{user.email}</div>
+              <div className="text-small text-text-3">{USER_ROLE_LABEL[user.role]}</div>
+            </div>
+          </Card>
+          <ActiveSessionsCard />
+          <LogoutActions />
+        </div>
+      ),
+    },
+    {
+      value: "connections",
+      label: "Подключения",
+      content: (
+        <div className="flex max-w-lg flex-col gap-4">
+          <JiraConnectionCard />
+          <GoogleCalendarCard />
+        </div>
+      ),
+    },
+    {
+      value: "files",
+      label: "Доступ к файлам",
+      content: (
+        <div className="flex max-w-lg flex-col gap-4">
+          <SshKeyCard />
+          <SftpConnectionCard />
+        </div>
+      ),
+    },
+    {
+      value: "agent",
+      label: "Настройки агента",
+      content: (
+        <div className="flex max-w-lg flex-col gap-4">
+          <LlmThresholdsCard />
+          <LlmCompactSwitchCard />
+        </div>
+      ),
+    },
+  ];
+
   return (
     <div className={PAGE_ROOT}>
       <PageHeader title="Профиль" />
       <div className={PAGE_BODY}>
-        <div className="flex max-w-lg flex-col gap-4">
-          <Card className="flex items-center gap-3.5">
-            <UserAvatar email={user.email} size="lg" />
-            <div>
-              <div className="font-bold">{user.email}</div>
-              <div className="text-small text-text-3">{USER_ROLE_LABEL[user.role]}</div>
-            </div>
-          </Card>
-
-          <SshKeyCard />
-
-          <SftpConnectionCard />
-
-          <JiraConnectionCard />
-
-          <GoogleCalendarCard />
-
-          <LlmThresholdsCard />
-
-          <LlmCompactSwitchCard />
-
-          <ActiveSessionsCard />
-
-          <LogoutActions />
-        </div>
+        <PageTabs tabs={tabs} />
       </div>
     </div>
   );

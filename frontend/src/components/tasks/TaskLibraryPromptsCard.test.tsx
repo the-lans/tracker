@@ -42,6 +42,21 @@ const stopButton = () => screen.findByRole("button", { name: "Остановит
 
 describe("TaskLibraryPromptsCard", () => {
   describe("запуск ▶", () => {
+    test.for([LibraryPromptRunStatus.QUEUED, LibraryPromptRunStatus.RUNNING])(
+      "на паузе активный промт $0 нельзя запустить повторно, его можно остановить",
+      async (status, { api }) => {
+        renderCard(api, [makeLibraryPrompt({ last_run_status: status, active_request_id: "mq1" })], { status: TaskStatus.PAUSED });
+        expect(await runButton()).toBeDisabled();
+        expect(await stopButton()).toBeEnabled();
+      },
+    );
+
+    test("на паузе завершённый промт можно выполнить снова", async ({ api }) => {
+      renderCard(api, [makeLibraryPrompt({ last_run_status: LibraryPromptRunStatus.STOPPED })], { status: TaskStatus.PAUSED });
+      expect(await runButton()).toBeEnabled();
+      expect(await stopButton()).toBeDisabled();
+    });
+
     test.for([
       { status: TaskStatus.IN_PROGRESS, llm: "acc1", type: NodeType.PLAIN_PROMPT, reason: null },
       { status: TaskStatus.PAUSED, llm: "acc1", type: NodeType.SLASH_COMMAND, reason: null },
@@ -161,6 +176,24 @@ describe("TaskLibraryPromptsCard", () => {
   });
 
   describe("добавление из библиотеки", () => {
+    test("поиск по имени команды выбирает промт с клавиатуры", async ({ api }) => {
+      const nodes = [
+        makeNode({ id: "l1", name: "Ревью безопасности", slash_name: "review", is_library_item: true }),
+        makeNode({ id: "l2", name: "Тестирование", slash_name: "verify", is_library_item: true }),
+      ];
+      api.respond(`GET ${PROMPTS_PATH}`, []);
+      const { user } = renderWithProviders(
+        <TaskLibraryPromptsCard task={makeTask()} libraryNodes={nodes} />,
+      );
+      await user.click(screen.getByRole("button", { name: "Добавить промт из библиотеки" }));
+      const dialog = screen.getByRole("dialog");
+      await user.click(within(dialog).getByRole("combobox", { name: "Промт библиотеки" }));
+      expect(within(dialog).queryByRole("option", { name: "Выберите промт" })).not.toBeInTheDocument();
+      await user.type(within(dialog).getByRole("combobox", { name: "Промт библиотеки" }), "verify{Enter}");
+      await user.click(within(dialog).getByRole("button", { name: "Добавить" }));
+      expect(api.mutations()).toEqual([{ method: "POST", path: PROMPTS_PATH, body: { node_id: "l2" } }]);
+    });
+
     test("«Добавить» активна только после выбора промта", async ({ api }) => {
       const { user } = renderCard(api, []);
 

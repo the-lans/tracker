@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { screen, within } from "@testing-library/react";
 import { describe, expect, vi } from "vitest";
 import { CreateTaskDialog } from "@/components/tasks/CreateTaskDialog";
@@ -313,6 +314,98 @@ describe("CreateTaskDialog", () => {
   });
 
   describe("импорт из Jira", () => {
+    test("повторное открытие показывает сохранённый ключ, его очистка снимает привязку", async ({ api }) => {
+      withJira(api);
+      api.respond("POST /tasks", makeTask({ id: "t9" }));
+      function Form() {
+        const [open, setOpen] = useState(true);
+        return <><button onClick={() => setOpen(true)}>Открыть форму</button><CreateTaskDialog open={open} onOpenChange={setOpen} /></>;
+      }
+      const { user } = renderWithProviders(<Form />);
+      await user.type(await screen.findByLabelText("Ключ задачи Jira"), "RR-15592");
+      await user.type(screen.getByLabelText("Название"), "Название");
+      await user.type(screen.getByLabelText("Описание"), "Описание");
+      await user.click(screen.getByRole("button", { name: "Отмена" }));
+      await user.click(screen.getByRole("button", { name: "Открыть форму" }));
+      expect(await screen.findByLabelText("Ключ задачи Jira")).toHaveValue("RR-15592");
+      await user.clear(screen.getByLabelText("Ключ задачи Jira"));
+      await user.type(screen.getByLabelText("Код задачи"), "local-task");
+      await user.click(screen.getByRole("button", { name: /^Создать$/ }));
+      expect(createRequest(api)?.body).toMatchObject({ code: "local-task", jira_issue_key: null });
+    });
+
+    test("после смены ключа очищает импортированные поля и сохраняет новую привязку", async ({ api }) => {
+      withJira(api);
+      api.respond("GET /jira/issues/RR-12370", jiraDraft);
+      const { user } = renderDialog(api);
+      const key = await screen.findByLabelText("Ключ задачи Jira");
+      await user.type(key, "RR-12370");
+      await user.click(screen.getByRole("button", { name: /Заполнить из Jira/ }));
+      await screen.findByDisplayValue(jiraDraft.title);
+      await user.clear(key);
+      await user.type(key, "RR-456");
+      expect(screen.getByLabelText("Код задачи")).toHaveValue("RR-456");
+      expect(screen.queryByText(/Заполнено из/)).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Название")).toHaveValue("");
+      expect(screen.getByLabelText("Описание")).toHaveValue("");
+      await user.type(screen.getByLabelText("Описание"), "Новое описание");
+      await user.type(screen.getByLabelText("Название"), "Новая задача");
+      await user.click(screen.getByRole("button", { name: "Создать" }));
+      expect(createRequest(api)?.body).toMatchObject({ code: "RR-456", jira_issue_key: "RR-456" });
+    });
+    test("смена ключа сохраняет ручную правку импортированного названия", async ({ api }) => {
+      withJira(api);
+      api.respond("GET /jira/issues/RR-12370", jiraDraft);
+      const { user } = renderDialog(api);
+      const key = await screen.findByLabelText("Ключ задачи Jira");
+      await user.type(key, "RR-12370");
+      await user.click(screen.getByRole("button", { name: /Заполнить из Jira/ }));
+      await screen.findByDisplayValue(jiraDraft.title);
+      await user.clear(screen.getByLabelText("Название"));
+      await user.type(screen.getByLabelText("Название"), "Моё название");
+      await user.clear(key);
+      await user.type(key, "RR-456");
+      expect(screen.getByLabelText("Название")).toHaveValue("Моё название");
+      expect(screen.getByLabelText("Описание")).toHaveValue("");
+      await user.type(screen.getByLabelText("Описание"), "Новое описание");
+      await user.click(screen.getByRole("button", { name: "Создать" }));
+      expect(createRequest(api)?.body).toMatchObject({ jira_issue_key: "RR-456", title: "Моё название" });
+    });
+
+    test("ключ Jira заполняет пустой код по мере ввода и редактирования", async ({ api }) => {
+      withJira(api);
+      const { user } = renderDialog(api);
+      const key = await screen.findByLabelText("Ключ задачи Jira");
+      await user.type(key, "RR-15592");
+      expect(screen.getByLabelText("Код задачи")).toHaveValue("RR-15592");
+      await user.clear(key);
+      await user.type(key, "RR-12370");
+      expect(screen.getByLabelText("Код задачи")).toHaveValue("RR-12370");
+    });
+
+    test("ручной код сохраняется при изменении ключа и импорте Jira", async ({ api }) => {
+      withJira(api);
+      api.respond("GET /jira/issues/RR-12370", jiraDraft);
+      const { user } = renderDialog(api);
+      await user.type(screen.getByLabelText("Код задачи"), "my-task");
+      await user.type(await screen.findByLabelText("Ключ задачи Jira"), "RR-12370");
+      expect(screen.getByLabelText("Код задачи")).toHaveValue("my-task");
+      await user.click(screen.getByRole("button", { name: /Заполнить из Jira/ }));
+      await expect.poll(() => screen.getByLabelText("Название")).toHaveValue(jiraDraft.title);
+      expect(screen.getByLabelText("Код задачи")).toHaveValue("my-task");
+    });
+
+    test("ручная правка автозаполненного кода отключает его синхронизацию", async ({ api }) => {
+      withJira(api);
+      const { user } = renderDialog(api);
+      const key = await screen.findByLabelText("Ключ задачи Jira");
+      await user.type(key, "RR-15592");
+      await user.type(screen.getByLabelText("Код задачи"), "-custom");
+      await user.clear(key);
+      await user.type(key, "RR-12370");
+      expect(screen.getByLabelText("Код задачи")).toHaveValue("RR-15592-custom");
+    });
+
     test("заполняет форму, а создание передаёт ключ для ссылки и вложений", async ({ api }) => {
       withJira(api);
       api.respond("GET /jira/issues/RR-12370", jiraDraft);

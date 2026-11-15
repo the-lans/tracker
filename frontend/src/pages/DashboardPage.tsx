@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { ListTodo, Plus, Search, SearchX } from "lucide-react";
+import { ListTodo, Plus, SearchX } from "lucide-react";
+import { SearchInput } from "@/components/common/inputs/SearchInput";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { NotificationBell } from "@/components/layout/NotificationBell";
 import { TaskCard } from "@/components/tasks/TaskCard";
@@ -117,16 +118,14 @@ export function DashboardPage() {
         title="Дашборд"
         actions={
           <>
-            <label className="hidden min-h-11 items-center gap-2 rounded-md border border-border bg-surface-2 px-3 text-body-lg text-text-3 md:flex">
-              <Search className="size-4" />
-              <input
-                aria-label="Найти задачу по коду или названию"
-                className="h-11 w-56 bg-transparent outline-none placeholder:text-text-3"
-                placeholder="Код или название задачи..."
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </label>
+            <SearchInput
+              aria-label="Найти задачу по коду или названию"
+              containerClassName="hidden w-64 md:flex"
+              placeholder="Код или название задачи..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onClear={() => setSearch("")}
+            />
             <NotificationBell />
             <Button aria-label="Новая задача" onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
@@ -134,38 +133,40 @@ export function DashboardPage() {
             </Button>
           </>
         }
-      />
-
-      <QueueSummaryLine />
-      {/* На телефоне ряды фильтров ниже; отступ 12px — зоны нажатия 44px соседних рядов не перекрываются. */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-3 px-5 pb-4 md:gap-2 lg:px-8">
+      >
+        <QueueSummaryLine />
+      </PageHeader>
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-2 px-5 pb-3 sm:gap-2 sm:pb-4 lg:px-8">
         {FILTERS.map((filterDef) => (
           <ToggleChip
             key={filterDef.key}
+            size="compact"
             pressed={filter === filterDef.key}
             onToggle={() => setFilter(filterDef.key)}
           >
             {filterDef.label} · {counts[filterDef.key]}
           </ToggleChip>
         ))}
-        <FilterSelect
-          value={categoryFilter}
-          onChange={setChosenCategory}
-          values={[WITHOUT_CATEGORY, ...(categories ?? []).map((category) => category.id)]}
-          labels={categoryLabels}
-          allLabel="Все категории"
-          label="Категория"
-          className="w-40 md:w-48"
-        />
-        <FilterSelect
-          value={markDayKey}
-          onChange={setMarkDayKey}
-          values={MARK_DAY_KEYS}
-          labels={MARK_DAY_LABEL}
-          allLabel="Все дни"
-          label="Отмечены на день"
-          className="w-32 md:w-36"
-        />
+        <div className="flex w-full gap-1.5 sm:w-auto sm:gap-2">
+          <FilterSelect
+            value={categoryFilter}
+            onChange={setChosenCategory}
+            values={[WITHOUT_CATEGORY, ...(categories ?? []).map((category) => category.id)]}
+            labels={categoryLabels}
+            allLabel="Все категории"
+            label="Категория"
+            className="min-w-0 flex-1 sm:w-48 sm:flex-none"
+          />
+          <FilterSelect
+            value={markDayKey}
+            onChange={setMarkDayKey}
+            values={MARK_DAY_KEYS}
+            labels={MARK_DAY_LABEL}
+            allLabel="Все дни"
+            label="Отмечены на день"
+            className="min-w-0 flex-1 sm:w-36 sm:flex-none"
+          />
+        </div>
       </div>
 
       <div className={PAGE_BODY}>

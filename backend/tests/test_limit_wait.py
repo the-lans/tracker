@@ -191,12 +191,31 @@ class TestLeaveLimitWait:
 
 
 class TestStopLimitWait:
+    async def test_stop_cancels_queued_request(self, db_session: AsyncSession) -> None:
+        task = await _waiting(db_session, TaskStatus.IN_PROGRESS)
+        request = TaskManualRequestQueue(
+            task_id=task.id,
+            request_type=ManualRequestType.FREEFORM_PROMPT,
+            raw_prompt_text="вопрос",
+            requested_by=task.created_by,
+            status=ManualRequestStatus.QUEUED,
+            requested_at=_NOW,
+        )
+        db_session.add(request)
+        await db_session.flush()
+
+        await stop_limit_wait(db_session, task=task)
+        await db_session.refresh(request)
+
+        assert request.status is ManualRequestStatus.CANCELLED
+        assert request.processed_at is not None
+
     @pytest.mark.parametrize(
         ("from_status", "status", "restart"),
         [
-            (TaskStatus.IN_PROGRESS, TaskStatus.FAILED, 3),
-            (TaskStatus.PAUSED, TaskStatus.FAILED, 3),
-            (TaskStatus.REFINING, TaskStatus.REFINING, None),
+            (TaskStatus.IN_PROGRESS, TaskStatus.DONE, None),
+            (TaskStatus.PAUSED, TaskStatus.DONE, None),
+            (TaskStatus.REFINING, TaskStatus.DONE, None),
         ],
     )
     async def test_stopped(

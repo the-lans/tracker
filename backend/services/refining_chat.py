@@ -82,7 +82,7 @@ async def settle_chat_after_error(
     if task is not None and task.status in REFINING_DECISION_STATUSES:
         try:
             await transition_task_status(
-                db_session,
+                db_session=db_session,
                 task_id=task_id,
                 from_status=task.status,
                 to_status=TaskStatus.REFINING,

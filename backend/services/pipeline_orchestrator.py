@@ -98,6 +98,7 @@ class NodeRunOutcome:
 class CheckpointDecision(StrEnum):
     CONTINUE = "continue"
     STOP = "stop"
+    FAIL = "fail"
 
 
 # Вызывается перед каждой включённой нодой с её `order_index`: здесь
@@ -503,12 +504,12 @@ async def run_pipeline(
     for task_node, node in _nodes_to_run(rows, start_after_order_index=start_after_order_index):
         if checkpoint is not None:
             decision = await checkpoint(task_node.order_index)
-            if decision is CheckpointDecision.STOP:
+            if decision is not CheckpointDecision.CONTINUE:
                 logger.info("pipeline_stopped_at_checkpoint", order_index=task_node.order_index)
                 return PipelineRunOutcome(
                     completed=False,
                     failed_order_index=task_node.order_index,
-                    stopped=True,
+                    stopped=decision is CheckpointDecision.STOP,
                 )
 
         if node.node_type is NodeType.CLEAR_CONTEXT:
@@ -550,13 +551,14 @@ async def run_pipeline(
             and await _should_pause_after(db_session, task_node)
         ):
             logger.info("pipeline_paused_after_node", order_index=task_node.order_index)
-            if await pause_after_node() is CheckpointDecision.STOP:
+            decision = await pause_after_node()
+            if decision is not CheckpointDecision.CONTINUE:
                 # Раздел 13.2, 14.1: перезапуск продолжит сразу за этой нодой —
                 # туда же можно вставить свой промт.
                 return PipelineRunOutcome(
                     completed=False,
                     failed_order_index=task_node.order_index + 1,
-                    stopped=True,
+                    stopped=decision is CheckpointDecision.STOP,
                 )
 
     return PipelineRunOutcome(completed=True)

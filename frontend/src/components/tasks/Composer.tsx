@@ -51,6 +51,7 @@ export function Composer({
   const { data: queue } = useManualQueue(taskId);
   const refining = taskStatus === TaskStatus.REFINING;
   const acceptsRequests = MANUAL_REQUEST_STATUSES.includes(taskStatus) || refining;
+  const sendDisabled = !text.trim() || submitFreeform.isPending || runCommand.isPending || (!isCommand && !llmAvailable);
   const queuedFreeform = (queue ?? []).filter(
     (request) =>
       (request.request_type === ManualRequestType.FREEFORM_PROMPT || request.command_name) &&
@@ -208,14 +209,24 @@ export function Composer({
               aria-controls={showCommands ? "task-command-options" : undefined}
               aria-activedescendant={showCommands && commands[selectedIndex] ? `task-command-${selectedIndex}` : undefined}
               onKeyDown={(event) => {
-                if (!showCommands || commands.length === 0) return;
-                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                if (event.nativeEvent.isComposing) return;
+                if (event.key === "Enter" && event.ctrlKey && !event.metaKey && !event.altKey) {
+                  event.preventDefault();
+                  const field = event.currentTarget;
+                  const start = field.selectionStart;
+                  const end = field.selectionEnd;
+                  handleTextChange(text.slice(0, start) + "\n" + text.slice(end));
+                  requestAnimationFrame(() => field.setSelectionRange(start + 1, start + 1));
+                } else if (showCommands && commands.length > 0 && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
                   event.preventDefault();
                   setSelectedIndex((index) => (index + (event.key === "ArrowDown" ? 1 : commands.length - 1)) % commands.length);
-                } else if (event.key === "Enter" || event.key === "Tab") {
+                } else if (showCommands && commands.length > 0 && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.altKey))) {
                   event.preventDefault(); chooseCommand(commands[selectedIndex] ?? commands[0]);
-                } else if (event.key === "Escape") {
+                } else if (showCommands && commands.length > 0 && event.key === "Escape") {
                   event.preventDefault(); handleTextChange(text + " ");
+                } else if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+                  event.preventDefault();
+                  if (!sendDisabled && !event.repeat) handleSend();
                 }
               }}
               rows={2}
@@ -236,7 +247,8 @@ export function Composer({
             <Button
               size="icon"
               aria-label="Отправить"
-              disabled={!text.trim() || submitFreeform.isPending || runCommand.isPending || (!isCommand && !llmAvailable)}
+              title="Enter — отправить; Ctrl + Enter — новая строка"
+              disabled={sendDisabled}
               onClick={() => handleSend()}
             >
               <Send className="size-4" />

@@ -502,9 +502,11 @@ async def test_run_pipeline_saves_session_id_after_first_turn(
     assert task.session_id == "sess-new"
 
 
+@pytest.mark.parametrize("decision", [CheckpointDecision.STOP, CheckpointDecision.FAIL])
 async def test_checkpoint_runs_before_each_enabled_node_and_can_stop(
     db_session: AsyncSession,
     tmp_path: Path,
+    decision: CheckpointDecision,
 ) -> None:
     task = await _make_task_with_pipeline(db_session)
     await _add_node(
@@ -526,7 +528,7 @@ async def test_checkpoint_runs_before_each_enabled_node_and_can_stop(
 
     async def checkpoint(order_index: int) -> CheckpointDecision:
         seen.append(order_index)
-        return CheckpointDecision.STOP if order_index == 2 else CheckpointDecision.CONTINUE
+        return decision if order_index == 2 else CheckpointDecision.CONTINUE
 
     outcome = await run_pipeline(
         db_session,
@@ -538,7 +540,7 @@ async def test_checkpoint_runs_before_each_enabled_node_and_can_stop(
 
     assert seen == [0, 2]
     assert fake.queries == ["шаг 0"]
-    assert outcome.stopped is True
+    assert outcome.stopped is (decision is CheckpointDecision.STOP)
     assert outcome.completed is False
     assert outcome.failed_order_index == 2
 
@@ -1102,7 +1104,7 @@ class TestCustomTaskNode:
 
         with pytest.raises(ValidationError):
             await transition_task_status(
-                db_session,
+                db_session=db_session,
                 task_id=task.id,
                 from_status=TaskStatus.IN_PROGRESS,
                 to_status=TaskStatus.DONE,

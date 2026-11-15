@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { screen } from "@testing-library/react";
 import { describe, expect, vi } from "vitest";
 import { JiraImportField } from "@/components/tasks/JiraImportField";
@@ -24,7 +25,11 @@ function renderField(api: MockedApi, { jiraUrl = JIRA_URL as string | null, toke
   api.respond("GET /jira/server", { jira_url: jiraUrl });
   api.respond("GET /profile", makeUser({ jira_token_set: tokenSet }));
   const onImported = vi.fn();
-  return { ...renderWithProviders(<JiraImportField onImported={onImported} />), onImported };
+  function ControlledField() {
+    const [key, setKey] = useState("");
+    return <JiraImportField value={key} onKeyChange={setKey} onImported={onImported} />;
+  }
+  return { ...renderWithProviders(<ControlledField />), onImported };
 }
 
 const fillButton = () => screen.getByRole("button", { name: /Заполнить из Jira/ });
@@ -43,7 +48,7 @@ describe("JiraImportField", () => {
     test("без личного токена — ссылка на профиль", async ({ api }) => {
       renderField(api, { tokenSet: false });
 
-      expect(await screen.findByRole("link", { name: "профиле" })).toHaveAttribute("href", "/profile");
+      expect(await screen.findByRole("link", { name: "профиле" })).toHaveAttribute("href", "/profile?tab=connections");
       expect(screen.queryByLabelText("Ключ задачи Jira")).not.toBeInTheDocument();
     });
 

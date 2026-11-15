@@ -6,6 +6,12 @@ export function AgentInline({ parts }: { parts: InlinePart[] }) {
   return (
     <>
       {parts.map((part, index) => {
+        if (part.kind === "link") return (
+          <a key={index} href={part.href} target="_blank" rel="noopener noreferrer"
+            className={cn("break-all text-accent underline underline-offset-2 hover:text-accent-hov", part.bold && "font-bold")}>
+            {part.text}
+          </a>
+        );
         if (part.kind === "bold") return <strong key={index} className="font-bold text-text">{part.text}</strong>;
         if (part.kind === "code")
           return (

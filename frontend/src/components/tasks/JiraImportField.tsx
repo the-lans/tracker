@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,13 +16,18 @@ import type { JiraIssueDraft } from "@/lib/types";
  */
 export function JiraImportField({
   onImported,
+  value: key,
+  onKeyChange,
 }: {
   onImported: (draft: JiraIssueDraft) => void;
+  value: string;
+  onKeyChange: (key: string) => void;
 }) {
   const { data: profile } = useProfile();
   const { data: server } = useJiraServer();
   const fetchDraft = useJiraIssueDraft();
-  const [key, setKey] = useState("");
+  const keyRef = useRef(key);
+  useEffect(() => { keyRef.current = key; }, [key]);
   const [imported, setImported] = useState<JiraIssueDraft | null>(null);
 
   if (server && !server.jira_url) {
@@ -37,7 +42,7 @@ export function JiraImportField({
     return (
       <div className="text-meta text-text-3">
         Чтобы заполнять задачу из Jira, добавьте личный токен Jira в{" "}
-        <Link to="/profile" className="text-accent underline">
+        <Link to="/profile?tab=connections" className="text-accent underline">
           профиле
         </Link>
         .
@@ -46,8 +51,10 @@ export function JiraImportField({
   }
 
   function handleImport() {
-    fetchDraft.mutate(key, {
+    const requestedKey = key.trim();
+    fetchDraft.mutate(requestedKey, {
       onSuccess: (draft) => {
+        if (keyRef.current.trim() !== requestedKey) return;
         setImported(draft);
         onImported(draft);
       },
@@ -64,7 +71,11 @@ export function JiraImportField({
           className="min-w-0 flex-1 basis-40"
           placeholder="PROJ-123"
           value={key}
-          onChange={(event) => setKey(event.target.value)}
+          onChange={(event) => {
+            keyRef.current = event.target.value;
+            setImported(null);
+            onKeyChange(event.target.value);
+          }}
         />
         <Button
           type="button"

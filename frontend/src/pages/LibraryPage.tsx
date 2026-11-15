@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { BookOpen, Plus } from "lucide-react";
+import { SearchInput } from "@/components/common/inputs/SearchInput";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -40,16 +41,31 @@ function LibraryArchiveToggle({ node }: { node: NodeItem }) {
 
 export function LibraryPage() {
   const [includeArchived, setIncludeArchived] = useState(false);
+  const [search, setSearch] = useState("");
   const { data: nodes, isLoading } = useNodes({ libraryOnly: true, includeArchived });
   const deleteNode = useDeleteNode();
   const [dialogNode, setDialogNode] = useState<EditTarget<NodeItem>>(null);
+  const query = search.trim().toLocaleLowerCase();
+  const filteredNodes = (nodes ?? []).filter((node) =>
+    [node.name, node.description ?? "", node.slash_name ? `/${node.slash_name}` : ""]
+      .some((value) => value.toLocaleLowerCase().includes(query)),
+  );
 
   return (
     <div className={PAGE_ROOT}>
       <PageHeader
         title="Библиотека промтов"
+        actionsClassName="w-full flex-wrap justify-end md:w-auto md:flex-nowrap"
         actions={
           <>
+            <SearchInput
+              aria-label="Поиск промтов"
+              placeholder="Название или команда..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onClear={() => setSearch("")}
+              containerClassName="order-last w-full md:order-none md:w-64"
+            />
             <ShowArchivedToggle checked={includeArchived} onChange={setIncludeArchived} />
             <Button onClick={() => setDialogNode("new")}>
               <Plus className="size-4" /> Промт
@@ -60,7 +76,7 @@ export function LibraryPage() {
       <div className={PAGE_BODY}>
         {isLoading && <LoadingState />}
         <div className="flex flex-col gap-2">
-          {(nodes ?? []).map((node) => (
+          {filteredNodes.map((node) => (
             <Card key={node.id} className="flex items-center gap-3">
               <NodeTypeIcon type={node.node_type} className="size-4 shrink-0 text-text-2" />
               <button className="min-h-11 min-w-0 flex-1 text-left" onClick={() => setDialogNode(node)}>
@@ -92,6 +108,9 @@ export function LibraryPage() {
               title={includeArchived ? "Библиотека промтов пуста" : "Активных промтов нет"}
               hint="Нажмите «+ Промт» вверху справа, чтобы сохранить промт, слэш-команду или скрипт. Сохранённый промт можно добавить в любую задачу и запускать вручную кнопкой ▶."
             />
+          )}
+          {!isLoading && (nodes ?? []).length > 0 && filteredNodes.length === 0 && (
+            <EmptyState compact title="Промты не найдены" hint="Попробуйте изменить поисковый запрос." />
           )}
         </div>
       </div>

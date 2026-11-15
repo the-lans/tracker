@@ -205,7 +205,7 @@ async def _claim_task(
         return False
     try:
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=task.status,
             to_status=TaskStatus.IN_PROGRESS,
@@ -302,14 +302,14 @@ class _SessionControl:
         if not in_conflict_status:
             return True
         await transition_task_status(
-            self.db_session,
+            db_session=self.db_session,
             task_id=self.task.id,
             from_status=TaskStatus.REBASE_CONFLICT,
             to_status=TaskStatus.IN_PROGRESS,
         )
         if resume_status is TaskStatus.PAUSED:
             await transition_task_status(
-                self.db_session,
+                db_session=self.db_session,
                 task_id=self.task.id,
                 from_status=TaskStatus.IN_PROGRESS,
                 to_status=TaskStatus.PAUSED,
@@ -356,21 +356,25 @@ class _SessionControl:
         )
         self.claude_session.add_notice(added_repositories_notice(self.workspace, cloned))
 
-    async def _serve_between_nodes(self, *, status: TaskStatus) -> TaskControlCommand | None:
+    async def _serve_between_nodes(
+        self, *, status: TaskStatus
+    ) -> TaskControlCommand | CheckpointDecision | None:
         """
         Работа между нодами (правило 16): мост, добавленные репозитории,
         ребейз, ручные запросы — и команда управления после них.
-        Неразобранный конфликт ребейза равносилен `stop`.
+        Неразобранный конфликт ребейза означает сбой.
         """
         await self.reconnect_bridge_if_requested()
         await self.clone_added_repositories()
         if not await self.resolve_rebase_conflict_if_any(resume_status=status):
-            return TaskControlCommand.STOP
+            return CheckpointDecision.FAIL
         await self.process_manual_queue()
         return await read_task_control(self.redis_client, self.task.id)
 
     async def checkpoint(self, _order_index: int) -> CheckpointDecision:
         command = await self._serve_between_nodes(status=TaskStatus.IN_PROGRESS)
+        if command is CheckpointDecision.FAIL:
+            return CheckpointDecision.FAIL
         if command is TaskControlCommand.STOP:
             return CheckpointDecision.STOP
         if command is TaskControlCommand.PAUSE and await consume_task_control(
@@ -388,6 +392,8 @@ class _SessionControl:
         заменяет её команду в том же ключе.
         """
         command = await self._serve_between_nodes(status=TaskStatus.IN_PROGRESS)
+        if command is CheckpointDecision.FAIL:
+            return CheckpointDecision.FAIL
         if command is TaskControlCommand.STOP:
             return CheckpointDecision.STOP
         logger.info("task_paused_after_node", task_id=str(self.task.id))
@@ -412,10 +418,12 @@ class _SessionControl:
             TaskStatus.PAUSED,
         ):
             if not await self.resolve_rebase_conflict_if_any(resume_status=TaskStatus.IN_PROGRESS):
-                return CheckpointDecision.STOP
+                return CheckpointDecision.FAIL
         logger.info("task_paused", task_id=str(self.task.id))
         while True:
             command = await self._serve_between_nodes(status=TaskStatus.PAUSED)
+            if command is CheckpointDecision.FAIL:
+                return CheckpointDecision.FAIL
             if command is TaskControlCommand.STOP:
                 return CheckpointDecision.STOP
             if command is TaskControlCommand.RESUME:
@@ -437,7 +445,7 @@ class _SessionControl:
     async def _try_transition(self, from_status: TaskStatus, to_status: TaskStatus) -> bool:
         try:
             await transition_task_status(
-                self.db_session,
+                db_session=self.db_session,
                 task_id=self.task.id,
                 from_status=from_status,
                 to_status=to_status,
@@ -454,14 +462,28 @@ class _SessionControl:
 
 
 async def _fail_task(db_session: AsyncSession, task: Task, *, failed_order_index: int) -> None:
-    """Сбой, остановка или неразрешённый конфликт — из того статуса, в
-    котором задача сейчас (раздел 14.1)."""
+    """
+    Сбой или неразрешённый конфликт — из текущего статуса задачи.
+    """
     await fail_task_from_current_status(
         db_session,
         task_id=task.id,
         failed_order_index=failed_order_index,
     )
     await db_session.refresh(task)
+
+
+async def _finish_stopped_task(db_session: AsyncSession, task: Task) -> None:
+    """Ручная остановка завершает задачу без выполнения оставшихся нод."""
+    await db_session.refresh(task)
+    await transition_task_status(
+        db_session=db_session,
+        task_id=task.id,
+        from_status=task.status,
+        to_status=TaskStatus.DONE,
+        stopped_by_user=True,
+    )
+    wake_task_dispatcher()
 
 
 async def _settle_bridge_request(
@@ -555,22 +577,24 @@ async def _wait_for_limit(
     ожидания, «Приостановить» — пауза после сброса.
     """
     command = await read_task_control(redis_client, task.id)
-    if command is not TaskControlCommand.STOP:
-        paused = command is TaskControlCommand.PAUSE and await consume_task_control(
-            redis_client,
-            task.id,
-            TaskControlCommand.PAUSE,
-        )
-        if await enter_limit_wait(
-            db_session,
-            task=task,
-            until=wait.until,
-            redis_client=redis_client,
-            paused=paused,
-            attempt=wait.attempt,
-        ):
-            _schedule_limit_resume(task.id, wait.until)
-            return
+    if command is TaskControlCommand.STOP:
+        await _finish_stopped_task(db_session, task)
+        return
+    paused = command is TaskControlCommand.PAUSE and await consume_task_control(
+        redis_client,
+        task.id,
+        TaskControlCommand.PAUSE,
+    )
+    if await enter_limit_wait(
+        db_session,
+        task=task,
+        until=wait.until,
+        redis_client=redis_client,
+        paused=paused,
+        attempt=wait.attempt,
+    ):
+        _schedule_limit_resume(task.id, wait.until)
+        return
     await _fail_task(
         db_session,
         task,
@@ -1114,11 +1138,7 @@ async def _run_claimed_task(
             return
         if parent_summary is None:
             logger.info("task_stopped_while_waiting_parent_summary", task_id=str(task.id))
-            await _fail_task(
-                db_session,
-                task,
-                failed_order_index=await first_unfinished_order_index(db_session, task.id),
-            )
+            await _finish_stopped_task(db_session, task)
             return
 
     active_node_context = ActiveNodeContext()
@@ -1245,16 +1265,15 @@ async def _run_connected_session(
     # продолжение после `clear_context`), — до первой же ноды.
     if not await control.resolve_rebase_conflict_if_any(resume_status=TaskStatus.IN_PROGRESS):
         return None, False
-    if (
-        control.resume_paused
-        and await control.stay_paused_after_limit_wait() is CheckpointDecision.STOP
-    ):
-        resume_index = 0 if start_after_order_index is None else start_after_order_index + 1
-        return PipelineRunOutcome(
-            completed=False,
-            failed_order_index=resume_index,
-            stopped=True,
-        ), True
+    if control.resume_paused:
+        decision = await control.stay_paused_after_limit_wait()
+        if decision is not CheckpointDecision.CONTINUE:
+            resume_index = 0 if start_after_order_index is None else start_after_order_index + 1
+            return PipelineRunOutcome(
+                completed=False,
+                failed_order_index=resume_index,
+                stopped=decision is CheckpointDecision.STOP,
+            ), True
     outcome = await run_pipeline(
         db_session,
         task=task,
@@ -1273,13 +1292,14 @@ async def _run_connected_session(
         return outcome, True
     # Пайплайн пройден, но сессия ещё жива: конфликт ребейза и запросы,
     # поставленные во время последней ноды, — до пуша. Пауза/остановка после
-    # последней ноды уже ни к чему не относятся.
-    await clear_task_control(control.redis_client, task.id)
+    # последней ноды проверяется до закрытия приёма команд и пуша.
     rebase_resolved = await control.resolve_rebase_conflict_if_any(
         resume_status=TaskStatus.IN_PROGRESS,
     )
     if rebase_resolved:
         await close_manual_requests(db_session, task.id)
+        if await read_task_control(control.redis_client, task.id) is TaskControlCommand.STOP:
+            return PipelineRunOutcome(completed=False, stopped=True), True
         await control.process_manual_queue()
     return outcome, rebase_resolved
 
@@ -1310,16 +1330,17 @@ async def _settle_pipeline_run(
             redis_client=redis_client,
         )
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task.id,
             from_status=TaskStatus.IN_PROGRESS,
             to_status=TaskStatus.DONE,
         )
         # Раздел 14.4: `done` освобождает слот автора.
         wake_task_dispatcher()
+    elif outcome.stopped:
+        logger.info("task_stopped_by_user", task_id=str(task.id))
+        await _finish_stopped_task(db_session, task)
     elif outcome.failed_order_index is not None:
-        if outcome.stopped:
-            logger.info("task_stopped_by_user", task_id=str(task.id))
         await _fail_task(db_session, task, failed_order_index=outcome.failed_order_index)
 
 

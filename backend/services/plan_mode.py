@@ -399,7 +399,7 @@ async def enter_decision_status(
     """Раздел 14.3: переход в `plan_review`/`awaiting_input` на время ожидания."""
     try:
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task_id,
             from_status=resume_status,
             to_status=awaiting_status,
@@ -419,7 +419,7 @@ async def leave_decision_status(
 ) -> None:
     try:
         await transition_task_status(
-            db_session,
+            db_session=db_session,
             task_id=task_id,
             from_status=awaiting_status,
             to_status=resume_status,

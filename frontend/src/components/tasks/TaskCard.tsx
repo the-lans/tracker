@@ -1,6 +1,8 @@
 import { Link } from "react-router-dom";
 import { Play } from "lucide-react";
 import { toast } from "sonner";
+import { TaskJiraLink } from "@/components/tasks/TaskJiraLink";
+import { TaskArchiveButton } from "@/components/tasks/TaskArchiveButton";
 import { TaskDayMarks } from "@/components/tasks/TaskDayMarks";
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { TASK_STATUS_META } from "@/components/tasks/taskStatusMeta";
@@ -39,7 +41,7 @@ export function TaskCard({ task }: { task: Task }) {
 
   return (
     <div
-      className="flex flex-col gap-2.5 rounded-lg border-[1.5px] bg-surface p-4"
+      className="flex flex-col gap-1.5 rounded-lg border-[1.5px] bg-surface p-3 sm:gap-2.5 sm:p-4"
       style={{ borderColor: meta.borderVar }}
     >
       <div className="flex items-center gap-2">
@@ -55,17 +57,21 @@ export function TaskCard({ task }: { task: Task }) {
           <TaskStatusBadge status={task.status} />
         </div>
       </div>
-      <Link
-        to={`/tasks/${task.id}`}
-        className="min-h-11 text-card-title font-bold leading-snug text-text"
-      >
-        {task.title}
-      </Link>
+      <div className="flex items-start gap-2">
+        <Link
+          to={`/tasks/${task.id}`}
+          className="min-w-0 flex-1 break-words text-card-title sm:min-h-11 font-bold leading-snug text-text"
+        >
+          {task.title}
+        </Link>
+        <TaskJiraLink task={task} />
+      </div>
       {subtitle && <div className="text-xs text-text-3">{subtitle}</div>}
       <OwnerLabel ownerId={task.created_by} />
-      <div className="mt-0.5 flex items-center gap-2 border-t border-border pt-2.5">
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border pt-2 sm:pt-2.5">
         <span className="text-xs font-bold text-text-2">{formatRelativeShort(task.updated_at)}</span>
         <TaskDayMarks task={task} />
+        <TaskArchiveButton task={task} compact />
         {preLaunch && (
           <button
             type="button"
