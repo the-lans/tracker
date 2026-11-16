@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from typing import Any
 
 import httpx
 
+from app_logging.config import get_logger
 from clients.http_errors import HttpFailure, classify_status
 from services.errors import ExternalServiceError
 
@@ -31,6 +33,7 @@ _KEY_ENV_VAR = "CLIPROXY_MANAGEMENT_KEY"
 # Раздел 19.7: таймаут вызова management API.
 TIMEOUT_SECONDS = 10.0
 _LATEST_VERSION_FIELD = "latest-version"
+logger = get_logger("cliproxy")
 
 
 class CliproxyUnavailableError(ExternalServiceError):
@@ -132,6 +135,7 @@ class CliproxyManagementClient:
         json: Mapping[str, Any] | None = None,
     ) -> httpx.Response:
         """Ответ прокси; недоступность и ошибка сервера — `CliproxyUnavailableError`."""
+        started_at = time.monotonic()
         try:
             response = await self._http_client.request(
                 method,
@@ -141,7 +145,21 @@ class CliproxyManagementClient:
                 headers=self._headers,
             )
         except httpx.TransportError as exc:
+            logger.warning(
+                "cliproxy_management_request_finished",
+                method=method,
+                path=path,
+                status="transport_error",
+                duration_ms=round((time.monotonic() - started_at) * 1000),
+            )
             raise CliproxyUnavailableError(f"LLM-прокси недоступен: {exc}") from exc
+        logger.info(
+            "cliproxy_management_request_finished",
+            method=method,
+            path=path,
+            status=response.status_code,
+            duration_ms=round((time.monotonic() - started_at) * 1000),
+        )
         if classify_status(response.status_code) is HttpFailure.TRANSIENT:
             raise CliproxyUnavailableError(f"LLM-прокси вернул {response.status_code} для {path}")
         return response

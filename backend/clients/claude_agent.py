@@ -34,10 +34,14 @@ from claude_agent_sdk import (
     ResultMessage,
     StreamEvent,
     TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
 )
 
 from app_logging.config import get_logger
 from prompts.agent import TWG_SESSION_CONTEXT
+from services import agent_metrics
 from services.twg import TWG_PLUGIN_PATH, twg_enabled
 
 if TYPE_CHECKING:
@@ -50,6 +54,7 @@ if TYPE_CHECKING:
 logger = get_logger("claude_agent")
 
 REMOTE_CONTROL_EXTRA_ARG = "remote-control"
+REPLAY_USER_MESSAGES_EXTRA_ARG = "replay-user-messages"
 # Правило 1 CLAUDE.md: ход сессии начинает только запрос трекера. Фоновая
 # команда или запланированное пробуждение агента завершаются ходом без
 # запроса, и его ответ достался бы следующему запросу трекера.
@@ -184,6 +189,7 @@ def build_claude_agent_options(
     Claude Code в коммитах и PR — тоже (`SESSION_CLI_SETTINGS`).
     """
     extra_args: dict[str, str | None] = {}
+    extra_args[REPLAY_USER_MESSAGES_EXTRA_ARG] = None
     if enable_remote_control:
         extra_args[REMOTE_CONTROL_EXTRA_ARG] = None
 
@@ -201,6 +207,7 @@ def build_claude_agent_options(
     )
 
     load_twg = cli_path is not None and twg_enabled()
+    diagnostics = agent_metrics.diagnostics_enabled()
     return ClaudeAgentOptions(
         resume=resume_session_id,
         fork_session=fork_session,
@@ -237,6 +244,9 @@ def build_claude_agent_options(
         include_partial_messages=True,
         add_dirs=list(add_dirs),
         settings=SESSION_CLI_SETTINGS,
+        max_turns=agent_metrics.diagnostics_max_turns() if diagnostics else None,
+        disallowed_tools=agent_metrics.DIAGNOSTIC_DISALLOWED_TOOLS if diagnostics else [],
+        stderr=agent_metrics.log_cli_stderr if diagnostics else None,
         plugins=[{"type": "local", "path": TWG_PLUGIN_PATH}] if load_twg else [],
     )
 
@@ -413,15 +423,23 @@ class ClaudeCodeSession:
 
     async def connect(self) -> None:
         async with self._lock:
+            started_at = time.monotonic()
             await self._client.connect()
             if self._runs_cli:
-                logger.info("session_connected")
+                logger.info(
+                    "session_connected",
+                    duration_ms=round((time.monotonic() - started_at) * 1000),
+                )
 
     async def disconnect(self) -> None:
         async with self._lock:
+            started_at = time.monotonic()
             await self._client.disconnect()
             if self._runs_cli:
-                logger.info("session_disconnected")
+                logger.info(
+                    "session_disconnected",
+                    duration_ms=round((time.monotonic() - started_at) * 1000),
+                )
 
     async def replace_client(self, client: ClaudeAgentClientProtocol) -> None:
         """
@@ -522,6 +540,13 @@ class ClaudeCodeSession:
             # и отсутствие аккаунта не должны стереть строку, ход ещё не начат.
             prompt = self._with_pending_notice(prompt, boundary=boundary)
             logger.info("session_query_started", prompt_length=len(prompt))
+            turn_started_at = time.monotonic()
+            first_event_at: float | None = None
+            tool_call_count = 0
+            subagent_call_count = 0
+            tool_started_at: dict[str, float] = {}
+            tool_durations_ms: list[int] = []
+            tool_error_count = 0
             self._turn_open = True
             try:
                 self._turn_text_parts = []
@@ -530,7 +555,11 @@ class ClaudeCodeSession:
                 text_parts = self._turn_text_parts
                 result: ResultMessage | None = None
                 assistant_error: str | None = None
+                tool_log_count = 0
+                tool_log_limit_reported = False
                 async for message in self._client.receive_response():
+                    if first_event_at is None:
+                        first_event_at = time.monotonic()
                     if isinstance(message, StreamEvent):
                         await self._forward_text_delta(message)
                     if isinstance(message, RateLimitEvent) and self._on_rate_limit is not None:
@@ -538,7 +567,46 @@ class ClaudeCodeSession:
                     if isinstance(message, AssistantMessage):
                         if message.error is not None:
                             assistant_error = message.error
+                        for block in message.content:
+                            if (
+                                isinstance(block, ToolUseBlock)
+                                and agent_metrics.diagnostics_enabled()
+                            ):
+                                tool_call_count += 1
+                                tool_started_at[block.id] = time.monotonic()
+                                if block.name in {"Agent", "Task"}:
+                                    subagent_call_count += 1
+                                if tool_log_count >= agent_metrics.TOOL_LOG_EVENT_LIMIT:
+                                    if not tool_log_limit_reported:
+                                        logger.info(
+                                            "session_tool_log_limit_reached",
+                                            limit=agent_metrics.TOOL_LOG_EVENT_LIMIT,
+                                        )
+                                        tool_log_limit_reported = True
+                                    continue
+                                tool_log_count += 1
+                                logger.info(
+                                    "session_tool_started",
+                                    tool_name=block.name,
+                                    tool_input=agent_metrics.tool_input_preview(block.input),
+                                    parent_tool_use_id=message.parent_tool_use_id,
+                                )
+                            elif isinstance(block, ToolUseBlock):
+                                tool_call_count += 1
+                                tool_started_at[block.id] = time.monotonic()
+                                if block.name in {"Agent", "Task"}:
+                                    subagent_call_count += 1
                         text_parts.extend(_own_text_blocks(message))
+                    if isinstance(message, UserMessage):
+                        for result_block in message.content:
+                            if isinstance(result_block, ToolResultBlock):
+                                started_at = tool_started_at.pop(result_block.tool_use_id, None)
+                                if started_at is not None:
+                                    tool_durations_ms.append(
+                                        round((time.monotonic() - started_at) * 1000)
+                                    )
+                                if result_block.is_error:
+                                    tool_error_count += 1
                     if isinstance(message, ResultMessage):
                         result = message
             except ClaudeSDKError:
@@ -547,6 +615,38 @@ class ClaudeCodeSession:
                 # Отмена корутины (остановка, таймаут) флаг не трогает — после
                 # неё хвост вычитывает `abort_turn`.
                 self._turn_open = False
+                logger.info(
+                    "session_query_finished",
+                    status="error",
+                    duration_ms=round((time.monotonic() - turn_started_at) * 1000),
+                    time_to_first_event_ms=(
+                        round((first_event_at - turn_started_at) * 1000)
+                        if first_event_at is not None
+                        else None
+                    ),
+                    tool_call_count=tool_call_count,
+                    subagent_call_count=subagent_call_count,
+                    tool_error_count=tool_error_count,
+                    tool_duration_max_ms=max(tool_durations_ms, default=None),
+                    tool_duration_total_ms=sum(tool_durations_ms),
+                )
+                raise
+            except asyncio.CancelledError:
+                logger.info(
+                    "session_query_finished",
+                    status="cancelled",
+                    duration_ms=round((time.monotonic() - turn_started_at) * 1000),
+                    time_to_first_event_ms=(
+                        round((first_event_at - turn_started_at) * 1000)
+                        if first_event_at is not None
+                        else None
+                    ),
+                    tool_call_count=tool_call_count,
+                    subagent_call_count=subagent_call_count,
+                    tool_error_count=tool_error_count,
+                    tool_duration_max_ms=max(tool_durations_ms, default=None),
+                    tool_duration_total_ms=sum(tool_durations_ms),
+                )
                 raise
             self._turn_open = False
             self._turn_text_parts = []
@@ -557,8 +657,20 @@ class ClaudeCodeSession:
             logger.info(
                 "session_query_finished",
                 is_error=result.is_error,
+                status="error" if result.is_error else "success",
                 assistant_error=assistant_error,
                 session_id=result.session_id,
+                duration_ms=round((time.monotonic() - turn_started_at) * 1000),
+                time_to_first_event_ms=(
+                    round((first_event_at - turn_started_at) * 1000)
+                    if first_event_at is not None
+                    else None
+                ),
+                tool_call_count=tool_call_count,
+                subagent_call_count=subagent_call_count,
+                tool_error_count=tool_error_count,
+                tool_duration_max_ms=max(tool_durations_ms, default=None),
+                tool_duration_total_ms=sum(tool_durations_ms),
             )
             account_transient = None
             if result.is_error and route is not None and self._router is not None:
