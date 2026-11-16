@@ -153,6 +153,7 @@ services:
       # SDK (runners/tracker-session) — пробный `claude -v` с запуском
       # контейнера перед каждой сессией не нужен.
       CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK: "1"
+      TRACKER_TWG_ENABLED: ${TRACKER_TWG_ENABLED:-true}
       # Раздел 14.4: воркер очереди не запускает больше задач, чем процессов
       # воркера сессий (session-worker, `--concurrency`).
       SESSION_WORKER_CONCURRENCY: ${SESSION_WORKER_CONCURRENCY:-4}

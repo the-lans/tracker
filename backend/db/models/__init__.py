@@ -36,9 +36,11 @@ from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.repositories import GitCredential, Repository, Template, TemplateMcpServer
 from db.models.settings import SystemSettings
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
+from db.models.twg import TwgConnection
 from db.models.users import AllowedEmail, User
 
 __all__ = [
+    "TwgConnection",
     "AllowedEmail",
     "AppLog",
     "BackupRun",

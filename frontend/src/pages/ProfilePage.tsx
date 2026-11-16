@@ -6,6 +6,7 @@ import { SshKeyCard } from "@/components/profile/SshKeyCard";
 import { SftpConnectionCard } from "@/components/profile/SftpConnectionCard";
 import { GoogleCalendarCard } from "@/components/profile/GoogleCalendarCard";
 import { JiraConnectionCard } from "@/components/profile/JiraConnectionCard";
+import { TwgConnectionCard } from "@/components/profile/TwgConnectionCard";
 import { LlmCompactSwitchCard } from "@/components/profile/LlmCompactSwitchCard";
 import { LlmThresholdsCard } from "@/components/profile/LlmThresholdsCard";
 import { Card } from "@/components/ui/card";
@@ -42,6 +43,7 @@ export function ProfilePage() {
       content: (
         <div className="flex max-w-lg flex-col gap-4">
           <JiraConnectionCard />
+          <TwgConnectionCard />
           <GoogleCalendarCard />
         </div>
       ),

@@ -112,6 +112,7 @@ from services.task_workspace import (
     resolve_repos_root,
     task_root,
 )
+from services.twg import session_environment
 from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import celery_app, wake_task_dispatcher
 
@@ -1078,6 +1079,7 @@ async def _build_client_factory(
             cwd=workspace,
             config_dir=config_dir,
             session_token=session_token,
+            twg_environment=await session_environment(db_session, task.created_by),
             artifacts_dir=artifacts_dir,
             knowledge_mounts=await knowledge_mounts(
                 db_session, user=knowledge_owner, sections=knowledge_sections

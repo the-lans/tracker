@@ -52,6 +52,11 @@ def build_command(argv: Sequence[str], environ: Mapping[str, str]) -> list[str]:
     ]
     for name in forwarded_env_names(environ):
         command += ["-e", name]
+    # Только подключение автора задачи; глобальные TWG_* воркера не наследуются.
+    if spec.get("twg_authenticated"):
+        for name in ("TWG_USER", "TWG_SITE", "TWG_TOKEN"):
+            if name in environ:
+                command += ["-e", name]
     return [*command, spec["image"], _CLI_COMMAND, *argv]
 
 

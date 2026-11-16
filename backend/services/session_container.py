@@ -123,6 +123,7 @@ async def build_session_cli_env(
     session_token: str,
     artifacts_dir: Path | None = None,
     knowledge_mounts: list[str] | None = None,
+    twg_environment: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """
     Окружение обёртки для сессии задачи `task_id` — добавляется к
@@ -139,11 +140,13 @@ async def build_session_cli_env(
         str(cwd),
     ]
     spec = {
+        "twg_authenticated": bool(twg_environment),
         "name_prefix": f"{SESSION_CONTAINER_PREFIX}{task_id}-",
         "docker_args": docker_args,
         "image": os.environ.get(SESSION_IMAGE_ENV, DEFAULT_SESSION_IMAGE),
     }
     return {
+        **(twg_environment or {}),
         SESSION_DOCKER_SPEC_ENV: json.dumps(spec),
         "ANTHROPIC_BASE_URL": os.environ.get(LLM_GATEWAY_URL_ENV, DEFAULT_LLM_GATEWAY_URL),
         "ANTHROPIC_AUTH_TOKEN": session_token,
