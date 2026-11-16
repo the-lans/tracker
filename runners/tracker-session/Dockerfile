@@ -17,3 +17,8 @@ RUN pip install --no-cache-dir "claude-agent-sdk==${CLAUDE_AGENT_SDK_VERSION}" \
     && ln -s "$(python -c 'import claude_agent_sdk, pathlib; print(pathlib.Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude")')" /usr/local/bin/claude
 
 WORKDIR /tmp
+
+# Доступы пользователей при сборке не используются. Пакет закреплён lock-файлом.
+COPY twg.lock.json install_twg.py /opt/tracker-twg-installer/
+RUN python /opt/tracker-twg-installer/install_twg.py
+ENV TWG_AGENT_DEFAULTS=1 TWG_CONFIG_DIR=/tmp/twg

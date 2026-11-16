@@ -443,6 +443,12 @@ docker-compose.yml, docker-compose.prod.yml, .env.example — раздел 20.3 
 
 ## 4. Команды
 
+TWG поставляется с `tracker-session`: версия, SHA-256 Linux-бинарников и ревизии
+базовых навыков закреплены в `runners/tracker-session/twg.lock.json`. Проверка:
+`bash scripts/smoke_twg_image.sh`. Личные доступы `/profile/twg` хранятся зашифрованными
+в `twg_connections`; в контейнер передаются только для автора задачи. Пакет загружается
+как SDK-плагин. Развёртывание, ограничения авторизации и обновления — `docs/twg-integration.md`.
+
 Backend требует Python **3.12+** (создайте venv явно нужной версией, если
 системный `python3` старее).
 

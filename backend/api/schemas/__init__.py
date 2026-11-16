@@ -160,8 +160,11 @@ from api.schemas.tasks import (
     TaskStatusChangeRequest,
     TaskUpdateRequest,
 )
+from api.schemas.twg import TwgConnectionRequest, TwgConnectionResponse
 
 __all__ = [
+    "TwgConnectionRequest",
+    "TwgConnectionResponse",
     "CredentialCheckRequest",
     "CredentialCheckResponse",
     "CredentialInput",

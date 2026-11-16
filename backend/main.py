@@ -37,6 +37,7 @@ from api.system_settings import router as system_settings_router
 from api.task_categories import router as task_categories_router
 from api.tasks import router as tasks_router
 from api.templates import router as templates_router
+from api.twg import router as twg_router
 from api.users import router as users_router
 from app_logging.app_logs import write_app_log
 from app_logging.config import configure_logging, get_logger
@@ -69,6 +70,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Tracker API", lifespan=lifespan)
+app.include_router(twg_router)
 app.include_router(knowledge_router)
 app.include_router(auth_router)
 app.include_router(tasks_router)

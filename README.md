@@ -4,6 +4,9 @@ Tracker — веб-приложение, в котором задачи разр
 
 Подробные требования — в [техническом задании](docs/technical_specification.md). Лицензия — [MIT](LICENSE).
 
+TWG для сессий Claude SDK: личное подключение в профиле, установка с образом,
+обновление и откат описаны в [инструкции TWG](docs/twg-integration.md).
+
 <p align="center">
   <img src="docs/screen/readme/task-page.png" width="100%" alt="Страница задачи: обзор слева, лента диалога с агентом справа">
 </p>

@@ -1,0 +1,14 @@
+{
+  "version": "1.4.4",
+  "source": "https://teamwork-graph.atlassian.com/cli",
+  "sha256": {
+    "aarch64": "4dab6d4fbc94e450fc79e661ac48616ba1099b40077dedc550d4d105e1cb83cc",
+    "x86_64": "36a93b0ad0011d80909cc00508091c34df03dd0bf1644fded67bf94f2c9ffc07"
+  },
+  "skills": {
+    "twg": "d13b2009140f228b9d71902c4ad56e3bd5a765d5b4d3fb58004281d584aeb629",
+    "twg-jira": "6e152db4abf303c1ea4b76235c358e40fd5d4fa03fca36f8939a7dc6e4207708",
+    "twg-confluence": "745d72bd5ee9f07a14ac6b5c21a6a4919e23f6e2023dcf77a76528e935702dcd",
+    "twg-setup": "6642af1b982fb44e7c77a1f58d40963f39451c732b69493415980794130bb740"
+  }
+}
