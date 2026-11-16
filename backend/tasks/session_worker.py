@@ -948,6 +948,7 @@ async def _summarize_parent_in_fork(
             cwd=parent_root,
             config_dir=parent_config_dir,
             session_token=lane.session_token,
+            twg_environment=await session_environment(db_session, child.created_by),
         ),
     )
     ensure_history_retention(str(parent_config_dir), days=history_retention_days())
