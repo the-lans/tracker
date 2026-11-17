@@ -153,6 +153,8 @@ services:
       # SDK (runners/tracker-session) — пробный `claude -v` с запуском
       # контейнера перед каждой сессией не нужен.
       CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK: "1"
+      CLAUDE_DIAGNOSTICS: ${CLAUDE_DIAGNOSTICS:-false}
+      CLAUDE_DIAGNOSTICS_MAX_TURNS: ${CLAUDE_DIAGNOSTICS_MAX_TURNS:-20}
       TRACKER_TWG_ENABLED: ${TRACKER_TWG_ENABLED:-true}
       # Раздел 14.4: воркер очереди не запускает больше задач, чем процессов
       # воркера сессий (session-worker, `--concurrency`).
@@ -198,6 +200,11 @@ services:
       args:
         GIT_SHA: ${GIT_SHA:-unknown}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     command: ["celery", "-A", "tasks.celery_app", "worker", "-Q", "celery", "-l", "info"]
     environment: *backend_env
     volumes:

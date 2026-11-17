@@ -16,18 +16,20 @@ from typing import TYPE_CHECKING
 
 import pytest
 import structlog
-from claude_agent_sdk import AssistantMessage, ProcessError, RateLimitInfo, TextBlock
+from claude_agent_sdk import AssistantMessage, ProcessError, RateLimitInfo, TextBlock, ToolUseBlock
 
 from clients import claude_agent
 from clients.claude_agent import (
     COMPACT_COMMAND,
     REMOTE_CONTROL_EXTRA_ARG,
+    REPLAY_USER_MESSAGES_EXTRA_ARG,
     SEQUENTIAL_TURNS_ENV,
     ClaudeCodeSession,
     OfflineAgentClient,
     build_claude_agent_options,
 )
 from db.models.enums import NodeType, ReasoningEffort
+from services import agent_metrics
 from services.llm_account_choice import NoLlmAccountAvailableError
 from tests.fakes import (
     FAKE_ROUTE,
@@ -59,7 +61,10 @@ def test_build_claude_agent_options_sets_remote_control_flag_on_first_connect() 
 
     assert options.resume is None
     assert options.add_dirs == ["/data/user-files/RR-00001"]
-    assert options.extra_args == {REMOTE_CONTROL_EXTRA_ARG: None}
+    assert options.extra_args == {
+        REPLAY_USER_MESSAGES_EXTRA_ARG: None,
+        REMOTE_CONTROL_EXTRA_ARG: None,
+    }
     assert options.env == {
         **SEQUENTIAL_TURNS_ENV,
         "CLAUDE_CONFIG_DIR": "/data/llm-accounts/acc-1",
@@ -77,7 +82,27 @@ def test_build_claude_agent_options_omits_remote_control_flag_on_resume() -> Non
     )
 
     assert options.resume == "sess-1"
-    assert options.extra_args == {}
+    assert options.extra_args == {REPLAY_USER_MESSAGES_EXTRA_ARG: None}
+
+
+def test_build_claude_agent_options_limits_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(agent_metrics.DIAGNOSTICS_ENV, "true")
+    monkeypatch.setenv(agent_metrics.DIAGNOSTICS_MAX_TURNS_ENV, "7")
+
+    options = build_claude_agent_options(
+        resume_session_id=None,
+        cwd="tracker/repos/RR-00001/",
+        permission_mode=None,
+        mcp_servers={},
+        claude_config_dir="/data/llm-accounts/acc-1",
+        enable_remote_control=False,
+    )
+
+    assert options.max_turns == 7
+    assert options.disallowed_tools == agent_metrics.DIAGNOSTIC_DISALLOWED_TOOLS
+    assert options.stderr is agent_metrics.log_cli_stderr
 
 
 class TestSequentialTurnsEnv:
@@ -137,6 +162,44 @@ async def test_send_and_collect_text_separates_text_blocks() -> None:
     assert turn.is_error is False
     assert turn.session_id == "sess-1"
     assert fake.queries == ["say hi"]
+
+
+async def test_send_and_collect_text_logs_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(agent_metrics.DIAGNOSTICS_ENV, "1")
+    fake = FakeClaudeAgentClient(
+        messages_per_query=[
+            [
+                AssistantMessage(
+                    content=[
+                        ToolUseBlock(
+                            id="tool-1",
+                            name="mcp__atlassian__jira_get_issue",
+                            input={
+                                "issue_key": "RR-15592",
+                                "credentials": [{"api_token": "hidden"}],
+                                "token": "hidden",
+                            },
+                        )
+                    ],
+                    model="claude",
+                ),
+                make_result_message(),
+            ],
+        ],
+    )
+    session = ClaudeCodeSession(fake)
+
+    with structlog.testing.capture_logs() as logs:
+        await session.send_and_collect_text("прочитай задачу")
+
+    tool_log = next(entry for entry in logs if entry["event"] == "session_tool_started")
+    assert tool_log["tool_name"] == "mcp__atlassian__jira_get_issue"
+    assert '"issue_key": "RR-15592"' in tool_log["tool_input"]
+    assert len(tool_log["tool_input"]) <= agent_metrics.TOOL_INPUT_LOG_LIMIT
+    assert "hidden" not in tool_log["tool_input"]
+    assert "<redacted>" in tool_log["tool_input"]
 
 
 async def test_send_and_collect_text_reports_error_result() -> None:

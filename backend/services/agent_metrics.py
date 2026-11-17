@@ -1,0 +1,78 @@
+"""Агрегирование диагностических показателей агентного хода."""
+
+from __future__ import annotations
+
+import json
+import os
+
+from app_logging.config import get_logger
+
+DIAGNOSTICS_ENV = "CLAUDE_DIAGNOSTICS"
+DIAGNOSTICS_MAX_TURNS_ENV = "CLAUDE_DIAGNOSTICS_MAX_TURNS"
+TOOL_INPUT_LOG_LIMIT = 200
+TOOL_LOG_EVENT_LIMIT = 50
+DIAGNOSTIC_DISALLOWED_TOOLS = ["Agent", "Task", "Bash", "ListAgents"]
+_SENSITIVE_TOOL_INPUT_KEYS = frozenset({"token", "secret", "password", "key"})
+_SENSITIVE_TOOL_INPUT_PARTS = (
+    "token",
+    "secret",
+    "password",
+    "authorization",
+    "credential",
+    "cookie",
+    "private_key",
+)
+
+logger = get_logger("agent_metrics")
+
+
+def diagnostics_enabled() -> bool:
+    return os.environ.get(DIAGNOSTICS_ENV, "").lower() in {"1", "true", "yes"}
+
+
+def diagnostics_max_turns() -> int:
+    value = os.environ.get(DIAGNOSTICS_MAX_TURNS_ENV)
+    if not value:
+        return 20
+    try:
+        turns = int(value)
+    except ValueError:
+        logger.warning("invalid_diagnostics_max_turns", value=value)
+        return 20
+    return turns if turns > 0 else 20
+
+
+def tool_input_preview(value: object) -> str:
+    """Возвращает короткие аргументы инструмента без известных секретов."""
+    value = _redact_tool_input(value)
+    try:
+        serialized = json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        serialized = repr(value)
+    return serialized[:TOOL_INPUT_LOG_LIMIT]
+
+
+def _redact_tool_input(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: "<redacted>" if _is_sensitive_key(key) else _redact_tool_input(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_tool_input(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_tool_input(item) for item in value)
+    return value
+
+
+def _is_sensitive_key(key: object) -> bool:
+    normalized = str(key).lower().replace("-", "_")
+    return normalized in _SENSITIVE_TOOL_INPUT_KEYS or any(
+        part in normalized for part in _SENSITIVE_TOOL_INPUT_PARTS
+    )
+
+
+def log_cli_stderr(line: str) -> None:
+    logger.info("claude_cli_stderr", line=line[:TOOL_INPUT_LOG_LIMIT])
+
+
