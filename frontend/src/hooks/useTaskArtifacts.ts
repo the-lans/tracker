@@ -24,6 +24,21 @@ export function useTaskArtifacts(taskId: string, refetchInterval: number | false
   });
 }
 
+/**
+ * Содержимое файла артефакта для просмотра. Не кешируется после закрытия окна
+ * (``gcTime: 0``), чтобы большие файлы не копились в памяти; изменённый файл
+ * (``modifiedAt``) загружается заново.
+ */
+export function useArtifactFile(taskId: string, path: string, modifiedAt: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["tasks", taskId, "artifact-file", path, modifiedAt] as const,
+    queryFn: () => api.getBlob(artifactUrl(taskId, path)),
+    enabled,
+    gcTime: 0,
+    retry: false,
+  });
+}
+
 // Вложения Jira копирует фоновая задача уже после создания задачи: пока она
 // идёт, статус копирования и список артефактов перечитываются часто.
 export const JIRA_COPY_REFETCH_INTERVAL_MS = 3_000;
