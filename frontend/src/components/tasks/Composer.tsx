@@ -162,9 +162,10 @@ export function Composer({
   return (
     <div className="border-t border-border bg-surface p-3.5 short:sticky short:bottom-0 short:z-10 short:px-3 short:py-1.5">
       {(queue ?? []).filter(isStoppableRequest).map((request) => <div key={request.id}
-        className="mb-2 flex items-center justify-between gap-2 text-small short:mb-1">
-        <span>{requestCaption(request)}</span>
-        <Button size="sm" variant="secondary" disabled={stopRequest.isPending}
+        className="mb-1.5 flex items-center justify-between gap-2 text-small short:mb-1">
+        <span className="min-w-0 truncate max-sm:text-meta max-sm:text-text-3">{requestCaption(request)}</span>
+        {/* Компактная: на телефоне строка не отнимает высоту; зона нажатия — `touch-hit`. */}
+        <Button size="sm" variant="secondary" className="touch-hit h-7 min-h-0! shrink-0 px-2.5 max-sm:text-meta" disabled={stopRequest.isPending}
           onClick={() => stopRequest.mutate(request.id, {
             onError: (error) => toast.error(errorMessage(error, "Не удалось остановить запрос")),
           })}>{stopButtonLabel(request)}</Button>
