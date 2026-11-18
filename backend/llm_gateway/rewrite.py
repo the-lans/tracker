@@ -22,9 +22,8 @@ _MAX_TOKENS_FIELD = "max_tokens"
 # сам, а шлюз подменяет её на модель маршрута, и прокси отвечает 400 на запрос
 # выше потолка этой модели. Для модели, которой нет в таблице, действует
 # значение по умолчанию (не меньше 64 000); в таблице — модели с другим
-# потолком. Ключ — часть имени модели маршрута, более длинные ключи — раньше
-# коротких. Значения Anthropic — из документации, `opus-5-5` — по принятому
-# прокси запросу.
+# потолком. Ключ — часть имени модели маршрута. Значения Anthropic — из
+# документации, `opus-5-5` — по принятому прокси запросу.
 DEFAULT_MAX_OUTPUT_TOKENS = 64_000
 _MODEL_MAX_OUTPUT_TOKENS = {
     "claude-3-5-haiku": 8_192,
@@ -44,7 +43,9 @@ def _max_output_tokens(model: str) -> int:
 
 
 def _clamp_max_tokens(body: dict[str, Any], model: str) -> int | None:
-    """Исходное `max_tokens`, если оно выше потолка модели и заменено; иначе None."""
+    """
+    Исходное `max_tokens`, если оно выше потолка модели и заменено; иначе None.
+    """
     max_tokens = body.get(_MAX_TOKENS_FIELD)
     if not isinstance(max_tokens, int) or isinstance(max_tokens, bool):
         return None

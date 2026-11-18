@@ -191,7 +191,7 @@ class TestRewrite:
             "unknown_below_default",
         ],
     )
-    async def test_max_tokens_clamped_to_route_model(
+    async def test_max_tokens_clamped(
         self,
         gateway: httpx.AsyncClient,
         upstream: Upstream,
