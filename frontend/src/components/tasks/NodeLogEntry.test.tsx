@@ -329,4 +329,72 @@ describe("NodeLogEntry", () => {
       expect(screen.queryByRole("note")).not.toBeInTheDocument();
     });
   });
+
+  describe("время реплик", () => {
+    const START = new Date(2026, 10, 10, 10, 0).toISOString();
+    const FINISH = new Date(2026, 10, 10, 10, 7).toISOString();
+    const times = (container: HTMLElement) =>
+      Array.from(container.querySelectorAll("time")).map((time) => time.getAttribute("dateTime"));
+
+    test("промт — время начала хода, ответ — время завершения", () => {
+      const { container } = renderEntry({
+        rendered_prompt: "Промт",
+        llm_output_text: "Ответ",
+        started_at: START,
+        finished_at: FINISH,
+      });
+
+      expect(times(container)).toEqual([START, FINISH]);
+    });
+
+    test("ответ ещё генерируется — у него времени нет, у промта есть", () => {
+      const { container } = renderEntry(
+        {
+          status: NodeLogStatus.RUNNING,
+          rendered_prompt: "Промт",
+          llm_output_text: null,
+          started_at: START,
+          finished_at: null,
+        },
+        { streamedText: "Пишу ответ", isAgentTurn: true },
+      );
+
+      expect(times(container)).toEqual([START]);
+    });
+
+    test("остановка и вывод до остановки — время завершения", () => {
+      const { container } = renderEntry({
+        status: NodeLogStatus.STOPPED,
+        llm_output_text: "Собранный вывод",
+        started_at: START,
+        finished_at: FINISH,
+      });
+
+      expect(times(container)).toEqual([FINISH, FINISH]);
+    });
+
+    test("ошибка — время завершения", () => {
+      const { container } = renderEntry({
+        status: NodeLogStatus.FAILED,
+        error_message: "Сбой",
+        started_at: START,
+        finished_at: FINISH,
+      });
+
+      expect(times(container)).toEqual([FINISH]);
+    });
+
+    test("решение пользователя — без времени", () => {
+      const { container } = renderEntry({
+        status: NodeLogStatus.SUCCESS,
+        user_input_text: "accept_default",
+        pending_plan_text: PLAN,
+        pending_options: PLAN_OPTIONS,
+        started_at: START,
+        finished_at: FINISH,
+      });
+
+      expect(times(container)).toEqual([]);
+    });
+  });
 });

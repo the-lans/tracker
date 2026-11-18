@@ -71,6 +71,8 @@ export function NodeLogEntry({
   );
 
   const routeCaption = routeCaptionOf(log, accountLabel);
+  // Ответ «появился», когда ход завершён: пока он генерируется или ждёт решения, времени нет.
+  const answerTime = generating ? null : log.finished_at;
   // Остановка пользователем или сбой: ответ, собранный до них, — отдельным сообщением после ошибки.
   const interruptedCaption = INTERRUPTED_OUTPUT_CAPTION[log.status];
   const interruptedOutput =
@@ -115,6 +117,7 @@ export function NodeLogEntry({
           role="user"
           text={log.rendered_prompt}
           kind={promptKindOf(log)}
+          timestamp={log.started_at}
         />
       )}
       {isScript && <ScriptOutputBlock stdout={log.script_stdout} exitCode={log.script_exit_code} />}
@@ -124,6 +127,7 @@ export function NodeLogEntry({
           text={before}
           streaming={generating && !liveAfterDecision}
           defaultExpanded={keepExpanded}
+          timestamp={answerTime}
         />
       )}
       {thinking && !liveAfterDecision && <MessageBubble role="llm" text="" thinking />}
@@ -139,7 +143,13 @@ export function NodeLogEntry({
         />
       )}
       {showTurnOutput && after && (
-        <MessageBubble role="llm" text={after} streaming={liveAfterDecision} defaultExpanded={keepExpanded} />
+        <MessageBubble
+          role="llm"
+          text={after}
+          streaming={liveAfterDecision}
+          defaultExpanded={keepExpanded}
+          timestamp={answerTime}
+        />
       )}
       {thinking && liveAfterDecision && <MessageBubble role="llm" text="" thinking />}
       {/* Пометка «саммари недоступно» сама объясняет себя — без общей ошибки. */}
@@ -150,10 +160,17 @@ export function NodeLogEntry({
           text={[`Ошибка выполнения (попытка ${log.attempt_number})`, log.error_message]
             .filter(Boolean)
             .join(": ")}
+          timestamp={log.finished_at}
         />
       )}
       {log.status === NodeLogStatus.STOPPED && (
-        <MessageBubble role="llm" danger kind="stopped" text="Остановлено пользователем" />
+        <MessageBubble
+          role="llm"
+          danger
+          kind="stopped"
+          text="Остановлено пользователем"
+          timestamp={log.finished_at}
+        />
       )}
       {interruptedOutput && (
         <MessageBubble
@@ -162,6 +179,7 @@ export function NodeLogEntry({
           caption={interruptedCaption}
           text={interruptedOutput}
           defaultExpanded={keepExpanded}
+          timestamp={log.finished_at}
         />
       )}
     </div>

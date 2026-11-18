@@ -3,6 +3,7 @@ import { CollapsibleText } from "@/components/tasks/CollapsibleText";
 import { AgentMessageText } from "@/components/tasks/AgentMessageText";
 import { AgentInline } from "@/components/tasks/AgentInline";
 import { linkParts } from "@/lib/agentMarkdown";
+import { formatDateTime, formatMessageTime } from "@/lib/utils";
 import { MESSAGE_KINDS, type MessageKind } from "@/components/tasks/messageKinds";
 import { USER_AVATAR_GRADIENT } from "@/styles/classes";
 
@@ -12,10 +13,19 @@ import { USER_AVATAR_GRADIENT } from "@/styles/classes";
  * не попадают: там сессия доступна только для просмотра (раздел 6.3).
  */
 
+function MessageTime({ value }: { value: string }) {
+  return (
+    <time dateTime={value} title={formatDateTime(value)} className="whitespace-nowrap text-caption text-text-3">
+      {formatMessageTime(value)}
+    </time>
+  );
+}
+
 export function MessageBubble({
   role,
   text,
   caption,
+  timestamp,
   danger,
   streaming = false,
   thinking = false,
@@ -26,6 +36,8 @@ export function MessageBubble({
   text: string;
   /** Пояснение над текстом: чем является реплика (например, вывод до остановки). */
   caption?: string;
+  /** Когда реплика появилась — время в правом нижнем углу; нет — не показывается. */
+  timestamp?: string | null;
   danger?: boolean;
   streaming?: boolean;
   /** Агент думает: первый фрагмент ответа ещё не пришёл (раздел 15.2). */
@@ -79,6 +91,7 @@ export function MessageBubble({
               text={text}
               live={streaming}
               defaultExpanded={defaultExpanded}
+              meta={timestamp ? <MessageTime value={timestamp} /> : undefined}
               renderText={
                 role === "llm" && !danger
                   ? (shown) => <AgentMessageText text={shown} />
