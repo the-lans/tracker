@@ -1,0 +1,123 @@
+import { screen, within } from "@testing-library/react";
+import { describe, expect, vi } from "vitest";
+import { TaskDetailsDialog } from "@/components/tasks/TaskDetailsDialog";
+import { makeTask } from "@/test/factories";
+import { test } from "@/test/fixtures";
+import { renderWithProviders } from "@/test/renderWithProviders";
+
+const ARTIFACTS = [
+  { path: "brief.md", size: 2048, modified_at: "2026-11-10T10:00:00Z" },
+  {
+    path: "docs/схема.png",
+    size: 1_048_576,
+    modified_at: "2026-11-11T10:00:00Z",
+  },
+];
+
+function renderDialog(
+  api: { respond: (key: string, body: unknown) => void },
+  overrides: Parameters<typeof makeTask>[0] = {},
+  onOpenChange = vi.fn(),
+) {
+  const task = makeTask({ id: "t1", ...overrides });
+  api.respond("GET /tasks/t1/artifacts", ARTIFACTS);
+  return {
+    ...renderWithProviders(
+      <TaskDetailsDialog task={task} open onOpenChange={onOpenChange} />,
+    ),
+    onOpenChange,
+  };
+}
+
+describe("TaskDetailsDialog", () => {
+  test("название, код, описание текстом, ссылки и файлы", async ({ api }) => {
+    renderDialog(api, {
+      code: "RR-1",
+      title: "Сводка по профилю игрока",
+      description: "Первая строка\nВторая строка",
+      jira_issue_url: "https://example.atlassian.net/browse/RR-1",
+      guide_url: "https://example.com/guide",
+    });
+
+    expect(
+      screen.getByRole("dialog", { name: "Сводка по профилю игрока" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("RR-1")).toBeInTheDocument();
+    expect(screen.getByText(/Первая строка/)).toHaveClass(
+      "whitespace-pre-wrap",
+    );
+    expect(
+      screen.getByRole("link", { name: "Открыть в Jira" }),
+    ).toHaveAttribute("href", "https://example.atlassian.net/browse/RR-1");
+    expect(screen.getByRole("link", { name: "Открыть гайд" })).toHaveAttribute(
+      "href",
+      "https://example.com/guide",
+    );
+    expect(await screen.findByText("brief.md")).toBeInTheDocument();
+    expect(screen.getByText("docs/схема.png")).toBeInTheDocument();
+  });
+
+  test("описание из Jira — отрисованным", async ({ api }) => {
+    renderDialog(api, {
+      description: "h2. Контекст",
+      description_html: "<h2>Контекст</h2><p>Нужна <b>сводка</b></p>",
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "Контекст" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("h2. Контекст")).not.toBeInTheDocument();
+  });
+
+  test("файлы только скачиваются: удаления нет", async ({ api }) => {
+    renderDialog(api);
+
+    const row = (await screen.findByText("brief.md")).closest(
+      "div.flex",
+    ) as HTMLElement;
+    expect(
+      within(row).getByRole("button", { name: "Скачать brief.md" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Удалить/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("без ссылок и файлов — пояснения", async ({ api }) => {
+    api.respond("GET /tasks/t1/artifacts", []);
+    renderWithProviders(
+      <TaskDetailsDialog
+        task={makeTask({ id: "t1" })}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Ссылок нет")).toBeInTheDocument();
+    expect(await screen.findByText("Файлов нет")).toBeInTheDocument();
+  });
+
+  test("файлы удалены по сроку хранения — причина", async ({ api }) => {
+    api.respond("GET /tasks/t1/artifacts", []);
+    renderWithProviders(
+      <TaskDetailsDialog
+        task={makeTask({
+          id: "t1",
+          artifacts_cleaned_at: "2026-09-01T10:00:00Z",
+        })}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Артефакты удалены")).toBeInTheDocument();
+  });
+
+  test("крестик закрывает окно", async ({ api }) => {
+    const { user, onOpenChange } = renderDialog(api);
+
+    await user.click(screen.getByRole("button", { name: "Закрыть" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});

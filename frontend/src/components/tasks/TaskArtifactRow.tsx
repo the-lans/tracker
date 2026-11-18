@@ -14,7 +14,16 @@ function fileName(path: string): string {
 }
 
 /** Один файл артефактов: скачать или удалить. */
-export function TaskArtifactRow({ taskId, artifact }: { taskId: string; artifact: TaskArtifact }) {
+export function TaskArtifactRow({
+  taskId,
+  artifact,
+  readOnly = false,
+}: {
+  taskId: string;
+  artifact: TaskArtifact;
+  /** Только просмотр и скачивание — без удаления (окно «Описание задачи»). */
+  readOnly?: boolean;
+}) {
   const remove = useDeleteTaskArtifact(taskId);
 
   function handleDownload() {
@@ -30,11 +39,15 @@ export function TaskArtifactRow({ taskId, artifact }: { taskId: string; artifact
     <div className="flex min-w-0 items-center gap-2 border-t border-border py-2 first:border-t-0">
       <FileText className="size-4 shrink-0 text-text-3" />
       <div className="min-w-0 flex-1">
-        <div className="truncate font-mono text-small font-bold" title={artifact.path}>
+        <div
+          className="truncate font-mono text-small font-bold"
+          title={artifact.path}
+        >
           {artifact.path}
         </div>
         <div className="text-meta text-text-3">
-          {formatFileSize(artifact.size)} · {formatDateTime(artifact.modified_at)}
+          {formatFileSize(artifact.size)} ·{" "}
+          {formatDateTime(artifact.modified_at)}
         </div>
       </div>
       <Button
@@ -45,16 +58,18 @@ export function TaskArtifactRow({ taskId, artifact }: { taskId: string; artifact
       >
         <Download className="size-4" />
       </Button>
-      <ConfirmDeleteButton
-        kind="файл"
-        name={artifact.path}
-        pending={remove.isPending}
-        onConfirm={() =>
-          remove.mutate(artifact.path, {
-            onError: toastError("Не удалось удалить файл"),
-          })
-        }
-      />
+      {!readOnly && (
+        <ConfirmDeleteButton
+          kind="файл"
+          name={artifact.path}
+          pending={remove.isPending}
+          onConfirm={() =>
+            remove.mutate(artifact.path, {
+              onError: toastError("Не удалось удалить файл"),
+            })
+          }
+        />
+      )}
     </div>
   );
 }

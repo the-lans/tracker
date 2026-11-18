@@ -3,9 +3,7 @@ import { Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/common/feedback/EmptyState";
-import { LoadingState } from "@/components/common/feedback/LoadingState";
-import { TaskArtifactRow } from "@/components/tasks/TaskArtifactRow";
+import { TaskArtifactList } from "@/components/tasks/TaskArtifactList";
 import {
   JIRA_COPY_REFETCH_INTERVAL_MS,
   useJiraAttachmentCopy,
@@ -14,9 +12,7 @@ import {
 } from "@/hooks/useTaskArtifacts";
 import { SESSION_ACTIVE_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { errorMessage } from "@/lib/errors";
-import { CLEANED_DATA_LABEL } from "@/lib/labels";
 import type { Task } from "@/lib/types";
-import { formatDateTime } from "@/lib/utils";
 
 // Пока задача работает, агент сохраняет файлы и между сменами статуса.
 const ACTIVE_REFETCH_INTERVAL_MS = 15_000;
@@ -28,13 +24,17 @@ const ACTIVE_REFETCH_INTERVAL_MS = 15_000;
  * видны по SFTP в `<код>/artifacts`.
  */
 export function TaskArtifactsCard({ task }: { task: Task }) {
-  const { data: jiraCopy } = useJiraAttachmentCopy(task.id, task.jira_issue_url !== null);
+  const { data: jiraCopy } = useJiraAttachmentCopy(
+    task.id,
+    task.jira_issue_url !== null,
+  );
   const copyingFromJira = jiraCopy?.pending === true;
   const { data: artifacts, isLoading } = useTaskArtifacts(
     task.id,
     copyingFromJira
       ? JIRA_COPY_REFETCH_INTERVAL_MS
-      : SESSION_ACTIVE_STATUSES.includes(task.status) && ACTIVE_REFETCH_INTERVAL_MS,
+      : SESSION_ACTIVE_STATUSES.includes(task.status) &&
+          ACTIVE_REFETCH_INTERVAL_MS,
   );
   const upload = useUploadTaskArtifact(task.id);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -45,9 +45,7 @@ export function TaskArtifactsCard({ task }: { task: Task }) {
     for (const file of files) {
       upload.mutate(file, {
         onError: (error) =>
-          toast.error(
-            errorMessage(error, `Не удалось загрузить ${file.name}`),
-          ),
+          toast.error(errorMessage(error, `Не удалось загрузить ${file.name}`)),
       });
     }
   }
@@ -78,27 +76,13 @@ export function TaskArtifactsCard({ task }: { task: Task }) {
           Копируются вложения из Jira — список обновится сам.
         </p>
       )}
-      {isLoading ? (
-        <LoadingState />
-      ) : artifacts?.length ? (
-        <div className="flex flex-col">
-          {artifacts.map((artifact) => (
-            <TaskArtifactRow key={artifact.path} taskId={task.id} artifact={artifact} />
-          ))}
-        </div>
-      ) : copyingFromJira ? null : task.artifacts_cleaned_at ? (
-        <EmptyState
-          compact
-          title={CLEANED_DATA_LABEL.artifacts_cleaned_at}
-          hint={`Файлы архивной задачи удалены ${formatDateTime(task.artifacts_cleaned_at)} по сроку хранения, который задаёт администратор.`}
-        />
-      ) : (
-        <EmptyState
-          compact
-          title="Файлов нет"
-          hint={`Загрузите файлы для агента — в промтах их каталог подставляется как {{task.artifacts_path}}. Агент сохраняет туда результаты; по SFTP каталог виден как ${task.code}/artifacts.`}
-        />
-      )}
+      <TaskArtifactList
+        task={task}
+        artifacts={artifacts}
+        isLoading={isLoading}
+        showEmpty={!copyingFromJira}
+        emptyHint={`Загрузите файлы для агента — в промтах их каталог подставляется как {{task.artifacts_path}}. Агент сохраняет туда результаты; по SFTP каталог виден как ${task.code}/artifacts.`}
+      />
     </Card>
   );
 }
