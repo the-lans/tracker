@@ -66,14 +66,17 @@ export function TaskPage() {
             </div>
             <TaskJiraLink task={task} />
           </div>
-          <TaskLlmAccountBadge task={task} />
+          {/* Под названием: отступ от него; надпись о просмотре — всегда на своей строке под аккаунтом. */}
+          <div className="mt-1 empty:hidden">
+            <TaskLlmAccountBadge task={task} />
+            {bridgeView === "unavailable" && (
+              <p className="text-caption text-text-3">
+                {REMOTE_CONTROL_STATUS_LABEL[RemoteControlStatus.UNAVAILABLE]}
+              </p>
+            )}
+          </div>
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {bridgeView === "unavailable" && (
-            <span className="mr-1 text-caption text-text-3">
-              {REMOTE_CONTROL_STATUS_LABEL[RemoteControlStatus.UNAVAILABLE]}
-            </span>
-          )}
           <TaskControlButtons task={task} />
           {bridgeView === "reconnect" && <RemoteControlButton task={task} />}
         </div>
