@@ -24,6 +24,7 @@ from db.models.enums import (
     ReasoningEffort,
     RemoteControlStatus,
     RepositoryRole,
+    TaskSessionEventKind,
     TaskStatus,
 )
 from db.models.tasks import MAX_QUEUE_PRIORITY, MIN_QUEUE_PRIORITY
@@ -115,6 +116,8 @@ class TaskResponse(BaseModel):
     code: str
     title: str
     description: str
+    # Раздел 15.6: HTML описания из Jira — только для показа.
+    description_html: str | None = None
     guide_url: str | None
     jira_issue_url: str | None = None
     status: TaskStatus
@@ -195,6 +198,16 @@ class NodeDependentResponse(BaseModel):
 class PipelineDependentsRequest(BaseModel):
     node_id: uuid.UUID
     enabled_node_ids: list[uuid.UUID]
+
+
+class TaskSessionEventResponse(BaseModel):
+    """Раздел 15.2: сброс контекста или начало новой сессии — реплика ленты чата."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    kind: TaskSessionEventKind
+    created_at: datetime
 
 
 class NodeLogResponse(BaseModel):

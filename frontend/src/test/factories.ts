@@ -57,6 +57,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     code: "RR-12345",
     title: "Экспорт отчётов в CSV",
     description: "",
+    description_html: null,
     guide_url: null,
     jira_issue_url: null,
     status: TaskStatus.NEW,
@@ -322,6 +323,7 @@ export function makeSystemSettings(overrides: Partial<SystemSettings> = {}): Sys
     night_window_end: "07:00:00",
     app_logs_retention_days: 30,
     day_start_time: "08:00:00",
+    llm_switch_threshold_week_pct: 98,
     ...overrides,
   };
 }

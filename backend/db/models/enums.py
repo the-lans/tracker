@@ -145,6 +145,15 @@ class LlmAccountStatus(StrEnum):
     DISABLED = "disabled"
 
 
+class TaskSessionEventKind(StrEnum):
+    """Событие сессии задачи, которое показывает лента чата (раздел 15.2)."""
+
+    # Контекст сброшен: нода `clear_context` или ручная очистка в `failed`.
+    CONTEXT_CLEARED = "context_cleared"
+    # Агент работает в новой сессии, а не продолжает прежнюю.
+    SESSION_STARTED = "session_started"
+
+
 class LlmSwitchReason(StrEnum):
     """
     Почему ход выполняется этим аккаунтом (раздел 19.7): событие

@@ -157,6 +157,7 @@ from api.schemas.tasks import (
     TaskRepositoryAttachRequest,
     TaskRepositoryResponse,
     TaskResponse,
+    TaskSessionEventResponse,
     TaskStatusChangeRequest,
     TaskUpdateRequest,
 )
@@ -278,6 +279,7 @@ __all__ = [
     "TaskLibraryPromptResponse",
     "TaskCustomNodeContent",
     "TaskCustomNodeCreateRequest",
+    "TaskSessionEventResponse",
     "TaskNodeResponse",
     "TaskNodeUpdateRequest",
     "TaskRepositoriesAddRequest",

@@ -11,6 +11,7 @@ import type {
   ManualRequest,
   NodeDependent,
   NodeLog,
+  TaskSessionEvent,
   NodeLogStatus,
   NodeLogTriggerType,
   QueueSummary,
@@ -115,6 +116,16 @@ export function useTask(taskId: string | undefined) {
     queryFn: () => api.get<Task>(`/tasks/${taskId}`),
     enabled: Boolean(taskId),
     refetchInterval: (query) => taskRefetchInterval(query.state.data),
+  });
+}
+
+/** Раздел 15.2: сброс контекста и новые сессии — реплики ленты вместе с записями нод. */
+export function useTaskSessionEvents(taskId: string) {
+  return useQuery({
+    // Под ключом записей нод: тот же сигнал сокета перечитывает и события.
+    queryKey: [...taskKeys.nodeLogs(taskId), "session-events"],
+    queryFn: () => api.get<TaskSessionEvent[]>(`/tasks/${taskId}/session-events`),
+    refetchInterval: 4_000,
   });
 }
 
@@ -382,6 +393,14 @@ export function useUpdateTaskNode(taskId: string) {
       void queryClient.invalidateQueries({ queryKey: taskKeys.nodes(taskId) });
     },
   });
+}
+
+/** Раздел 15.6: отрисованное описание из Jira у задачи, импортированной раньше. */
+export function useRefreshJiraDescription(taskId: string) {
+  return useInvalidatingMutation(
+    () => api.post<Task>(`/jira/tasks/${taskId}/description`),
+    [taskKeys.detail(taskId), ["tasks", taskId, "artifacts"]],
+  );
 }
 
 /** Раздел 13.1: свой промт между нодами снимка задачи. */

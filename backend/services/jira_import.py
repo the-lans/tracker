@@ -21,13 +21,15 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 import httpx
+import sqlalchemy as sa
 
 from app_logging.app_logs import write_app_log
 from app_logging.config import get_logger
 from clients.jira import AttachmentTooLargeError, JiraClient, JiraCredentials
 from db.models.enums import AppLogLevel
+from db.models.tasks import Task
 from services.crypto import decrypt, encrypt
-from services.errors import AppError, ValidationError
+from services.errors import AppError, ConflictError, ValidationError
 from services.system_settings import get_jira_url
 from services.task_artifacts import max_upload_bytes, save_artifact
 from services.task_codes import validate_task_code
@@ -36,7 +38,6 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from db.models.tasks import Task
     from db.models.users import User
 
 logger = get_logger("jira_import")
@@ -44,8 +45,11 @@ logger = get_logger("jira_import")
 _LOG_SOURCE = "jira_import"
 _ISSUE_KEY_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]*-\d+")
 _BROWSE_PATH = "/browse/"
+_BROWSE_KEY_PATTERN = re.compile(r"/browse/([A-Za-z][A-Za-z0-9_]*-\d+)")
 # Запрос к Jira — по действию пользователя: ждать дольше нет смысла.
 JIRA_TIMEOUT_SECONDS = 30.0
+# Больше этого HTML описания не сохраняется: показывается обычный текст.
+DESCRIPTION_HTML_MAX_CHARS = 500_000
 _COPY_PENDING_KEY = "jira_attachments_pending:{task_id}"
 # Страховка на случай потерянной фоновой задачи: флаг «копируются» не держит
 # опрос списка артефактов вечно.
@@ -207,6 +211,69 @@ async def _log_skipped(task: Task, filename: str, reason: str) -> None:
     )
 
 
+async def save_description_html(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    description: str,
+    description_html: str | None,
+) -> bool:
+    """
+    HTML описания из Jira → `tasks.description_html` (раздел 15.6). Только если
+    описание задачи осталось таким, как в Jira: условие в самом UPDATE — правка
+    описания между чтением и записью не оставит HTML от прежнего текста.
+    """
+    if not description_html or len(description_html) > DESCRIPTION_HTML_MAX_CHARS:
+        return False
+    result = await db_session.execute(
+        sa.update(Task)
+        .where(Task.id == task.id, Task.description == description)
+        .values(description_html=description_html)
+        .returning(Task.id),
+    )
+    await db_session.commit()
+    return result.scalar_one_or_none() is not None
+
+
+def issue_key_of_url(url: str | None) -> str | None:
+    """Ключ задачи из сохранённой ссылки `…/browse/PROJ-123`; нет ссылки или ключа — None."""
+    match = _BROWSE_KEY_PATTERN.search(url or "")
+    return match.group(1).upper() if match else None
+
+
+async def refresh_description_html(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    user: User,
+    http_client: httpx.AsyncClient,
+) -> str:
+    """
+    Подгружает отрисованное описание у задачи, импортированной из Jira раньше
+    (раздел 15.6); возвращает ключ задачи Jira — по нему копируются вложения.
+    Только пока описание задачи совпадает с описанием в Jira: иначе HTML
+    показывал бы другой текст.
+    """
+    key = issue_key_of_url(task.jira_issue_url)
+    if key is None:
+        raise ConflictError("У задачи нет ссылки на задачу Jira")
+    credentials = await jira_credentials_for(db_session, user)
+    issue = await JiraClient(credentials=credentials, http_client=http_client).get_issue(key)
+    if issue.description != task.description:
+        raise ConflictError("Описание задачи отличается от описания в Jira — обновить нельзя")
+    if not issue.description_html:
+        raise ConflictError("Jira не вернула отрисованное описание")
+    saved = await save_description_html(
+        db_session,
+        task=task,
+        description=issue.description,
+        description_html=issue.description_html,
+    )
+    if not saved:
+        raise ConflictError("Описание изменилось или слишком большое для показа")
+    return key
+
+
 async def copy_jira_attachments(
     db_session: AsyncSession,
     *,
@@ -228,6 +295,12 @@ async def copy_jira_attachments(
     except AppError as exc:
         await _log_skipped(task, "*", exc.message)
         return result
+    await save_description_html(
+        db_session,
+        task=task,
+        description=issue.description,
+        description_html=issue.description_html,
+    )
     limit = max_upload_bytes()
     taken: set[str] = set()
     for attachment in issue.attachments:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
 
@@ -10,11 +11,21 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.dependencies import get_current_user
-from api.schemas import JiraIssueDraftResponse, JiraServerResponse
+from api.schemas import JiraIssueDraftResponse, JiraServerResponse, TaskResponse
+from api.tasks.common import get_task_or_404
+from db.models.tasks import Task
 from db.models.users import User
 from db.session import get_session
-from services.jira_import import JiraIssueDraft, fetch_jira_draft, new_jira_http_client
+from services.jira_import import (
+    JiraIssueDraft,
+    fetch_jira_draft,
+    mark_attachment_copy_pending,
+    new_jira_http_client,
+    refresh_description_html,
+)
+from services.redis_connection import redis_connection
 from services.system_settings import get_jira_url
+from tasks.jira_attachments import copy_jira_attachments_to_task
 
 router = APIRouter(prefix="/jira", tags=["jira"])
 
@@ -49,3 +60,28 @@ async def get_issue_draft(
         key=key,
         http_client=http_client,
     )
+
+
+@router.post("/tasks/{task_id}/description", response_model=TaskResponse)
+async def refresh_task_description(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    http_client: Annotated[httpx.AsyncClient, Depends(get_jira_http_client)],
+) -> Task:
+    """
+    Раздел 15.6: «Обновить описание из Jira» — подгружает отрисованное описание
+    у задачи, импортированной раньше, и перекопирует вложения для картинок.
+    """
+    task = await get_task_or_404(db_session, task_id, current_user)
+    key = await refresh_description_html(
+        db_session,
+        task=task,
+        user=current_user,
+        http_client=http_client,
+    )
+    async with redis_connection() as redis_client:
+        await mark_attachment_copy_pending(redis_client, task.id)
+    copy_jira_attachments_to_task.delay(str(task.id), str(current_user.id), key)
+    await db_session.refresh(task)
+    return task

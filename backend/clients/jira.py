@@ -23,6 +23,8 @@ from services.errors import ExternalServiceError, NotFoundError
 
 _ISSUE_PATH = "/rest/api/2/issue/{key}"
 _ISSUE_FIELDS = "summary,description,attachment"
+# Jira отдаёт готовый HTML описания рядом с исходной разметкой (для показа в трекере).
+_ISSUE_EXPAND = "renderedFields"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,8 @@ class JiraIssue:
     key: str
     summary: str
     description: str
+    # Описание, отрисованное Jira в HTML; None — Jira его не вернула.
+    description_html: str | None
     browse_url: str
     attachments: list[JiraAttachment]
 
@@ -73,6 +77,14 @@ def _attachments(fields: dict[str, Any]) -> list[JiraAttachment]:
         for item in fields.get("attachment") or []
         if isinstance(item, dict) and item.get("filename") and item.get("content")
     ]
+
+
+def _rendered_description(body: dict[str, Any]) -> str | None:
+    rendered = body.get("renderedFields")
+    if not isinstance(rendered, dict):
+        return None
+    html = rendered.get("description")
+    return html if isinstance(html, str) and html.strip() else None
 
 
 class JiraClient:
@@ -134,7 +146,7 @@ class JiraClient:
 
     async def get_issue(self, key: str) -> JiraIssue:
         url = f"{self._base_url}{_ISSUE_PATH.format(key=quote(key, safe=''))}"
-        response = await self._get(url, params={"fields": _ISSUE_FIELDS})
+        response = await self._get(url, params={"fields": _ISSUE_FIELDS, "expand": _ISSUE_EXPAND})
         self._raise_for_status(response, what=f"Задача {key}")
         body = self._json_object(response)
         fields = body.get("fields")
@@ -145,6 +157,7 @@ class JiraClient:
             key=issue_key,
             summary=str(fields.get("summary") or ""),
             description=str(fields.get("description") or ""),
+            description_html=_rendered_description(body),
             browse_url=f"{self._base_url}/browse/{issue_key}",
             attachments=_attachments(fields),
         )

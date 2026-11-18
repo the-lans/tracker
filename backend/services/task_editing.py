@@ -33,6 +33,7 @@ _ANYTIME_FIELD = "auto_accept_plan"
 _RUN_CONTROL_FIELDS = frozenset({"queue_priority", "occupies_slot"})
 _LLM_ACCOUNT_FIELD = "llm_account_id"
 _CATEGORY_FIELD = "category_id"
+_DESCRIPTION_FIELD = "description"
 
 
 def _restart_on_chosen_account(task: Task, changes: dict[str, Any]) -> None:
@@ -41,6 +42,12 @@ def _restart_on_chosen_account(task: Task, changes: dict[str, Any]) -> None:
         return
     task.current_llm_account_id = None
     logger.info("task_start_llm_account_changed", task_id=str(task.id))
+
+
+def _drop_stale_description_html(task: Task, changes: dict[str, Any]) -> None:
+    """Новое описание — HTML из Jira ему больше не соответствует (раздел 15.6)."""
+    if _DESCRIPTION_FIELD in changes and changes[_DESCRIPTION_FIELD] != task.description:
+        task.description_html = None
 
 
 async def update_task(
@@ -78,6 +85,7 @@ async def update_task(
             require_active=changes[_LLM_ACCOUNT_FIELD] != task.llm_account_id,
         )
     _restart_on_chosen_account(task, changes)
+    _drop_stale_description_html(task, changes)
 
     for field, value in {**changes, **run_control}.items():
         setattr(task, field, value)
