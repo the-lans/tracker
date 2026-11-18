@@ -239,6 +239,27 @@ class TestRewrite:
         entries = [entry for entry in logs if entry["event"] == "llm_gateway_request"]
         assert [entry["max_tokens_clamped_from"] for entry in entries] == [128_000, None]
 
+    async def test_timings_logged(
+        self,
+        gateway: httpx.AsyncClient,
+        token: str,
+    ) -> None:
+        with structlog.testing.capture_logs() as logs:
+            await gateway.post(
+                "/v1/messages",
+                json=_message(),
+                headers={"authorization": f"Bearer {token}"},
+            )
+
+        request = next(entry for entry in logs if entry["event"] == "llm_gateway_request")
+        finished = next(
+            entry for entry in logs if entry["event"] == "llm_gateway_response_finished"
+        )
+        assert isinstance(request["upstream_headers_ms"], int)
+        assert isinstance(finished["first_chunk_ms"], int)
+        assert isinstance(finished["duration_ms"], int)
+        assert finished["completed"] is True
+
     async def test_request_logged_with_route(
         self,
         gateway: httpx.AsyncClient,

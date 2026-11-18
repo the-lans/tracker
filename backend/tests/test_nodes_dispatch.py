@@ -181,7 +181,7 @@ async def test_execute_llm_node_with_timeout_interrupts_and_fails_on_timeout() -
     outcome = await execute_llm_node_with_timeout(session, "hi", timeout_seconds=0.001)
 
     assert outcome.success is False
-    assert outcome.error_message == "Превышен таймаут выполнения"
+    assert outcome.error_message == "Превышен таймаут выполнения (ответ модели не начался)"
     assert fake.interrupted is True
 
 

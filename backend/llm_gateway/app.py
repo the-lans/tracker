@@ -16,8 +16,9 @@ ASGI-приложение шлюза `llm-gateway` (раздел 19.7 ТЗ).
 
 from __future__ import annotations
 
+import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING
 
 import httpx
@@ -42,6 +43,13 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
 
 logger = get_logger(LOGGER_NAME)
+
+_MS_IN_SECOND = 1000
+
+
+def _elapsed_ms(started: float) -> int:
+    return round((time.monotonic() - started) * _MS_IN_SECOND)
+
 
 _BEARER = "bearer "
 # Ключ сессии и транспортные заголовки клиента прокси не уходят.
@@ -162,6 +170,7 @@ class LlmGateway:
         content: bytes,
         max_tokens_clamped_from: int | None = None,
     ) -> Response:
+        started = time.monotonic()
         upstream_request = self._upstream.build_request(
             request.method,
             f"{self._config.cliproxy_url}{request.url.path}",
@@ -187,6 +196,8 @@ class LlmGateway:
             account_id=str(route.account_id),
             model=route.model,
             reasoning_effort=route.provider_effort.value,
+            # Время до заголовков ответа прокси: задержка до начала ответа модели.
+            upstream_headers_ms=_elapsed_ms(started),
             # Шлюз снизил `max_tokens` до потолка модели (None — не менялся):
             # отличает обрыв ответа по лимиту от запроса самой сессии.
             max_tokens_clamped_from=max_tokens_clamped_from,
@@ -194,10 +205,41 @@ class LlmGateway:
         # `aiter_bytes`: если прокси всё же сжал ответ, сессия получит его распакованным
         # (заголовок `content-encoding` не пересылается).
         return StreamingResponse(
-            upstream_response.aiter_bytes(),
+            _relay(upstream_response, task_id=task_id, path=request.url.path, started=started),
             status_code=upstream_response.status_code,
             headers=_response_headers(upstream_response.headers),
             background=BackgroundTask(upstream_response.aclose),
+        )
+
+
+async def _relay(
+    upstream_response: httpx.Response,
+    *,
+    task_id: uuid.UUID,
+    path: str,
+    started: float,
+) -> AsyncIterator[bytes]:
+    """
+    Передаёт тело ответа прокси сессии и пишет, как долго оно шло: время до
+    первого фрагмента, полная длительность и дошло ли тело до конца (обрыв
+    или отмена сессией — `completed=False`).
+    """
+    first_chunk_ms: int | None = None
+    completed = False
+    try:
+        async for chunk in upstream_response.aiter_bytes():
+            if first_chunk_ms is None:
+                first_chunk_ms = _elapsed_ms(started)
+            yield chunk
+        completed = True
+    finally:
+        logger.info(
+            "llm_gateway_response_finished",
+            task_id=str(task_id),
+            path=path,
+            first_chunk_ms=first_chunk_ms,
+            duration_ms=_elapsed_ms(started),
+            completed=completed,
         )
 
 

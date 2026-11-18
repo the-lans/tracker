@@ -390,6 +390,8 @@ class ClaudeCodeSession:
         # В поток хода уже ушёл текст: следующий текстовый блок отделяется.
         self._turn_streamed_text = False
         self.user_wait_clock = UserWaitClock()
+        # Прогресс текущего (или последнего) хода — для причины таймаута ноды.
+        self.turn_progress = agent_metrics.TurnProgress()
         # Служебная строка трекера (например, о добавленных репозиториях,
         # раздел 3.2) — уходит первой строкой следующего обычного хода.
         self._pending_notice: str | None = None
@@ -535,6 +537,9 @@ class ClaudeCodeSession:
         на границе аккаунт меняется со сжатием контекста `/compact`.
         """
         async with self._lock:
+            # До выбора аккаунта: таймаут на этом этапе не должен показать
+            # прогресс прошлого хода.
+            progress = self.turn_progress = agent_metrics.TurnProgress()
             route = await self._route(effort=effort, node_type=node_type, boundary=boundary)
             # Только после выбора аккаунта: ворота лимита (`LlmLimitWaitError`)
             # и отсутствие аккаунта не должны стереть строку, ход ещё не начат.
@@ -560,6 +565,7 @@ class ClaudeCodeSession:
                 async for message in self._client.receive_response():
                     if first_event_at is None:
                         first_event_at = time.monotonic()
+                        progress.first_event_received = True
                     if isinstance(message, StreamEvent):
                         await self._forward_text_delta(message)
                     if isinstance(message, RateLimitEvent) and self._on_rate_limit is not None:
@@ -574,6 +580,7 @@ class ClaudeCodeSession:
                             ):
                                 tool_call_count += 1
                                 tool_started_at[block.id] = time.monotonic()
+                                progress.tool_started(block.id, block.name)
                                 if block.name in {"Agent", "Task"}:
                                     subagent_call_count += 1
                                 if tool_log_count >= agent_metrics.TOOL_LOG_EVENT_LIMIT:
@@ -594,12 +601,14 @@ class ClaudeCodeSession:
                             elif isinstance(block, ToolUseBlock):
                                 tool_call_count += 1
                                 tool_started_at[block.id] = time.monotonic()
+                                progress.tool_started(block.id, block.name)
                                 if block.name in {"Agent", "Task"}:
                                     subagent_call_count += 1
                         text_parts.extend(_own_text_blocks(message))
                     if isinstance(message, UserMessage):
                         for result_block in message.content:
                             if isinstance(result_block, ToolResultBlock):
+                                progress.tool_finished(result_block.tool_use_id)
                                 started_at = tool_started_at.pop(result_block.tool_use_id, None)
                                 if started_at is not None:
                                     tool_durations_ms.append(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass, field
 
 from app_logging.config import get_logger
 
@@ -23,7 +24,39 @@ _SENSITIVE_TOOL_INPUT_PARTS = (
     "private_key",
 )
 
+# Сколько незавершённых инструментов перечислять в причине таймаута.
+TIMEOUT_OPEN_TOOLS_LIMIT = 3
+
 logger = get_logger("agent_metrics")
+
+
+@dataclass
+class TurnProgress:
+    """
+    Что успел ход к моменту таймаута: пришло ли первое событие SDK, сколько
+    вызвано инструментов и какие из них не вернули результат. Только имена
+    инструментов, без аргументов — текст попадает в `node_logs.error_message`.
+    """
+
+    first_event_received: bool = False
+    tool_call_count: int = 0
+    open_tools: dict[str, str] = field(default_factory=dict)
+
+    def tool_started(self, tool_use_id: str, name: str) -> None:
+        self.tool_call_count += 1
+        self.open_tools[tool_use_id] = name
+
+    def tool_finished(self, tool_use_id: str) -> None:
+        self.open_tools.pop(tool_use_id, None)
+
+    def timeout_details(self) -> str:
+        if not self.first_event_received:
+            return "ответ модели не начался"
+        details = [f"инструментов: {self.tool_call_count}"]
+        if self.open_tools:
+            names = list(self.open_tools.values())[:TIMEOUT_OPEN_TOOLS_LIMIT]
+            details.append(f"не завершены: {', '.join(names)}")
+        return ", ".join(details)
 
 
 def diagnostics_enabled() -> bool:
@@ -74,5 +107,3 @@ def _is_sensitive_key(key: object) -> bool:
 
 def log_cli_stderr(line: str) -> None:
     logger.info("claude_cli_stderr", line=line[:TOOL_INPUT_LOG_LIMIT])
-
-
