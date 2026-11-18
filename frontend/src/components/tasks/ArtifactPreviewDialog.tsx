@@ -51,8 +51,8 @@ export function ArtifactPreviewDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-5xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[90vh] max-w-5xl flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="break-all font-mono text-lead">
             {artifact.path}
           </DialogTitle>
@@ -61,14 +61,17 @@ export function ArtifactPreviewDialog({
             {formatDateTime(artifact.modified_at)}
           </DialogDescription>
         </DialogHeader>
-        <ArtifactPreviewBody
-          kind={kind}
-          path={artifact.path}
-          blob={blob}
-          isLoading={isLoading}
-          isError={isError}
-        />
-        <DialogFooter>
+        {/* Название и кнопки неподвижны, прокручивается только содержимое файла. */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <ArtifactPreviewBody
+            kind={kind}
+            path={artifact.path}
+            blob={blob}
+            isLoading={isLoading}
+            isError={isError}
+          />
+        </div>
+        <DialogFooter className="shrink-0">
           <Button variant="secondary" size="sm" onClick={handleDownload}>
             <Download className="size-3.5" /> Скачать
           </Button>

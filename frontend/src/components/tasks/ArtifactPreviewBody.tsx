@@ -50,13 +50,13 @@ function MediaPreview({
     <img
       src={url}
       alt={path}
-      className="mx-auto max-h-[70vh] max-w-full object-contain"
+      className="mx-auto max-h-[60vh] max-w-full object-contain"
     />
   ) : (
     <iframe
       src={url}
       title={path}
-      className="h-[70vh] w-full rounded-md border border-border"
+      className="h-[60vh] w-full rounded-md border border-border"
     />
   );
 }
