@@ -10,8 +10,10 @@
  */
 export const PAGE_ROOT = "flex h-full flex-col short:h-auto";
 
+// `relative`: скрытые служебные поля переключателей и списков (position: absolute)
+// остаются внутри панели прокрутки и не растягивают документ — иначе второй ползунок.
 export const PAGE_BODY =
-  "min-h-0 flex-1 overflow-auto px-5 pb-8 short:flex-none short:overflow-visible lg:px-8";
+  "relative min-h-0 flex-1 overflow-auto px-5 pb-8 short:flex-none short:overflow-visible lg:px-8";
 
 /** Кнопка действия в шапке страницы задачи (раздел 14.2). */
 export const HEADER_BUTTON =

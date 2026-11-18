@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Menu } from "lucide-react";
-import { Sidebar } from "@/components/layout/Sidebar";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Sidebar, SidebarBrand } from "@/components/layout/Sidebar";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { CountBadge } from "@/components/common/feedback/CountBadge";
 import { useAwaitingDecisionCount } from "@/hooks/useTasks";
@@ -46,8 +46,16 @@ export function AppShell() {
       </div>
 
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-        <SheetContent className="left-0 top-0 h-dvh max-h-dvh w-[280px] max-w-[85vw] overflow-hidden rounded-none border-r border-t-0 p-0 [&>[data-sheet-handle]]:hidden">
-          <Sidebar onNavigate={() => setMobileNavOpen(false)} />
+        <SheetContent
+          className="left-0 top-0 flex h-dvh max-h-dvh w-[280px] max-w-[85vw] flex-col overflow-hidden rounded-none border-r border-t-0 p-0 [&>[data-sheet-handle]]:hidden"
+          // Крестик — в шапке шторки, а не поверх полосы прокрутки меню.
+          closeClassName="right-2 top-2"
+        >
+          <SheetTitle className="sr-only">Основное меню</SheetTitle>
+          <SidebarBrand className="shrink-0 border-b border-border px-5 pb-3 pt-3.5" />
+          <div className="min-h-0 flex-1">
+            <Sidebar hideBrand onNavigate={() => setMobileNavOpen(false)} />
+          </div>
         </SheetContent>
       </Sheet>
 
