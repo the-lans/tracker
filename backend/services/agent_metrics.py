@@ -47,8 +47,9 @@ class TurnProgress:
         self.tool_call_count += 1
         self.open_tools[tool_use_id] = name
 
-    def tool_finished(self, tool_use_id: str) -> None:
-        self.open_tools.pop(tool_use_id, None)
+    def tool_finished(self, tool_use_id: str) -> str | None:
+        """Имя инструмента, вернувшего результат; None, если вызов не отслеживался."""
+        return self.open_tools.pop(tool_use_id, None)
 
     def timeout_details(self) -> str:
         if not self.model_responded:
@@ -103,6 +104,34 @@ def _is_sensitive_key(key: object) -> bool:
     normalized = str(key).lower().replace("-", "_")
     return normalized in _SENSITIVE_TOOL_INPUT_KEYS or any(
         part in normalized for part in _SENSITIVE_TOOL_INPUT_PARTS
+    )
+
+
+def tool_result_preview(content: object) -> str:
+    """Короткий текст результата инструмента для лога ошибки."""
+    if isinstance(content, list):
+        texts = [item.get("text", "") for item in content if isinstance(item, dict)]
+        content = " ".join(str(text) for text in texts)
+    return str(content or "")[:TOOL_INPUT_LOG_LIMIT]
+
+
+def log_tool_finished(
+    *,
+    tool_name: str | None,
+    duration_ms: int | None,
+    is_error: bool,
+    content: object,
+) -> None:
+    """
+    Результат инструмента в диагностическом режиме: имя, длительность и для
+    ошибки — начало её текста.
+    """
+    logger.info(
+        "session_tool_finished",
+        tool_name=tool_name,
+        duration_ms=duration_ms,
+        is_error=is_error,
+        error=tool_result_preview(content) if is_error else None,
     )
 
 

@@ -403,6 +403,44 @@ class TestUpstream:
         assert (response.status_code, response.json()) == (429, error)
         assert response.headers["retry-after"] == "30"
 
+    async def test_error_body_logged(
+        self,
+        gateway: httpx.AsyncClient,
+        upstream: Upstream,
+        token: str,
+    ) -> None:
+        error = {"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}}
+        upstream.reply = (400, json.dumps(error).encode(), {})
+
+        with structlog.testing.capture_logs() as logs:
+            response = await gateway.post(
+                "/v1/messages",
+                json=_message(),
+                headers={"x-api-key": token},
+            )
+
+        entry = next(entry for entry in logs if entry["event"] == "llm_gateway_request")
+        assert json.loads(entry["error_body"]) == error
+        assert response.json() == error
+
+    async def test_error_body_truncated_and_absent_on_success(
+        self,
+        gateway: httpx.AsyncClient,
+        upstream: Upstream,
+        token: str,
+    ) -> None:
+        upstream.reply = (500, b"x" * 1000, {})
+        with structlog.testing.capture_logs() as failed:
+            await gateway.post("/v1/messages", json=_message(), headers={"x-api-key": token})
+        upstream.reply = (200, _SSE, {"content-type": "text/event-stream"})
+        with structlog.testing.capture_logs() as succeeded:
+            await gateway.post("/v1/messages", json=_message(), headers={"x-api-key": token})
+
+        failed_entry = next(entry for entry in failed if entry["event"] == "llm_gateway_request")
+        ok_entry = next(entry for entry in succeeded if entry["event"] == "llm_gateway_request")
+        assert len(failed_entry["error_body"]) == 300
+        assert ok_entry["error_body"] is None
+
     async def test_compressed_reply_decoded(
         self,
         gateway: httpx.AsyncClient,

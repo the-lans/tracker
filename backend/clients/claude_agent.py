@@ -562,6 +562,7 @@ class ClaudeCodeSession:
                 assistant_error: str | None = None
                 tool_log_count = 0
                 tool_log_limit_reported = False
+                tool_finished_log_count = 0
                 async for message in self._client.receive_response():
                     if first_event_at is None:
                         first_event_at = time.monotonic()
@@ -609,14 +610,29 @@ class ClaudeCodeSession:
                     if isinstance(message, UserMessage):
                         for result_block in message.content:
                             if isinstance(result_block, ToolResultBlock):
-                                progress.tool_finished(result_block.tool_use_id)
+                                tool_name = progress.tool_finished(result_block.tool_use_id)
                                 started_at = tool_started_at.pop(result_block.tool_use_id, None)
-                                if started_at is not None:
-                                    tool_durations_ms.append(
-                                        round((time.monotonic() - started_at) * 1000)
-                                    )
+                                duration_ms = (
+                                    round((time.monotonic() - started_at) * 1000)
+                                    if started_at is not None
+                                    else None
+                                )
+                                if duration_ms is not None:
+                                    tool_durations_ms.append(duration_ms)
                                 if result_block.is_error:
                                     tool_error_count += 1
+                                # Ошибки пишутся всегда, остальные — в пределах лимита хода.
+                                if agent_metrics.diagnostics_enabled() and (
+                                    result_block.is_error
+                                    or tool_finished_log_count < agent_metrics.TOOL_LOG_EVENT_LIMIT
+                                ):
+                                    tool_finished_log_count += 1
+                                    agent_metrics.log_tool_finished(
+                                        tool_name=tool_name,
+                                        duration_ms=duration_ms,
+                                        is_error=bool(result_block.is_error),
+                                        content=result_block.content,
+                                    )
                     if isinstance(message, ResultMessage):
                         result = message
             except ClaudeSDKError:

@@ -45,6 +45,9 @@ if TYPE_CHECKING:
 logger = get_logger(LOGGER_NAME)
 
 _MS_IN_SECOND = 1000
+_HTTP_ERROR_MIN_STATUS = 400
+# Сколько символов тела ошибки прокси попадает в лог.
+_ERROR_BODY_LOG_LIMIT = 300
 
 
 def _elapsed_ms(started: float) -> int:
@@ -187,6 +190,11 @@ class LlmGateway:
                 error=type(exc).__name__,
             )
             return _error(502, "api_error", "LLM-прокси недоступен")
+        error_body = None
+        if upstream_response.status_code >= _HTTP_ERROR_MIN_STATUS:
+            # Тело ошибки короткое: читаем его целиком, сессия получит его без изменений.
+            raw_body = await upstream_response.aread()
+            error_body = raw_body[:_ERROR_BODY_LOG_LIMIT].decode(errors="replace")
         logger.info(
             "llm_gateway_request",
             task_id=str(task_id),
@@ -201,6 +209,8 @@ class LlmGateway:
             # Шлюз снизил `max_tokens` до потолка модели (None — не менялся):
             # отличает обрыв ответа по лимиту от запроса самой сессии.
             max_tokens_clamped_from=max_tokens_clamped_from,
+            # Начало тела ответа с ошибкой (None — ответ без ошибки).
+            error_body=error_body,
         )
         # `aiter_bytes`: если прокси всё же сжал ответ, сессия получит его распакованным
         # (заголовок `content-encoding` не пересылается).
