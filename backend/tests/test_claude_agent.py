@@ -833,10 +833,10 @@ class TestTurnProgress:
         ("progress", "expected"),
         [
             (agent_metrics.TurnProgress(), "ответ модели не начался"),
-            (agent_metrics.TurnProgress(first_event_received=True), "инструментов: 0"),
+            (agent_metrics.TurnProgress(model_responded=True), "инструментов: 0"),
             (
                 agent_metrics.TurnProgress(
-                    first_event_received=True,
+                    model_responded=True,
                     tool_call_count=5,
                     open_tools={"a": "mcp__jira", "b": "Read"},
                 ),
@@ -844,7 +844,7 @@ class TestTurnProgress:
             ),
             (
                 agent_metrics.TurnProgress(
-                    first_event_received=True,
+                    model_responded=True,
                     open_tools={str(index): f"tool{index}" for index in range(5)},
                 ),
                 "инструментов: 0, не завершены: tool0, tool1, tool2",
@@ -898,5 +898,14 @@ class TestTurnProgress:
 
         with pytest.raises(NoLlmAccountAvailableError):
             await session.send_and_collect_text("второй")
+
+        assert session.turn_progress.timeout_details() == "ответ модели не начался"
+
+    async def test_echo_is_not_model_response(self) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[[UserMessage(content="прочитай")]])
+        session = ClaudeCodeSession(fake)
+
+        with pytest.raises(RuntimeError):
+            await session.send_and_collect_text("прочитай")
 
         assert session.turn_progress.timeout_details() == "ответ модели не начался"

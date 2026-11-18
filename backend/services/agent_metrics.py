@@ -33,12 +33,13 @@ logger = get_logger("agent_metrics")
 @dataclass
 class TurnProgress:
     """
-    Что успел ход к моменту таймаута: пришло ли первое событие SDK, сколько
+    Что успел ход к моменту таймаута: ответила ли модель (первое событие SDK
+    приходит сразу, ещё до модели, поэтому считается только её ответ), сколько
     вызвано инструментов и какие из них не вернули результат. Только имена
     инструментов, без аргументов — текст попадает в `node_logs.error_message`.
     """
 
-    first_event_received: bool = False
+    model_responded: bool = False
     tool_call_count: int = 0
     open_tools: dict[str, str] = field(default_factory=dict)
 
@@ -50,7 +51,7 @@ class TurnProgress:
         self.open_tools.pop(tool_use_id, None)
 
     def timeout_details(self) -> str:
-        if not self.first_event_received:
+        if not self.model_responded:
             return "ответ модели не начался"
         details = [f"инструментов: {self.tool_call_count}"]
         if self.open_tools:

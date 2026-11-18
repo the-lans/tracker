@@ -565,7 +565,8 @@ class ClaudeCodeSession:
                 async for message in self._client.receive_response():
                     if first_event_at is None:
                         first_event_at = time.monotonic()
-                        progress.first_event_received = True
+                    if isinstance(message, AssistantMessage | StreamEvent | ResultMessage):
+                        progress.model_responded = True
                     if isinstance(message, StreamEvent):
                         await self._forward_text_delta(message)
                     if isinstance(message, RateLimitEvent) and self._on_rate_limit is not None:
