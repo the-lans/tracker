@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mergeFeed } from "@/lib/chatFeed";
+import { mergeFeed, withDateSeparators } from "@/lib/chatFeed";
 import { TaskSessionEventKind, type TaskSessionEvent } from "@/lib/types";
 import { makeNodeLog } from "@/test/factories";
 
@@ -55,5 +55,59 @@ describe("mergeFeed", () => {
     const logs = [makeNodeLog({ id: "a" }), makeNodeLog({ id: "b" })];
 
     expect(order(mergeFeed(logs, []))).toEqual(["a", "b"]);
+  });
+});
+
+describe("withDateSeparators", () => {
+  const local = (day: number, hours: number) => new Date(2026, 10, day, hours, 0).toISOString();
+  const kinds = (logs: ReturnType<typeof makeNodeLog>[], events: TaskSessionEvent[] = []) =>
+    withDateSeparators(mergeFeed(logs, events)).map((entry) =>
+      entry.type === "date" ? "date" : entry.type === "log" ? entry.log.id : entry.event.id,
+    );
+
+  test("дата стоит перед первой записью и при смене дня", () => {
+    const logs = [
+      makeNodeLog({ id: "a", started_at: local(10, 9) }),
+      makeNodeLog({ id: "b", started_at: local(10, 18) }),
+      makeNodeLog({ id: "c", started_at: local(11, 8) }),
+    ];
+
+    expect(kinds(logs)).toEqual(["date", "a", "b", "date", "c"]);
+  });
+
+  test("событие сессии тоже может открыть новый день", () => {
+    const logs = [makeNodeLog({ id: "a", started_at: local(10, 22) })];
+
+    expect(kinds(logs, [event("e", local(11, 1))])).toEqual(["date", "a", "date", "e"]);
+  });
+
+  test("запись без времени начала даты не добавляет и не прерывает день", () => {
+    const logs = [
+      makeNodeLog({ id: "a", started_at: local(10, 9) }),
+      makeNodeLog({ id: "queued", started_at: null }),
+    ];
+
+    expect(kinds(logs)).toEqual(["date", "a", "queued"]);
+  });
+
+  test("дата всегда перед блоком: в конце ленты и подряд двух дат не бывает", () => {
+    const logs = [
+      makeNodeLog({ id: "a", started_at: local(9, 9) }),
+      makeNodeLog({ id: "b", started_at: local(11, 9) }),
+      makeNodeLog({ id: "c", started_at: local(15, 9) }),
+      makeNodeLog({ id: "queued", started_at: null }),
+    ];
+
+    const entries = kinds(logs);
+
+    expect(entries[entries.length - 1]).not.toBe("date");
+    entries.slice(1).forEach((entry, index) => {
+      if (entries[index] === "date") expect(entry).not.toBe("date");
+    });
+    expect(entries.filter((entry) => entry === "date")).toHaveLength(3);
+  });
+
+  test("пустая лента — без дат", () => {
+    expect(kinds([])).toEqual([]);
   });
 });

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Maximize2, MessagesSquare, Minimize2 } from "lucide-react";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { NodeLogEntry } from "@/components/tasks/NodeLogEntry";
+import { DateSeparator } from "@/components/tasks/DateSeparator";
 import { NewMessagesButton } from "@/components/tasks/NewMessagesButton";
 import { SessionEventNotice } from "@/components/tasks/SessionEventNotice";
 import { Composer } from "@/components/tasks/Composer";
@@ -12,7 +13,7 @@ import { useTaskOutputStream } from "@/hooks/useTaskStatusSocket";
 import { useTaskLibraryPrompts, useTaskNodes, useTaskSessionEvents } from "@/hooks/useTasks";
 import { cn } from "@/lib/utils";
 import { isAgentTurn } from "@/components/tasks/messageKinds";
-import { mergeFeed } from "@/lib/chatFeed";
+import { mergeFeed, withDateSeparators } from "@/lib/chatFeed";
 import { TaskStatus, type NodeLog, type NodeType } from "@/lib/types";
 import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
@@ -75,6 +76,7 @@ export function TaskChatFeed({
   ]);
   const { data: sessionEvents } = useTaskSessionEvents(taskId);
   const feedItems = mergeFeed(nodeLogs, sessionEvents ?? []);
+  const feedEntries = withDateSeparators(feedItems);
   const { data: llmAccounts } = useLlmAccounts();
   const llmAvailable = useLlmAvailable(ownerId);
   const accountLabels = new Map((llmAccounts ?? []).map((account) => [account.id, account.label]));
@@ -116,29 +118,30 @@ export function TaskChatFeed({
               {...EMPTY_FEED[emptyFeedKind(taskStatus)]}
             />
           )}
-          {feedItems.map((item) =>
-            item.type === "event" ? (
-              <SessionEventNotice key={`event-${item.event.id}`} kind={item.event.kind} />
-            ) : (
+          {feedEntries.map((entry) => {
+            if (entry.type === "date") return <DateSeparator key={`date-${entry.at}`} at={entry.at} />;
+            if (entry.type === "event") {
+              return <SessionEventNotice key={`event-${entry.event.id}`} kind={entry.event.kind} />;
+            }
+            const { log } = entry;
+            return (
               <NodeLogEntry
-                key={item.log.id}
+                key={log.id}
                 taskId={taskId}
-                log={item.log}
+                log={log}
                 title={
-                  item.log.command_name
-                    ? `/${item.log.command_name} · версия ${item.log.command_revision}`
-                    : item.log.node_id
-                      ? nodeNames.get(item.log.node_id)
+                  log.command_name
+                    ? `/${log.command_name} · версия ${log.command_revision}`
+                    : log.node_id
+                      ? nodeNames.get(log.node_id)
                       : undefined
                 }
-                streamedText={outputStream[item.log.id]}
-                isAgentTurn={isAgentTurn(item.log, nodeTypes)}
-                accountLabel={
-                  item.log.llm_account_id ? accountLabels.get(item.log.llm_account_id) : undefined
-                }
+                streamedText={outputStream[log.id]}
+                isAgentTurn={isAgentTurn(log, nodeTypes)}
+                accountLabel={log.llm_account_id ? accountLabels.get(log.llm_account_id) : undefined}
               />
-            ),
-          )}
+            );
+          })}
         </div>
         {hasUnseen && <NewMessagesButton onClick={scrollToBottom} />}
       </div>

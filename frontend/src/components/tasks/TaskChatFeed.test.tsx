@@ -55,6 +55,30 @@ describe("TaskChatFeed", () => {
     expect(screen.getAllByRole("note")).toHaveLength(3);
   });
 
+  test("при смене даты в ленте строка с датой", async ({ api }) => {
+    api.respond("GET /tasks/t1/session-events", []);
+    const logs = [
+      makeNodeLog({ id: "a", started_at: new Date(2026, 9, 31, 22, 0).toISOString(), llm_output_text: "Вчера" }),
+      makeNodeLog({ id: "b", started_at: new Date(2026, 10, 1, 8, 0).toISOString(), llm_output_text: "Сегодня" }),
+    ];
+
+    renderWithProviders(
+      <TaskChatFeed
+        taskId="t1"
+        taskStatus={TaskStatus.IN_PROGRESS}
+        ownerId="u1"
+        nodeLogs={logs}
+        header={null}
+      />,
+    );
+
+    const separators = await screen.findAllByRole("separator");
+    expect(separators.map((item) => item.textContent)).toEqual([
+      expect.stringMatching(/31 октября/),
+      expect.stringMatching(/1 ноября/),
+    ]);
+  });
+
   test("без записей и событий — пустая лента", () => {
     renderWithProviders(
       <TaskChatFeed
