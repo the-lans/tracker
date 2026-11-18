@@ -69,6 +69,7 @@ from services.llm_usage import (
     refresh_account_usage,
     turns_since_usage_check,
 )
+from services.system_settings import get_llm_week_threshold
 
 if TYPE_CHECKING:
     from claude_agent_sdk import RateLimitInfo
@@ -259,6 +260,7 @@ class TaskAccountRouter:
         state = limit_state(
             AccountView(account),
             threshold_pct=await self._threshold(),
+            week_threshold_pct=await get_llm_week_threshold(self._db),
             now=self._clock(),
         )
         if state.state in _CANNOT_COMPACT:
@@ -295,6 +297,7 @@ class TaskAccountRouter:
         request = ChoiceRequest(
             now=self._clock(),
             threshold_pct=await self._threshold(),
+            week_threshold_pct=await get_llm_week_threshold(self._db),
             current_id=task.current_llm_account_id,
             start_id=task.llm_account_id,
             plan_prompt=node_type is NodeType.PLAN_PROMPT,

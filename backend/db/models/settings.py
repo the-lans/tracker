@@ -8,7 +8,12 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
-from db.models.users import MAX_RETENTION_DAYS, MIN_RETENTION_DAYS
+from db.models.users import (
+    MAX_LLM_SWITCH_THRESHOLD_PCT,
+    MAX_RETENTION_DAYS,
+    MIN_LLM_SWITCH_THRESHOLD_PCT,
+    MIN_RETENTION_DAYS,
+)
 
 # Единственная строка настроек инстанса.
 SYSTEM_SETTINGS_ROW_ID = 1
@@ -24,6 +29,8 @@ MIN_BACKUP_RETENTION_COUNT = 1
 MAX_BACKUP_RETENTION_COUNT = 365
 # Раздел 17.2: сколько дней хранится журнал `app_logs`; 0 — бессрочно.
 DEFAULT_APP_LOGS_RETENTION_DAYS = 30
+# Раздел 19.7: недельный расход аккаунта, с которого задача уходит на другой аккаунт.
+DEFAULT_LLM_WEEK_THRESHOLD_PCT = 98
 
 
 class SystemSettings(Base):
@@ -51,6 +58,11 @@ class SystemSettings(Base):
         sa.CheckConstraint(
             f"app_logs_retention_days BETWEEN {MIN_RETENTION_DAYS} AND {MAX_RETENTION_DAYS}",
             name="ck_system_settings_app_logs_retention_days",
+        ),
+        sa.CheckConstraint(
+            "llm_switch_threshold_week_pct BETWEEN "
+            f"{MIN_LLM_SWITCH_THRESHOLD_PCT} AND {MAX_LLM_SWITCH_THRESHOLD_PCT}",
+            name="ck_system_settings_llm_switch_threshold_week_pct",
         ),
     )
 
@@ -108,4 +120,11 @@ class SystemSettings(Base):
         sa.Integer,
         default=DEFAULT_APP_LOGS_RETENTION_DAYS,
         server_default=str(DEFAULT_APP_LOGS_RETENTION_DAYS),
+    )
+    # Раздел 19.7: порог недельного расхода — один для всех пользователей и аккаунтов
+    # (порог 5-часового окна у каждого пользователя свой, в профиле).
+    llm_switch_threshold_week_pct: Mapped[int] = mapped_column(
+        sa.Integer,
+        default=DEFAULT_LLM_WEEK_THRESHOLD_PCT,
+        server_default=str(DEFAULT_LLM_WEEK_THRESHOLD_PCT),
     )

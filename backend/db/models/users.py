@@ -86,8 +86,9 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         default=DEFAULT_LLM_SWITCH_THRESHOLD_PCT,
         server_default=str(DEFAULT_LLM_SWITCH_THRESHOLD_PCT),
     )
-    # Недельного порога нет: `llm_switch_threshold_week_pct` остаётся в БД для
-    # прежней версии (раздел 20.6) и не отображается.
+    # Недельный порог теперь общий, из `system_settings`; столбец пользователя
+    # `llm_switch_threshold_week_pct` остаётся в БД для прежней версии (раздел 20.6)
+    # и не используется.
     llm_compact_on_switch: Mapped[bool] = mapped_column(
         sa.Boolean,
         default=True,

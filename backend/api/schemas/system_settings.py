@@ -17,7 +17,12 @@ from db.models.settings import (
     MAX_BACKUP_RETENTION_COUNT,
     MIN_BACKUP_RETENTION_COUNT,
 )
-from db.models.users import MAX_RETENTION_DAYS, MIN_RETENTION_DAYS
+from db.models.users import (
+    MAX_LLM_SWITCH_THRESHOLD_PCT,
+    MAX_RETENTION_DAYS,
+    MIN_LLM_SWITCH_THRESHOLD_PCT,
+    MIN_RETENTION_DAYS,
+)
 from services.backup.settings import (
     MAX_ACCESS_KEY_LENGTH,
     MAX_FOLDER_LENGTH,
@@ -40,6 +45,11 @@ class SystemSettingsBody(BaseModel):
     app_logs_retention_days: int = Field(ge=MIN_RETENTION_DAYS, le=MAX_RETENTION_DAYS)
     # Раздел 15.8: начало дня «Дейли» по московскому времени.
     day_start_time: time
+    # Раздел 19.7: недельный расход, с которого задача уходит на другой аккаунт.
+    llm_switch_threshold_week_pct: int = Field(
+        ge=MIN_LLM_SWITCH_THRESHOLD_PCT,
+        le=MAX_LLM_SWITCH_THRESHOLD_PCT,
+    )
 
 
 class IntegrationsResponse(BaseModel):

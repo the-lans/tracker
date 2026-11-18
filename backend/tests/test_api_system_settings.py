@@ -24,6 +24,7 @@ _SETTINGS = {
     "night_window_end": "06:45:00",
     "app_logs_retention_days": 60,
     "day_start_time": "09:30:00",
+    "llm_switch_threshold_week_pct": 90,
 }
 
 
@@ -34,6 +35,7 @@ class TestSystemSettings:
         assert initial.json()["default_timeout_seconds"] == 600
         assert initial.json()["app_logs_retention_days"] == 30
         assert initial.json()["day_start_time"] == "08:00:00"
+        assert initial.json()["llm_switch_threshold_week_pct"] == 98
         assert "default_runner_image_python" not in initial.json()
         assert "default_runner_image_bash" not in initial.json()
 
@@ -53,6 +55,9 @@ class TestSystemSettings:
             ("app_logs_retention_days", None),
             ("day_start_time", None),
             ("day_start_time", "25:00"),
+            ("llm_switch_threshold_week_pct", 0),
+            ("llm_switch_threshold_week_pct", 101),
+            ("llm_switch_threshold_week_pct", None),
         ],
     )
     async def test_rejects_out_of_range(

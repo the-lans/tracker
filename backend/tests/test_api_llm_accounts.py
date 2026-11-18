@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -122,6 +123,23 @@ class TestList:
 
         assert (item["limit_state"], item["active_tasks"]) == ("running", 1)
         assert item["limit_state_until"] is not None
+
+    async def test_week_threshold_badge(
+        self,
+        authed_client: AsyncClient,
+        current_user: User,
+        db_session: AsyncSession,
+    ) -> None:
+        """Раздел 19.7: недельный расход на пороге — «На пороге» со сбросом недели."""
+        account = await make_llm_account(db_session, owner_id=current_user.id)
+        resets_at = datetime.now(UTC) + timedelta(days=3)
+        account.usage_week_pct = Decimal(98)
+        account.usage_week_resets_at = resets_at
+
+        [item] = (await authed_client.get("/llm-accounts")).json()
+
+        assert item["limit_state"] == "at_threshold"
+        assert datetime.fromisoformat(item["limit_state_until"]) == resets_at
 
     async def test_admin_sees_all(
         self,
