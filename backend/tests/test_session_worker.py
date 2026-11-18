@@ -47,6 +47,7 @@ from db.models.prompts import TaskManualRequestQueue
 from db.models.repositories import Repository, Template, TemplateMcpServer
 from db.models.tasks import Task, TaskRepository
 from db.models.users import User
+from db.queries.session_events import list_session_events
 from prompts.agent import (
     PLAN_ACCEPTED_MESSAGE,
     PLAN_REVISE_DENIED,
@@ -289,6 +290,57 @@ async def test_clear_context_hands_session_over_to_continuation_task(
     await db_session.refresh(task)
     assert task.status is TaskStatus.DONE
     assert worker_env.client.queries == ["шаг 2"]
+
+
+async def _session_events(db_session: AsyncSession, task: Task) -> list[str]:
+    events = await list_session_events(db_session, task.id)
+    return [event.kind.value for event in events]
+
+
+class TestSessionEvents:
+    """Раздел 15.2: в ленте чата — сброс контекста и начало новой сессии."""
+
+    @pytest.mark.parametrize(
+        ("session_id", "expected"),
+        [(None, ["session_started"]), ("sess-old", [])],
+        ids=["new_session", "resumed_session"],
+    )
+    async def test_new_session_noted_once(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        session_id: str | None,
+        expected: list[str],
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        task.session_id = session_id
+        await _add_node(db_session, task, order_index=0)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        await _run_worker(task)
+
+        assert await _session_events(db_session, task) == expected
+
+    async def test_clear_context_node_noted_between_sessions(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        await _add_node(db_session, task, order_index=1, node_type=NodeType.CLEAR_CONTEXT)
+        await _add_node(db_session, task, order_index=2)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+        await _run_worker(task)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        await _run_worker(task, start_after_order_index=1, continuation=True)
+
+        assert await _session_events(db_session, task) == [
+            "session_started",
+            "context_cleared",
+            "session_started",
+        ]
 
 
 async def test_restart_after_failure_reruns_failed_node_only(

@@ -1456,6 +1456,23 @@ class TestForgetSession:
         await db_session.refresh(task)
         assert task.context_cleared_at is not None
 
+    async def test_clear_context_noted_in_chat(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task = await _task_in_status(authed_client, db_session, TaskStatus.FAILED)
+
+        await authed_client.post(f"/tasks/{task.id}/clear-context")
+        events = (await authed_client.get(f"/tasks/{task.id}/session-events")).json()
+
+        assert [event["kind"] for event in events] == ["context_cleared"]
+
+    async def test_events_of_unknown_task(self, authed_client: AsyncClient) -> None:
+        response = await authed_client.get(f"/tasks/{uuid.uuid4()}/session-events")
+
+        assert response.status_code == 404
+
 
 class TestStartAccountChange:
     """
