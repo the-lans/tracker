@@ -166,6 +166,79 @@ class TestRewrite:
         assert sent["output_config"] == {"effort": "xhigh", "format": {"type": "text"}}
         assert sent["stream"] is True
 
+    @pytest.mark.parametrize(
+        ("model", "requested", "expected"),
+        [
+            ("claude-haiku-4-5-20251001", 128_000, 64_000),
+            ("claude-haiku-4-5-20251001", 16, 16),
+            ("claude-sonnet-4-5", 128_000, 64_000),
+            ("claude-opus-4-5", 128_000, 64_000),
+            ("claude-opus-4-1", 128_000, 32_000),
+            ("claude-3-5-haiku-20241022", 128_000, 8_192),
+            ("claude-opus-5-5", 128_000, 128_000),
+            ("gpt-6.1-sol", 128_000, 64_000),
+            ("gpt-6.1-sol", 32_000, 32_000),
+        ],
+        ids=[
+            "haiku",
+            "below_cap",
+            "sonnet",
+            "opus_4_5",
+            "opus_4_1",
+            "haiku_3_5",
+            "opus_5_5_higher_cap",
+            "unknown_default_cap",
+            "unknown_below_default",
+        ],
+    )
+    async def test_max_tokens_clamped_to_route_model(
+        self,
+        gateway: httpx.AsyncClient,
+        upstream: Upstream,
+        redis_client: Redis,
+        model: str,
+        requested: int,
+        expected: int,
+    ) -> None:
+        task_id = uuid.uuid4()
+        route = TurnRoute(
+            account_id=uuid.uuid4(),
+            prefix="acc-0123456789ab",
+            model=model,
+            effort=ReasoningEffort.LOW,
+            provider_effort=ReasoningEffort.LOW,
+        )
+        await publish_route(redis_client, task_id, route)
+        session = await issue_session_token(redis_client, task_id)
+
+        await gateway.post(
+            "/v1/messages",
+            json=_message(max_tokens=requested),
+            headers={"authorization": f"Bearer {session}"},
+        )
+
+        assert upstream.body()["max_tokens"] == expected
+
+    async def test_clamp_logged(
+        self,
+        gateway: httpx.AsyncClient,
+        token: str,
+    ) -> None:
+        with structlog.testing.capture_logs() as logs:
+            await gateway.post(
+                "/v1/messages",
+                json=_message(max_tokens=128_000),
+                headers={"authorization": f"Bearer {token}"},
+            )
+            await gateway.post(
+                "/v1/messages",
+                json=_message(max_tokens=16),
+                headers={"authorization": f"Bearer {token}"},
+            )
+
+        entries = [entry for entry in logs if entry["event"] == "llm_gateway_request"]
+        assert [entry["max_tokens_clamped_from"] for entry in entries] == [128_000, None]
+
     async def test_request_logged_with_route(
         self,
         gateway: httpx.AsyncClient,

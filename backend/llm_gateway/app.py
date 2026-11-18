@@ -137,12 +137,21 @@ class LlmGateway:
             return resolved
         task_id, route = resolved
         content = await request.body()
+        clamped_from = None
         if content:
             try:
-                content = rewrite_body(request.url.path, content, route)
+                rewritten = rewrite_body(request.url.path, content, route)
             except InvalidRequestBodyError:
                 return _error(400, "invalid_request_error", "Тело запроса — не JSON-объект")
-        return await self._forward(request, task_id=task_id, route=route, content=content)
+            content = rewritten.content
+            clamped_from = rewritten.max_tokens_clamped_from
+        return await self._forward(
+            request,
+            task_id=task_id,
+            route=route,
+            content=content,
+            max_tokens_clamped_from=clamped_from,
+        )
 
     async def _forward(
         self,
@@ -151,6 +160,7 @@ class LlmGateway:
         task_id: uuid.UUID,
         route: TurnRoute,
         content: bytes,
+        max_tokens_clamped_from: int | None = None,
     ) -> Response:
         upstream_request = self._upstream.build_request(
             request.method,
@@ -177,6 +187,9 @@ class LlmGateway:
             account_id=str(route.account_id),
             model=route.model,
             reasoning_effort=route.provider_effort.value,
+            # Шлюз снизил `max_tokens` до потолка модели (None — не менялся):
+            # отличает обрыв ответа по лимиту от запроса самой сессии.
+            max_tokens_clamped_from=max_tokens_clamped_from,
         )
         # `aiter_bytes`: если прокси всё же сжал ответ, сессия получит его распакованным
         # (заголовок `content-encoding` не пересылается).
