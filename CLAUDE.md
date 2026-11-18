@@ -228,7 +228,7 @@ backend/
               «Архива», parent_summaries.py — идёт ли пересказ для
               дочерней задачи, app_logs.py — удаление старого журнала,
               daily.py — отметки, работа за день, события и календарь
-              «Дейли», task_repositories.py — блокировка задачи и
+              «Дейли», session_events.py — события сессии для ленты чата, task_repositories.py — блокировка задачи и
               привязанные репозитории, git_credentials.py — запись ключа
               хоста SSH compare-and-swap, users.py — версия сессий входа
   prompts/   — служебные тексты трекера для агента (agent.py): сообщения
@@ -392,7 +392,10 @@ alembic/
                  daily_plan_templates, google_calendar_connections,
                  system_settings.day_start_time,
                  task_repositories.cloned_at,
-                 git_credentials.ssh_known_hosts, users.session_version);
+                 git_credentials.ssh_known_hosts, users.session_version,
+                 tasks.description_html — HTML описания из Jira для показа,
+                 task_session_events — сброс контекста и новые сессии в ленте чата,
+                 system_settings.llm_switch_threshold_week_pct — порог недели);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
@@ -753,7 +756,8 @@ Postgres из `backend/tests/conftest.py`:
     CLIProxyAPI (volume `cliproxy_data`), в БД — лишь имя учётки. Аккаунт
     каждого хода выбирает `services/account_router.py`
     (`services/llm_account_choice.py`): порог 5-часового окна из профиля
-    автора не переступается, недельного порога нет; если все аккаунты на
+    автора и порог недельного расхода из системных настроек (98%, один для
+    всех) не переступаются; если все аккаунты на
     пороге или исчерпаны, ход модели не начинается — задача ждёт сброса
     (`awaiting_limit`); ворота учитывают тип хода, скрипт и очистка
     контекста их не ждут, пересказ родителя ждёт вместе с задачей. Смена аккаунта на границе хода сжимает контекст
