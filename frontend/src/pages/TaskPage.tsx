@@ -69,16 +69,16 @@ export function TaskPage() {
           <TaskLlmAccountBadge task={task} />
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          {bridgeView === "unavailable" && (
+            <span className="mr-1 text-caption text-text-3">
+              {REMOTE_CONTROL_STATUS_LABEL[RemoteControlStatus.UNAVAILABLE]}
+            </span>
+          )}
           <TaskControlButtons task={task} />
           {bridgeView === "reconnect" && <RemoteControlButton task={task} />}
         </div>
         {bridgeView === "reconnect" && <RemoteControlNotice />}
         <TaskLimitWaitBanner task={task} />
-        {bridgeView === "unavailable" && (
-          <p className="basis-full text-right text-caption text-text-3">
-            {REMOTE_CONTROL_STATUS_LABEL[RemoteControlStatus.UNAVAILABLE]}
-          </p>
-        )}
       </div>
 
       <TaskMobileTabs value={mobileTab} onChange={setMobileTab} />
