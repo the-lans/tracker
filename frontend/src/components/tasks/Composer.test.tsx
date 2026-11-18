@@ -366,4 +366,42 @@ describe("Команды библиотеки в чате", () => {
     await user.click(await screen.findByRole("button", {name: "Отменить /review"}));
     expect(api.mutations()[0].path).toBe("/tasks/t1/manual-queue/mq1/stop");
   });
+
+  describe("остановка свободного промта", () => {
+    test("выполняющийся промт можно остановить кнопкой", async ({ api }) => {
+      api.respond("GET /tasks/t1/manual-queue", [
+        makeManualRequest({ status: ManualRequestStatus.PROCESSING }),
+      ]);
+      const { user } = renderComposer();
+
+      expect(await screen.findByText("Промт · Выполняется")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Остановить промт" }));
+
+      expect(api.mutations()[0].path).toBe("/tasks/t1/manual-queue/mq1/stop");
+    });
+
+    test("ожидающий в очереди промт кнопки остановки не получает", async ({ api }) => {
+      api.respond("GET /tasks/t1/manual-queue", [makeManualRequest()]);
+      renderComposer();
+
+      expect(await screen.findByText("В очереди: 1")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /промт$/ })).not.toBeInTheDocument();
+    });
+
+    test("ошибка остановки показывается пользователю", async ({ api, toasts }) => {
+      api.respond("GET /tasks/t1/manual-queue", [
+        makeManualRequest({ status: ManualRequestStatus.PROCESSING }),
+      ]);
+      api.respond("POST /tasks/t1/manual-queue/mq1/stop", {
+        error: { status: 409, message: "Запрос уже завершён — останавливать нечего" },
+      });
+      const { user } = renderComposer();
+
+      await user.click(await screen.findByRole("button", { name: "Остановить промт" }));
+
+      await expect.poll(() => toasts.error).toHaveBeenCalledWith(
+        "Запрос уже завершён — останавливать нечего",
+      );
+    });
+  });
 });

@@ -15,6 +15,7 @@ import { USER_AVATAR_GRADIENT } from "@/styles/classes";
 export function MessageBubble({
   role,
   text,
+  caption,
   danger,
   streaming = false,
   thinking = false,
@@ -23,6 +24,8 @@ export function MessageBubble({
 }: {
   role: "user" | "llm";
   text: string;
+  /** Пояснение над текстом: чем является реплика (например, вывод до остановки). */
+  caption?: string;
   danger?: boolean;
   streaming?: boolean;
   /** Агент думает: первый фрагмент ответа ещё не пришёл (раздел 15.2). */
@@ -33,8 +36,16 @@ export function MessageBubble({
   kind?: MessageKind;
 }) {
   const { icon: KindIcon, title: kindTitle } = MESSAGE_KINDS[kind];
+  // Ширина — по содержимому, но не больше доли ширины ленты: чем шире лента (в том числе
+  // на весь экран), тем меньше доля: до 448 px — вся ширина, от 448 px — 85%, от 768 px — 80%,
+  // от 1024 px — 75%.
   return (
-    <div className={cn("flex min-w-0 max-w-[min(640px,100%)] gap-2.5", role === "user" && "ml-auto flex-row-reverse")}>
+    <div
+      className={cn(
+        "flex min-w-0 max-w-full gap-2.5 @md:max-w-[85%] @3xl:max-w-[80%] @5xl:max-w-[75%]",
+        role === "user" && "ml-auto flex-row-reverse",
+      )}
+    >
       {/* Значок по источнику реплики; цвета — с заметной рамкой, чтобы кружок не сливался с фоном. */}
       <div
         role="img"
@@ -58,6 +69,7 @@ export function MessageBubble({
             danger && "border-danger-border bg-danger-tint text-danger-text",
           )}
         >
+          {caption && <div className="mb-1 text-caption font-bold text-text-3">{caption}</div>}
           {thinking ? (
             <div role="status" className="text-text-3">
               думает…

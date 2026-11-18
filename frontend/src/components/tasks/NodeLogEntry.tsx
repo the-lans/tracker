@@ -24,6 +24,12 @@ function sourceLabelOf(log: NodeLog): string | undefined {
   return undefined;
 }
 
+/** Подпись ответа, собранного до остановки или сбоя хода (раздел 15.2). */
+const INTERRUPTED_OUTPUT_CAPTION: Partial<Record<NodeLogStatus, string>> = {
+  [NodeLogStatus.STOPPED]: "Вывод модели до остановки",
+  [NodeLogStatus.FAILED]: "Вывод модели до сбоя",
+};
+
 /** Раздел 15.2: подпись ответа — аккаунт, модель и уровень рассуждений обращения. */
 function routeCaptionOf(log: NodeLog, accountLabel: string | undefined): string | null {
   if (log.llm_model === null) return null;
@@ -65,6 +71,11 @@ export function NodeLogEntry({
   );
 
   const routeCaption = routeCaptionOf(log, accountLabel);
+  // Остановка пользователем или сбой: ответ, собранный до них, — отдельным сообщением после ошибки.
+  const interruptedCaption = INTERRUPTED_OUTPUT_CAPTION[log.status];
+  const interruptedOutput =
+    interruptedCaption && !isSummaryNote ? (log.llm_output_text ?? "").trim() : "";
+  const showTurnOutput = !interruptedOutput;
 
   return (
     <div className="flex flex-col gap-3">
@@ -107,7 +118,7 @@ export function NodeLogEntry({
         />
       )}
       {isScript && <ScriptOutputBlock stdout={log.script_stdout} exitCode={log.script_exit_code} />}
-      {before && (
+      {showTurnOutput && before && (
         <MessageBubble
           role="llm"
           text={before}
@@ -127,7 +138,7 @@ export function NodeLogEntry({
           text={userInput.text}
         />
       )}
-      {after && (
+      {showTurnOutput && after && (
         <MessageBubble role="llm" text={after} streaming={liveAfterDecision} defaultExpanded={keepExpanded} />
       )}
       {thinking && liveAfterDecision && <MessageBubble role="llm" text="" thinking />}
@@ -143,6 +154,15 @@ export function NodeLogEntry({
       )}
       {log.status === NodeLogStatus.STOPPED && (
         <MessageBubble role="llm" danger kind="stopped" text="Остановлено пользователем" />
+      )}
+      {interruptedOutput && (
+        <MessageBubble
+          role="llm"
+          kind="partial"
+          caption={interruptedCaption}
+          text={interruptedOutput}
+          defaultExpanded={keepExpanded}
+        />
       )}
     </div>
   );

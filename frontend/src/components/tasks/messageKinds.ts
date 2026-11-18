@@ -3,6 +3,7 @@ import {
   Bot,
   ClipboardCheck,
   CircleStop,
+  FileClock,
   FileInput,
   FileOutput,
   GitMerge,
@@ -28,7 +29,8 @@ export type MessageKind =
   | "agent"
   | "plan"
   | "error"
-  | "stopped";
+  | "stopped"
+  | "partial";
 
 export const MESSAGE_KINDS: Record<MessageKind, { icon: LucideIcon; title: string }> = {
   pipeline: { icon: Workflow, title: "Промт ноды пайплайна" },
@@ -43,6 +45,7 @@ export const MESSAGE_KINDS: Record<MessageKind, { icon: LucideIcon; title: strin
   plan: { icon: ClipboardCheck, title: "Принятый план" },
   error: { icon: TriangleAlert, title: "Ошибка выполнения" },
   stopped: { icon: CircleStop, title: "Остановлено" },
+  partial: { icon: FileClock, title: "Вывод модели до остановки" },
 };
 
 /** Вид реплики-запроса по источнику записи `node_logs` (раздел 13.4). */

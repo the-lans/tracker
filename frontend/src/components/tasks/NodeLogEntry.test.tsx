@@ -182,6 +182,51 @@ describe("NodeLogEntry", () => {
       expect(screen.getByText(text)).toBeInTheDocument();
     });
 
+    test("остановка: собранный вывод — отдельным сообщением после ошибки", () => {
+      const { container } = renderEntry({
+        status: NodeLogStatus.STOPPED,
+        llm_output_text: "Прочитал задачу и три связанные.",
+      });
+
+      expect(screen.getByText("Вывод модели до остановки")).toBeInTheDocument();
+      expect(screen.getAllByText("Прочитал задачу и три связанные.")).toHaveLength(1);
+      expectOrder(container, [
+        "Остановлено пользователем",
+        "Вывод модели до остановки",
+        "Прочитал задачу и три связанные.",
+      ]);
+    });
+
+    test.for([null, "", "  \n "])("остановка без вывода (%j) — только ошибка", (output) => {
+      renderEntry({ status: NodeLogStatus.STOPPED, llm_output_text: output });
+
+      expect(screen.getByText("Остановлено пользователем")).toBeInTheDocument();
+      expect(screen.queryByText("Вывод модели до остановки")).not.toBeInTheDocument();
+    });
+
+    test("сбой: вывод до сбоя — отдельным сообщением после ошибки", () => {
+      const { container } = renderEntry({
+        status: NodeLogStatus.FAILED,
+        error_message: "Превышен таймаут выполнения",
+        llm_output_text: "Начал читать задачу.",
+        attempt_number: 2,
+      });
+
+      expect(screen.getAllByText("Начал читать задачу.")).toHaveLength(1);
+      expectOrder(container, [
+        "Ошибка выполнения (попытка 2): Превышен таймаут выполнения",
+        "Вывод модели до сбоя",
+        "Начал читать задачу.",
+      ]);
+    });
+
+    test("не остановленная запись выводит ответ обычным сообщением", () => {
+      renderEntry({ status: NodeLogStatus.SUCCESS, llm_output_text: "Готово." });
+
+      expect(screen.getByText("Готово.")).toBeInTheDocument();
+      expect(screen.queryByText("Вывод модели до остановки")).not.toBeInTheDocument();
+    });
+
     test("недоступное саммари родителя — без общей ошибки", () => {
       renderEntry({
         status: NodeLogStatus.FAILED,

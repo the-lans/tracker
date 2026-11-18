@@ -10,9 +10,29 @@ import { useTemplatePreview } from "@/hooks/useTemplates";
 import { MANUAL_REQUEST_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { errorMessage } from "@/lib/errors";
 import { NO_LLM_ACCOUNT } from "@/lib/llmAccounts";
-import { ManualRequestStatus, ManualRequestType, TaskStatus } from "@/lib/types";
+import { ManualRequestStatus, ManualRequestType, TaskStatus, type ManualRequest } from "@/lib/types";
 import { isPreLaunch } from "@/lib/taskStatusTransitions";
 import { ComposerResizeHandle } from "@/components/tasks/ComposerResizeHandle";
+
+/** Команда в очереди или выполняется; свободный промт — пока выполняется (раздел 7.3). */
+function isStoppableRequest(request: ManualRequest): boolean {
+  if (request.command_name) return true;
+  return (
+    request.request_type === ManualRequestType.FREEFORM_PROMPT &&
+    request.status === ManualRequestStatus.PROCESSING
+  );
+}
+
+function requestCaption(request: ManualRequest): string {
+  const state = request.status === ManualRequestStatus.QUEUED ? "В очереди" : "Выполняется";
+  if (!request.command_name) return `Промт · ${state}`;
+  return `/${request.command_name} · версия ${request.command_revision} · ${state}`;
+}
+
+function stopButtonLabel(request: ManualRequest): string {
+  const action = request.status === ManualRequestStatus.QUEUED ? "Отменить" : "Остановить";
+  return request.command_name ? `${action} /${request.command_name}` : `${action} промт`;
+}
 
 function isMobileDevice() {
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
@@ -141,13 +161,13 @@ export function Composer({
 
   return (
     <div className="border-t border-border bg-surface p-3.5 short:sticky short:bottom-0 short:z-10 short:px-3 short:py-1.5">
-      {(queue ?? []).filter((request) => request.command_name).map((request) => <div key={request.id}
-        className="mb-2 flex items-center justify-between gap-2 text-small">
-        <span>/{request.command_name} · версия {request.command_revision} · {request.status === ManualRequestStatus.QUEUED ? "В очереди" : "Выполняется"}</span>
+      {(queue ?? []).filter(isStoppableRequest).map((request) => <div key={request.id}
+        className="mb-2 flex items-center justify-between gap-2 text-small short:mb-1">
+        <span>{requestCaption(request)}</span>
         <Button size="sm" variant="secondary" disabled={stopRequest.isPending}
           onClick={() => stopRequest.mutate(request.id, {
-            onError: (error) => toast.error(errorMessage(error, "Не удалось остановить команду")),
-          })}>{request.status === ManualRequestStatus.QUEUED ? "Отменить" : "Остановить"} /{request.command_name}</Button>
+            onError: (error) => toast.error(errorMessage(error, "Не удалось остановить запрос")),
+          })}>{stopButtonLabel(request)}</Button>
       </div>)}
       {queuedFreeform > 0 && (
         <div className="mb-2 flex items-center gap-1.5 text-meta font-bold text-info-text short:mb-1">
