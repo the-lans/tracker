@@ -3,36 +3,16 @@ import { Clock, Eye, MessageSquarePlus, Send } from "lucide-react";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { useManualQueue, useSubmitFreeformPrompt, useStopManualRequest } from "@/hooks/useTasks";
+import { useManualQueue, useSubmitFreeformPrompt } from "@/hooks/useTasks";
 import { useCommandPreview, useRunTaskCommand, useTaskCommands, type TaskCommand } from "@/hooks/useTaskCommands";
 import { ApiError } from "@/lib/apiClient";
 import { useTemplatePreview } from "@/hooks/useTemplates";
 import { MANUAL_REQUEST_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { errorMessage } from "@/lib/errors";
 import { NO_LLM_ACCOUNT } from "@/lib/llmAccounts";
-import { ManualRequestStatus, ManualRequestType, TaskStatus, type ManualRequest } from "@/lib/types";
+import { ManualRequestStatus, ManualRequestType, TaskStatus } from "@/lib/types";
 import { isPreLaunch } from "@/lib/taskStatusTransitions";
 import { ComposerResizeHandle } from "@/components/tasks/ComposerResizeHandle";
-
-/** Команда в очереди или выполняется; свободный промт — пока выполняется (раздел 7.3). */
-function isStoppableRequest(request: ManualRequest): boolean {
-  if (request.command_name) return true;
-  return (
-    request.request_type === ManualRequestType.FREEFORM_PROMPT &&
-    request.status === ManualRequestStatus.PROCESSING
-  );
-}
-
-function requestCaption(request: ManualRequest): string {
-  const state = request.status === ManualRequestStatus.QUEUED ? "В очереди" : "Выполняется";
-  if (!request.command_name) return `Промт · ${state}`;
-  return `/${request.command_name} · версия ${request.command_revision} · ${state}`;
-}
-
-function stopButtonLabel(request: ManualRequest): string {
-  const action = request.status === ManualRequestStatus.QUEUED ? "Отменить" : "Остановить";
-  return request.command_name ? `${action} /${request.command_name}` : `${action} промт`;
-}
 
 function isMobileDevice() {
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
@@ -74,7 +54,6 @@ export function Composer({
   const commandPreview = useCommandPreview(taskId);
   const showCommands = isCommand && !/\s/.test(text.trimStart());
   const [previewText, setPreviewText] = useState<string | null>(null);
-  const stopRequest = useStopManualRequest(taskId);
   const submitFreeform = useSubmitFreeformPrompt(taskId);
   const preview = useTemplatePreview();
   const { data: queue } = useManualQueue(taskId);
@@ -161,15 +140,6 @@ export function Composer({
 
   return (
     <div className="border-t border-border bg-surface p-3.5 short:sticky short:bottom-0 short:z-10 short:px-3 short:py-1.5">
-      {(queue ?? []).filter(isStoppableRequest).map((request) => <div key={request.id}
-        className="mb-1.5 flex items-center justify-between gap-2 text-small short:mb-1">
-        <span className="min-w-0 truncate max-sm:text-meta max-sm:text-text-3">{requestCaption(request)}</span>
-        {/* Компактная: на телефоне строка не отнимает высоту; зона нажатия — `touch-hit`. */}
-        <Button size="sm" variant="secondary" className="touch-hit h-7 min-h-0! shrink-0 px-2.5 max-sm:text-meta" disabled={stopRequest.isPending}
-          onClick={() => stopRequest.mutate(request.id, {
-            onError: (error) => toast.error(errorMessage(error, "Не удалось остановить запрос")),
-          })}>{stopButtonLabel(request)}</Button>
-      </div>)}
       {queuedFreeform > 0 && (
         <div className="mb-2 flex items-center gap-1.5 text-meta font-bold text-info-text short:mb-1">
           <Clock className="size-3" />

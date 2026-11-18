@@ -47,8 +47,8 @@ export function TaskHeader({ task }: { task: Task }) {
       </Link>
       <div ref={leftRef} className="min-w-0 flex-1 basis-56">
         {/* Отметки дня переносятся на свою строку, а не сжимают код и статус. */}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="max-w-full break-all font-mono text-small font-bold text-text-3">{task.code}</span>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 max-sm:gap-x-1.5">
+          <span className="max-w-full break-all font-mono text-small font-bold text-text-3 max-sm:text-caption">{task.code}</span>
           <TaskStatusMenu task={task} />
           <TaskDayMarks task={task} />
         </div>
