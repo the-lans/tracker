@@ -71,14 +71,15 @@ export function ArtifactPreviewDialog({
             isError={isError}
           />
         </div>
-        <DialogFooter className="shrink-0">
+        <DialogFooter className="shrink-0 flex-wrap max-sm:flex-col max-sm:items-stretch">
           <Button variant="secondary" size="sm" onClick={handleDownload}>
-            <Download className="size-3.5" /> Скачать
+            <Download className="size-3.5 shrink-0" /> Скачать
           </Button>
           {tabUrl !== null && (
             <Button asChild variant="secondary" size="sm">
               <a href={tabUrl} target="_blank" rel="noreferrer">
-                <ExternalLink className="size-3.5" /> Открыть в новой вкладке
+                <ExternalLink className="size-3.5 shrink-0" /> Открыть в новой
+                вкладке
               </a>
             </Button>
           )}
