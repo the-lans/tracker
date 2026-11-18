@@ -25,6 +25,7 @@ _SETTINGS = {
     "app_logs_retention_days": 60,
     "day_start_time": "09:30:00",
     "llm_switch_threshold_week_pct": 90,
+    "llm_compact_min_context_chars": 5000,
 }
 
 
@@ -36,6 +37,7 @@ class TestSystemSettings:
         assert initial.json()["app_logs_retention_days"] == 30
         assert initial.json()["day_start_time"] == "08:00:00"
         assert initial.json()["llm_switch_threshold_week_pct"] == 98
+        assert initial.json()["llm_compact_min_context_chars"] == 12000
         assert "default_runner_image_python" not in initial.json()
         assert "default_runner_image_bash" not in initial.json()
 
@@ -58,6 +60,9 @@ class TestSystemSettings:
             ("llm_switch_threshold_week_pct", 0),
             ("llm_switch_threshold_week_pct", 101),
             ("llm_switch_threshold_week_pct", None),
+            ("llm_compact_min_context_chars", -1),
+            ("llm_compact_min_context_chars", 10_000_001),
+            ("llm_compact_min_context_chars", None),
         ],
     )
     async def test_rejects_out_of_range(
@@ -69,6 +74,15 @@ class TestSystemSettings:
         response = await admin_client.put("/system-settings", json={**_SETTINGS, field: value})
 
         assert response.status_code == 422
+
+    async def test_compaction_always(self, admin_client: AsyncClient) -> None:
+        response = await admin_client.put(
+            "/system-settings",
+            json={**_SETTINGS, "llm_compact_min_context_chars": 0},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["llm_compact_min_context_chars"] == 0
 
     async def test_app_logs_forever(self, admin_client: AsyncClient) -> None:
         response = await admin_client.put(

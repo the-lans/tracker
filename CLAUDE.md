@@ -395,7 +395,8 @@ alembic/
                  git_credentials.ssh_known_hosts, users.session_version,
                  tasks.description_html — HTML описания из Jira для показа,
                  task_session_events — сброс контекста и новые сессии в ленте чата,
-                 system_settings.llm_switch_threshold_week_pct — порог недели);
+                 system_settings.llm_switch_threshold_week_pct — порог недели,
+                 system_settings.llm_compact_min_context_chars — минимум контекста для сжатия);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
@@ -761,7 +762,8 @@ Postgres из `backend/tests/conftest.py`:
     пороге или исчерпаны, ход модели не начинается — задача ждёт сброса
     (`awaiting_limit`); ворота учитывают тип хода, скрипт и очистка
     контекста их не ждут, пересказ родителя ждёт вместе с задачей. Смена аккаунта на границе хода сжимает контекст
-    (`/compact`, буквально) по переключателю профиля;
+    (`/compact`, буквально) по переключателю профиля, кроме новой сессии и
+    короткого контекста (минимум — в системных настройках);
     `tasks.current_llm_account_id` выставляет только воркер (compare-and-swap);
     сбрасывается лишь до запуска — возврат из `failed`/`done` в статус до
     запуска и смена стартового аккаунта.

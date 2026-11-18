@@ -11,10 +11,15 @@ import sqlalchemy as sa
 
 from db.models.enums import NodeType, ScriptLanguage
 from db.models.pipelines import Node
-from db.models.settings import DEFAULT_LLM_WEEK_THRESHOLD_PCT, SystemSettings
+from db.models.settings import (
+    DEFAULT_LLM_COMPACT_MIN_CONTEXT_CHARS,
+    DEFAULT_LLM_WEEK_THRESHOLD_PCT,
+    SystemSettings,
+)
 from services.system_settings import (
     DEFAULT_NODE_TIMEOUT_SECONDS,
     SystemSettingsValues,
+    get_llm_compact_min_context_chars,
     get_llm_week_threshold,
     get_system_settings,
     resolve_execution_settings,
@@ -35,6 +40,7 @@ _CUSTOM_SETTINGS = SystemSettingsValues(
     app_logs_retention_days=45,
     day_start_time=time(9, 30),
     llm_switch_threshold_week_pct=90,
+    llm_compact_min_context_chars=5_000,
 )
 
 
@@ -78,6 +84,26 @@ class TestLlmWeekThreshold:
         await db_session.execute(sa.delete(SystemSettings))
 
         assert await get_llm_week_threshold(db_session) == DEFAULT_LLM_WEEK_THRESHOLD_PCT
+
+
+class TestLlmCompactMinContext:
+    async def test_default_then_custom(self, db_session: AsyncSession) -> None:
+        assert (
+            await get_llm_compact_min_context_chars(db_session)
+            == DEFAULT_LLM_COMPACT_MIN_CONTEXT_CHARS
+        )
+
+        await update_system_settings(db_session, values=_CUSTOM_SETTINGS)
+
+        assert await get_llm_compact_min_context_chars(db_session) == 5_000
+
+    async def test_no_row_gives_default(self, db_session: AsyncSession) -> None:
+        await db_session.execute(sa.delete(SystemSettings))
+
+        assert (
+            await get_llm_compact_min_context_chars(db_session)
+            == DEFAULT_LLM_COMPACT_MIN_CONTEXT_CHARS
+        )
 
 
 class TestNodeExecutionDefaults:

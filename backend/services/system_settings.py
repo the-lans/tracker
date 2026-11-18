@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 from app_logging.config import get_logger
 from db.models.enums import NodeType, ScriptLanguage
 from db.models.settings import (
+    DEFAULT_LLM_COMPACT_MIN_CONTEXT_CHARS,
     DEFAULT_LLM_WEEK_THRESHOLD_PCT,
     SYSTEM_SETTINGS_ROW_ID,
     SystemSettings,
@@ -59,6 +60,8 @@ class SystemSettingsValues:
     day_start_time: time
     # Раздел 19.7: недельный расход, с которого задача уходит на другой аккаунт.
     llm_switch_threshold_week_pct: int
+    # Раздел 19.7: короче этого контекст при смене аккаунта не сжимается.
+    llm_compact_min_context_chars: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +110,7 @@ async def update_system_settings(
     settings.app_logs_retention_days = values.app_logs_retention_days
     settings.day_start_time = values.day_start_time
     settings.llm_switch_threshold_week_pct = values.llm_switch_threshold_week_pct
+    settings.llm_compact_min_context_chars = values.llm_compact_min_context_chars
     await db_session.commit()
     logger.info("system_settings_updated")
     return settings
@@ -135,6 +139,19 @@ async def get_llm_week_threshold(db_session: AsyncSession) -> int:
     """
     settings = await db_session.get(SystemSettings, SYSTEM_SETTINGS_ROW_ID, populate_existing=True)
     return settings.llm_switch_threshold_week_pct if settings else DEFAULT_LLM_WEEK_THRESHOLD_PCT
+
+
+async def get_llm_compact_min_context_chars(db_session: AsyncSession) -> int:
+    """
+    Раздел 19.7: минимум контекста (символов) для сжатия при смене аккаунта;
+    перечитывается и в долгоживущей сессии воркера.
+    """
+    settings = await db_session.get(SystemSettings, SYSTEM_SETTINGS_ROW_ID, populate_existing=True)
+    return (
+        settings.llm_compact_min_context_chars
+        if settings
+        else DEFAULT_LLM_COMPACT_MIN_CONTEXT_CHARS
+    )
 
 
 async def resolve_runner_image(db_session: AsyncSession, node: Node) -> str | None:

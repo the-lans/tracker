@@ -263,6 +263,8 @@ export interface User {
 /** Границы порога расхода LLM-аккаунта, % — как `MIN/MAX_LLM_SWITCH_THRESHOLD_PCT` backend. */
 export const MIN_LLM_THRESHOLD_PCT = 1;
 export const MAX_LLM_THRESHOLD_PCT = 100;
+/** Верхняя граница минимума контекста для сжатия — как `MAX_LLM_COMPACT_MIN_CONTEXT_CHARS` backend. */
+export const MAX_LLM_COMPACT_MIN_CONTEXT_CHARS = 10_000_000;
 export const RETENTION_FOREVER = 0;
 /** Верхняя граница сроков хранения — как `MAX_RETENTION_DAYS` backend. */
 export const MAX_RETENTION_DAYS = 3650;
@@ -1002,6 +1004,8 @@ export interface SystemSettings {
   day_start_time: string;
   /** Раздел 19.7: недельный расход, с которого задача уходит на другой аккаунт, %. */
   llm_switch_threshold_week_pct: number;
+  /** Раздел 19.7: короче этого контекст при смене аккаунта не сжимается, символов; 0 — всегда. */
+  llm_compact_min_context_chars: number;
 }
 
 /**

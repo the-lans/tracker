@@ -31,6 +31,7 @@ from services.account_router import ROUTE_LOCK_KEY, TaskAccountRouter
 from services.llm_account_choice import LlmLimitWaitError, NoLlmAccountAvailableError
 from services.llm_routing import TurnRoute, read_route
 from services.notifications import NotificationEvent
+from services.system_settings import get_system_settings
 from tests.cliproxy_support import FakeCliproxy
 from tests.factories import make_llm_account, make_task, make_user
 
@@ -41,6 +42,8 @@ if TYPE_CHECKING:
 _NOW = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
 _USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 _LIMITED = LlmAccountStatus.RATE_LIMITED
+# Больше порога по умолчанию (12 000 символов): сжатие нужно.
+_LONG_CONTEXT_CHARS = 20_000
 
 
 class Recorded:
@@ -524,6 +527,7 @@ class TestCompaction:
         previous_status: LlmAccountStatus = LlmAccountStatus.ACTIVE,
         session_id: str | None = "sess-1",
         compact: bool = True,
+        context_chars: int = _LONG_CONTEXT_CHARS,
     ) -> tuple[Task, LlmAccount, LlmAccount]:
         previous = await setup.account(
             pct_5h="95",
@@ -536,8 +540,31 @@ class TestCompaction:
         author = await setup.db_session.get(User, setup.owner_id)
         assert author is not None
         author.llm_compact_on_switch = compact
+        if context_chars:
+            await self._add_context(setup.db_session, task, chars=context_chars)
         await setup.db_session.flush()
         return task, previous, spare
+
+    @staticmethod
+    async def _add_context(
+        db_session: AsyncSession,
+        task: Task,
+        *,
+        chars: int,
+        started_at: datetime = _NOW - timedelta(hours=1),
+        status: NodeLogStatus = NodeLogStatus.SUCCESS,
+    ) -> None:
+        """Завершённый ход: промт и ответ суммарно в ``chars`` символов."""
+        db_session.add(
+            NodeLog(
+                task_id=task.id,
+                trigger_type=NodeLogTriggerType.PIPELINE,
+                status=status,
+                started_at=started_at,
+                rendered_prompt="п" * (chars // 2),
+                llm_output_text="о" * (chars - chars // 2),
+            ),
+        )
 
     @pytest.mark.parametrize(
         ("succeeded", "level"),
@@ -640,6 +667,108 @@ class TestCompaction:
         assert (plan.compact_with is not None) is compacts
         if not compacts:
             assert await read_route(redis_client, task.id) == plan.route
+
+    @pytest.mark.parametrize(
+        ("context_chars", "compacts"),
+        [(0, False), (5_000, False), (11_999, False), (12_000, True), (50_000, True)],
+        ids=["no_logs", "short", "just_below", "at_minimum", "long"],
+    )
+    async def test_short_context_not_compacted(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+        context_chars: int,
+        compacts: bool,
+    ) -> None:
+        task, _, spare = await self._switching(setup, context_chars=context_chars)
+        router = _router(db_session, redis_client, fake_cliproxy, task)
+
+        plan = await router.plan_turn(effort=None, node_type=None, has_history=True)
+
+        assert plan.route.account_id == spare.id
+        assert (plan.compact_with is not None) is compacts
+        if not compacts:
+            assert await read_route(redis_client, task.id) == plan.route
+
+    async def test_minimum_from_settings(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+    ) -> None:
+        task, _, _ = await self._switching(setup, context_chars=5_000)
+        settings = await get_system_settings(db_session)
+        settings.llm_compact_min_context_chars = 4_000
+        await db_session.flush()
+
+        plan = await _router(db_session, redis_client, fake_cliproxy, task).plan_turn(
+            effort=None,
+            node_type=None,
+            has_history=True,
+        )
+
+        assert plan.compact_with is not None
+
+    async def test_zero_minimum_compacts_any_history(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+    ) -> None:
+        task, _, _ = await self._switching(setup, context_chars=0)
+        settings = await get_system_settings(db_session)
+        settings.llm_compact_min_context_chars = 0
+        await db_session.flush()
+
+        plan = await _router(db_session, redis_client, fake_cliproxy, task).plan_turn(
+            effort=None,
+            node_type=None,
+            has_history=True,
+        )
+
+        assert plan.compact_with is not None
+
+    async def test_only_context_after_last_reset_counts(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+    ) -> None:
+        task, _, _ = await self._switching(setup, context_chars=0)
+        task.context_cleared_at = _NOW - timedelta(minutes=30)
+        await self._add_context(
+            db_session, task, chars=50_000, started_at=_NOW - timedelta(hours=2)
+        )
+        await self._add_context(
+            db_session, task, chars=3_000, started_at=_NOW - timedelta(minutes=10)
+        )
+        await db_session.flush()
+        router = _router(db_session, redis_client, fake_cliproxy, task)
+
+        plan = await router.plan_turn(effort=None, node_type=None, has_history=True)
+
+        assert plan.compact_with is None
+
+    async def test_running_turn_not_counted(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        fake_cliproxy: FakeCliproxy,
+        setup: Setup,
+    ) -> None:
+        task, _, _ = await self._switching(setup, context_chars=3_000)
+        await self._add_context(db_session, task, chars=50_000, status=NodeLogStatus.RUNNING)
+        await db_session.flush()
+        router = _router(db_session, redis_client, fake_cliproxy, task)
+
+        plan = await router.plan_turn(effort=None, node_type=None, has_history=True)
+
+        assert plan.compact_with is None
 
     async def test_same_account_not_compacted(
         self,

@@ -15,6 +15,7 @@ from db.models.settings import (
     DEFAULT_BACKUP_FOLDER,
     DEFAULT_BACKUP_RETENTION_COUNT,
     MAX_BACKUP_RETENTION_COUNT,
+    MAX_LLM_COMPACT_MIN_CONTEXT_CHARS,
     MIN_BACKUP_RETENTION_COUNT,
 )
 from db.models.users import (
@@ -50,6 +51,8 @@ class SystemSettingsBody(BaseModel):
         ge=MIN_LLM_SWITCH_THRESHOLD_PCT,
         le=MAX_LLM_SWITCH_THRESHOLD_PCT,
     )
+    # Раздел 19.7: короче этого контекст при смене аккаунта не сжимается; 0 — всегда сжимать.
+    llm_compact_min_context_chars: int = Field(ge=0, le=MAX_LLM_COMPACT_MIN_CONTEXT_CHARS)
 
 
 class IntegrationsResponse(BaseModel):

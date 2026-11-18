@@ -31,6 +31,9 @@ MAX_BACKUP_RETENTION_COUNT = 365
 DEFAULT_APP_LOGS_RETENTION_DAYS = 30
 # Раздел 19.7: недельный расход аккаунта, с которого задача уходит на другой аккаунт.
 DEFAULT_LLM_WEEK_THRESHOLD_PCT = 98
+# Раздел 19.7: меньше стольких символов в промтах и ответах сессии сжимать контекст незачем.
+DEFAULT_LLM_COMPACT_MIN_CONTEXT_CHARS = 12_000
+MAX_LLM_COMPACT_MIN_CONTEXT_CHARS = 10_000_000
 
 
 class SystemSettings(Base):
@@ -63,6 +66,10 @@ class SystemSettings(Base):
             "llm_switch_threshold_week_pct BETWEEN "
             f"{MIN_LLM_SWITCH_THRESHOLD_PCT} AND {MAX_LLM_SWITCH_THRESHOLD_PCT}",
             name="ck_system_settings_llm_switch_threshold_week_pct",
+        ),
+        sa.CheckConstraint(
+            f"llm_compact_min_context_chars BETWEEN 0 AND {MAX_LLM_COMPACT_MIN_CONTEXT_CHARS}",
+            name="ck_system_settings_llm_compact_min_context_chars",
         ),
     )
 
@@ -127,4 +134,11 @@ class SystemSettings(Base):
         sa.Integer,
         default=DEFAULT_LLM_WEEK_THRESHOLD_PCT,
         server_default=str(DEFAULT_LLM_WEEK_THRESHOLD_PCT),
+    )
+    # Раздел 19.7: при смене аккаунта контекст короче этого (символов в промтах и
+    # ответах текущей сессии) не сжимается; 0 — сжимать при любой истории.
+    llm_compact_min_context_chars: Mapped[int] = mapped_column(
+        sa.Integer,
+        default=DEFAULT_LLM_COMPACT_MIN_CONTEXT_CHARS,
+        server_default=str(DEFAULT_LLM_COMPACT_MIN_CONTEXT_CHARS),
     )

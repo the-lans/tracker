@@ -8,6 +8,7 @@ import { useSystemSettings, useUpdateSystemSettings } from "@/hooks/useAdmin";
 import { errorMessage } from "@/lib/errors";
 import { parseIntegerInRange } from "@/lib/integerInput";
 import {
+  MAX_LLM_COMPACT_MIN_CONTEXT_CHARS,
   MAX_LLM_THRESHOLD_PCT,
   MAX_RETENTION_DAYS,
   MIN_LLM_THRESHOLD_PCT,
@@ -21,7 +22,7 @@ import { CARD_DIVIDER } from "@/styles/classes";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 import { SectionTitle } from "@/components/common/typography/SectionTitle";
 import { AppLogsRetentionField } from "@/components/admin/AppLogsRetentionField";
-import { LlmWeekThresholdField } from "@/components/admin/LlmWeekThresholdField";
+import { LlmAccountsSettingsFields } from "@/components/admin/LlmAccountsSettingsFields";
 import { IntegrationsCard } from "@/components/admin/IntegrationsCard";
 import { BackupSettingsCard } from "@/components/admin/BackupSettingsCard";
 
@@ -72,14 +73,19 @@ function SettingsForm({ initial }: { initial: SystemSettings }) {
     MIN_LLM_THRESHOLD_PCT,
     MAX_LLM_THRESHOLD_PCT,
   );
+  const [compactMinDraft, setCompactMinDraft] = useState(
+    String(initial.llm_compact_min_context_chars),
+  );
+  const compactMin = parseIntegerInRange(compactMinDraft, 0, MAX_LLM_COMPACT_MIN_CONTEXT_CHARS);
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!appLogsDays.valid || !weekThreshold.valid) return;
+    if (!appLogsDays.valid || !weekThreshold.valid || !compactMin.valid) return;
     update.mutate({
       ...values,
       app_logs_retention_days: appLogsDays.value,
       llm_switch_threshold_week_pct: weekThreshold.value,
+      llm_compact_min_context_chars: compactMin.value,
     }, {
       onSuccess: () => toast.success("Настройки сохранены"),
       onError: (error) =>
@@ -142,16 +148,21 @@ function SettingsForm({ initial }: { initial: SystemSettings }) {
           Отметки, события и работа по задачам до этого времени относятся к предыдущему дню. Сохранённые отметки и ручные события не пересчитываются.
         </div>
       </SettingsFieldset>
-      <LlmWeekThresholdField
-        draft={weekThresholdDraft}
-        parsed={weekThreshold}
-        onChange={setWeekThresholdDraft}
+      <LlmAccountsSettingsFields
+        week={{ draft: weekThresholdDraft, parsed: weekThreshold, onChange: setWeekThresholdDraft }}
+        compact={{ draft: compactMinDraft, parsed: compactMin, onChange: setCompactMinDraft }}
       />
       <AppLogsRetentionField draft={appLogsDraft} parsed={appLogsDays} onChange={setAppLogsDraft} />
       <div>
         <Button
           type="submit"
-          disabled={update.isPending || nightWindowEmpty || !appLogsDays.valid || !weekThreshold.valid}
+          disabled={
+            update.isPending ||
+            nightWindowEmpty ||
+            !appLogsDays.valid ||
+            !weekThreshold.valid ||
+            !compactMin.valid
+          }
         >
           Сохранить
         </Button>

@@ -67,6 +67,7 @@ from services.plan_mode import (
 )
 from services.session_context import clear_task_session_context
 from services.session_heartbeat import is_session_alive
+from services.system_settings import get_system_settings
 from services.task_control import (
     TaskControlCommand,
     consume_bridge_reconnect,
@@ -1245,6 +1246,13 @@ class TestAccountSwitching:
         )
         return list((await db_session.execute(stmt)).scalars())
 
+    @staticmethod
+    async def _compact_any_context(db_session: AsyncSession) -> None:
+        """Минимум контекста для сжатия — 0: в тестах промты короче порога по умолчанию."""
+        settings = await get_system_settings(db_session)
+        settings.llm_compact_min_context_chars = 0
+        await db_session.flush()
+
     @pytest.mark.parametrize("compact", [True, False], ids=["compact", "no_compact"])
     async def test_threshold_switches_next_node(
         self,
@@ -1256,6 +1264,7 @@ class TestAccountSwitching:
         author = await db_session.get(User, task.created_by)
         assert author is not None
         author.llm_compact_on_switch = compact
+        await self._compact_any_context(db_session)
         queries = 0
 
         async def exhaust_start_after_first_turn() -> None:
@@ -1288,6 +1297,36 @@ class TestAccountSwitching:
         assert await self._compacted(db_session, task) == [False, compact]
         assert _compactions(logs) == ([str(start.id)] if compact else [])
 
+    async def test_short_context_not_compacted_on_switch(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+    ) -> None:
+        """Раздел 19.7: контекст короче минимума из настроек при смене аккаунта не сжимается."""
+        task, start, spare = await self._task_with_spare(db_session, nodes=2)
+        queries = 0
+
+        async def exhaust_start_after_first_turn() -> None:
+            nonlocal queries
+            queries += 1
+            if queries == 1:
+                start.usage_5h_pct = Decimal("95")
+                start.usage_checked_at = datetime.now(UTC)
+                await db_session.flush()
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(2),
+            on_query=exhaust_start_after_first_turn,
+        )
+
+        with structlog.testing.capture_logs() as logs:
+            await _run_worker(task)
+
+        assert worker_env.client.queries == ["шаг 0", "шаг 1"]
+        assert await self._compacted(db_session, task) == [False, False]
+        assert _compactions(logs) == []
+        assert any(entry["event"] == "llm_compaction_skipped_short_context" for entry in logs)
+
     async def test_limit_mid_turn_retried_on_other_account(
         self,
         db_session: AsyncSession,
@@ -1296,6 +1335,7 @@ class TestAccountSwitching:
         task, start, spare = await self._task_with_spare(db_session, nodes=1)
         # Вторая попытка ноды — повтор по retry-политике (раздел 11.7).
         await set_execution_settings(db_session, max_retries=2)
+        await self._compact_any_context(db_session)
         worker_env.client = FakeClaudeAgentClient(
             messages_per_query=[
                 [make_assistant_error("rate_limit"), make_result_message(is_error=True)],

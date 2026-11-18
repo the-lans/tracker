@@ -34,6 +34,7 @@ _SETTINGS = {
     "app_logs_retention_days": 30,
     "day_start_time": "08:00:00",
     "llm_switch_threshold_week_pct": 98,
+    "llm_compact_min_context_chars": 12000,
 }
 
 
