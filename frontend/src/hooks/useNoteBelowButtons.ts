@@ -1,7 +1,7 @@
 import { useLayoutEffect, useState, type RefObject } from "react";
 import { noteBelowButtons } from "@/lib/headerLayout";
 
-/** Атрибут элементов слева, чья ширина без обрезки нужна для расчёта (название, аккаунт). */
+/** Атрибут элементов слева, чья ширина без обрезки нужна для расчёта (строка аккаунта; название не мешает). */
 export const FIT_ATTRIBUTE = "data-fit";
 
 /**

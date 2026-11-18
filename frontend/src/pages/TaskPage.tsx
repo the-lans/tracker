@@ -19,7 +19,7 @@ import { REMOTE_CONTROL_STATUS_LABEL } from "@/lib/labels";
 import { RemoteControlStatus } from "@/lib/types";
 import { useTask, useTaskNodeLogs } from "@/hooks/useTasks";
 import { useTaskStatusSocket } from "@/hooks/useTaskStatusSocket";
-import { FIT_ATTRIBUTE, useNoteBelowButtons } from "@/hooks/useNoteBelowButtons";
+import { useNoteBelowButtons } from "@/hooks/useNoteBelowButtons";
 import { cn } from "@/lib/utils";
 
 export function TaskPage() {
@@ -28,7 +28,7 @@ export function TaskPage() {
   const { data: nodeLogs } = useTaskNodeLogs(taskId);
   const [mobileTab, setMobileTab] = useState<MobileTaskTab>("dialogue");
   useTaskStatusSocket(taskId);
-  // Надпись о просмотре: под кнопками, пока слева ничего не обрезается, иначе — под аккаунтом.
+  // Надпись о просмотре: под кнопками, пока строка аккаунта слева не подступила к ней, иначе — под аккаунтом.
   const leftRef = useRef<HTMLDivElement>(null);
   const buttonsRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLSpanElement>(null);
@@ -74,7 +74,6 @@ export function TaskPage() {
           </div>
           <div className="flex items-center gap-2">
             <div
-              {...{ [FIT_ATTRIBUTE]: "" }}
               className="min-w-0 truncate text-title font-extrabold tracking-tight xl:text-heading 2xl:text-display"
               title={task.title}
             >
