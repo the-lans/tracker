@@ -16,7 +16,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 import structlog
-from claude_agent_sdk import AssistantMessage, ProcessError, RateLimitInfo, TextBlock, ToolUseBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    ProcessError,
+    RateLimitInfo,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+)
 
 from clients import claude_agent
 from clients.claude_agent import (
@@ -818,3 +826,86 @@ class TestPendingNotice:
         await session.send_and_collect_text("сделай задачу")
 
         assert fake.queries == ["сделай задачу"]
+
+
+class TestTurnProgress:
+    @pytest.mark.parametrize(
+        ("progress", "expected"),
+        [
+            (agent_metrics.TurnProgress(), "ответ модели не начался"),
+            (agent_metrics.TurnProgress(model_responded=True), "инструментов: 0"),
+            (
+                agent_metrics.TurnProgress(
+                    model_responded=True,
+                    tool_call_count=5,
+                    open_tools={"a": "mcp__jira", "b": "Read"},
+                ),
+                "инструментов: 5, не завершены: mcp__jira, Read",
+            ),
+            (
+                agent_metrics.TurnProgress(
+                    model_responded=True,
+                    open_tools={str(index): f"tool{index}" for index in range(5)},
+                ),
+                "инструментов: 0, не завершены: tool0, tool1, tool2",
+            ),
+        ],
+        ids=["no_events", "no_tools", "open_tools", "open_tools_limited"],
+    )
+    def test_timeout_details(self, progress: agent_metrics.TurnProgress, expected: str) -> None:
+        assert progress.timeout_details() == expected
+
+    async def test_tracked_by_session(self) -> None:
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    AssistantMessage(
+                        content=[
+                            ToolUseBlock(id="done", name="Read", input={}),
+                            ToolUseBlock(id="hung", name="mcp__jira__get", input={}),
+                        ],
+                        model="claude",
+                    ),
+                    UserMessage(content=[ToolResultBlock(tool_use_id="done", content="ok")]),
+                    make_result_message(),
+                ],
+            ],
+        )
+        session = ClaudeCodeSession(fake)
+
+        await session.send_and_collect_text("прочитай")
+
+        assert session.turn_progress.timeout_details() == (
+            "инструментов: 2, не завершены: mcp__jira__get"
+        )
+
+    async def test_reset_before_routing(self) -> None:
+        router = FakeTurnRouter()
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                [
+                    AssistantMessage(
+                        content=[ToolUseBlock(id="t", name="Read", input={})],
+                        model="claude",
+                    ),
+                    make_result_message(),
+                ],
+            ],
+        )
+        session = ClaudeCodeSession(fake, router=router)
+        await session.send_and_collect_text("первый")
+        router.available = False
+
+        with pytest.raises(NoLlmAccountAvailableError):
+            await session.send_and_collect_text("второй")
+
+        assert session.turn_progress.timeout_details() == "ответ модели не начался"
+
+    async def test_echo_is_not_model_response(self) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[[UserMessage(content="прочитай")]])
+        session = ClaudeCodeSession(fake)
+
+        with pytest.raises(RuntimeError):
+            await session.send_and_collect_text("прочитай")
+
+        assert session.turn_progress.timeout_details() == "ответ модели не начался"

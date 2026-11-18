@@ -242,6 +242,8 @@ async def execute_llm_node(
     return NodeExecutionOutcome(success=True, llm_output_text=turn.text, route=turn.route)
 
 
+TIMEOUT_MESSAGE = "Превышен таймаут выполнения"
+
 # Пока ход ждёт решения пользователя, срок не идёт: ждём не чаще раза в
 # секунду, даже если до таймаута оставались доли секунды.
 _USER_WAIT_POLL_SECONDS = 1.0
@@ -311,7 +313,7 @@ async def execute_llm_node_with_timeout(
         return NodeExecutionOutcome(
             success=False,
             llm_output_text=partial_text,
-            error_message="Превышен таймаут выполнения",
+            error_message=(f"{TIMEOUT_MESSAGE} ({claude_session.turn_progress.timeout_details()})"),
             route=claude_session.turn_route,
         )
 
