@@ -1,5 +1,6 @@
 import { Cpu } from "lucide-react";
 import { useLlmAccounts, useLlmProviders } from "@/hooks/useLlmAccounts";
+import { FIT_ATTRIBUTE } from "@/hooks/useNoteBelowButtons";
 import type { Task } from "@/lib/types";
 
 function usagePart(label: string, pct: string | null): string | null {
@@ -29,7 +30,7 @@ export function TaskLlmAccountBadge({ task }: { task: Task }) {
       title={account.default_model ?? undefined}
     >
       <Cpu className="size-3.5 shrink-0 text-text-3" />
-      <span className="truncate">
+      <span {...{ [FIT_ATTRIBUTE]: "" }} className="truncate">
         <span className="font-bold text-text">{account.label}</span>
         {" · "}
         {provider?.label ?? account.provider}

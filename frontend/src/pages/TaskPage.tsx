@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { TaskJiraLink } from "@/components/tasks/TaskJiraLink";
@@ -19,6 +19,7 @@ import { REMOTE_CONTROL_STATUS_LABEL } from "@/lib/labels";
 import { RemoteControlStatus } from "@/lib/types";
 import { useTask, useTaskNodeLogs } from "@/hooks/useTasks";
 import { useTaskStatusSocket } from "@/hooks/useTaskStatusSocket";
+import { FIT_ATTRIBUTE, useNoteBelowButtons } from "@/hooks/useNoteBelowButtons";
 import { cn } from "@/lib/utils";
 
 export function TaskPage() {
@@ -27,6 +28,16 @@ export function TaskPage() {
   const { data: nodeLogs } = useTaskNodeLogs(taskId);
   const [mobileTab, setMobileTab] = useState<MobileTaskTab>("dialogue");
   useTaskStatusSocket(taskId);
+  // Надпись о просмотре: под кнопками, пока слева ничего не обрезается, иначе — под аккаунтом.
+  const leftRef = useRef<HTMLDivElement>(null);
+  const buttonsRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLSpanElement>(null);
+  const noteBelow = useNoteBelowButtons(
+    leftRef,
+    buttonsRef,
+    measureRef,
+    `${task?.title}:${task?.current_llm_account_id ?? task?.llm_account_id}:${task?.status}`,
+  );
 
   if (isLoading || !task) {
     return (
@@ -41,6 +52,7 @@ export function TaskPage() {
   const workspaceView: WorkspaceView = mobileTab === "logs" ? "logs" : "dialogue";
   const workspaceTabs = <TaskWorkspaceTabs value={workspaceView} onChange={setMobileTab} />;
   const bridgeView = bridgeViewOf(task);
+  const remoteControlNote = REMOTE_CONTROL_STATUS_LABEL[RemoteControlStatus.UNAVAILABLE];
 
   return (
     <div className="flex h-full flex-col short:h-auto">
@@ -53,7 +65,7 @@ export function TaskPage() {
         >
           <ArrowLeft className="size-4" />
         </Link>
-        <div className="min-w-0 flex-1 basis-56">
+        <div ref={leftRef} className="min-w-0 flex-1 basis-56">
           {/* Отметки дня переносятся на свою строку, а не сжимают код и статус. */}
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="max-w-full break-all font-mono text-small font-bold text-text-3">{task.code}</span>
@@ -61,25 +73,43 @@ export function TaskPage() {
             <TaskDayMarks task={task} />
           </div>
           <div className="flex items-center gap-2">
-            <div className="min-w-0 truncate text-title font-extrabold tracking-tight xl:text-heading 2xl:text-display" title={task.title}>
+            <div
+              {...{ [FIT_ATTRIBUTE]: "" }}
+              className="min-w-0 truncate text-title font-extrabold tracking-tight xl:text-heading 2xl:text-display"
+              title={task.title}
+            >
               {task.title}
             </div>
             <TaskJiraLink task={task} />
           </div>
-          {/* Под названием: отступ от него; надпись о просмотре — всегда на своей строке под аккаунтом. */}
+          {/* Под названием: отступ от него; тесно — надпись о просмотре на своей строке под аккаунтом. */}
           <div className="mt-1 empty:hidden">
             <TaskLlmAccountBadge task={task} />
-            {bridgeView === "unavailable" && (
-              <p className="text-caption text-text-3">
-                {REMOTE_CONTROL_STATUS_LABEL[RemoteControlStatus.UNAVAILABLE]}
-              </p>
+            {bridgeView === "unavailable" && !noteBelow && (
+              <p className="text-caption text-text-3">{remoteControlNote}</p>
             )}
           </div>
         </div>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <TaskControlButtons task={task} />
-          {bridgeView === "reconnect" && <RemoteControlButton task={task} />}
+        <div ref={buttonsRef} className="ml-auto flex flex-col items-end gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <TaskControlButtons task={task} />
+            {bridgeView === "reconnect" && <RemoteControlButton task={task} />}
+          </div>
+          {bridgeView === "unavailable" && noteBelow && (
+            // Шире кнопок — выступает влево, ширину колонки кнопок не меняет.
+            <div className="flex w-0 min-w-full justify-end">
+              <span className="whitespace-nowrap text-caption text-text-3">{remoteControlNote}</span>
+            </div>
+          )}
         </div>
+        {/* Замер ширины надписи: вне потока и экрана, не влияет на раскладку. */}
+        <span
+          ref={measureRef}
+          aria-hidden
+          className="pointer-events-none invisible fixed left-[-9999px] top-0 whitespace-nowrap text-caption"
+        >
+          {remoteControlNote}
+        </span>
         {bridgeView === "reconnect" && <RemoteControlNotice />}
         <TaskLimitWaitBanner task={task} />
       </div>
