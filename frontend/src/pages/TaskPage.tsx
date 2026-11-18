@@ -61,7 +61,7 @@ export function TaskPage() {
             <TaskDayMarks task={task} />
           </div>
           <div className="flex items-center gap-2">
-            <div className="min-w-0 truncate text-title font-extrabold tracking-tight" title={task.title}>
+            <div className="min-w-0 truncate text-title font-extrabold tracking-tight xl:text-heading 2xl:text-display" title={task.title}>
               {task.title}
             </div>
             <TaskJiraLink task={task} />
