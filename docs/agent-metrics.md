@@ -65,12 +65,13 @@ docker logs tracker-llm-gateway-1 --since 15m | grep llm_gateway_
 | Событие | Поля | Назначение |
 | --- | --- | --- |
 | `session_tool_started` | `tool_name`, `tool_input`, `parent_tool_use_id` | Найти последний начавшийся инструмент. |
+| `session_tool_finished` | `tool_name`, `duration_ms`, `is_error`, `error` | Длительность каждого вызова и начало текста ошибки (до 200 символов; у успешного — `null`). Ошибки пишутся всегда, остальные — в пределах лимита ниже. |
 | `session_tool_log_limit_reached` | `limit` | Показать, что подробные tool-события были ограничены. |
 | `claude_cli_stderr` | `line` | Сохранить короткую строку stderr CLI. |
 
 `tool_input` ограничен 200 символами и рекурсивно маскирует поля, содержащие
 `token`, `secret`, `password`, `authorization`, `credential`, `cookie` или
-`private_key`. Подробно записывается не более 50 tool-событий на ход.
+`private_key`. Подробно записывается не более 50 событий `session_tool_started` и 50 успешных `session_tool_finished` на ход; ошибки инструментов лимитом не ограничены. Текст ошибки инструмента обрезается, но не маскируется: он попадает в лог как вернул MCP-сервер.
 
 ### Management API CLIProxy
 
@@ -99,6 +100,7 @@ docker logs tracker-llm-gateway-1 --since 15m | grep llm_gateway_
 | --- | --- |
 | `status_code` | Код ответа прокси. |
 | `upstream_headers_ms` | Время от отправки запроса прокси до его заголовков ответа. |
+| `error_body` | Начало тела ответа прокси (до 300 символов), если код 400 и выше; иначе `null`. Тело сессии передаётся без изменений. |
 | `max_tokens_clamped_from` | Запрошенное сессией `max_tokens`, если шлюз снизил его до потолка модели; иначе `null`. |
 
 Событие `llm_gateway_response_finished` создаётся, когда тело ответа передано

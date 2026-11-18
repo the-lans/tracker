@@ -53,7 +53,7 @@ from tests.fakes import (
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from claude_agent_sdk import Message
+    from claude_agent_sdk import ContentBlock, Message
 
 
 def test_build_claude_agent_options_sets_remote_control_flag_on_first_connect() -> None:
@@ -909,3 +909,78 @@ class TestTurnProgress:
             await session.send_and_collect_text("прочитай")
 
         assert session.turn_progress.timeout_details() == "ответ модели не начался"
+
+
+class TestToolFinishedLogs:
+    @staticmethod
+    def _turn(*results: ToolResultBlock) -> list[Message]:
+        uses: list[ContentBlock] = [
+            ToolUseBlock(id=block.tool_use_id, name="mcp__x", input={}) for block in results
+        ]
+        return [
+            AssistantMessage(content=uses, model="claude"),
+            UserMessage(content=list(results)),
+            make_result_message(),
+        ]
+
+    async def test_error_and_success_logged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(agent_metrics.DIAGNOSTICS_ENV, "1")
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                self._turn(
+                    ToolResultBlock(tool_use_id="a", content="ok"),
+                    ToolResultBlock(
+                        tool_use_id="b",
+                        content=[{"type": "text", "text": "E" * 500}],
+                        is_error=True,
+                    ),
+                ),
+            ],
+        )
+        session = ClaudeCodeSession(fake)
+
+        with structlog.testing.capture_logs() as logs:
+            await session.send_and_collect_text("go")
+
+        finished = [entry for entry in logs if entry["event"] == "session_tool_finished"]
+        assert [(entry["tool_name"], entry["is_error"]) for entry in finished] == [
+            ("mcp__x", False),
+            ("mcp__x", True),
+        ]
+        assert finished[0]["error"] is None
+        assert finished[1]["error"] == "E" * agent_metrics.TOOL_INPUT_LOG_LIMIT
+        assert all(isinstance(entry["duration_ms"], int) for entry in finished)
+
+    async def test_errors_logged_past_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(agent_metrics.DIAGNOSTICS_ENV, "1")
+        monkeypatch.setattr(agent_metrics, "TOOL_LOG_EVENT_LIMIT", 1)
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                self._turn(
+                    ToolResultBlock(tool_use_id="a", content="ok"),
+                    ToolResultBlock(tool_use_id="b", content="ok too"),
+                    ToolResultBlock(tool_use_id="c", content="boom", is_error=True),
+                ),
+            ],
+        )
+        session = ClaudeCodeSession(fake)
+
+        with structlog.testing.capture_logs() as logs:
+            await session.send_and_collect_text("go")
+
+        finished = [entry for entry in logs if entry["event"] == "session_tool_finished"]
+        assert [entry["is_error"] for entry in finished] == [False, True]
+
+    async def test_not_logged_without_diagnostics(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(agent_metrics.DIAGNOSTICS_ENV, raising=False)
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[
+                self._turn(ToolResultBlock(tool_use_id="a", content="x", is_error=True)),
+            ],
+        )
+        session = ClaudeCodeSession(fake)
+
+        with structlog.testing.capture_logs() as logs:
+            await session.send_and_collect_text("go")
+
+        assert all(entry["event"] != "session_tool_finished" for entry in logs)
