@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
+from sqlalchemy.orm import defer
 
 from app_logging.config import get_logger
 from db.models.enums import TaskSessionEventKind, TaskStatus
@@ -61,6 +62,7 @@ async def list_active_sessions(db_session: AsyncSession, *, user_id: uuid.UUID) 
     """
     stmt = (
         sa.select(Task)
+        .options(defer(Task.description_html))
         .where(Task.created_by == user_id, Task.status.in_(SESSION_ACTIVE_STATUSES))
         .order_by(Task.updated_at.desc())
     )

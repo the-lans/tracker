@@ -8,7 +8,7 @@ import {
 
 /** Оформление HTML Jira: заголовки, списки, таблицы, код, цитаты (без своих стилей Jira). */
 const CONTENT_CLASSES = [
-  "text-body leading-relaxed text-text-2 break-words",
+  "isolate overflow-x-auto text-body leading-relaxed text-text-2 break-words",
   "[&_h1]:mt-3 [&_h1]:mb-1 [&_h1]:text-subtitle [&_h1]:font-bold [&_h1]:text",
   "[&_h2]:mt-3 [&_h2]:mb-1 [&_h2]:text-card-title [&_h2]:font-bold [&_h2]:text",
   "[&_h3]:mt-2 [&_h3]:mb-1 [&_h3]:font-bold [&_h3]:text",

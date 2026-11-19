@@ -108,7 +108,12 @@ class TaskRepositoryResponse(BaseModel):
     cloned_at: datetime | None
 
 
-class TaskResponse(BaseModel):
+class TaskListItemResponse(BaseModel):
+    """
+    Задача в списках (дашборд, активные сессии): без `description_html` — HTML
+    описания из Jira велик и нужен только странице одной задачи.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     manual_requests_closed: bool = False
@@ -116,8 +121,6 @@ class TaskResponse(BaseModel):
     code: str
     title: str
     description: str
-    # Раздел 15.6: HTML описания из Jira — только для показа.
-    description_html: str | None = None
     guide_url: str | None
     jira_issue_url: str | None = None
     status: TaskStatus
@@ -156,6 +159,15 @@ class TaskResponse(BaseModel):
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
+
+
+class TaskResponse(TaskListItemResponse):
+    """
+    Одна задача: к полям списка добавлен HTML описания из Jira.
+    """
+
+    # Раздел 15.6: HTML описания из Jira — только для показа.
+    description_html: str | None = None
 
 
 class TaskStatusChangeRequest(BaseModel):

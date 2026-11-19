@@ -33,6 +33,14 @@ describe("prepareDescriptionHtml", () => {
     ["обработчик", '<p onclick="alert(1)">a</p>', "[onclick]"],
     ["стиль", '<p style="color:red">a</p>', "[style]"],
     ["форма", "<form><input name=x></form><p>a</p>", "form, input"],
+    ["класс", '<a class="fixed inset-0 z-50" href="/x">a</a>', "[class]"],
+    ["идентификатор", '<p id="root">a</p>', "[id]"],
+    ["видео", '<video src="https://t.example/p.mp4"></video><p>a</p>', "video"],
+    [
+      "картинка-источник",
+      '<picture><source srcset="https://t.example/a.png"></picture><p>a</p>',
+      "picture, source",
+    ],
     [
       "javascript-ссылка",
       '<a href="javascript:alert(1)">a</a>',

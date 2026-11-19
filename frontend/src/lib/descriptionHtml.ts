@@ -1,8 +1,18 @@
 import DOMPurify from "dompurify";
 
-/** Теги, которых в описании не бывает: формы и встроенное содержимое. */
+/**
+ * Теги, которых в описании не бывает: формы, встроенное содержимое и всё, что само
+ * грузит внешние файлы (картинки — только вложения, через артефакты задачи).
+ */
 const FORBIDDEN_TAGS = [
   "style",
+  "video",
+  "audio",
+  "source",
+  "picture",
+  "track",
+  "object",
+  "embed",
   "form",
   "input",
   "button",
@@ -11,7 +21,9 @@ const FORBIDDEN_TAGS = [
   "svg",
   "math",
 ];
-const FORBIDDEN_ATTRIBUTES = ["style"];
+// `class` — тоже: классы Jira совпали бы с утилитами Tailwind трекера (`fixed inset-0`)
+// и дали бы автору описания перекрыть интерфейс; оформление задают теги.
+const FORBIDDEN_ATTRIBUTES = ["style", "class", "id", "name"];
 const IMAGE_SELECTOR = "img";
 const LINK_SELECTOR = "a[href]";
 
