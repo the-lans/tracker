@@ -2091,8 +2091,6 @@ class TestDescriptionHtml:
 
         listed = await authed_client.get("/tasks")
         sessions = await authed_client.get("/tasks/active-sessions")
-        # Тест делит сессию БД между запросами: объект со списка остался бы без HTML.
-        db_session.expire(task)
         detail = await authed_client.get(f"/tasks/{task_id}")
 
         for response in (listed, sessions):

@@ -58,6 +58,8 @@ from tasks.jira_attachments import copy_jira_attachments_to_task
 
 router = APIRouter(prefix=TASKS_PREFIX, tags=TASKS_TAGS)
 
+_DESCRIPTION_HTML_FIELD = "description_html"
+
 
 async def _with_queue_positions[T: TaskListItemResponse](
     db_session: AsyncSession,
@@ -318,4 +320,7 @@ async def get_task(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> TaskResponse:
     task = await get_task_or_404(db_session, task_id, current_user)
+    if _DESCRIPTION_HTML_FIELD in sa.inspect(task).unloaded:
+        # Объект уже в сессии после списка (там колонка отложена): дочитываем её.
+        await db_session.refresh(task, [_DESCRIPTION_HTML_FIELD])
     return (await _with_queue_positions(db_session, [task], TaskResponse))[0]
