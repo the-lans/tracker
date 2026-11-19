@@ -157,7 +157,8 @@ backend/
               task_dispatcher.py — проход дневного и ночного воркера
               очереди; refining_chat.py — чат с агентом в «Уточняется»;
               template_files.py — файлы шаблона, загруженные с диска;
-              jira_import.py — импорт задачи из Jira (раздел 15.6);
+              jira_import.py — импорт задачи из Jira и отрисованное описание
+              (`description_html`, «Обновить из Jira», раздел 15.6);
               «Дейли» (раздел 15.8): tracker_day.py — день трекера по
               началу дня, окно «Истории» (DayWindow); daily_clock.py — окно
               и начало дня из system_settings; day_marks.py — отметки
@@ -218,6 +219,9 @@ backend/
               владелец сессии; node_history.py — история `node_logs` задачи
               для `{{node.*}}` и вкладки «Логи»; node_runs.py — жизненный
               цикл записи `node_logs` (старт, итог, остановка);
+              session_events.py — строки ленты «Контекст сброшен» и «Начата новая
+              сессия» (`task_session_events`; повторный старт воркера до первого
+              хода строку не дублирует);
               redis_connection.py — клиент Redis на операцию; integrity.py —
               запреты удаления (раздел 3.2) и commit_or_conflict
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
@@ -304,7 +308,22 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               (настройки задачи и категории), actions/ToggleChip
               (переключатель-«пилюля»: фильтры дашборда, отметки дня),
               actions/ConfirmActionButton (действие с подтверждением),
-              inputs/TimeField и lib/clockTime.ts (время «ЧЧ:ММ»);
+              inputs/TimeField и lib/clockTime.ts (время «ЧЧ:ММ»),
+              inputs/IntegerSettingField (целочисленная настройка админки:
+              подпись, поле, подсказка), typography/TitledSection (раздел с
+              заголовком и чертой между разделами);
+              страница задачи (components/tasks): TaskHeader — шапка (кнопки,
+              аккаунт, надпись про claude.ai/code; раскладка и мобильная строка),
+              TaskStopButton — «Остановить» по шагам: запросы чата по одному,
+              затем красная — задача с подтверждением (lib/manualRequests.ts),
+              TaskDetailsDialog — окно «В отдельном окне» (общие части с
+              карточками: TaskDescriptionBody, TaskLinks, TaskArtifactList),
+              ArtifactPreviewDialog/Body и lib/artifactPreview.ts — просмотр
+              артефактов (SVG не открывается в новой вкладке: скрипт
+              выполнился бы в origin приложения; предел размера), FeedNotice —
+              служебная строка ленты (смена аккаунта, событие сессии, дата),
+              lib/chatFeed.ts + hooks/useStickToBottom.ts — сборка ленты и
+              автопрокрутка с кнопкой «Новые сообщения»;
               по разделам — components/{tasks,nodes,profile,admin,
               taskCategories,daily,repositories,templates,llmAccounts,
               envVariables};
