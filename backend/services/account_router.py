@@ -69,6 +69,7 @@ from services.llm_usage import (
     refresh_account_usage,
     turns_since_usage_check,
 )
+from services.system_settings import get_llm_compact_min_context_chars, get_llm_week_threshold
 
 if TYPE_CHECKING:
     from claude_agent_sdk import RateLimitInfo
@@ -241,8 +242,47 @@ class TaskAccountRouter:
         author = await self._db.get(User, task.created_by)
         if author is None or not author.llm_compact_on_switch:
             return False
-        await self._db.refresh(task, ["session_id"])
-        return has_history or task.session_id is not None
+        await self._db.refresh(task, ["session_id", "context_cleared_at"])
+        if not (has_history or task.session_id is not None):
+            return False
+        return await self._context_is_long_enough()
+
+    async def _context_is_long_enough(self) -> bool:
+        """
+        Короткий контекст сжимать незачем (раздел 19.7): меньше `llm_compact_min_context_chars`
+        символов в промтах и ответах текущей сессии (после последнего сброса контекста).
+        """
+        minimum = await get_llm_compact_min_context_chars(self._db)
+        if minimum <= 0:
+            return True
+        size = await self._context_chars()
+        if size >= minimum:
+            return True
+        logger.info(
+            "llm_compaction_skipped_short_context",
+            task_id=str(self._task.id),
+            context_chars=size,
+            minimum_chars=minimum,
+        )
+        return False
+
+    async def _context_chars(self) -> int:
+        """
+        Размер контекста сессии: промты, ответы и решения завершённых ходов, в символах.
+        """
+        task = self._task
+        text_length = (
+            sa.func.coalesce(sa.func.length(NodeLog.rendered_prompt), 0)
+            + sa.func.coalesce(sa.func.length(NodeLog.llm_output_text), 0)
+            + sa.func.coalesce(sa.func.length(NodeLog.user_input_text), 0)
+        )
+        stmt = sa.select(sa.func.coalesce(sa.func.sum(text_length), 0)).where(
+            NodeLog.task_id == task.id,
+            NodeLog.status != NodeLogStatus.RUNNING,
+        )
+        if task.context_cleared_at is not None:
+            stmt = stmt.where(NodeLog.started_at >= task.context_cleared_at)
+        return int(await self._db.scalar(stmt) or 0)
 
     async def _compaction_route(
         self,
@@ -259,6 +299,7 @@ class TaskAccountRouter:
         state = limit_state(
             AccountView(account),
             threshold_pct=await self._threshold(),
+            week_threshold_pct=await get_llm_week_threshold(self._db),
             now=self._clock(),
         )
         if state.state in _CANNOT_COMPACT:
@@ -295,6 +336,7 @@ class TaskAccountRouter:
         request = ChoiceRequest(
             now=self._clock(),
             threshold_pct=await self._threshold(),
+            week_threshold_pct=await get_llm_week_threshold(self._db),
             current_id=task.current_llm_account_id,
             start_id=task.llm_account_id,
             plan_prompt=node_type is NodeType.PLAN_PROMPT,

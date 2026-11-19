@@ -29,13 +29,10 @@ async function openComposer() {
 
 describe("Composer", () => {
   describe("доступность", () => {
-    test("финализация закрывает новый ввод, сохраняя управление принятыми вызовами", async ({ api }) => {
-      api.respond("GET /tasks/t1/manual-queue", [makeManualRequest({command_name: "review"})]);
-      const { user } = renderComposer({manualRequestsClosed: true});
+    test("финализация закрывает новый ввод", () => {
+      renderComposer({manualRequestsClosed: true});
       expect(screen.getByText("Задача завершается — приём новых промтов и команд закрыт")).toBeInTheDocument();
       expect(screen.queryByRole("button", {name: OPEN_COMPOSER})).not.toBeInTheDocument();
-      await user.click(await screen.findByRole("button", {name: "Отменить /review"}));
-      expect(api.mutations()[0].path).toBe("/tasks/t1/manual-queue/mq1/stop");
     });
 
     test("завершённая задача не отображается как завершающаяся", () => {
@@ -356,14 +353,5 @@ describe("Команды библиотеки в чате", () => {
     await user.click(screen.getByRole("button", { name: "Отправить" }));
     expect(api.mutations()).toHaveLength(2);
     expect(api.mutations()[0].body).toEqual(api.mutations()[1].body);
-  });
-
-  test("ожидающий вызов можно отменить из чата", async ({ api }) => {
-    api.respond("GET /tasks/t1/manual-queue", [makeManualRequest({
-      command_name: "review", command_revision: 2, request_type: ManualRequestType.LIBRARY_PROMPT,
-    })]);
-    const { user } = renderComposer();
-    await user.click(await screen.findByRole("button", {name: "Отменить /review"}));
-    expect(api.mutations()[0].path).toBe("/tasks/t1/manual-queue/mq1/stop");
   });
 });

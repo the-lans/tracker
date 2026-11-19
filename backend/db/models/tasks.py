@@ -51,6 +51,10 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     code: Mapped[str] = mapped_column(sa.String, unique=True)
     title: Mapped[str] = mapped_column(sa.String)
     description: Mapped[str] = mapped_column(sa.Text)
+    # Раздел 15.6: описание задачи Jira, отрисованное Jira в HTML, — только для
+    # показа; агенту и промтам уходит `description`. NULL у задачи без импорта
+    # и после правки описания (HTML больше не соответствует тексту).
+    description_html: Mapped[str | None] = mapped_column(sa.Text)
     guide_url: Mapped[str | None] = mapped_column(sa.String)
     # Раздел 15.6: задача Jira, из которой задача импортирована.
     jira_issue_url: Mapped[str | None] = mapped_column(sa.String)

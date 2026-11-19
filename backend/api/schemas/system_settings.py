@@ -15,9 +15,15 @@ from db.models.settings import (
     DEFAULT_BACKUP_FOLDER,
     DEFAULT_BACKUP_RETENTION_COUNT,
     MAX_BACKUP_RETENTION_COUNT,
+    MAX_LLM_COMPACT_MIN_CONTEXT_CHARS,
     MIN_BACKUP_RETENTION_COUNT,
 )
-from db.models.users import MAX_RETENTION_DAYS, MIN_RETENTION_DAYS
+from db.models.users import (
+    MAX_LLM_SWITCH_THRESHOLD_PCT,
+    MAX_RETENTION_DAYS,
+    MIN_LLM_SWITCH_THRESHOLD_PCT,
+    MIN_RETENTION_DAYS,
+)
 from services.backup.settings import (
     MAX_ACCESS_KEY_LENGTH,
     MAX_FOLDER_LENGTH,
@@ -40,6 +46,13 @@ class SystemSettingsBody(BaseModel):
     app_logs_retention_days: int = Field(ge=MIN_RETENTION_DAYS, le=MAX_RETENTION_DAYS)
     # Раздел 15.8: начало дня «Дейли» по московскому времени.
     day_start_time: time
+    # Раздел 19.7: недельный расход, с которого задача уходит на другой аккаунт.
+    llm_switch_threshold_week_pct: int = Field(
+        ge=MIN_LLM_SWITCH_THRESHOLD_PCT,
+        le=MAX_LLM_SWITCH_THRESHOLD_PCT,
+    )
+    # Раздел 19.7: короче этого контекст при смене аккаунта не сжимается; 0 — всегда сжимать.
+    llm_compact_min_context_chars: int = Field(ge=0, le=MAX_LLM_COMPACT_MIN_CONTEXT_CHARS)
 
 
 class IntegrationsResponse(BaseModel):

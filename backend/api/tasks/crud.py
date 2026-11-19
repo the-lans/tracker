@@ -13,6 +13,7 @@ from typing import Annotated
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from api.dependencies import get_current_user
 from api.schemas import (
@@ -23,6 +24,7 @@ from api.schemas import (
     QueueSummaryResponse,
     TaskCreateRequest,
     TaskDuplicateRequest,
+    TaskListItemResponse,
     TaskRepositoryResponse,
     TaskResponse,
     TaskUpdateRequest,
@@ -56,15 +58,18 @@ from tasks.jira_attachments import copy_jira_attachments_to_task
 
 router = APIRouter(prefix=TASKS_PREFIX, tags=TASKS_TAGS)
 
+_DESCRIPTION_HTML_FIELD = "description_html"
 
-async def _with_queue_positions(
+
+async def _with_queue_positions[T: TaskListItemResponse](
     db_session: AsyncSession,
     tasks: list[Task],
-) -> list[TaskResponse]:
+    schema: type[T],
+) -> list[T]:
     """Раздел 14.4: у задач в очереди — место в очереди автора."""
     positions = await queue_positions(db_session, [task.id for task in tasks])
     return [
-        TaskResponse.model_validate(task).model_copy(
+        schema.model_validate(task).model_copy(
             update={"queue_position": positions.get(task.id)},
         )
         for task in tasks
@@ -183,19 +188,20 @@ async def list_task_repositories(
     return [task_repository for task_repository, _ in pairs]
 
 
-@router.get("", response_model=list[TaskResponse])
+@router.get("", response_model=list[TaskListItemResponse])
 async def list_tasks(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
     status_filter: TaskStatus | None = None,
     include_archived: bool = False,
-) -> list[TaskResponse]:
+) -> list[TaskListItemResponse]:
     """
     Раздел 15.1: задачи дашборда — без архивных (у них свой раздел);
     ``include_archived`` — для выбора родительской задачи.
     """
     stmt = (
         sa.select(Task)
+        .options(defer(Task.description_html))
         .where(owner_filter(Task.created_by, current_user))
         .order_by(Task.created_at.desc())
     )
@@ -204,7 +210,7 @@ async def list_tasks(
     elif not include_archived:
         stmt = stmt.where(Task.status != TaskStatus.ARCHIVED)
     tasks = list((await db_session.execute(stmt)).scalars().all())
-    return await _with_queue_positions(db_session, tasks)
+    return await _with_queue_positions(db_session, tasks, TaskListItemResponse)
 
 
 @router.get("/archive", response_model=ArchivedTaskPageResponse)
@@ -263,7 +269,7 @@ async def get_awaiting_decision_count(
     return AwaitingDecisionCountResponse(count=count)
 
 
-@router.get("/active-sessions", response_model=list[TaskResponse])
+@router.get("/active-sessions", response_model=list[TaskListItemResponse])
 async def list_my_active_sessions(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -314,4 +320,7 @@ async def get_task(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> TaskResponse:
     task = await get_task_or_404(db_session, task_id, current_user)
-    return (await _with_queue_positions(db_session, [task]))[0]
+    if _DESCRIPTION_HTML_FIELD in sa.inspect(task).unloaded:
+        # Объект уже в сессии после списка (там колонка отложена): дочитываем её.
+        await db_session.refresh(task, [_DESCRIPTION_HTML_FIELD])
+    return (await _with_queue_positions(db_session, [task], TaskResponse))[0]

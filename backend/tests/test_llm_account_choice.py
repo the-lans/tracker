@@ -26,6 +26,7 @@ from services.llm_account_choice import (
 
 _NOW = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
 _THRESHOLD = 93
+_WEEK_THRESHOLD = 98
 
 
 def _at(hours: float) -> datetime:
@@ -81,6 +82,7 @@ def _choose(
         ChoiceRequest(
             now=now,
             threshold_pct=_THRESHOLD,
+            week_threshold_pct=_WEEK_THRESHOLD,
             current_id=current.id if current else None,
             start_id=start.id if start else None,
             **request,
@@ -178,7 +180,13 @@ class TestLimitState:
     ) -> None:
         view = AccountView(_account(1, **fields), running_turns=running_turns)
 
-        limit = limit_state(view, threshold_pct=_THRESHOLD, now=_NOW, plan_prompt=plan_prompt)
+        limit = limit_state(
+            view,
+            threshold_pct=_THRESHOLD,
+            week_threshold_pct=_WEEK_THRESHOLD,
+            now=_NOW,
+            plan_prompt=plan_prompt,
+        )
 
         assert (limit.state, limit.until) == expected
 
@@ -342,7 +350,7 @@ class TestPlannedWindow:
                 },
                 3,
             ),
-            ({2: {}, 3: {"pct_week": "99", "resets_week_in": 150}}, 3),
+            ({2: {}, 3: {"pct_week": "97", "resets_week_in": 150}}, 3),
             ({2: {}, 3: {}}, 2),
         ],
         ids=["week_expiring", "week_pressure", "unknown_last", "switch_order"],
@@ -428,6 +436,99 @@ class TestLimitWait:
             _choose(accounts, plan_prompt=plan_prompt)
 
 
+class TestWeekThreshold:
+    """Порог недельного расхода — один для всех аккаунтов (раздел 19.7)."""
+
+    @pytest.mark.parametrize(
+        ("account", "expected"),
+        [
+            (_account(1, pct_week="98", resets_week_in=30), (LimitState.AT_THRESHOLD, _at(30))),
+            (_account(1, pct_week="99", resets_week_in=30), (LimitState.AT_THRESHOLD, _at(30))),
+            (_account(1, pct_week="97", resets_week_in=30), (LimitState.FREE, None)),
+            (_account(1, pct_week="100", resets_week_in=30), (LimitState.EXHAUSTED, _at(30))),
+            (_account(1, pct_week="99", resets_week_in=-1), (LimitState.FREE, None)),
+            (_account(1), (LimitState.FREE, None)),
+            (
+                _account(1, pct_week="98", resets_week_in=30, started_ago=1, resets_5h_in=4),
+                (LimitState.AT_THRESHOLD, _at(30)),
+            ),
+        ],
+        ids=["at_98", "above_98", "below_98", "full_week", "week_reset", "unknown", "window_idle"],
+    )
+    def test_state(self, account: LlmAccount, expected: tuple[LimitState, datetime | None]) -> None:
+        limit = limit_state(
+            AccountView(account),
+            threshold_pct=_THRESHOLD,
+            week_threshold_pct=_WEEK_THRESHOLD,
+            now=_NOW,
+        )
+
+        assert (limit.state, limit.until) == expected
+        assert limit.by_week is (limit.state is LimitState.AT_THRESHOLD)
+
+    def test_threshold_from_settings(self) -> None:
+        account = _account(1, pct_week="91", resets_week_in=30)
+
+        limit = limit_state(
+            AccountView(account),
+            threshold_pct=_THRESHOLD,
+            week_threshold_pct=90,
+            now=_NOW,
+        )
+
+        assert limit.state is LimitState.AT_THRESHOLD
+
+    def test_unknown_reset_waits_a_week(self) -> None:
+        account = _account(1, pct_week="99")
+
+        limit = limit_state(
+            AccountView(account),
+            threshold_pct=_THRESHOLD,
+            week_threshold_pct=_WEEK_THRESHOLD,
+            now=_NOW,
+        )
+
+        assert (limit.state, limit.until) == (LimitState.AT_THRESHOLD, _NOW + timedelta(days=7))
+
+    def test_task_moves_to_other_account(self) -> None:
+        first = _account(1, pct_week="98", resets_week_in=30)
+        second = _account(2)
+
+        account, reason = _picked(_choose([first, second], current=first))
+
+        assert (account, reason) == (second, LlmSwitchReason.THRESHOLD_WEEK)
+
+    def test_task_stays_below_threshold(self) -> None:
+        first = _account(1, pct_week="97", resets_week_in=30, started_ago=1, resets_5h_in=4)
+        second = _account(2)
+
+        account, reason = _picked(_choose([first, second], current=first, boundary=False))
+
+        assert (account, reason) == (first, LlmSwitchReason.KEPT)
+
+    def test_all_at_threshold_wait_for_nearest_week_reset(self) -> None:
+        accounts = [
+            _account(1, pct_week="98", resets_week_in=70),
+            _account(2, pct_week="99", resets_week_in=30),
+        ]
+
+        choice = _choose(accounts, current=accounts[0])
+
+        assert choice == LimitWait(until=_at(30))
+
+    def test_gate_waits_for_week_reset(self) -> None:
+        account = _account(1, pct_week="98", resets_week_in=50)
+        request = ChoiceRequest(
+            now=_NOW,
+            threshold_pct=_THRESHOLD,
+            week_threshold_pct=_WEEK_THRESHOLD,
+            current_id=None,
+            start_id=None,
+        )
+
+        assert wait_until([AccountView(account)], request) == _at(50)
+
+
 class TestWaitUntil:
     @pytest.mark.parametrize(
         ("accounts", "expected"),
@@ -439,7 +540,13 @@ class TestWaitUntil:
         ids=["all_at_threshold", "free_left", "no_account"],
     )
     def test_gate(self, accounts: list[LlmAccount], expected: datetime | None) -> None:
-        request = ChoiceRequest(now=_NOW, threshold_pct=_THRESHOLD, current_id=None, start_id=None)
+        request = ChoiceRequest(
+            now=_NOW,
+            threshold_pct=_THRESHOLD,
+            week_threshold_pct=_WEEK_THRESHOLD,
+            current_id=None,
+            start_id=None,
+        )
 
         assert wait_until([AccountView(account) for account in accounts], request) == expected
 

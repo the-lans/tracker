@@ -161,6 +161,21 @@ export const LlmSwitchReason = {
 } as const;
 export type LlmSwitchReason = (typeof LlmSwitchReason)[keyof typeof LlmSwitchReason];
 
+/** Раздел 15.2: событие сессии задачи в ленте чата. */
+export const TaskSessionEventKind = {
+  /** Нода `clear_context` или ручная очистка в `failed`. */
+  CONTEXT_CLEARED: "context_cleared",
+  /** Агент работает в новой сессии, а не продолжает прежнюю. */
+  SESSION_STARTED: "session_started",
+} as const;
+export type TaskSessionEventKind = (typeof TaskSessionEventKind)[keyof typeof TaskSessionEventKind];
+
+export interface TaskSessionEvent {
+  id: string;
+  kind: TaskSessionEventKind;
+  created_at: string;
+}
+
 /** Раздел 19.7: состояние лимита аккаунта для бейджа в списке аккаунтов. */
 export const LlmLimitState = {
   EXCLUDED: "excluded",
@@ -245,6 +260,11 @@ export interface User {
 }
 
 /** Разделы 14.2, 14.3, 17.2: срок хранения выключен — данные хранятся бессрочно. */
+/** Границы порога расхода LLM-аккаунта, % — как `MIN/MAX_LLM_SWITCH_THRESHOLD_PCT` backend. */
+export const MIN_LLM_THRESHOLD_PCT = 1;
+export const MAX_LLM_THRESHOLD_PCT = 100;
+/** Верхняя граница минимума контекста для сжатия — как `MAX_LLM_COMPACT_MIN_CONTEXT_CHARS` backend. */
+export const MAX_LLM_COMPACT_MIN_CONTEXT_CHARS = 10_000_000;
 export const RETENTION_FOREVER = 0;
 /** Верхняя граница сроков хранения — как `MAX_RETENTION_DAYS` backend. */
 export const MAX_RETENTION_DAYS = 3650;
@@ -326,6 +346,8 @@ export interface Task {
   code: string;
   title: string;
   description: string;
+  /** Раздел 15.6: описание, отрисованное Jira в HTML, — только для показа; `null` без импорта и после правки описания. */
+  description_html?: string | null;
   guide_url: string | null;
   /** Раздел 15.6: задача Jira, из которой задача импортирована. */
   jira_issue_url: string | null;
@@ -980,6 +1002,10 @@ export interface SystemSettings {
   app_logs_retention_days: number;
   /** Раздел 15.8: начало дня «Дейли» по МСК, «ЧЧ:ММ:СС». */
   day_start_time: string;
+  /** Раздел 19.7: недельный расход, с которого задача уходит на другой аккаунт, %. */
+  llm_switch_threshold_week_pct: number;
+  /** Раздел 19.7: короче этого контекст при смене аккаунта не сжимается, символов; 0 — всегда. */
+  llm_compact_min_context_chars: number;
 }
 
 /**

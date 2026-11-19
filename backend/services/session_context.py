@@ -15,12 +15,14 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
+from sqlalchemy.orm import defer
 
 from app_logging.config import get_logger
-from db.models.enums import TaskStatus
+from db.models.enums import TaskSessionEventKind, TaskStatus
 from db.models.tasks import Task
 from services.errors import ConflictError
 from services.nodes.clear_context import ensure_clear_context_allowed
+from services.session_events import add_session_event
 from services.task_status import SESSION_ACTIVE_STATUSES
 
 if TYPE_CHECKING:
@@ -44,6 +46,7 @@ async def clear_task_session_context(db_session: AsyncSession, *, task: Task) ->
     await ensure_clear_context_allowed(db_session, task.id)
     previous_session_id = task.session_id
     forget_task_session(task)
+    add_session_event(db_session, task_id=task.id, kind=TaskSessionEventKind.CONTEXT_CLEARED)
     await db_session.commit()
     logger.info(
         "task_session_context_cleared",
@@ -59,6 +62,7 @@ async def list_active_sessions(db_session: AsyncSession, *, user_id: uuid.UUID) 
     """
     stmt = (
         sa.select(Task)
+        .options(defer(Task.description_html))
         .where(Task.created_by == user_id, Task.status.in_(SESSION_ACTIVE_STATUSES))
         .order_by(Task.updated_at.desc())
     )

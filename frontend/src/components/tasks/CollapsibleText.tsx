@@ -15,6 +15,7 @@ export function CollapsibleText({
   live = false,
   defaultExpanded = false,
   renderText,
+  meta,
 }: {
   text: string;
   filename?: string;
@@ -26,6 +27,8 @@ export function CollapsibleText({
   defaultExpanded?: boolean;
   /** Своё оформление видимой части текста (например, раскраска вывода скрипта). */
   renderText?: (text: string) => ReactNode;
+  /** Служебная пометка в правом нижнем углу блока (например, время). */
+  meta?: ReactNode;
 }) {
   // `null` — пользователь не разворачивал: текст, выросший после показа
   // (например, вывод скрипта вместо «(пусто)»), тоже остаётся свёрнутым.
@@ -69,6 +72,7 @@ export function CollapsibleText({
         >
           <Download className="size-3" /> Скачать
         </button>
+        {meta && <span className="ml-auto">{meta}</span>}
       </div>
     </div>
   );

@@ -18,12 +18,15 @@ from api.schemas import (
     TaskCustomNodeCreateRequest,
     TaskNodeResponse,
     TaskNodeUpdateRequest,
+    TaskSessionEventResponse,
 )
 from api.tasks.common import TASKS_PREFIX, TASKS_TAGS, get_task_or_404
 from db.models.enums import NodeLogStatus, NodeLogTriggerType
 from db.models.logs import NodeLog
+from db.models.session_events import TaskSessionEvent
 from db.models.tasks import Task
 from db.models.users import User
+from db.queries.session_events import list_session_events
 from db.session import get_session
 from services.node_dependencies import find_task_node_dependents
 from services.node_history import filter_node_logs
@@ -154,6 +157,19 @@ async def list_task_node_dependents(
         task_node_id=task_node_id,
     )
     return [NodeDependentResponse.model_validate(node) for node in dependents]
+
+
+@router.get("/{task_id}/session-events", response_model=list[TaskSessionEventResponse])
+async def list_task_session_events(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> list[TaskSessionEvent]:
+    """
+    Раздел 15.2: сброс контекста и начало новой сессии — реплики ленты чата.
+    """
+    await get_task_or_404(db_session, task_id, current_user)
+    return await list_session_events(db_session, task_id)
 
 
 @router.get("/{task_id}/node-logs", response_model=list[NodeLogResponse])

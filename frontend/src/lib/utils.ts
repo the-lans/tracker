@@ -48,15 +48,30 @@ export function formatDateTime(value: string | null | undefined): string {
   });
 }
 
-/**
- * Раздел 19.7: момент сброса лимита — время, если сегодня («18:40»), иначе
- * с датой («14 нояб., 18:40»).
- */
-export function formatResetTime(value: string, now: Date = new Date()): string {
+/** Время, если момент сегодня («18:40»), иначе с датой («14 нояб., 18:40»). */
+export function formatTimeOrDate(value: string, now: Date = new Date()): string {
   const date = new Date(value);
   const time = date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   if (date.toDateString() === now.toDateString()) return time;
   return `${date.toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}, ${time}`;
+}
+
+/** Раздел 19.7: момент сброса лимита. */
+export const formatResetTime = formatTimeOrDate;
+
+/** Раздел 15.2: время реплики в ленте чата — когда она появилась; дата — строкой ленты. */
+export function formatMessageTime(value: string): string {
+  return new Date(value).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
+
+/** Раздел 15.2: дата в ленте чата («19 ноября»; другой год — с годом). */
+export function formatFeedDate(at: number, now: Date = new Date()): string {
+  const date = new Date(at);
+  return date.toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "long",
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
 }
 
 export function formatRelativeShort(value: string | null | undefined, now: number = Date.now()): string {

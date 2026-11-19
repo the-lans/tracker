@@ -11,6 +11,7 @@ import { PipelinePickerDialog } from "@/components/tasks/PipelinePickerDialog";
 import { TaskArtifactsCard } from "@/components/tasks/TaskArtifactsCard";
 import { TaskCategoryCard } from "@/components/tasks/TaskCategoryCard";
 import { TaskDescriptionCard } from "@/components/tasks/TaskDescriptionCard";
+import { TaskDetailsButton } from "@/components/tasks/TaskDetailsButton";
 import { TaskEnvVariablesCard } from "@/components/tasks/TaskEnvVariablesCard";
 import { TaskLibraryPromptsCard } from "@/components/tasks/TaskLibraryPromptsCard";
 import { TaskPipelineCard } from "@/components/tasks/TaskPipelineCard";
@@ -50,8 +51,9 @@ export function TaskOverviewPanel({ task, nodeLogs }: { task: Task; nodeLogs: No
 
   return (
     <div className="flex flex-col gap-4 overflow-auto p-5 short:overflow-visible">
-      <div className="px-0.5 text-caption font-extrabold uppercase tracking-wider text-text-3">
-        Обзор
+      <div className="flex items-center justify-between gap-2 px-0.5">
+        <div className="text-caption font-extrabold uppercase tracking-wider text-text-3">Обзор</div>
+        <TaskDetailsButton task={task} />
       </div>
 
       <TaskDescriptionCard task={task} />

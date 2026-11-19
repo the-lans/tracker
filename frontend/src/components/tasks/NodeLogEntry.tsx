@@ -24,6 +24,12 @@ function sourceLabelOf(log: NodeLog): string | undefined {
   return undefined;
 }
 
+/** Подпись ответа, собранного до остановки или сбоя хода (раздел 15.2). */
+const INTERRUPTED_OUTPUT_CAPTION: Partial<Record<NodeLogStatus, string>> = {
+  [NodeLogStatus.STOPPED]: "Вывод модели до остановки",
+  [NodeLogStatus.FAILED]: "Вывод модели до сбоя",
+};
+
 /** Раздел 15.2: подпись ответа — аккаунт, модель и уровень рассуждений обращения. */
 function routeCaptionOf(log: NodeLog, accountLabel: string | undefined): string | null {
   if (log.llm_model === null) return null;
@@ -65,6 +71,13 @@ export function NodeLogEntry({
   );
 
   const routeCaption = routeCaptionOf(log, accountLabel);
+  // Ответ «появился», когда ход завершён: пока он генерируется или ждёт решения, времени нет.
+  const answerTime = generating ? null : log.finished_at;
+  // Остановка пользователем или сбой: ответ, собранный до них, — отдельным сообщением после ошибки.
+  const interruptedCaption = INTERRUPTED_OUTPUT_CAPTION[log.status];
+  const interruptedOutput =
+    interruptedCaption && !isSummaryNote ? (log.llm_output_text ?? "").trim() : "";
+  const showTurnOutput = !interruptedOutput;
 
   return (
     <div className="flex flex-col gap-3">
@@ -104,15 +117,17 @@ export function NodeLogEntry({
           role="user"
           text={log.rendered_prompt}
           kind={promptKindOf(log)}
+          timestamp={log.started_at}
         />
       )}
       {isScript && <ScriptOutputBlock stdout={log.script_stdout} exitCode={log.script_exit_code} />}
-      {before && (
+      {showTurnOutput && before && (
         <MessageBubble
           role="llm"
           text={before}
           streaming={generating && !liveAfterDecision}
           defaultExpanded={keepExpanded}
+          timestamp={answerTime}
         />
       )}
       {thinking && !liveAfterDecision && <MessageBubble role="llm" text="" thinking />}
@@ -127,8 +142,14 @@ export function NodeLogEntry({
           text={userInput.text}
         />
       )}
-      {after && (
-        <MessageBubble role="llm" text={after} streaming={liveAfterDecision} defaultExpanded={keepExpanded} />
+      {showTurnOutput && after && (
+        <MessageBubble
+          role="llm"
+          text={after}
+          streaming={liveAfterDecision}
+          defaultExpanded={keepExpanded}
+          timestamp={answerTime}
+        />
       )}
       {thinking && liveAfterDecision && <MessageBubble role="llm" text="" thinking />}
       {/* Пометка «саммари недоступно» сама объясняет себя — без общей ошибки. */}
@@ -139,10 +160,27 @@ export function NodeLogEntry({
           text={[`Ошибка выполнения (попытка ${log.attempt_number})`, log.error_message]
             .filter(Boolean)
             .join(": ")}
+          timestamp={log.finished_at}
         />
       )}
       {log.status === NodeLogStatus.STOPPED && (
-        <MessageBubble role="llm" danger kind="stopped" text="Остановлено пользователем" />
+        <MessageBubble
+          role="llm"
+          danger
+          kind="stopped"
+          text="Остановлено пользователем"
+          timestamp={log.finished_at}
+        />
+      )}
+      {interruptedOutput && (
+        <MessageBubble
+          role="llm"
+          kind="partial"
+          caption={interruptedCaption}
+          text={interruptedOutput}
+          defaultExpanded={keepExpanded}
+          timestamp={log.finished_at}
+        />
       )}
     </div>
   );

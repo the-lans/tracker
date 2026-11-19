@@ -3,6 +3,7 @@ import { CollapsibleText } from "@/components/tasks/CollapsibleText";
 import { AgentMessageText } from "@/components/tasks/AgentMessageText";
 import { AgentInline } from "@/components/tasks/AgentInline";
 import { linkParts } from "@/lib/agentMarkdown";
+import { formatDateTime, formatMessageTime } from "@/lib/utils";
 import { MESSAGE_KINDS, type MessageKind } from "@/components/tasks/messageKinds";
 import { USER_AVATAR_GRADIENT } from "@/styles/classes";
 
@@ -12,9 +13,19 @@ import { USER_AVATAR_GRADIENT } from "@/styles/classes";
  * не попадают: там сессия доступна только для просмотра (раздел 6.3).
  */
 
+function MessageTime({ value }: { value: string }) {
+  return (
+    <time dateTime={value} title={formatDateTime(value)} className="whitespace-nowrap text-caption text-text-3">
+      {formatMessageTime(value)}
+    </time>
+  );
+}
+
 export function MessageBubble({
   role,
   text,
+  caption,
+  timestamp,
   danger,
   streaming = false,
   thinking = false,
@@ -23,6 +34,10 @@ export function MessageBubble({
 }: {
   role: "user" | "llm";
   text: string;
+  /** Пояснение над текстом: чем является реплика (например, вывод до остановки). */
+  caption?: string;
+  /** Когда реплика появилась — время в правом нижнем углу; нет — не показывается. */
+  timestamp?: string | null;
   danger?: boolean;
   streaming?: boolean;
   /** Агент думает: первый фрагмент ответа ещё не пришёл (раздел 15.2). */
@@ -33,8 +48,16 @@ export function MessageBubble({
   kind?: MessageKind;
 }) {
   const { icon: KindIcon, title: kindTitle } = MESSAGE_KINDS[kind];
+  // Ширина — по содержимому, но не больше доли ширины ленты: чем шире лента (в том числе
+  // на весь экран), тем меньше доля: до 448 px — вся ширина, от 448 px — 85%, от 768 px — 80%,
+  // от 1024 px — 75%.
   return (
-    <div className={cn("flex min-w-0 max-w-[min(640px,100%)] gap-2.5", role === "user" && "ml-auto flex-row-reverse")}>
+    <div
+      className={cn(
+        "flex min-w-0 max-w-full gap-2.5 @md:max-w-[85%] @3xl:max-w-[80%] @5xl:max-w-[75%]",
+        role === "user" && "ml-auto flex-row-reverse",
+      )}
+    >
       {/* Значок по источнику реплики; цвета — с заметной рамкой, чтобы кружок не сливался с фоном. */}
       <div
         role="img"
@@ -58,6 +81,7 @@ export function MessageBubble({
             danger && "border-danger-border bg-danger-tint text-danger-text",
           )}
         >
+          {caption && <div className="mb-1 text-caption font-bold text-text-3">{caption}</div>}
           {thinking ? (
             <div role="status" className="text-text-3">
               думает…
@@ -67,6 +91,7 @@ export function MessageBubble({
               text={text}
               live={streaming}
               defaultExpanded={defaultExpanded}
+              meta={timestamp ? <MessageTime value={timestamp} /> : undefined}
               renderText={
                 role === "llm" && !danger
                   ? (shown) => <AgentMessageText text={shown} />

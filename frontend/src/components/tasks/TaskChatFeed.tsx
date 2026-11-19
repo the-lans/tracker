@@ -1,14 +1,19 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Maximize2, MessagesSquare, Minimize2 } from "lucide-react";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { NodeLogEntry } from "@/components/tasks/NodeLogEntry";
+import { DateSeparator } from "@/components/tasks/DateSeparator";
+import { NewMessagesButton } from "@/components/tasks/NewMessagesButton";
+import { SessionEventNotice } from "@/components/tasks/SessionEventNotice";
 import { Composer } from "@/components/tasks/Composer";
 import { Button } from "@/components/ui/button";
 import { useLlmAccounts, useLlmAvailable } from "@/hooks/useLlmAccounts";
+import { useStickToBottom } from "@/hooks/useStickToBottom";
 import { useTaskOutputStream } from "@/hooks/useTaskStatusSocket";
-import { useTaskLibraryPrompts, useTaskNodes } from "@/hooks/useTasks";
+import { useTaskLibraryPrompts, useTaskNodes, useTaskSessionEvents } from "@/hooks/useTasks";
 import { cn } from "@/lib/utils";
 import { isAgentTurn } from "@/components/tasks/messageKinds";
+import { mergeFeed, withDateSeparators } from "@/lib/chatFeed";
 import { TaskStatus, type NodeLog, type NodeType } from "@/lib/types";
 import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
@@ -69,18 +74,20 @@ export function TaskChatFeed({
     ...(libraryPrompts ?? []).map((prompt): [string, NodeType] => [prompt.node_id, prompt.node_type]),
     ...(taskNodes ?? []).map((node): [string, NodeType] => [node.node_id, node.node_type]),
   ]);
+  const { data: sessionEvents } = useTaskSessionEvents(taskId);
+  const feedItems = mergeFeed(nodeLogs, sessionEvents ?? []);
+  const feedEntries = withDateSeparators(feedItems);
   const { data: llmAccounts } = useLlmAccounts();
   const llmAvailable = useLlmAvailable(ownerId);
   const accountLabels = new Map((llmAccounts ?? []).map((account) => [account.id, account.label]));
-  const feedRef = useRef<HTMLDivElement>(null);
-  const previousLength = useRef(0);
-
-  useEffect(() => {
-    if (nodeLogs.length !== previousLength.current) {
-      feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
-      previousLength.current = nodeLogs.length;
-    }
-  }, [nodeLogs.length]);
+  // Растущий ответ и новые реплики двигают ленту вниз, пока пользователь у её конца.
+  const streamedLength = Object.values(outputStream).reduce((total, text) => total + text.length, 0);
+  const {
+    ref: feedRef,
+    onScroll: handleFeedScroll,
+    hasUnseen,
+    scrollToBottom,
+  } = useStickToBottom<HTMLDivElement>(`${feedItems.length}:${streamedLength}`);
 
   return (
     <div
@@ -89,12 +96,13 @@ export function TaskChatFeed({
         fullscreen && "fixed inset-0 z-40 overflow-auto bg-bg",
       )}
     >
-      <div className="flex items-center justify-between border-b border-border px-4 py-0.5 xl:px-6 xl:py-3.5">
+      {/* На широком экране высота как у шапки панели «Логи»: кнопка компактная, зона нажатия — `touch-hit`. */}
+      <div className="flex items-center justify-between border-b border-border px-4 py-0.5 xl:px-6 xl:py-2">
         {header}
         <Button
           variant="ghost"
           size="icon"
-          className="ml-auto"
+          className="touch-hit ml-auto xl:size-7 xl:min-h-0! xl:min-w-0!"
           aria-label={fullscreen ? "Свернуть ленту" : "Развернуть ленту на весь экран"}
           onClick={() => setFullscreen((prev) => !prev)}
         >
@@ -102,24 +110,40 @@ export function TaskChatFeed({
         </Button>
       </div>
 
-      <div ref={feedRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-2.5 py-5 sm:px-6 short:flex-none short:gap-3 short:overflow-visible short:py-3">
-        {nodeLogs.length === 0 && (
-          <EmptyState
-            icon={MessagesSquare}
-            {...EMPTY_FEED[emptyFeedKind(taskStatus)]}
-          />
-        )}
-        {nodeLogs.map((log) => (
-          <NodeLogEntry
-            key={log.id}
-            taskId={taskId}
-            log={log}
-            title={log.command_name ? `/${log.command_name} · версия ${log.command_revision}` : log.node_id ? nodeNames.get(log.node_id) : undefined}
-            streamedText={outputStream[log.id]}
-            isAgentTurn={isAgentTurn(log, nodeTypes)}
-            accountLabel={log.llm_account_id ? accountLabels.get(log.llm_account_id) : undefined}
-          />
-        ))}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={feedRef} onScroll={handleFeedScroll} className="@container flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-2.5 py-5 sm:px-6 short:flex-none short:gap-3 short:overflow-visible short:py-3">
+          {feedItems.length === 0 && (
+            <EmptyState
+              icon={MessagesSquare}
+              {...EMPTY_FEED[emptyFeedKind(taskStatus)]}
+            />
+          )}
+          {feedEntries.map((entry) => {
+            if (entry.type === "date") return <DateSeparator key={`date-${entry.at}`} at={entry.at} />;
+            if (entry.type === "event") {
+              return <SessionEventNotice key={`event-${entry.event.id}`} kind={entry.event.kind} />;
+            }
+            const { log } = entry;
+            return (
+              <NodeLogEntry
+                key={log.id}
+                taskId={taskId}
+                log={log}
+                title={
+                  log.command_name
+                    ? `/${log.command_name} · версия ${log.command_revision}`
+                    : log.node_id
+                      ? nodeNames.get(log.node_id)
+                      : undefined
+                }
+                streamedText={outputStream[log.id]}
+                isAgentTurn={isAgentTurn(log, nodeTypes)}
+                accountLabel={log.llm_account_id ? accountLabels.get(log.llm_account_id) : undefined}
+              />
+            );
+          })}
+        </div>
+        {hasUnseen && <NewMessagesButton onClick={scrollToBottom} />}
       </div>
 
       <Composer taskId={taskId} taskStatus={taskStatus} llmAvailable={llmAvailable} manualRequestsClosed={manualRequestsClosed} />

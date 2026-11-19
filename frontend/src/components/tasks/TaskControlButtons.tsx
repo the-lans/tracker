@@ -1,8 +1,8 @@
-import { useState } from "react";
-import { Ban, Pause, Play, RotateCcw, Square } from "lucide-react";
+import { Ban, Pause, Play, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
-import { ConfirmDialog } from "@/components/common/dialogs/ConfirmDialog";
 import { HEADER_BUTTON } from "@/styles/classes";
+import { MANUAL_REQUEST_STATUSES } from "@/components/tasks/taskStatusMeta";
+import { TaskStopButton } from "@/components/tasks/TaskStopButton";
 import { TaskLifecycleActions } from "@/components/tasks/TaskLifecycleActions";
 import {
   useCancelQueuedTask,
@@ -10,7 +10,6 @@ import {
   useRestartTask,
   useStartTask,
   useResumeTask,
-  useStopTask,
   useLlmLimit,
 } from "@/hooks/useTasks";
 import { toastError } from "@/lib/errors";
@@ -26,15 +25,10 @@ const PAUSABLE_LIMIT_WAIT_FROM: (TaskStatus | null | undefined)[] = [
   TaskStatus.REBASE_CONFLICT,
 ];
 
-const STOP_DESCRIPTION =
-  "Текущее выполнение будет прервано, оставшиеся ноды и автоматический пуш не выполнятся. Задача перейдёт в статус «Готово».";
-
 /** Раздел 14.2: действия пользователя, доступные в текущем статусе задачи. */
 export function TaskControlButtons({ task }: { task: Task }) {
-  const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const pauseTask = usePauseTask(task.id);
   const resumeTask = useResumeTask(task.id);
-  const stopTask = useStopTask(task.id);
   const cancelTask = useCancelQueuedTask(task.id);
   const restartTask = useRestartTask(task.id);
   const startTask = useStartTask(task.id);
@@ -43,19 +37,12 @@ export function TaskControlButtons({ task }: { task: Task }) {
     task.status === TaskStatus.IN_PROGRESS ||
     (limitWait && PAUSABLE_LIMIT_WAIT_FROM.includes(task.limit_wait_from_status));
   const canStop = task.status === TaskStatus.IN_PROGRESS || task.status === TaskStatus.PAUSED || limitWait;
+  // Запрос чата можно остановить везде, где чат принимает запросы, включая «Уточняется».
+  const canStopRequests =
+    MANUAL_REQUEST_STATUSES.includes(task.status) || task.status === TaskStatus.REFINING;
   const preLaunch = isPreLaunch(task.status);
   const { data: llmLimit } = useLlmLimit(task.created_by, preLaunch);
   const launchWaitUntil = preLaunch ? llmLimit?.wait_until : null;
-
-  function handleStop() {
-    stopTask.mutate(undefined, {
-      onSuccess: () => {
-        setStopConfirmOpen(false);
-        toast.success("Задача останавливается");
-      },
-      onError: toastError("Не удалось остановить задачу"),
-    });
-  }
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
@@ -133,18 +120,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
           <ButtonLabel>Продолжить</ButtonLabel>
         </button>
       )}
-      {canStop && (
-        <button
-          type="button"
-          className={HEADER_BUTTON}
-          aria-label="Остановить"
-          title="Остановить"
-          onClick={() => setStopConfirmOpen(true)}
-        >
-          <Square className="size-3.5" />
-          <ButtonLabel>Остановить</ButtonLabel>
-        </button>
-      )}
+      {(canStop || canStopRequests) && <TaskStopButton taskId={task.id} canStopTask={canStop} />}
       {task.status === TaskStatus.FAILED && (
         <button
           type="button"
@@ -170,17 +146,6 @@ export function TaskControlButtons({ task }: { task: Task }) {
           {launchWaitHint(launchWaitUntil)}
         </p>
       )}
-
-      <ConfirmDialog
-        open={stopConfirmOpen}
-        onOpenChange={setStopConfirmOpen}
-        title="Остановить задачу?"
-        description={STOP_DESCRIPTION}
-        confirmLabel="Остановить"
-        danger
-        pending={stopTask.isPending}
-        onConfirm={handleStop}
-      />
     </div>
   );
 }

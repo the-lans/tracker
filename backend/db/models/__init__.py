@@ -34,6 +34,7 @@ from db.models.periodic import PeriodicTask
 from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.repositories import GitCredential, Repository, Template, TemplateMcpServer
+from db.models.session_events import TaskSessionEvent
 from db.models.settings import SystemSettings
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
 from db.models.twg import TwgConnection
@@ -67,6 +68,7 @@ __all__ = [
     "TaskCategory",
     "TaskCategoryLibraryPrompt",
     "TaskDayMark",
+    "TaskSessionEvent",
     "TaskEnvVariable",
     "TaskLibraryPrompt",
     "TaskManualRequestQueue",

@@ -59,20 +59,30 @@ function NavItem({ to, label, icon: Icon, badge, end }: NavItemDef) {
   );
 }
 
-export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+/** Логотип и название — шапка меню; в мобильной шторке она отдельно от прокручиваемого списка. */
+export function SidebarBrand({ className }: { className?: string }) {
+  return (
+    <div className={cn("flex items-center gap-2.5 px-2 pb-[22px] pt-1.5", className)}>
+      <BrandMark />
+      <span className="text-title font-extrabold tracking-tight">Tracker</span>
+    </div>
+  );
+}
+
+export function Sidebar({ onNavigate, hideBrand = false }: { onNavigate?: () => void; hideBrand?: boolean }) {
   const { user } = useAuth();
   const { data: awaitingCount } = useAwaitingDecisionCount();
 
   return (
     <aside
       aria-label="Основное меню"
-      className="flex h-full min-h-0 w-[248px] shrink-0 flex-col overflow-y-auto overscroll-contain border-r border-border bg-surface p-3.5"
+      className={cn(
+        "flex h-full min-h-0 w-[248px] shrink-0 flex-col overflow-y-auto overscroll-contain border-r border-border bg-surface p-3.5",
+        hideBrand && "w-full border-r-0 pt-1",
+      )}
       onClick={onNavigate}
     >
-      <div className="flex items-center gap-2.5 px-2 pb-[22px] pt-1.5">
-        <BrandMark />
-        <span className="text-title font-extrabold tracking-tight">Tracker</span>
-      </div>
+      {!hideBrand && <SidebarBrand />}
 
       <nav className="flex flex-col gap-0.5">
         <NavItem to="/" label="Дашборд" icon={LayoutGrid} badge={awaitingCount?.count} />

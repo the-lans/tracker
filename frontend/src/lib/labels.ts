@@ -8,6 +8,7 @@ import {
   LlmAccountStatus,
   LlmLimitState,
   LlmSwitchReason,
+  TaskSessionEventKind,
   McpIsolationMode,
   PeriodicRunStatus,
   ReasoningEffort,
@@ -172,6 +173,12 @@ export const REASONING_EFFORT_LABEL: Record<ReasoningEffort, string> = {
   [ReasoningEffort.MAX]: "максимальный",
 };
 
+/** Раздел 15.2: реплика ленты о сбросе контекста и начале новой сессии. */
+export const TASK_SESSION_EVENT_LABEL: Record<TaskSessionEventKind, string> = {
+  [TaskSessionEventKind.CONTEXT_CLEARED]: "Контекст задачи сброшен",
+  [TaskSessionEventKind.SESSION_STARTED]: "Начата новая сессия по задаче",
+};
+
 /** Раздел 15.2: причина строки «Переключено на аккаунт …» в «Диалоге». */
 export const LLM_SWITCH_REASON_LABEL: Record<LlmSwitchReason, string> = {
   [LlmSwitchReason.START]: "стартовый аккаунт задачи",
@@ -179,7 +186,7 @@ export const LLM_SWITCH_REASON_LABEL: Record<LlmSwitchReason, string> = {
   [LlmSwitchReason.WINDOW_PLANNED]: "новое окно лимита по плану",
   [LlmSwitchReason.WINDOW_BALANCE]: "более срочное окно лимита",
   [LlmSwitchReason.THRESHOLD_5H]: "порог 5-часового окна",
-  [LlmSwitchReason.THRESHOLD_WEEK]: "порог недельного окна",
+  [LlmSwitchReason.THRESHOLD_WEEK]: "порог недельного лимита",
   [LlmSwitchReason.WEEK_EXHAUSTED]: "исчерпан недельный лимит",
   [LlmSwitchReason.RATE_LIMITED]: "исчерпан лимит",
   [LlmSwitchReason.LOGIN_REQUIRED]: "нужен повторный вход в прежний аккаунт",

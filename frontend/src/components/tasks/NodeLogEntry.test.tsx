@@ -182,6 +182,51 @@ describe("NodeLogEntry", () => {
       expect(screen.getByText(text)).toBeInTheDocument();
     });
 
+    test("остановка: собранный вывод — отдельным сообщением после ошибки", () => {
+      const { container } = renderEntry({
+        status: NodeLogStatus.STOPPED,
+        llm_output_text: "Прочитал задачу и три связанные.",
+      });
+
+      expect(screen.getByText("Вывод модели до остановки")).toBeInTheDocument();
+      expect(screen.getAllByText("Прочитал задачу и три связанные.")).toHaveLength(1);
+      expectOrder(container, [
+        "Остановлено пользователем",
+        "Вывод модели до остановки",
+        "Прочитал задачу и три связанные.",
+      ]);
+    });
+
+    test.for([null, "", "  \n "])("остановка без вывода (%j) — только ошибка", (output) => {
+      renderEntry({ status: NodeLogStatus.STOPPED, llm_output_text: output });
+
+      expect(screen.getByText("Остановлено пользователем")).toBeInTheDocument();
+      expect(screen.queryByText("Вывод модели до остановки")).not.toBeInTheDocument();
+    });
+
+    test("сбой: вывод до сбоя — отдельным сообщением после ошибки", () => {
+      const { container } = renderEntry({
+        status: NodeLogStatus.FAILED,
+        error_message: "Превышен таймаут выполнения",
+        llm_output_text: "Начал читать задачу.",
+        attempt_number: 2,
+      });
+
+      expect(screen.getAllByText("Начал читать задачу.")).toHaveLength(1);
+      expectOrder(container, [
+        "Ошибка выполнения (попытка 2): Превышен таймаут выполнения",
+        "Вывод модели до сбоя",
+        "Начал читать задачу.",
+      ]);
+    });
+
+    test("не остановленная запись выводит ответ обычным сообщением", () => {
+      renderEntry({ status: NodeLogStatus.SUCCESS, llm_output_text: "Готово." });
+
+      expect(screen.getByText("Готово.")).toBeInTheDocument();
+      expect(screen.queryByText("Вывод модели до остановки")).not.toBeInTheDocument();
+    });
+
     test("недоступное саммари родителя — без общей ошибки", () => {
       renderEntry({
         status: NodeLogStatus.FAILED,
@@ -282,6 +327,74 @@ describe("NodeLogEntry", () => {
       renderEntry(ROUTED, { accountLabel: "Codex — запасной" });
 
       expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("время реплик", () => {
+    const START = new Date(2026, 10, 10, 10, 0).toISOString();
+    const FINISH = new Date(2026, 10, 10, 10, 7).toISOString();
+    const times = (container: HTMLElement) =>
+      Array.from(container.querySelectorAll("time")).map((time) => time.getAttribute("dateTime"));
+
+    test("промт — время начала хода, ответ — время завершения", () => {
+      const { container } = renderEntry({
+        rendered_prompt: "Промт",
+        llm_output_text: "Ответ",
+        started_at: START,
+        finished_at: FINISH,
+      });
+
+      expect(times(container)).toEqual([START, FINISH]);
+    });
+
+    test("ответ ещё генерируется — у него времени нет, у промта есть", () => {
+      const { container } = renderEntry(
+        {
+          status: NodeLogStatus.RUNNING,
+          rendered_prompt: "Промт",
+          llm_output_text: null,
+          started_at: START,
+          finished_at: null,
+        },
+        { streamedText: "Пишу ответ", isAgentTurn: true },
+      );
+
+      expect(times(container)).toEqual([START]);
+    });
+
+    test("остановка и вывод до остановки — время завершения", () => {
+      const { container } = renderEntry({
+        status: NodeLogStatus.STOPPED,
+        llm_output_text: "Собранный вывод",
+        started_at: START,
+        finished_at: FINISH,
+      });
+
+      expect(times(container)).toEqual([FINISH, FINISH]);
+    });
+
+    test("ошибка — время завершения", () => {
+      const { container } = renderEntry({
+        status: NodeLogStatus.FAILED,
+        error_message: "Сбой",
+        started_at: START,
+        finished_at: FINISH,
+      });
+
+      expect(times(container)).toEqual([FINISH]);
+    });
+
+    test("решение пользователя — без времени", () => {
+      const { container } = renderEntry({
+        status: NodeLogStatus.SUCCESS,
+        user_input_text: "accept_default",
+        pending_plan_text: PLAN,
+        pending_options: PLAN_OPTIONS,
+        started_at: START,
+        finished_at: FINISH,
+      });
+
+      expect(times(container)).toEqual([]);
     });
   });
 });

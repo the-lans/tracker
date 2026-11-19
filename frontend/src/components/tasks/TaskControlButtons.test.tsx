@@ -1,8 +1,8 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, vi } from "vitest";
 import { TaskControlButtons } from "@/components/tasks/TaskControlButtons";
-import { TaskStatus, type Task } from "@/lib/types";
-import { makeTask } from "@/test/factories";
+import { ManualRequestStatus, TaskStatus, type Task } from "@/lib/types";
+import { makeManualRequest, makeTask } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
@@ -84,6 +84,26 @@ describe("TaskControlButtons", () => {
         expect(screen.getByText("Репозитории очищены")).toBeInTheDocument();
       },
     );
+  });
+
+  describe("остановка запроса чата в статусах без остановки задачи", () => {
+    test.for([
+      TaskStatus.REFINING,
+      TaskStatus.PLAN_REVIEW,
+      TaskStatus.AWAITING_INPUT,
+      TaskStatus.REBASE_CONFLICT,
+    ])("%s: выполняющийся промт останавливается кнопкой шапки", async (status, { api }) => {
+      api.respond("GET /tasks/t1/manual-queue", [
+        makeManualRequest({ status: ManualRequestStatus.PROCESSING }),
+      ]);
+      const { user } = renderButtons({ status });
+
+      await user.click(await screen.findByRole("button", { name: "Остановить промт" }));
+
+      expect(api.mutations().map((request) => request.path)).toEqual([
+        "/tasks/t1/manual-queue/mq1/stop",
+      ]);
+    });
   });
 
   describe("действие без подтверждения", () => {

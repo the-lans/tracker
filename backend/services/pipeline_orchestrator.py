@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from claude_agent_sdk import ClaudeSDKError
 
 from app_logging.config import get_logger
-from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType
+from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType, TaskSessionEventKind
 from db.models.logs import NodeLog
 from db.models.pipelines import Node
 from services.failure_classification import is_transient_sdk_exception
@@ -45,6 +45,7 @@ from services.nodes.dispatch import (
     sent_prompt,
 )
 from services.session_context import forget_task_session
+from services.session_events import add_session_event
 from services.system_settings import (
     ExecutionSettings,
     resolve_execution_settings,
@@ -454,6 +455,12 @@ async def _clear_session_context(
     await claude_session.disconnect()
     forget_task_session(task)
     now = datetime.now(UTC)
+    add_session_event(
+        db_session,
+        task_id=task.id,
+        kind=TaskSessionEventKind.CONTEXT_CLEARED,
+        at=now,
+    )
     # Успешная запись нужна инварианту перехода в `done` (раздел 17.5):
     # без неё пайплайн с clear_context никогда бы не завершился.
     db_session.add(

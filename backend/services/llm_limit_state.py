@@ -22,6 +22,7 @@ from db.models.tasks import Task
 from db.models.users import User
 from services.account_router import IN_WORK_STATUSES
 from services.llm_account_choice import AccountView, LimitState, limit_state
+from services.system_settings import get_llm_week_threshold
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -81,6 +82,7 @@ async def account_limit_states(
             sa.select(User.id, User.llm_switch_threshold_5h_pct).where(User.id.in_(owner_ids)),
         )
     }
+    week_threshold = await get_llm_week_threshold(db_session)
     states: dict[uuid.UUID, AccountLimitInfo] = {}
     for account in accounts:
         view = AccountView(
@@ -88,7 +90,12 @@ async def account_limit_states(
             tasks=tasks.get(account.id, 0),
             running_turns=turns.get(account.id, 0),
         )
-        limit = limit_state(view, threshold_pct=thresholds[account.created_by], now=now)
+        limit = limit_state(
+            view,
+            threshold_pct=thresholds[account.created_by],
+            week_threshold_pct=week_threshold,
+            now=now,
+        )
         states[account.id] = AccountLimitInfo(
             state=limit.state,
             until=limit.until,

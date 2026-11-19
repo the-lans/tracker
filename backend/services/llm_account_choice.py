@@ -103,6 +103,8 @@ class AccountLimit:
     state: LimitState
     # Когда состояние кончится: сброс окна или недели; None — не ограничено.
     until: datetime | None = None
+    # На пороге из-за недельного расхода, а не 5-часового окна.
+    by_week: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +117,8 @@ class ChoiceRequest:
 
     now: datetime
     threshold_pct: int
+    # Порог недельного расхода — один для всех, из системных настроек.
+    week_threshold_pct: int
     current_id: uuid.UUID | None
     start_id: uuid.UUID | None
     plan_prompt: bool = False
@@ -192,10 +196,23 @@ def _exhausted(account: LlmAccount, *, now: datetime) -> AccountLimit | None:
     return None
 
 
+def _week_at_threshold(account: LlmAccount, *, week_threshold_pct: int, now: datetime) -> bool:
+    """
+    Недельный расход дошёл до порога; после сброса недели прежний расход не действует.
+    """
+    week = account.usage_week_pct
+    return (
+        week is not None
+        and week >= week_threshold_pct
+        and _not_reset(account.usage_week_resets_at, now=now)
+    )
+
+
 def limit_state(
     view: AccountView,
     *,
     threshold_pct: int,
+    week_threshold_pct: int,
     now: datetime,
     plan_prompt: bool = False,
 ) -> AccountLimit:
@@ -206,6 +223,12 @@ def limit_state(
     exhausted = _exhausted(account, now=now)
     if exhausted is not None:
         return exhausted
+    if _week_at_threshold(account, week_threshold_pct=week_threshold_pct, now=now):
+        return AccountLimit(
+            LimitState.AT_THRESHOLD,
+            until=account.usage_week_resets_at or now + _WEEK,
+            by_week=True,
+        )
     end = window_end(account, now=now)
     usage = _usage_5h(account, now=now)
     if usage is not None and usage + _reserve_pct(view) >= threshold_pct:
@@ -251,7 +274,7 @@ def _leave_reason(limit: AccountLimit, account: LlmAccount) -> LlmSwitchReason:
     if limit.state is LimitState.EXHAUSTED:
         return LlmSwitchReason.WEEK_EXHAUSTED
     if limit.state is LimitState.AT_THRESHOLD:
-        return LlmSwitchReason.THRESHOLD_5H
+        return LlmSwitchReason.THRESHOLD_WEEK if limit.by_week else LlmSwitchReason.THRESHOLD_5H
     return LlmSwitchReason.UNSUITABLE
 
 
@@ -297,6 +320,7 @@ def _pool(views: Sequence[AccountView], request: ChoiceRequest) -> _Pool:
             view.account.id: limit_state(
                 view,
                 threshold_pct=request.threshold_pct,
+                week_threshold_pct=request.week_threshold_pct,
                 now=request.now,
                 plan_prompt=request.plan_prompt,
             )

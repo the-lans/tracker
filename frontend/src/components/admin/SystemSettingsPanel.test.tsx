@@ -97,3 +97,61 @@ describe("SystemSettingsPanel: хранение данных", () => {
     expect(api.mutations()).toEqual([]);
   });
 });
+
+describe("SystemSettingsPanel: порог недельного лимита", () => {
+  test("по умолчанию 98 и сохраняется вместе с настройками", async ({ api }) => {
+    const { user } = await renderPanel(api);
+    const field = screen.getByLabelText("Порог недельного лимита, %");
+    expect(field).toHaveValue(98);
+
+    await user.clear(field);
+    await user.type(field, "90");
+    await user.click(saveButton());
+
+    expect(api.mutations()).toEqual([
+      { method: "PUT", path: "/system-settings", body: { ...SETTINGS, llm_switch_threshold_week_pct: 90 } },
+    ]);
+  });
+
+  test.for(["", "0", "101", "97.5"])("порог «%s» не сохраняется", async (input, { api }) => {
+    const { user } = await renderPanel(api);
+    const field = screen.getByLabelText("Порог недельного лимита, %");
+
+    await user.clear(field);
+    if (input) await user.type(field, input);
+
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("Целое число от 1 до 100")).toBeInTheDocument();
+    expect(saveButton()).toBeDisabled();
+    expect(api.mutations()).toEqual([]);
+  });
+});
+
+describe("SystemSettingsPanel: минимум контекста для сжатия", () => {
+  test("по умолчанию 12000 и сохраняется вместе с настройками", async ({ api }) => {
+    const { user } = await renderPanel(api);
+    const field = screen.getByLabelText("Минимум контекста для сжатия, симв.");
+    expect(field).toHaveValue(12000);
+
+    await user.clear(field);
+    await user.type(field, "0");
+    await user.click(saveButton());
+
+    expect(api.mutations()).toEqual([
+      { method: "PUT", path: "/system-settings", body: { ...SETTINGS, llm_compact_min_context_chars: 0 } },
+    ]);
+  });
+
+  test.for(["", "-1", "2.5", "10000001"])("минимум «%s» не сохраняется", async (input, { api }) => {
+    const { user } = await renderPanel(api);
+    const field = screen.getByLabelText("Минимум контекста для сжатия, симв.");
+
+    await user.clear(field);
+    if (input) await user.type(field, input);
+
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("Целое число от 0 до 10000000")).toBeInTheDocument();
+    expect(saveButton()).toBeDisabled();
+    expect(api.mutations()).toEqual([]);
+  });
+});

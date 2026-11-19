@@ -3,7 +3,7 @@ import { Clock, Eye, MessageSquarePlus, Send } from "lucide-react";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { useManualQueue, useSubmitFreeformPrompt, useStopManualRequest } from "@/hooks/useTasks";
+import { useManualQueue, useSubmitFreeformPrompt } from "@/hooks/useTasks";
 import { useCommandPreview, useRunTaskCommand, useTaskCommands, type TaskCommand } from "@/hooks/useTaskCommands";
 import { ApiError } from "@/lib/apiClient";
 import { useTemplatePreview } from "@/hooks/useTemplates";
@@ -54,7 +54,6 @@ export function Composer({
   const commandPreview = useCommandPreview(taskId);
   const showCommands = isCommand && !/\s/.test(text.trimStart());
   const [previewText, setPreviewText] = useState<string | null>(null);
-  const stopRequest = useStopManualRequest(taskId);
   const submitFreeform = useSubmitFreeformPrompt(taskId);
   const preview = useTemplatePreview();
   const { data: queue } = useManualQueue(taskId);
@@ -141,14 +140,6 @@ export function Composer({
 
   return (
     <div className="border-t border-border bg-surface p-3.5 short:sticky short:bottom-0 short:z-10 short:px-3 short:py-1.5">
-      {(queue ?? []).filter((request) => request.command_name).map((request) => <div key={request.id}
-        className="mb-2 flex items-center justify-between gap-2 text-small">
-        <span>/{request.command_name} · версия {request.command_revision} · {request.status === ManualRequestStatus.QUEUED ? "В очереди" : "Выполняется"}</span>
-        <Button size="sm" variant="secondary" disabled={stopRequest.isPending}
-          onClick={() => stopRequest.mutate(request.id, {
-            onError: (error) => toast.error(errorMessage(error, "Не удалось остановить команду")),
-          })}>{request.status === ManualRequestStatus.QUEUED ? "Отменить" : "Остановить"} /{request.command_name}</Button>
-      </div>)}
       {queuedFreeform > 0 && (
         <div className="mb-2 flex items-center gap-1.5 text-meta font-bold text-info-text short:mb-1">
           <Clock className="size-3" />

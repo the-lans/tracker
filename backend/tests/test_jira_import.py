@@ -21,7 +21,9 @@ from db.models.tasks import Task
 from services.errors import ExternalServiceError, NotFoundError
 from services.jira_import import (
     attachment_copy_pending,
+    issue_key_of_url,
     mark_attachment_copy_pending,
+    save_description_html,
     unique_artifact_name,
 )
 from services.system_settings import update_integrations
@@ -43,12 +45,16 @@ _BASE_URL_ATTACHMENT_URL = "http://jira.internal:8080/secure/attachment/1/brief.
 _FOREIGN_ATTACHMENT_URL = "http://169.254.169.254/latest/meta-data/"
 
 
+_DESCRIPTION_TEXT = "Пользователь не может войти после смены пароля"
+_DESCRIPTION_HTML = "<p>Пользователь не может <b>войти</b> после смены пароля</p>"
+
+
 def _issue_body(key: str = "PROJ-42") -> dict[str, Any]:
     return {
         "key": key,
         "fields": {
             "summary": "Починить вход",
-            "description": "Пользователь не может войти после смены пароля",
+            "description": _DESCRIPTION_TEXT,
             "attachment": [
                 {"filename": "brief.md", "size": 5, "content": _ATTACHMENT_URL},
                 {"filename": "brief.md", "size": 5, "content": _ATTACHMENT_URL},
@@ -56,6 +62,7 @@ def _issue_body(key: str = "PROJ-42") -> dict[str, Any]:
                 {"filename": "meta.txt", "size": 5, "content": _FOREIGN_ATTACHMENT_URL},
             ],
         },
+        "renderedFields": {"description": _DESCRIPTION_HTML},
     }
 
 
@@ -393,3 +400,244 @@ class TestCreateFromJira:
         ]
         assert all(url.startswith(_JIRA_URL) for url in jira.requested_urls)
         assert not await attachment_copy_pending(redis_client, task.id)
+
+
+class TestDescriptionHtml:
+    async def test_client_reads_rendered_description(self) -> None:
+        jira = FakeJira()
+        async with jira.client() as http_client:
+            issue = await _client(http_client).get_issue("PROJ-42")
+
+        assert issue.description_html == _DESCRIPTION_HTML
+        assert "expand=renderedFields" in jira.requested_urls[0]
+
+    @pytest.mark.parametrize(
+        "rendered",
+        [None, {}, {"description": ""}, {"description": "  "}, {"description": 5}],
+        ids=["absent", "empty_object", "empty", "blank", "not_text"],
+    )
+    async def test_client_without_rendered_description(self, rendered: object) -> None:
+        def handle(_: httpx.Request) -> httpx.Response:
+            body = _issue_body()
+            body["renderedFields"] = rendered
+            return httpx.Response(200, json=body)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http_client:
+            issue = await _client(http_client).get_issue("PROJ-42")
+
+        assert issue.description_html is None
+
+    async def _task(self, authed_client: AsyncClient, description: str) -> dict[str, Any]:
+        created = await authed_client.post(
+            "/tasks",
+            json={"code": "PROJ-42", "title": "t", "description": description},
+        )
+        assert created.status_code == 201, created.text
+        body: dict[str, Any] = created.json()
+        return body
+
+    @pytest.mark.parametrize(
+        ("description", "html", "saved"),
+        [
+            (_DESCRIPTION_TEXT, _DESCRIPTION_HTML, True),
+            ("описание правили", _DESCRIPTION_HTML, False),
+            (_DESCRIPTION_TEXT, None, False),
+            (_DESCRIPTION_TEXT, "<p>" + "x" * 500_000 + "</p>", False),
+        ],
+        ids=["unchanged", "edited_meanwhile", "no_html", "too_large"],
+    )
+    async def test_saved_only_for_unchanged_description(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        description: str,
+        html: str | None,
+        saved: bool,
+    ) -> None:
+        created = await self._task(authed_client, description)
+        task = await db_session.get(Task, uuid.UUID(created["id"]))
+        assert task is not None
+
+        result = await save_description_html(
+            db_session,
+            task=task,
+            description=_DESCRIPTION_TEXT,
+            description_html=html,
+        )
+        await db_session.refresh(task)
+
+        assert result is saved
+        assert task.description_html == (html if saved else None)
+
+    async def test_background_copy_saves_html(
+        self,
+        authed_client: AsyncClient,
+        current_user: User,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _connect(authed_client, db_session)
+        monkeypatch.setattr(
+            jira_attachments.copy_jira_attachments_to_task, "delay", lambda *_: None
+        )
+        created = await authed_client.post(
+            "/tasks",
+            json={
+                "code": "PROJ-42",
+                "title": "t",
+                "description": _DESCRIPTION_TEXT,
+                "jira_issue_key": "PROJ-42",
+            },
+        )
+        assert created.json()["description_html"] is None
+        jira = FakeJira()
+
+        @asynccontextmanager
+        async def same_session() -> AsyncIterator[AsyncSession]:
+            yield db_session
+
+        monkeypatch.setattr(jira_attachments, "async_session_factory", same_session)
+        monkeypatch.setattr(jira_attachments, "new_jira_http_client", jira.client)
+        await jira_attachments.copy_jira_attachments_async(
+            task_id=uuid.UUID(created.json()["id"]),
+            user_id=current_user.id,
+            key="PROJ-42",
+        )
+
+        task = await db_session.get(Task, uuid.UUID(created.json()["id"]))
+        assert task is not None
+        await db_session.refresh(task)
+        assert task.description_html == _DESCRIPTION_HTML
+
+    async def test_dropped_when_description_edited(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        created = await self._task(authed_client, _DESCRIPTION_TEXT)
+        task = await db_session.get(Task, uuid.UUID(created["id"]))
+        assert task is not None
+        task.description_html = _DESCRIPTION_HTML
+        await db_session.commit()
+
+        unchanged = await authed_client.patch(
+            f"/tasks/{created['id']}",
+            json={"description": _DESCRIPTION_TEXT, "title": "new"},
+        )
+        edited = await authed_client.patch(
+            f"/tasks/{created['id']}",
+            json={"description": "другое описание"},
+        )
+
+        assert unchanged.json()["description_html"] == _DESCRIPTION_HTML
+        assert edited.json()["description_html"] is None
+
+
+class TestRefreshDescription:
+    @staticmethod
+    async def _imported_task(
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        description: str = _DESCRIPTION_TEXT,
+        key: str | None = "PROJ-42",
+        queued: list[tuple[object, ...]] | None = None,
+    ) -> str:
+        await _connect(authed_client, db_session)
+        delivered = [] if queued is None else queued
+        monkeypatch.setattr(
+            jira_attachments.copy_jira_attachments_to_task,
+            "delay",
+            lambda *args: delivered.append(args),
+        )
+        created = await authed_client.post(
+            "/tasks",
+            json={
+                "code": "PROJ-42",
+                "title": "t",
+                "description": description,
+                "jira_issue_key": key,
+            },
+        )
+        assert created.status_code == 201, created.text
+        delivered.clear()
+        task_id: str = created.json()["id"]
+        return task_id
+
+    async def test_html_loaded_and_attachments_requeued(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        fake_jira: FakeJira,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        queued: list[tuple[object, ...]] = []
+        task_id = await self._imported_task(
+            authed_client,
+            db_session,
+            monkeypatch,
+            queued=queued,
+        )
+
+        response = await authed_client.post(f"/jira/tasks/{task_id}/description")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["description_html"] == _DESCRIPTION_HTML
+        assert fake_jira.requested_urls
+        assert [args[2] for args in queued] == ["PROJ-42"]
+
+    @pytest.mark.parametrize(
+        ("description", "key", "message"),
+        [
+            ("Описание правили в трекере", "PROJ-42", "отличается от описания в Jira"),
+            (_DESCRIPTION_TEXT, None, "нет ссылки на задачу Jira"),
+        ],
+        ids=["description_edited", "not_imported"],
+    )
+    async def test_conflict(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        fake_jira: FakeJira,
+        monkeypatch: pytest.MonkeyPatch,
+        description: str,
+        key: str | None,
+        message: str,
+    ) -> None:
+        del fake_jira
+        task_id = await self._imported_task(
+            authed_client,
+            db_session,
+            monkeypatch,
+            description=description,
+            key=key,
+        )
+
+        response = await authed_client.post(f"/jira/tasks/{task_id}/description")
+
+        assert response.status_code == 409
+        assert message in response.text
+
+    async def test_foreign_task_not_found(
+        self,
+        authed_client: AsyncClient,
+        fake_jira: FakeJira,
+    ) -> None:
+        del fake_jira
+
+        response = await authed_client.post(f"/jira/tasks/{uuid.uuid4()}/description")
+
+        assert response.status_code == 404
+
+    @pytest.mark.parametrize(
+        ("url", "key"),
+        [
+            ("https://j.example.com/browse/proj-42", "PROJ-42"),
+            ("https://j.example.com/browse/PROJ-7?focusedId=1", "PROJ-7"),
+            ("https://j.example.com/projects/X", None),
+            (None, None),
+        ],
+    )
+    def test_issue_key_of_url(self, url: str | None, key: str | None) -> None:
+        assert issue_key_of_url(url) == key

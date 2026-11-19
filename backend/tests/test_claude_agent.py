@@ -512,6 +512,74 @@ class TestTextDeltas:
         assert deltas == expected
 
 
+class TestPartialTurnText:
+    @pytest.mark.parametrize(
+        ("messages", "hang_on", "expected"),
+        [
+            (
+                [make_text_block_start(), make_text_delta("Недопис"), make_text_delta("анный")],
+                "анный",
+                "Недописанный",
+            ),
+            (
+                [
+                    make_text_block_start(),
+                    make_text_delta("Готов"),
+                    AssistantMessage(content=[TextBlock(text="Готов")], model="claude"),
+                    make_text_block_start(),
+                    make_text_delta("Пишу"),
+                ],
+                "Пишу",
+                "Готов\n\nПишу",
+            ),
+            (
+                [
+                    make_text_block_start(),
+                    make_text_delta("Субагент", parent_tool_use_id="t"),
+                    make_text_delta("Свой"),
+                ],
+                "Свой",
+                "Свой",
+            ),
+        ],
+        ids=["unfinished_block", "finished_not_duplicated", "subagent_ignored"],
+    )
+    async def test_includes_unfinished_block(
+        self,
+        messages: list[Message],
+        hang_on: str,
+        expected: str | None,
+    ) -> None:
+        async def hang(text: str) -> None:
+            if text == hang_on:
+                await asyncio.Event().wait()
+
+        fake = FakeClaudeAgentClient(messages_per_query=[messages])
+        session = ClaudeCodeSession(fake, on_text_delta=hang)
+
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(session.send_and_collect_text("go"), timeout=0.3)
+
+        assert session.take_partial_turn_text() == expected
+        assert session.take_partial_turn_text() is None
+
+    async def test_buffered_without_stream_listener(self) -> None:
+        # Пустые фрагменты ничего не добавляют, но держат ход открытым.
+        messages: list[Message] = [
+            make_text_block_start(),
+            make_text_delta("Часть"),
+            *[make_text_delta("") for _ in range(10)],
+        ]
+        fake = FakeClaudeAgentClient(messages_per_query=[messages])
+        fake.message_delay_seconds = 0.2
+        session = ClaudeCodeSession(fake)
+
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(session.send_and_collect_text("go"), timeout=0.7)
+
+        assert session.take_partial_turn_text() == "Часть"
+
+
 class TestReplaceClient:
     async def test_switches_to_new_process(self) -> None:
         old = FakeClaudeAgentClient(messages_per_query=[])

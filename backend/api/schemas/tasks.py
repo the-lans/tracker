@@ -24,6 +24,7 @@ from db.models.enums import (
     ReasoningEffort,
     RemoteControlStatus,
     RepositoryRole,
+    TaskSessionEventKind,
     TaskStatus,
 )
 from db.models.tasks import MAX_QUEUE_PRIORITY, MIN_QUEUE_PRIORITY
@@ -107,7 +108,12 @@ class TaskRepositoryResponse(BaseModel):
     cloned_at: datetime | None
 
 
-class TaskResponse(BaseModel):
+class TaskListItemResponse(BaseModel):
+    """
+    Задача в списках (дашборд, активные сессии): без `description_html` — HTML
+    описания из Jira велик и нужен только странице одной задачи.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     manual_requests_closed: bool = False
@@ -155,6 +161,15 @@ class TaskResponse(BaseModel):
     updated_at: datetime
 
 
+class TaskResponse(TaskListItemResponse):
+    """
+    Одна задача: к полям списка добавлен HTML описания из Jira.
+    """
+
+    # Раздел 15.6: HTML описания из Jira — только для показа.
+    description_html: str | None = None
+
+
 class TaskStatusChangeRequest(BaseModel):
     """Раздел 14.1: ручная смена статуса — только в статус до запуска."""
 
@@ -195,6 +210,18 @@ class NodeDependentResponse(BaseModel):
 class PipelineDependentsRequest(BaseModel):
     node_id: uuid.UUID
     enabled_node_ids: list[uuid.UUID]
+
+
+class TaskSessionEventResponse(BaseModel):
+    """
+    Раздел 15.2: сброс контекста или начало новой сессии — реплика ленты чата.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    kind: TaskSessionEventKind
+    created_at: datetime
 
 
 class NodeLogResponse(BaseModel):

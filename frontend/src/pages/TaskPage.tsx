@@ -1,22 +1,11 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
-import { TaskJiraLink } from "@/components/tasks/TaskJiraLink";
-import { TaskStatusMenu } from "@/components/tasks/TaskStatusMenu";
+import { useParams } from "react-router-dom";
+import { TaskHeader } from "@/components/tasks/TaskHeader";
 import { TaskOverviewPanel } from "@/components/tasks/TaskOverviewPanel";
 import { TaskChatFeed } from "@/components/tasks/TaskChatFeed";
 import { TaskLogsPanel } from "@/components/tasks/TaskLogsPanel";
 import { type MobileTaskTab, TaskMobileTabs } from "@/components/tasks/TaskMobileTabs";
 import { TaskWorkspaceTabs, type WorkspaceView } from "@/components/tasks/TaskWorkspaceTabs";
-import { TaskControlButtons } from "@/components/tasks/TaskControlButtons";
-import { TaskDayMarks } from "@/components/tasks/TaskDayMarks";
-import { RemoteControlButton } from "@/components/tasks/RemoteControlButton";
-import { RemoteControlNotice } from "@/components/tasks/RemoteControlNotice";
-import { TaskLlmAccountBadge } from "@/components/tasks/TaskLlmAccountBadge";
-import { TaskLimitWaitBanner } from "@/components/tasks/TaskLimitWaitBanner";
-import { bridgeViewOf } from "@/components/tasks/taskStatusMeta";
-import { REMOTE_CONTROL_STATUS_LABEL } from "@/lib/labels";
-import { RemoteControlStatus } from "@/lib/types";
 import { useTask, useTaskNodeLogs } from "@/hooks/useTasks";
 import { useTaskStatusSocket } from "@/hooks/useTaskStatusSocket";
 import { cn } from "@/lib/utils";
@@ -27,7 +16,6 @@ export function TaskPage() {
   const { data: nodeLogs } = useTaskNodeLogs(taskId);
   const [mobileTab, setMobileTab] = useState<MobileTaskTab>("dialogue");
   useTaskStatusSocket(taskId);
-
   if (isLoading || !task) {
     return (
       <div className="flex h-full items-center justify-center text-text-3">
@@ -40,46 +28,10 @@ export function TaskPage() {
   // На десктопе правая панель видна всегда; «Обзор» — только мобильная вкладка.
   const workspaceView: WorkspaceView = mobileTab === "logs" ? "logs" : "dialogue";
   const workspaceTabs = <TaskWorkspaceTabs value={workspaceView} onChange={setMobileTab} />;
-  const bridgeView = bridgeViewOf(task);
 
   return (
     <div className="flex h-full flex-col short:h-auto">
-      {/* Название занимает свою строку; кнопки переносятся под него, а не сжимают его. */}
-      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-b border-border bg-surface px-4 py-3 short:gap-y-1 short:py-1.5 lg:px-7">
-        <Link
-          to="/"
-          aria-label="К списку задач"
-          className="flex touch-target size-8 shrink-0 items-center justify-center rounded-[9px] border border-border text-text-2"
-        >
-          <ArrowLeft className="size-4" />
-        </Link>
-        <div className="min-w-0 flex-1 basis-56">
-          {/* Отметки дня переносятся на свою строку, а не сжимают код и статус. */}
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="max-w-full break-all font-mono text-small font-bold text-text-3">{task.code}</span>
-            <TaskStatusMenu task={task} />
-            <TaskDayMarks task={task} />
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 truncate text-title font-extrabold tracking-tight" title={task.title}>
-              {task.title}
-            </div>
-            <TaskJiraLink task={task} />
-          </div>
-          <TaskLlmAccountBadge task={task} />
-        </div>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <TaskControlButtons task={task} />
-          {bridgeView === "reconnect" && <RemoteControlButton task={task} />}
-        </div>
-        {bridgeView === "reconnect" && <RemoteControlNotice />}
-        <TaskLimitWaitBanner task={task} />
-        {bridgeView === "unavailable" && (
-          <p className="basis-full text-right text-caption text-text-3">
-            {REMOTE_CONTROL_STATUS_LABEL[RemoteControlStatus.UNAVAILABLE]}
-          </p>
-        )}
-      </div>
+      <TaskHeader task={task} />
 
       <TaskMobileTabs value={mobileTab} onChange={setMobileTab} />
 

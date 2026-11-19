@@ -3,6 +3,8 @@ import {
   formatCountdown,
   formatFileSize,
   formatInterval,
+  formatFeedDate,
+  formatMessageTime,
   formatRelativeShort,
   initialsFromEmail,
   localDayBoundary,
@@ -133,5 +135,24 @@ describe("pageCountOf", () => {
     { total: 100, pages: 5 },
   ])("$total записей по 20 → $pages", ({ total, pages }) => {
     expect(pageCountOf(total, 20)).toBe(pages);
+  });
+});
+
+describe("formatMessageTime", () => {
+  test("только время, в любой день", () => {
+    expect(formatMessageTime(new Date(2026, 10, 10, 9, 5).toISOString())).toBe("09:05");
+    expect(formatMessageTime(new Date(2026, 9, 1, 23, 40).toISOString())).toBe("23:40");
+  });
+});
+
+describe("formatFeedDate", () => {
+  const now = new Date(2026, 10, 19, 12, 0);
+
+  test("этот год — без года", () => {
+    expect(formatFeedDate(new Date(2026, 10, 19, 9, 0).getTime(), now)).toBe("19 ноября");
+  });
+
+  test("другой год — с годом", () => {
+    expect(formatFeedDate(new Date(2025, 11, 31, 23, 0).getTime(), now)).toBe("31 декабря 2025 г.");
   });
 });

@@ -1456,6 +1456,23 @@ class TestForgetSession:
         await db_session.refresh(task)
         assert task.context_cleared_at is not None
 
+    async def test_clear_context_noted_in_chat(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task = await _task_in_status(authed_client, db_session, TaskStatus.FAILED)
+
+        await authed_client.post(f"/tasks/{task.id}/clear-context")
+        events = (await authed_client.get(f"/tasks/{task.id}/session-events")).json()
+
+        assert [event["kind"] for event in events] == ["context_cleared"]
+
+    async def test_events_of_unknown_task(self, authed_client: AsyncClient) -> None:
+        response = await authed_client.get(f"/tasks/{uuid.uuid4()}/session-events")
+
+        assert response.status_code == 404
+
 
 class TestStartAccountChange:
     """
@@ -2048,6 +2065,39 @@ class TestNodeLogFilters:
         )
 
         assert [entry["node_id"] for entry in response.json()] == [nodes[1]["node_id"]]
+
+
+class TestDescriptionHtml:
+    """HTML описания из Jira велик: в списках его нет, у одной задачи — есть."""
+
+    async def test_only_in_detail(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        current_user: User,
+    ) -> None:
+        task = Task(
+            code=f"RR-{uuid.uuid4().hex[:8]}",
+            title="с описанием",
+            description="d",
+            description_html="<p>d</p>",
+            created_by=current_user.id,
+            status=TaskStatus.IN_PROGRESS,
+        )
+        db_session.add(task)
+        await db_session.flush()
+        task_id = task.id
+        db_session.expire(task)
+
+        listed = await authed_client.get("/tasks")
+        sessions = await authed_client.get("/tasks/active-sessions")
+        detail = await authed_client.get(f"/tasks/{task_id}")
+
+        for response in (listed, sessions):
+            assert response.status_code == 200
+            assert [item["id"] for item in response.json()] == [str(task_id)]
+            assert "description_html" not in response.json()[0]
+        assert detail.json()["description_html"] == "<p>d</p>"
 
 
 class TestActiveSessions:

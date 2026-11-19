@@ -389,6 +389,10 @@ class ClaudeCodeSession:
         self._turn_text_parts: list[str] = []
         # В поток хода уже ушёл текст: следующий текстовый блок отделяется.
         self._turn_streamed_text = False
+        # Фрагменты блока, который ещё пишется: в `_turn_text_parts` блок попадает
+        # целиком, когда SDK его завершит, а при остановке посреди блока
+        # собранное иначе пропало бы.
+        self._turn_pending_stream: list[str] = []
         self.user_wait_clock = UserWaitClock()
         # Прогресс текущего (или последнего) хода — для причины таймаута ноды.
         self.turn_progress = agent_metrics.TurnProgress()
@@ -401,8 +405,10 @@ class ClaudeCodeSession:
         Текст прерванного хода (раздел 6.4), полученный до остановки, таймаута
         или падения CLI. Буфер очищается: текст попадает ровно в одну запись.
         """
-        text = _join_text_blocks(self._turn_text_parts) or None
+        pending = "".join(self._turn_pending_stream)
+        text = _join_text_blocks([*self._turn_text_parts, pending]) or None
         self._turn_text_parts = []
+        self._turn_pending_stream = []
         return text
 
     def turn_text_length(self) -> int:
@@ -555,6 +561,7 @@ class ClaudeCodeSession:
             self._turn_open = True
             try:
                 self._turn_text_parts = []
+                self._turn_pending_stream = []
                 self._turn_streamed_text = False
                 await self._client.query(prompt)
                 text_parts = self._turn_text_parts
@@ -606,7 +613,11 @@ class ClaudeCodeSession:
                                 progress.tool_started(block.id, block.name)
                                 if block.name in {"Agent", "Task"}:
                                     subagent_call_count += 1
-                        text_parts.extend(_own_text_blocks(message))
+                        own_blocks = _own_text_blocks(message)
+                        text_parts.extend(own_blocks)
+                        if own_blocks:
+                            # Блок завершён и теперь целиком в `text_parts`.
+                            self._turn_pending_stream = []
                     if isinstance(message, UserMessage):
                         for result_block in message.content:
                             if isinstance(result_block, ToolResultBlock):
@@ -676,6 +687,7 @@ class ClaudeCodeSession:
                 raise
             self._turn_open = False
             self._turn_text_parts = []
+            self._turn_pending_stream = []
             if result is None:
                 error_message = "Сессия завершила приём сообщений без ResultMessage"
                 raise RuntimeError(error_message)
@@ -762,6 +774,7 @@ class ClaudeCodeSession:
         logger.info("session_compaction_started", account_id=str(route.account_id))
         self._turn_open = True
         self._turn_text_parts = []
+        self._turn_pending_stream = []
         self.user_wait_clock.begin()
         try:
             async with asyncio.timeout(COMPACT_TIMEOUT_SECONDS):
@@ -799,12 +812,17 @@ class ClaudeCodeSession:
         return result, assistant_error
 
     async def _forward_text_delta(self, message: StreamEvent) -> None:
-        if self._on_text_delta is None:
-            return
+        # Копится всегда, даже без получателя потока: это буфер для остановки.
         if _starts_text_block(message) and self._turn_streamed_text:
-            await self._on_text_delta(TEXT_BLOCK_SEPARATOR)
+            if self._turn_pending_stream:
+                # Завершённый блок уже в `_turn_text_parts`: их разделитель добавит склейка.
+                self._turn_pending_stream.append(TEXT_BLOCK_SEPARATOR)
+            if self._on_text_delta is not None:
+                await self._on_text_delta(TEXT_BLOCK_SEPARATOR)
             return
         text = _text_delta_of(message)
         if text is not None:
             self._turn_streamed_text = True
-            await self._on_text_delta(text)
+            self._turn_pending_stream.append(text)
+            if self._on_text_delta is not None:
+                await self._on_text_delta(text)

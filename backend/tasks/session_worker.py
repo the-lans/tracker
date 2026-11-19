@@ -81,6 +81,7 @@ from services.refining_chat import (
 )
 from services.remote_control import bridge_unavailable, record_bridge_status
 from services.session_container import SESSION_CLI_PATH, build_session_cli_env
+from services.session_events import record_new_session
 from services.session_heartbeat import (
     SESSION_OWNER_WAIT_SECONDS,
     SessionAlreadyOwnedError,
@@ -734,6 +735,8 @@ async def _run_chat(
         session_token=lane.session_token,
     )
     start_plan = plan_session_start(existing_session_id=task.session_id)
+    if start_plan.resume_session_id is None and make_client.has_llm:
+        await record_new_session(db_session, task_id=task.id)
     session = ClaudeCodeSession(
         make_client(resume_session_id=start_plan.resume_session_id, enable_remote_control=False),
         on_text_delta=build_output_publisher(redis_client, active_node_context),
@@ -1157,6 +1160,8 @@ async def _run_claimed_task(
         session_token=lane.session_token,
     )
     start_plan = plan_session_start(existing_session_id=task.session_id)
+    if start_plan.resume_session_id is None and make_client.has_llm:
+        await record_new_session(db_session, task_id=task.id)
     enable_remote_control = (
         start_plan.enable_remote_control and make_client.has_llm and not bridge_unavailable(task)
     )

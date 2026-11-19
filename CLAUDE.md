@@ -157,7 +157,8 @@ backend/
               task_dispatcher.py — проход дневного и ночного воркера
               очереди; refining_chat.py — чат с агентом в «Уточняется»;
               template_files.py — файлы шаблона, загруженные с диска;
-              jira_import.py — импорт задачи из Jira (раздел 15.6);
+              jira_import.py — импорт задачи из Jira и отрисованное описание
+              (`description_html`, «Обновить из Jira», раздел 15.6);
               «Дейли» (раздел 15.8): tracker_day.py — день трекера по
               началу дня, окно «Истории» (DayWindow); daily_clock.py — окно
               и начало дня из system_settings; day_marks.py — отметки
@@ -218,6 +219,9 @@ backend/
               владелец сессии; node_history.py — история `node_logs` задачи
               для `{{node.*}}` и вкладки «Логи»; node_runs.py — жизненный
               цикл записи `node_logs` (старт, итог, остановка);
+              session_events.py — строки ленты «Контекст сброшен» и «Начата новая
+              сессия» (`task_session_events`; повторный старт воркера до первого
+              хода строку не дублирует);
               redis_connection.py — клиент Redis на операцию; integrity.py —
               запреты удаления (раздел 3.2) и commit_or_conflict
   db/        — ORM-модели (db/base.py — Base), асинхронное подключение
@@ -228,7 +232,7 @@ backend/
               «Архива», parent_summaries.py — идёт ли пересказ для
               дочерней задачи, app_logs.py — удаление старого журнала,
               daily.py — отметки, работа за день, события и календарь
-              «Дейли», task_repositories.py — блокировка задачи и
+              «Дейли», session_events.py — события сессии для ленты чата, task_repositories.py — блокировка задачи и
               привязанные репозитории, git_credentials.py — запись ключа
               хоста SSH compare-and-swap, users.py — версия сессий входа
   prompts/   — служебные тексты трекера для агента (agent.py): сообщения
@@ -304,7 +308,22 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               (настройки задачи и категории), actions/ToggleChip
               (переключатель-«пилюля»: фильтры дашборда, отметки дня),
               actions/ConfirmActionButton (действие с подтверждением),
-              inputs/TimeField и lib/clockTime.ts (время «ЧЧ:ММ»);
+              inputs/TimeField и lib/clockTime.ts (время «ЧЧ:ММ»),
+              inputs/IntegerSettingField (целочисленная настройка админки:
+              подпись, поле, подсказка), typography/TitledSection (раздел с
+              заголовком и чертой между разделами);
+              страница задачи (components/tasks): TaskHeader — шапка (кнопки,
+              аккаунт, надпись про claude.ai/code; раскладка и мобильная строка),
+              TaskStopButton — «Остановить» по шагам: запросы чата по одному,
+              затем красная — задача с подтверждением (lib/manualRequests.ts),
+              TaskDetailsDialog — окно «В отдельном окне» (общие части с
+              карточками: TaskDescriptionBody, TaskLinks, TaskArtifactList),
+              ArtifactPreviewDialog/Body и lib/artifactPreview.ts — просмотр
+              артефактов (SVG не открывается в новой вкладке: скрипт
+              выполнился бы в origin приложения; предел размера), FeedNotice —
+              служебная строка ленты (смена аккаунта, событие сессии, дата),
+              lib/chatFeed.ts + hooks/useStickToBottom.ts — сборка ленты и
+              автопрокрутка с кнопкой «Новые сообщения»;
               по разделам — components/{tasks,nodes,profile,admin,
               taskCategories,daily,repositories,templates,llmAccounts,
               envVariables};
@@ -392,7 +411,11 @@ alembic/
                  daily_plan_templates, google_calendar_connections,
                  system_settings.day_start_time,
                  task_repositories.cloned_at,
-                 git_credentials.ssh_known_hosts, users.session_version);
+                 git_credentials.ssh_known_hosts, users.session_version,
+                 tasks.description_html — HTML описания из Jira для показа,
+                 task_session_events — сброс контекста и новые сессии в ленте чата,
+                 system_settings.llm_switch_threshold_week_pct — порог недели,
+                 system_settings.llm_compact_min_context_chars — минимум контекста для сжатия);
                  новые миграции пишут DDL
                  с IF [NOT] EXISTS, чтобы повторный запуск не падал
 scripts/
@@ -753,11 +776,13 @@ Postgres из `backend/tests/conftest.py`:
     CLIProxyAPI (volume `cliproxy_data`), в БД — лишь имя учётки. Аккаунт
     каждого хода выбирает `services/account_router.py`
     (`services/llm_account_choice.py`): порог 5-часового окна из профиля
-    автора не переступается, недельного порога нет; если все аккаунты на
+    автора и порог недельного расхода из системных настроек (98%, один для
+    всех) не переступаются; если все аккаунты на
     пороге или исчерпаны, ход модели не начинается — задача ждёт сброса
     (`awaiting_limit`); ворота учитывают тип хода, скрипт и очистка
     контекста их не ждут, пересказ родителя ждёт вместе с задачей. Смена аккаунта на границе хода сжимает контекст
-    (`/compact`, буквально) по переключателю профиля;
+    (`/compact`, буквально) по переключателю профиля, кроме новой сессии и
+    короткого контекста (минимум — в системных настройках);
     `tasks.current_llm_account_id` выставляет только воркер (compare-and-swap);
     сбрасывается лишь до запуска — возврат из `failed`/`done` в статус до
     запуска и смена стартового аккаунта.
