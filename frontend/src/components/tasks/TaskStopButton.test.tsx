@@ -20,14 +20,40 @@ const QUEUED_COMMAND = makeManualRequest({
   request_type: ManualRequestType.LIBRARY_PROMPT,
 });
 
-function renderButton() {
-  return renderWithProviders(<TaskStopButton taskId="t1" />);
+function renderButton(canStopTask = true) {
+  return renderWithProviders(
+    <TaskStopButton taskId="t1" canStopTask={canStopTask} />,
+  );
 }
 
 const isDanger = (button: HTMLElement) =>
   button.className.includes("bg-danger-tint");
 
 describe("TaskStopButton", () => {
+  describe("статус, где задачу завершить нельзя", () => {
+    test("есть запрос — только остановка запроса", async ({ api }) => {
+      api.respond("GET /tasks/t1/manual-queue", [RUNNING]);
+      renderButton(false);
+
+      expect(
+        await screen.findByRole("button", { name: "Остановить промт" }),
+      ).toBeInTheDocument();
+    });
+
+    test("запросов нет — кнопки нет, красной тоже", async ({ api }) => {
+      renderButton(false);
+
+      await expect
+        .poll(() =>
+          api.requests.some(
+            (request) => request.path === "/tasks/t1/manual-queue",
+          ),
+        )
+        .toBe(true);
+      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    });
+  });
+
   test("без запросов — красная кнопка завершает задачу после подтверждения", async ({
     api,
   }) => {

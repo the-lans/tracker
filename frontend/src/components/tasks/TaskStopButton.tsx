@@ -27,8 +27,16 @@ const DANGER_CLASS =
  * или команда, — каждое нажатие останавливает один из них (сначала выполняющийся, потом
  * ожидающие), кнопка обычная. Когда останавливать больше нечего, она красная и
  * завершает всю задачу — после подтверждения и паузы в {@link STOP_TASK_ARMING_MS}.
+ * Где задачу завершить нельзя (``canStopTask`` = false), кнопка есть только пока есть запрос.
  */
-export function TaskStopButton({ taskId }: { taskId: string }) {
+export function TaskStopButton({
+  taskId,
+  canStopTask,
+}: {
+  taskId: string;
+  /** Задачу можно завершить: в статусе без этого (чат «Уточняется», ответ агента) кнопка только для запросов. */
+  canStopTask: boolean;
+}) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [stoppedIds, setStoppedIds] = useState<ReadonlySet<string>>(new Set());
   const [arming, setArming] = useState(false);
@@ -66,6 +74,8 @@ export function TaskStopButton({ taskId }: { taskId: string }) {
       onError: toastError("Не удалось остановить задачу"),
     });
   }
+
+  if (!request && !canStopTask) return null;
 
   const label = request ? stopRequestLabel(request) : "Остановить";
   const title = request

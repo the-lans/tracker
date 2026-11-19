@@ -1,6 +1,7 @@
 import { Ban, Pause, Play, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { HEADER_BUTTON } from "@/styles/classes";
+import { MANUAL_REQUEST_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { TaskStopButton } from "@/components/tasks/TaskStopButton";
 import { TaskLifecycleActions } from "@/components/tasks/TaskLifecycleActions";
 import {
@@ -36,6 +37,9 @@ export function TaskControlButtons({ task }: { task: Task }) {
     task.status === TaskStatus.IN_PROGRESS ||
     (limitWait && PAUSABLE_LIMIT_WAIT_FROM.includes(task.limit_wait_from_status));
   const canStop = task.status === TaskStatus.IN_PROGRESS || task.status === TaskStatus.PAUSED || limitWait;
+  // Запрос чата можно остановить везде, где чат принимает запросы, включая «Уточняется».
+  const canStopRequests =
+    MANUAL_REQUEST_STATUSES.includes(task.status) || task.status === TaskStatus.REFINING;
   const preLaunch = isPreLaunch(task.status);
   const { data: llmLimit } = useLlmLimit(task.created_by, preLaunch);
   const launchWaitUntil = preLaunch ? llmLimit?.wait_until : null;
@@ -116,7 +120,7 @@ export function TaskControlButtons({ task }: { task: Task }) {
           <ButtonLabel>Продолжить</ButtonLabel>
         </button>
       )}
-      {canStop && <TaskStopButton taskId={task.id} />}
+      {(canStop || canStopRequests) && <TaskStopButton taskId={task.id} canStopTask={canStop} />}
       {task.status === TaskStatus.FAILED && (
         <button
           type="button"
