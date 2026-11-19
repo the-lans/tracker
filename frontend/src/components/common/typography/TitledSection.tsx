@@ -16,7 +16,12 @@ export function TitledSection({
   children: ReactNode;
 }) {
   return (
-    <section className={cn("border-t border-border pt-4 first:border-t-0 first:pt-0", className)}>
+    <section
+      className={cn(
+        "border-t border-border pt-4 first:border-t-0 first:pt-0",
+        className,
+      )}
+    >
       <SectionTitle className="mb-2">{title}</SectionTitle>
       {children}
     </section>

@@ -6,8 +6,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-import pytest
-
 from db.models.enums import NodeLogStatus, NodeLogTriggerType, TaskSessionEventKind
 from db.models.logs import NodeLog
 from db.queries.session_events import list_session_events
@@ -51,16 +49,11 @@ class TestRecordNewSession:
 
         assert await _kinds(db_session, task.id) == ["session_started", "session_started"]
 
-    @pytest.mark.parametrize("previous", [TaskSessionEventKind.CONTEXT_CLEARED])
-    async def test_session_after_context_clear_is_noted(
-        self,
-        db_session: AsyncSession,
-        previous: TaskSessionEventKind,
-    ) -> None:
+    async def test_session_after_context_clear_is_noted(self, db_session: AsyncSession) -> None:
         task = await make_task(db_session)
-        add_session_event(db_session, task_id=task.id, kind=previous)
+        add_session_event(db_session, task_id=task.id, kind=TaskSessionEventKind.CONTEXT_CLEARED)
         await db_session.commit()
 
         await record_new_session(db_session, task_id=task.id)
 
-        assert await _kinds(db_session, task.id) == [previous.value, "session_started"]
+        assert await _kinds(db_session, task.id) == ["context_cleared", "session_started"]

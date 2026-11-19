@@ -7,14 +7,31 @@ import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
 // jsdom не реализует прокрутку элемента — лента прокручивается к новым записям.
-Object.defineProperty(HTMLElement.prototype, "scrollTo", { value: () => {}, configurable: true });
+Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+  value: () => {},
+  configurable: true,
+});
 
 describe("TaskChatFeed", () => {
-  test("сброс контекста и новая сессия — репликами между записями нод", async ({ api }) => {
+  test("сброс контекста и новая сессия — репликами между записями нод", async ({
+    api,
+  }) => {
     api.respond("GET /tasks/t1/session-events", [
-      { id: "e1", kind: TaskSessionEventKind.SESSION_STARTED, created_at: "2026-01-01T09:00:00Z" },
-      { id: "e2", kind: TaskSessionEventKind.CONTEXT_CLEARED, created_at: "2026-01-01T11:00:00Z" },
-      { id: "e3", kind: TaskSessionEventKind.SESSION_STARTED, created_at: "2026-01-01T11:00:05Z" },
+      {
+        id: "e1",
+        kind: TaskSessionEventKind.SESSION_STARTED,
+        created_at: "2026-01-01T09:00:00Z",
+      },
+      {
+        id: "e2",
+        kind: TaskSessionEventKind.CONTEXT_CLEARED,
+        created_at: "2026-01-01T11:00:00Z",
+      },
+      {
+        id: "e3",
+        kind: TaskSessionEventKind.SESSION_STARTED,
+        created_at: "2026-01-01T11:00:05Z",
+      },
     ]);
     const logs = [
       makeNodeLog({
@@ -58,8 +75,16 @@ describe("TaskChatFeed", () => {
   test("при смене даты в ленте строка с датой", async ({ api }) => {
     api.respond("GET /tasks/t1/session-events", []);
     const logs = [
-      makeNodeLog({ id: "a", started_at: new Date(2026, 9, 31, 22, 0).toISOString(), llm_output_text: "Вчера" }),
-      makeNodeLog({ id: "b", started_at: new Date(2026, 10, 1, 8, 0).toISOString(), llm_output_text: "Сегодня" }),
+      makeNodeLog({
+        id: "a",
+        started_at: new Date(2026, 9, 31, 22, 0).toISOString(),
+        llm_output_text: "Вчера",
+      }),
+      makeNodeLog({
+        id: "b",
+        started_at: new Date(2026, 10, 1, 8, 0).toISOString(),
+        llm_output_text: "Сегодня",
+      }),
     ];
 
     renderWithProviders(

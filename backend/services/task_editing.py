@@ -45,7 +45,9 @@ def _restart_on_chosen_account(task: Task, changes: dict[str, Any]) -> None:
 
 
 def _drop_stale_description_html(task: Task, changes: dict[str, Any]) -> None:
-    """Новое описание — HTML из Jira ему больше не соответствует (раздел 15.6)."""
+    """
+    Новое описание — HTML из Jira ему больше не соответствует (раздел 15.6).
+    """
     if _DESCRIPTION_FIELD in changes and changes[_DESCRIPTION_FIELD] != task.description:
         task.description_html = None
 

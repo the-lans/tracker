@@ -10,5 +10,9 @@ const EVENT_ICON: Record<TaskSessionEventKind, LucideIcon> = {
 
 /** Раздел 15.2: служебная строка ленты — контекст задачи сброшен или начата новая сессия. */
 export function SessionEventNotice({ kind }: { kind: TaskSessionEventKind }) {
-  return <FeedNotice icon={EVENT_ICON[kind]}>{TASK_SESSION_EVENT_LABEL[kind]}</FeedNotice>;
+  return (
+    <FeedNotice icon={EVENT_ICON[kind]}>
+      {TASK_SESSION_EVENT_LABEL[kind]}
+    </FeedNotice>
+  );
 }

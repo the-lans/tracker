@@ -20,7 +20,13 @@ export function TaskHeaderInfo({
   return (
     <div className={cn("empty:hidden", className)}>
       <TaskLlmAccountBadge task={task} />
-      {note && <p className={cn("text-caption text-text-3", truncateNote && "truncate")}>{note}</p>}
+      {note && (
+        <p
+          className={cn("text-caption text-text-3", truncateNote && "truncate")}
+        >
+          {note}
+        </p>
+      )}
     </div>
   );
 }

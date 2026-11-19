@@ -14,7 +14,8 @@ import { useNoteBelowButtons } from "@/hooks/useNoteBelowButtons";
 import { REMOTE_CONTROL_STATUS_LABEL } from "@/lib/labels";
 import { RemoteControlStatus, type Task } from "@/lib/types";
 
-const REMOTE_CONTROL_NOTE = REMOTE_CONTROL_STATUS_LABEL[RemoteControlStatus.UNAVAILABLE];
+const REMOTE_CONTROL_NOTE =
+  REMOTE_CONTROL_STATUS_LABEL[RemoteControlStatus.UNAVAILABLE];
 
 /**
  * Шапка страницы задачи (раздел 15.2): код, статус, название, аккаунт и кнопки.
@@ -48,7 +49,9 @@ export function TaskHeader({ task }: { task: Task }) {
       <div ref={leftRef} className="min-w-0 flex-1 basis-56">
         {/* Отметки дня переносятся на свою строку, а не сжимают код и статус. */}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 max-sm:gap-x-1.5">
-          <span className="max-w-full break-all font-mono text-small font-bold text-text-3 max-sm:text-caption">{task.code}</span>
+          <span className="max-w-full break-all font-mono text-small font-bold text-text-3 max-sm:text-caption">
+            {task.code}
+          </span>
           <TaskStatusMenu task={task} />
           <TaskDayMarks task={task} />
         </div>
@@ -71,7 +74,12 @@ export function TaskHeader({ task }: { task: Task }) {
         ref={buttonsRef}
         className="ml-auto flex flex-col items-end gap-1 max-sm:w-full max-sm:flex-row max-sm:items-center max-sm:gap-3"
       >
-        <TaskHeaderInfo task={task} note={note} truncateNote className="min-w-0 flex-1 sm:hidden" />
+        <TaskHeaderInfo
+          task={task}
+          note={note}
+          truncateNote
+          className="min-w-0 flex-1 sm:hidden"
+        />
         <div className="flex flex-wrap items-center justify-end gap-2 max-sm:shrink-0">
           <TaskControlButtons task={task} />
           {bridgeView === "reconnect" && <RemoteControlButton task={task} />}
@@ -79,7 +87,9 @@ export function TaskHeader({ task }: { task: Task }) {
         {note && noteBelow && (
           // Шире кнопок — выступает влево, ширину колонки кнопок не меняет.
           <div className="flex w-0 min-w-full justify-end max-sm:hidden">
-            <span className="whitespace-nowrap text-caption text-text-3">{note}</span>
+            <span className="whitespace-nowrap text-caption text-text-3">
+              {note}
+            </span>
           </div>
         )}
       </div>

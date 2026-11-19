@@ -17,7 +17,10 @@ const NO_TIME = Number.MAX_SAFE_INTEGER;
  * `clear_context` и должен стоять под её заголовком. Порядок записей нод
  * сохраняется, как его отдал сервер.
  */
-export function mergeFeed(logs: NodeLog[], events: TaskSessionEvent[]): FeedItem[] {
+export function mergeFeed(
+  logs: NodeLog[],
+  events: TaskSessionEvent[],
+): FeedItem[] {
   const items: FeedItem[] = [
     ...logs.map((log): FeedItem => ({
       type: "log",
@@ -32,7 +35,12 @@ export function mergeFeed(logs: NodeLog[], events: TaskSessionEvent[]): FeedItem
   ];
   return items
     .map((item, index) => ({ item, index }))
-    .sort((a, b) => a.item.at - b.item.at || rank(a.item) - rank(b.item) || a.index - b.index)
+    .sort(
+      (a, b) =>
+        a.item.at - b.item.at ||
+        rank(a.item) - rank(b.item) ||
+        a.index - b.index,
+    )
     .map(({ item }) => item);
 }
 

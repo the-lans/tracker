@@ -38,41 +38,64 @@ describe("TaskDescriptionCard", () => {
     );
   });
 
-  test("кнопка обновляет описание из Jira и подгружает HTML", async ({ api, toasts }) => {
-    api.respond("POST /jira/tasks/t1/description", makeTask({ description_html: "<p>x</p>" }));
+  test("кнопка обновляет описание из Jira и подгружает HTML", async ({
+    api,
+    toasts,
+  }) => {
+    api.respond(
+      "POST /jira/tasks/t1/description",
+      makeTask({ description_html: "<p>x</p>" }),
+    );
     const { user } = renderWithProviders(
       <TaskDescriptionCard
-        task={makeTask({ description: "d", jira_issue_url: "https://example.atlassian.net/browse/RR-1" })}
+        task={makeTask({
+          description: "d",
+          jira_issue_url: "https://example.atlassian.net/browse/RR-1",
+        })}
       />,
     );
 
     await user.click(screen.getByRole("button", { name: "Обновить из Jira" }));
 
-    await expect.poll(() => api.mutations()[0]?.path).toBe("/jira/tasks/t1/description");
-    await expect.poll(() => toasts.success).toHaveBeenCalledWith("Описание обновлено из Jira");
+    await expect
+      .poll(() => api.mutations()[0]?.path)
+      .toBe("/jira/tasks/t1/description");
+    await expect
+      .poll(() => toasts.success)
+      .toHaveBeenCalledWith("Описание обновлено из Jira");
   });
 
   test("ошибка обновления показывается", async ({ api, toasts }) => {
     api.respond("POST /jira/tasks/t1/description", {
-      error: { status: 409, message: "Описание задачи отличается от описания в Jira" },
+      error: {
+        status: 409,
+        message: "Описание задачи отличается от описания в Jira",
+      },
     });
     const { user } = renderWithProviders(
       <TaskDescriptionCard
-        task={makeTask({ description: "d", jira_issue_url: "https://example.atlassian.net/browse/RR-1" })}
+        task={makeTask({
+          description: "d",
+          jira_issue_url: "https://example.atlassian.net/browse/RR-1",
+        })}
       />,
     );
 
     await user.click(screen.getByRole("button", { name: "Обновить из Jira" }));
 
-    await expect.poll(() => toasts.error).toHaveBeenCalledWith(
-      "Описание задачи отличается от описания в Jira",
-    );
+    await expect
+      .poll(() => toasts.error)
+      .toHaveBeenCalledWith("Описание задачи отличается от описания в Jira");
   });
 
   test("без ссылки на Jira кнопки обновления нет", () => {
-    renderWithProviders(<TaskDescriptionCard task={makeTask({ description: "d" })} />);
+    renderWithProviders(
+      <TaskDescriptionCard task={makeTask({ description: "d" })} />,
+    );
 
-    expect(screen.queryByRole("button", { name: "Обновить из Jira" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Обновить из Jira" }),
+    ).not.toBeInTheDocument();
   });
 
   test("ссылка на задачу Jira остаётся", () => {

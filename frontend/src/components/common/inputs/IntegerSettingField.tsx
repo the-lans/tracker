@@ -47,7 +47,13 @@ export function IntegerSettingField({
           required
         />
       </div>
-      <div className={parsed.valid ? "text-small text-text-3" : "text-small text-danger-text"}>
+      <div
+        className={
+          parsed.valid
+            ? "text-small text-text-3"
+            : "text-small text-danger-text"
+        }
+      >
         {parsed.valid ? hint : invalidHint}
       </div>
     </>

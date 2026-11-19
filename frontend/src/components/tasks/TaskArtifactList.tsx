@@ -29,7 +29,11 @@ export function TaskArtifactList({
   emptyHint?: string;
 }) {
   return (
-    <QueryState isLoading={isLoading} isError={isError} errorLabel="Не удалось получить артефакты">
+    <QueryState
+      isLoading={isLoading}
+      isError={isError}
+      errorLabel="Не удалось получить артефакты"
+    >
       {artifacts?.length ? (
         <div className="flex flex-col">
           {artifacts.map((artifact) => (

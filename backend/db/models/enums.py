@@ -146,7 +146,9 @@ class LlmAccountStatus(StrEnum):
 
 
 class TaskSessionEventKind(StrEnum):
-    """Событие сессии задачи, которое показывает лента чата (раздел 15.2)."""
+    """
+    Событие сессии задачи, которое показывает лента чата (раздел 15.2).
+    """
 
     # Контекст сброшен: нода `clear_context` или ручная очистка в `failed`.
     CONTEXT_CLEARED = "context_cleared"

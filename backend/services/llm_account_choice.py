@@ -197,7 +197,9 @@ def _exhausted(account: LlmAccount, *, now: datetime) -> AccountLimit | None:
 
 
 def _week_at_threshold(account: LlmAccount, *, week_threshold_pct: int, now: datetime) -> bool:
-    """Недельный расход дошёл до порога; после сброса недели прежний расход не действует."""
+    """
+    Недельный расход дошёл до порога; после сброса недели прежний расход не действует.
+    """
     week = account.usage_week_pct
     return (
         week is not None

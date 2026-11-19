@@ -17,7 +17,10 @@ describe("LlmLimitStateBadge", () => {
     const until = new Date(2026, 10, 10, 15, 30).toISOString();
     render(
       <LlmLimitStateBadge
-        account={makeLlmAccount({ limit_state: LlmLimitState.AT_THRESHOLD, limit_state_until: until })}
+        account={makeLlmAccount({
+          limit_state: LlmLimitState.AT_THRESHOLD,
+          limit_state_until: until,
+        })}
       />,
     );
 
@@ -28,17 +31,25 @@ describe("LlmLimitStateBadge", () => {
     const until = new Date(2026, 10, 14, 9, 0).toISOString();
     render(
       <LlmLimitStateBadge
-        account={makeLlmAccount({ limit_state: LlmLimitState.AT_THRESHOLD, limit_state_until: until })}
+        account={makeLlmAccount({
+          limit_state: LlmLimitState.AT_THRESHOLD,
+          limit_state_until: until,
+        })}
       />,
     );
 
-    expect(screen.getByText(/^На пороге · до 14 нояб\.?, 09:00$/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/^На пороге · до 14 нояб\.?, 09:00$/),
+    ).toBeInTheDocument();
   });
 
   test("число задач добавляется к состоянию", () => {
     render(
       <LlmLimitStateBadge
-        account={makeLlmAccount({ limit_state: LlmLimitState.AT_THRESHOLD, active_tasks: 2 })}
+        account={makeLlmAccount({
+          limit_state: LlmLimitState.AT_THRESHOLD,
+          active_tasks: 2,
+        })}
       />,
     );
 
@@ -47,7 +58,9 @@ describe("LlmLimitStateBadge", () => {
 
   test("аккаунт вне выбора — бейджа нет", () => {
     const { container } = render(
-      <LlmLimitStateBadge account={makeLlmAccount({ limit_state: LlmLimitState.EXCLUDED })} />,
+      <LlmLimitStateBadge
+        account={makeLlmAccount({ limit_state: LlmLimitState.EXCLUDED })}
+      />,
     );
 
     expect(container).toBeEmptyDOMElement();

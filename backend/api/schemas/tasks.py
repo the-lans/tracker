@@ -201,7 +201,9 @@ class PipelineDependentsRequest(BaseModel):
 
 
 class TaskSessionEventResponse(BaseModel):
-    """Раздел 15.2: сброс контекста или начало новой сессии — реплика ленты чата."""
+    """
+    Раздел 15.2: сброс контекста или начало новой сессии — реплика ленты чата.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -1,4 +1,6 @@
-"""Запросы к `task_session_events` — события сессии для ленты чата (раздел 15.2)."""
+"""
+Запросы к `task_session_events` — события сессии для ленты чата (раздел 15.2).
+"""
 
 from __future__ import annotations
 

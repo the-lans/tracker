@@ -3,7 +3,11 @@ import { Square } from "lucide-react";
 import { toast } from "sonner";
 import { ButtonLabel } from "@/components/common/actions/ButtonLabel";
 import { ConfirmDialog } from "@/components/common/dialogs/ConfirmDialog";
-import { useManualQueue, useStopManualRequest, useStopTask } from "@/hooks/useTasks";
+import {
+  useManualQueue,
+  useStopManualRequest,
+  useStopTask,
+} from "@/hooks/useTasks";
 import { errorMessage, toastError } from "@/lib/errors";
 import { nextStoppableRequest, stopRequestLabel } from "@/lib/manualRequests";
 import { cn } from "@/lib/utils";
@@ -32,7 +36,9 @@ export function TaskStopButton({ taskId }: { taskId: string }) {
   const stopRequest = useStopManualRequest(taskId);
   const { data: queue } = useManualQueue(taskId);
   // Остановленный запрос остаётся в списке до очередного опроса — второй раз его не трогаем.
-  const request = nextStoppableRequest((queue ?? []).filter((item) => !stoppedIds.has(item.id)));
+  const request = nextStoppableRequest(
+    (queue ?? []).filter((item) => !stoppedIds.has(item.id)),
+  );
 
   useEffect(() => {
     if (!arming) return;
@@ -46,7 +52,8 @@ export function TaskStopButton({ taskId }: { taskId: string }) {
         setStoppedIds((ids) => new Set(ids).add(target));
         setArming(true);
       },
-      onError: (error) => toast.error(errorMessage(error, "Не удалось остановить запрос")),
+      onError: (error) =>
+        toast.error(errorMessage(error, "Не удалось остановить запрос")),
     });
   }
 
@@ -73,7 +80,9 @@ export function TaskStopButton({ taskId }: { taskId: string }) {
         aria-label={label}
         title={title}
         disabled={stopRequest.isPending || (!request && arming)}
-        onClick={() => (request ? handleStopRequest(request.id) : setConfirmOpen(true))}
+        onClick={() =>
+          request ? handleStopRequest(request.id) : setConfirmOpen(true)
+        }
       >
         <Square className="size-3.5" />
         <ButtonLabel>{label}</ButtonLabel>

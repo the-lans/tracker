@@ -165,7 +165,9 @@ async def list_task_session_events(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> list[TaskSessionEvent]:
-    """Раздел 15.2: сброс контекста и начало новой сессии — реплики ленты чата."""
+    """
+    Раздел 15.2: сброс контекста и начало новой сессии — реплики ленты чата.
+    """
     await get_task_or_404(db_session, task_id, current_user)
     return await list_session_events(db_session, task_id)
 

@@ -5,9 +5,19 @@ import type { Task } from "@/lib/types";
 export function TaskLinks({ task }: { task: Task }) {
   return (
     <>
-      {task.guide_url && <ExternalLinkField label="Гайд" href={task.guide_url} text="Открыть гайд" />}
+      {task.guide_url && (
+        <ExternalLinkField
+          label="Гайд"
+          href={task.guide_url}
+          text="Открыть гайд"
+        />
+      )}
       {task.jira_issue_url && (
-        <ExternalLinkField label="Задача в Jira" href={task.jira_issue_url} text="Открыть в Jira" />
+        <ExternalLinkField
+          label="Задача в Jira"
+          href={task.jira_issue_url}
+          text="Открыть в Jira"
+        />
       )}
     </>
   );

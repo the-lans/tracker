@@ -26,9 +26,9 @@ export function useNoteBelowButtons(
     const update = () => {
       const leftBox = leftEl.getBoundingClientRect();
       const buttonsBox = buttonsEl.getBoundingClientRect();
-      const needed = Array.from(leftEl.querySelectorAll<HTMLElement>(`[${FIT_ATTRIBUTE}]`)).map(
-        (element) => element.scrollWidth,
-      );
+      const needed = Array.from(
+        leftEl.querySelectorAll<HTMLElement>(`[${FIT_ATTRIBUTE}]`),
+      ).map((element) => element.scrollWidth);
       setBelow(
         noteBelowButtons({
           buttonsWrapped: buttonsBox.top >= leftBox.bottom - 1,

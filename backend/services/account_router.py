@@ -267,7 +267,9 @@ class TaskAccountRouter:
         return False
 
     async def _context_chars(self) -> int:
-        """Размер контекста сессии: промты, ответы и решения завершённых ходов, в символах."""
+        """
+        Размер контекста сессии: промты, ответы и решения завершённых ходов, в символах.
+        """
         task = self._task
         text_length = (
             sa.func.coalesce(sa.func.length(NodeLog.rendered_prompt), 0)

@@ -15,7 +15,10 @@ export function RefreshJiraDescriptionButton({ taskId }: { taskId: string }) {
       onClick={() =>
         refresh.mutate(undefined, {
           onSuccess: () => toast.success("Описание обновлено из Jira"),
-          onError: (error) => toast.error(errorMessage(error, "Не удалось обновить описание из Jira")),
+          onError: (error) =>
+            toast.error(
+              errorMessage(error, "Не удалось обновить описание из Jira"),
+            ),
         })
       }
     >

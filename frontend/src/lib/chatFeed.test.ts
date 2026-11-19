@@ -31,7 +31,10 @@ describe("mergeFeed", () => {
   test("при равном времени запись ноды раньше события", () => {
     const at = "2026-01-01T10:00:00Z";
 
-    const items = mergeFeed([makeNodeLog({ id: "clear", started_at: at })], [event("e", at)]);
+    const items = mergeFeed(
+      [makeNodeLog({ id: "clear", started_at: at })],
+      [event("e", at)],
+    );
 
     expect(order(items)).toEqual(["clear", "e"]);
   });
@@ -43,12 +46,9 @@ describe("mergeFeed", () => {
       makeNodeLog({ id: "first", started_at: "2026-01-01T10:00:00Z" }),
     ];
 
-    expect(order(mergeFeed(logs, [event("e", "2026-01-01T11:00:00Z")]))).toEqual([
-      "first",
-      "e",
-      "queued",
-      "later",
-    ]);
+    expect(
+      order(mergeFeed(logs, [event("e", "2026-01-01T11:00:00Z")])),
+    ).toEqual(["first", "e", "queued", "later"]);
   });
 
   test("без событий лента — записи как есть", () => {
@@ -59,10 +59,18 @@ describe("mergeFeed", () => {
 });
 
 describe("withDateSeparators", () => {
-  const local = (day: number, hours: number) => new Date(2026, 10, day, hours, 0).toISOString();
-  const kinds = (logs: ReturnType<typeof makeNodeLog>[], events: TaskSessionEvent[] = []) =>
+  const local = (day: number, hours: number) =>
+    new Date(2026, 10, day, hours, 0).toISOString();
+  const kinds = (
+    logs: ReturnType<typeof makeNodeLog>[],
+    events: TaskSessionEvent[] = [],
+  ) =>
     withDateSeparators(mergeFeed(logs, events)).map((entry) =>
-      entry.type === "date" ? "date" : entry.type === "log" ? entry.log.id : entry.event.id,
+      entry.type === "date"
+        ? "date"
+        : entry.type === "log"
+          ? entry.log.id
+          : entry.event.id,
     );
 
   test("дата стоит перед первой записью и при смене дня", () => {
@@ -78,7 +86,12 @@ describe("withDateSeparators", () => {
   test("событие сессии тоже может открыть новый день", () => {
     const logs = [makeNodeLog({ id: "a", started_at: local(10, 22) })];
 
-    expect(kinds(logs, [event("e", local(11, 1))])).toEqual(["date", "a", "date", "e"]);
+    expect(kinds(logs, [event("e", local(11, 1))])).toEqual([
+      "date",
+      "a",
+      "date",
+      "e",
+    ]);
   });
 
   test("запись без времени начала даты не добавляет и не прерывает день", () => {

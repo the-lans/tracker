@@ -236,7 +236,9 @@ async def save_description_html(
 
 
 def issue_key_of_url(url: str | None) -> str | None:
-    """Ключ задачи из сохранённой ссылки `…/browse/PROJ-123`; нет ссылки или ключа — None."""
+    """
+    Ключ задачи из сохранённой ссылки `…/browse/PROJ-123`; нет ссылки или ключа — None.
+    """
     match = _BROWSE_KEY_PATTERN.search(url or "")
     return match.group(1).upper() if match else None
 
