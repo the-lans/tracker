@@ -9,11 +9,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ErrorState } from "@/components/common/feedback/ErrorState";
 import { ArtifactPreviewBody } from "@/components/tasks/ArtifactPreviewBody";
 import { useObjectUrl } from "@/hooks/useBlobPreview";
 import { useArtifactFile } from "@/hooks/useTaskArtifacts";
 import { downloadArtifact } from "@/lib/artifactDownload";
-import { previewMimeOf, type PreviewKind } from "@/lib/artifactPreview";
+import {
+  canOpenInNewTab,
+  previewMimeOf,
+  previewSizeLimit,
+  type PreviewKind,
+} from "@/lib/artifactPreview";
 import { errorMessage } from "@/lib/errors";
 import type { TaskArtifact } from "@/lib/types";
 import { formatDateTime, formatFileSize } from "@/lib/utils";
@@ -36,12 +42,23 @@ export function ArtifactPreviewDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  // Файл читается в память целиком: слишком большой не загружается.
+  const sizeLimit = previewSizeLimit(kind);
+  const tooLarge = artifact.size > sizeLimit;
   const {
     data: blob,
     isLoading,
     isError,
-  } = useArtifactFile(taskId, artifact.path, artifact.modified_at, open);
-  const tabUrl = useObjectUrl(blob, previewMimeOf(artifact.path));
+  } = useArtifactFile(
+    taskId,
+    artifact.path,
+    artifact.modified_at,
+    open && !tooLarge,
+  );
+  const tabUrl = useObjectUrl(
+    canOpenInNewTab(artifact.path) ? blob : undefined,
+    previewMimeOf(artifact.path),
+  );
 
   function handleDownload() {
     downloadArtifact(taskId, artifact.path).catch((error: unknown) =>
@@ -63,13 +80,19 @@ export function ArtifactPreviewDialog({
         </DialogHeader>
         {/* Название и кнопки неподвижны, прокручивается только содержимое файла. */}
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <ArtifactPreviewBody
-            kind={kind}
-            path={artifact.path}
-            blob={blob}
-            isLoading={isLoading}
-            isError={isError}
-          />
+          {tooLarge ? (
+            <ErrorState
+              label={`Файл больше ${formatFileSize(sizeLimit)} — просмотр недоступен, скачайте его.`}
+            />
+          ) : (
+            <ArtifactPreviewBody
+              kind={kind}
+              path={artifact.path}
+              blob={blob}
+              isLoading={isLoading}
+              isError={isError}
+            />
+          )}
         </div>
         <DialogFooter className="shrink-0 flex-wrap max-sm:flex-col max-sm:items-stretch">
           <Button variant="secondary" size="sm" onClick={handleDownload}>

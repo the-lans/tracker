@@ -150,4 +150,41 @@ describe("ArtifactPreviewDialog", () => {
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  test("SVG: просмотр есть, а в новой вкладке он не открывается (скрипт выполнился бы в origin приложения)", async () => {
+    serveFile(
+      "<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>",
+      "image/svg+xml",
+    );
+    renderDialog(ARTIFACT("logo.svg"), "image");
+
+    expect(
+      await screen.findByRole("img", { name: "logo.svg" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Скачать/ })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /Открыть в новой вкладке/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  test.for([
+    ["big.log", "text", 21 * 1024 * 1024],
+    ["huge.png", "image", 26 * 1024 * 1024],
+    ["huge.pdf", "pdf", 26 * 1024 * 1024],
+  ] as const)(
+    "%s больше предела: не загружается, предлагается скачать",
+    async ([path, kind, size]) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      renderDialog(ARTIFACT(path, size), kind);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "просмотр недоступен",
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("button", { name: /Скачать/ }),
+      ).toBeInTheDocument();
+    },
+  );
 });

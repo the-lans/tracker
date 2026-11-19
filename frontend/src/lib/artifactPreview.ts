@@ -4,6 +4,10 @@ export type PreviewKind = "image" | "markdown" | "text" | "pdf";
 /** Сколько байт текстового файла показывается; остальное — скачать целиком. */
 export const TEXT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 
+/** Файл читается в память целиком, поэтому у просмотра есть предел размера. */
+export const TEXT_PREVIEW_DOWNLOAD_MAX_BYTES = 20 * 1024 * 1024;
+export const MEDIA_PREVIEW_MAX_BYTES = 25 * 1024 * 1024;
+
 const IMAGE_MIME: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -79,4 +83,20 @@ export function previewMimeOf(path: string): string {
     IMAGE_MIME[extension] ??
     (extension === "pdf" ? "application/pdf" : "text/plain;charset=utf-8")
   );
+}
+
+/**
+ * Можно ли открыть файл в новой вкладке браузера. SVG — нет: адрес `blob:` наследует
+ * origin приложения, и скрипт внутри SVG выполнился бы с доступом к сессии.
+ * Остальное — растровые картинки, PDF и текст (в том числе HTML — как `text/plain`).
+ */
+export function canOpenInNewTab(path: string): boolean {
+  return extensionOf(path) !== "svg";
+}
+
+/** Предел размера файла для просмотра в окне; больше — только скачать (файл читается целиком). */
+export function previewSizeLimit(kind: PreviewKind): number {
+  return kind === "image" || kind === "pdf"
+    ? MEDIA_PREVIEW_MAX_BYTES
+    : TEXT_PREVIEW_DOWNLOAD_MAX_BYTES;
 }

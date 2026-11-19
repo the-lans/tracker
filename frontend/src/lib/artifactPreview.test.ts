@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { previewKindOf, previewMimeOf } from "@/lib/artifactPreview";
+import {
+  canOpenInNewTab,
+  previewKindOf,
+  previewMimeOf,
+  previewSizeLimit,
+} from "@/lib/artifactPreview";
 
 describe("previewKindOf", () => {
   test.for([
@@ -32,5 +37,26 @@ describe("previewMimeOf", () => {
     ["a.log", "text/plain;charset=utf-8"],
   ] as const)("%s → %s", ([path, mime]) => {
     expect(previewMimeOf(path)).toBe(mime);
+  });
+});
+
+describe("canOpenInNewTab", () => {
+  test.for([
+    ["logo.svg", false],
+    ["LOGO.SVG", false],
+    ["a.png", true],
+    ["a.pdf", true],
+    ["a.html", true],
+    ["a.md", true],
+  ] as const)("%s → %s", ([path, allowed]) => {
+    expect(canOpenInNewTab(path)).toBe(allowed);
+  });
+});
+
+describe("previewSizeLimit", () => {
+  test("у картинок и PDF предел выше, чем у текста", () => {
+    expect(previewSizeLimit("image")).toBe(previewSizeLimit("pdf"));
+    expect(previewSizeLimit("image")).toBeGreaterThan(previewSizeLimit("text"));
+    expect(previewSizeLimit("markdown")).toBe(previewSizeLimit("text"));
   });
 });

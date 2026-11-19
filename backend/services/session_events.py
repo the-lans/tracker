@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from db.models.enums import TaskSessionEventKind
 from db.models.session_events import TaskSessionEvent
+from db.queries.session_events import get_last_session_event, has_node_log_since
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +35,17 @@ def add_session_event(
 
 
 async def record_new_session(db_session: AsyncSession, *, task_id: uuid.UUID) -> None:
-    """Воркер открывает сессию задачи с чистого листа — до первого хода."""
+    """
+    Воркер открывает сессию задачи с чистого листа — до первого хода. Повторный
+    старт воркера (сбой или повторная доставка до записи `session_id`) нового
+    события не добавляет: с прошлого такого события в задаче не было ни одного хода.
+    """
+    last = await get_last_session_event(db_session, task_id)
+    if (
+        last is not None
+        and last.kind is TaskSessionEventKind.SESSION_STARTED
+        and not await has_node_log_since(db_session, task_id, last.created_at)
+    ):
+        return
     add_session_event(db_session, task_id=task_id, kind=TaskSessionEventKind.SESSION_STARTED)
     await db_session.commit()
