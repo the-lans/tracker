@@ -42,6 +42,14 @@ class TurnProgress:
     model_responded: bool = False
     tool_call_count: int = 0
     open_tools: dict[str, str] = field(default_factory=dict)
+    # Последнее событие хода (`time.monotonic`) и сколько к этому моменту ход ждал
+    # пользователя: таймаут ноды отсчитывается от последней активности (раздел 7.4).
+    last_activity_at: float | None = None
+    waited_at_activity: float = 0.0
+
+    def mark_activity(self, now: float, waited_seconds: float) -> None:
+        self.last_activity_at = now
+        self.waited_at_activity = waited_seconds
 
     def tool_started(self, tool_use_id: str, name: str) -> None:
         self.tool_call_count += 1

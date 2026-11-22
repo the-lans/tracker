@@ -4,7 +4,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from claude_agent_sdk import AssistantMessage, Message, TextBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    Message,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.claude_agent import ClaudeCodeSession, UserWaitClock
@@ -530,6 +537,97 @@ class TestTimeoutExcludesUserWait:
         assert outcome.success is success
 
 
+class TestTimeoutCountsFromLastActivity:
+    """Раздел 7.4: таймаут ноды — по неактивности, а не от начала хода."""
+
+    @staticmethod
+    def _chatty_turn(messages: int) -> list[Message]:
+        chunks: list[Message] = [
+            AssistantMessage(content=[TextBlock(text=f"часть {index}")], model="claude")
+            for index in range(messages)
+        ]
+        return [*chunks, make_result_message()]
+
+    async def test_long_turn_with_steady_activity_is_not_interrupted(self) -> None:
+        # Ход идёт ~1,2 с, но события приходят каждые 0,2 с — таймаут 0,5 с не срабатывает.
+        fake = FakeClaudeAgentClient(messages_per_query=[self._chatty_turn(5)])
+        fake.message_delay_seconds = 0.2
+        session = ClaudeCodeSession(fake)
+
+        outcome = await execute_llm_node_with_timeout(session, "hi", timeout_seconds=0.5)
+
+        assert outcome.success is True
+        assert fake.interrupted is False
+
+    async def test_silence_longer_than_timeout_after_activity_interrupts(self) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[self._chatty_turn(3)])
+        fake.message_delays = {0: 0.05, 1: 0.05, 2: 0.05, 3: 1.0}
+        session = ClaudeCodeSession(fake)
+
+        outcome = await execute_llm_node_with_timeout(session, "hi", timeout_seconds=0.4)
+
+        assert outcome.success is False
+        assert outcome.error_message is not None
+        assert outcome.error_message.startswith("Превышен таймаут выполнения")
+        assert fake.interrupted is True
+        assert outcome.llm_output_text is not None
+        assert "часть 2" in outcome.llm_output_text
+
+    async def test_tool_activity_resets_the_timer(self) -> None:
+        tool_turn: list[Message] = []
+        for index in range(4):
+            tool_turn.append(
+                AssistantMessage(
+                    content=[ToolUseBlock(id=f"t{index}", name="Read", input={})],
+                    model="claude",
+                ),
+            )
+            tool_turn.append(
+                UserMessage(
+                    content=[ToolResultBlock(tool_use_id=f"t{index}", content="ok")],
+                ),
+            )
+        fake = FakeClaudeAgentClient(messages_per_query=[[*tool_turn, make_result_message()]])
+        fake.message_delay_seconds = 0.15
+        session = ClaudeCodeSession(fake)
+
+        outcome = await execute_llm_node_with_timeout(session, "hi", timeout_seconds=0.4)
+
+        assert outcome.success is True
+        assert session.turn_progress.tool_call_count == 4
+
+    async def test_user_wait_after_activity_is_still_excluded(self) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[self._chatty_turn(1)])
+        fake.message_delays = {0: 0.05, 1: 0.7}
+        session = ClaudeCodeSession(fake)
+
+        async def user_decides() -> None:
+            await asyncio.sleep(0.1)
+            session.user_wait_clock.begin()
+            await asyncio.sleep(0.5)
+            session.user_wait_clock.end()
+
+        waiting = asyncio.ensure_future(user_decides())
+        outcome = await execute_llm_node_with_timeout(session, "hi", timeout_seconds=0.4)
+        await waiting
+
+        assert outcome.success is True
+
+    async def test_activity_of_a_previous_turn_does_not_extend_the_next_one(self) -> None:
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()], [make_result_message()]],
+        )
+        session = ClaudeCodeSession(fake)
+        await execute_llm_node_with_timeout(session, "первый", timeout_seconds=5)
+        await asyncio.sleep(0.3)
+        fake.message_delay_seconds = 1.0
+
+        outcome = await execute_llm_node_with_timeout(session, "второй", timeout_seconds=0.3)
+
+        assert outcome.success is False
+        assert outcome.error_message == "Превышен таймаут выполнения (ответ модели не начался)"
+
+
 class TestUserWaitPolling:
     """Раздел 7.3: пока ход ждёт решения, срок не идёт — и цикл не крутится вхолостую."""
 
@@ -569,10 +667,11 @@ class TestPartialReply:
                 ],
             ],
         )
-        fake.message_delay_seconds = 0.5
+        # Часть ответа пришла сразу, затем модель замолчала дольше таймаута.
+        fake.message_delays = {0: 0.01, 1: 0.8}
         session = ClaudeCodeSession(fake)
 
-        outcome = await execute_llm_node_with_timeout(session, "hi", timeout_seconds=0.75)
+        outcome = await execute_llm_node_with_timeout(session, "hi", timeout_seconds=0.4)
 
         assert outcome.success is False
         assert outcome.llm_output_text == "часть ответа"

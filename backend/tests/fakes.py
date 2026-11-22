@@ -114,6 +114,8 @@ class FakeClaudeAgentClient:
         self.max_observed_concurrency = 0
         self.permission_modes: list[str] = []
         self.message_delay_seconds = 0.01
+        # Пауза перед сообщением хода по его номеру (с нуля); остальные — `message_delay_seconds`.
+        self.message_delays: dict[int, float] = {}
         self._stream: list[Message] = []
 
     async def connect(self) -> None:
@@ -150,8 +152,10 @@ class FakeClaudeAgentClient:
         self.max_observed_concurrency = max(self.max_observed_concurrency, self.concurrent_calls)
         try:
             mid_turn_failure = self._failures_mid_turn.get(len(self.queries) - 1)
+            index = 0
             while self._stream:
-                await asyncio.sleep(self.message_delay_seconds)
+                await asyncio.sleep(self.message_delays.get(index, self.message_delay_seconds))
+                index += 1
                 if mid_turn_failure is not None and isinstance(self._stream[0], ResultMessage):
                     raise mid_turn_failure
                 message = self._stream.pop(0)

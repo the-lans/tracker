@@ -32,7 +32,7 @@ type NumericField =
   | "default_retry_base_delay_seconds";
 
 const NUMERIC_FIELDS: Array<{ field: NumericField; label: string }> = [
-  { field: "default_timeout_seconds", label: "Таймаут ноды, сек." },
+  { field: "default_timeout_seconds", label: "Таймаут ноды без активности, сек." },
   { field: "default_max_retries", label: "Максимум попыток (retry)" },
   {
     field: "default_retry_base_delay_seconds",
@@ -182,7 +182,7 @@ export function SystemSettingsPanel() {
       </SectionTitle>
       <Card className="text-body text-text-2">
         <div className="mb-3 text-small text-text-3">
-          Таймаут действует для всех запросов и нод, повторы — только для нод пайплайна. Изменения применяются со следующего запуска.
+          Таймаут действует для всех запросов и нод, повторы — только для нод пайплайна. Для обращения к модели срок идёт от последней активности хода (ответ, вызов или результат инструмента), для скрипта — от запуска. Изменения применяются со следующего запуска.
         </div>
         {isLoading && <LoadingState />}
         {settings && <SettingsForm initial={settings} />}

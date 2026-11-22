@@ -571,6 +571,8 @@ class ClaudeCodeSession:
                 tool_log_limit_reported = False
                 tool_finished_log_count = 0
                 async for message in self._client.receive_response():
+                    # Раздел 7.4: любое событие хода — активность, от неё идёт таймаут ноды.
+                    progress.mark_activity(time.monotonic(), self.user_wait_clock.waited_seconds())
                     if first_event_at is None:
                         first_event_at = time.monotonic()
                     if isinstance(message, AssistantMessage | StreamEvent | ResultMessage):
