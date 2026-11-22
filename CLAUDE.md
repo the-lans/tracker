@@ -331,7 +331,9 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               lib/agentMarkdown.ts — разбор ответа агента (нумерация списков
               продолжается через блоки кода), lib/textPreview.ts — превью
               свёрнутого вывода без обрезки внутри блока кода, lib/jiraKey.ts —
-              ключ Jira из вставленной ссылки, lib/taskNodes.ts — какие ноды
+              ключ Jira из вставленной ссылки, lib/manualQueue.ts +
+              tasks/QueueInjectBar — индикатор «В очереди» и кнопки влития,
+              lib/taskNodes.ts — какие ноды
               задачи можно менять (зеркало services/task_nodes.py),
               layout/SidebarResizer + lib/sidebarWidth.ts — ширина бокового
               меню и режим «только значки», pipelines/RenamePipelineButton —
