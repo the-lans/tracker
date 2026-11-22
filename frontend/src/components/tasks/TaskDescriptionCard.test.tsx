@@ -1,5 +1,5 @@
 import { screen } from "@testing-library/react";
-import { describe, expect } from "vitest";
+import { afterEach, describe, expect } from "vitest";
 import { TaskDescriptionCard } from "@/components/tasks/TaskDescriptionCard";
 import { makeTask } from "@/test/factories";
 import { test } from "@/test/fixtures";
@@ -111,5 +111,34 @@ describe("TaskDescriptionCard", () => {
     expect(
       screen.getByRole("link", { name: "Открыть в Jira" }),
     ).toBeInTheDocument();
+  });
+
+  describe("длинное описание", () => {
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    afterEach(() => {
+      if (original) Object.defineProperty(HTMLElement.prototype, "scrollHeight", original);
+    });
+    const setHeight = (height: number) =>
+      Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => height });
+
+    test("обрезается, «Открыть полностью» открывает отдельное окно", async ({ api }) => {
+      api.respond("GET /tasks/t1/artifacts", []);
+      setHeight(900);
+      const { user } = renderWithProviders(
+        <TaskDescriptionCard task={makeTask({ description: "Очень длинное описание" })} />,
+      );
+
+      expect(screen.getByTestId("clamped-fade")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Открыть полностью" }));
+
+      expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    });
+
+    test("короткое описание — без кнопки", () => {
+      setHeight(80);
+      renderWithProviders(<TaskDescriptionCard task={makeTask({ description: "Коротко" })} />);
+
+      expect(screen.queryByRole("button", { name: "Открыть полностью" })).not.toBeInTheDocument();
+    });
   });
 });
