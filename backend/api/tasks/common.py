@@ -21,7 +21,11 @@ from tasks.session_worker import run_task_session
 TASKS_PREFIX = "/tasks"
 TASKS_TAGS: list[str | Enum] = ["tasks"]
 
-ACTIVE_REQUEST_STATUSES = (ManualRequestStatus.QUEUED, ManualRequestStatus.PROCESSING)
+ACTIVE_REQUEST_STATUSES = (
+    ManualRequestStatus.QUEUED,
+    ManualRequestStatus.PROCESSING,
+    ManualRequestStatus.INJECTED,
+)
 
 
 async def get_task_or_404(db_session: AsyncSession, task_id: uuid.UUID, user: User) -> Task:

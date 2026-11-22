@@ -28,7 +28,9 @@ from typing import TYPE_CHECKING, Protocol
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ClaudeSDKClient,
     ClaudeSDKError,
+    CLIConnectionError,
     RateLimitEvent,
     RateLimitInfo,
     ResultMessage,
@@ -80,6 +82,15 @@ COMPACT_COMMAND = "/compact"
 # Сжатие не входит в таймаут ноды, но и не длится бесконечно: зависшее
 # прерывается, и ход идёт на новом аккаунте без него.
 COMPACT_TIMEOUT_SECONDS = 600.0
+# Управляющий запрос CLI: снять ещё не взятое сообщение с его очереди (раздел 7.3).
+CANCEL_ASYNC_MESSAGE_SUBTYPE = "cancel_async_message"
+# Меньше ожидания ответа API (`prompt_injection.REPLY_WAIT_SECONDS`): иначе отмена,
+# которую воркер ещё выполняет, выглядела бы для пользователя ошибкой.
+_CANCEL_INJECTION_TIMEOUT_SECONDS = 4.0
+# Влитое сообщение, не взятое до конца хода и уже начатое CLI отдельным ходом:
+# сколько ждать его начала и каждого следующего события при вычитке (раздел 7.3).
+_FOLLOWUP_FIRST_EVENT_SECONDS = 3.0
+_FOLLOWUP_EVENT_SECONDS = 120.0
 
 # Получатель фрагментов ответа по мере генерации (раздел 15.2).
 TextDeltaHandler = Callable[[str], Awaitable[None]]
@@ -99,6 +110,27 @@ class ClaudeAgentClientProtocol(Protocol):
     def receive_response(self) -> AsyncIterator[Message]: ...
     def interrupt(self) -> Awaitable[None]: ...
     def set_permission_mode(self, mode: SdkPermissionMode) -> Awaitable[None]: ...
+    def inject_message(self, text: str, message_id: str) -> Awaitable[None]: ...
+    def cancel_injected_message(self, message_id: str) -> Awaitable[bool]: ...
+
+
+class InjectionObserver(Protocol):
+    """
+    Судьба сообщения, влитого в идущий ход (раздел 7.3): агент его взял
+    (`taken`) либо оно возвращено до того, как агент его увидел (`returned`).
+    """
+
+    async def taken(self, message_id: str) -> None: ...
+
+    async def returned(self, message_id: str) -> None: ...
+
+
+class InjectionRefusedError(RuntimeError):
+    """Влить сообщение сейчас нельзя; ``reason`` — машинная причина для API."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 class TurnRouter(Protocol):
@@ -153,6 +185,49 @@ class OfflineAgentClient:
 
     async def set_permission_mode(self, mode: SdkPermissionMode) -> None:  # noqa: ARG002
         return None
+
+    async def inject_message(self, text: str, message_id: str) -> None:  # noqa: ARG002
+        message = "У задачи нет LLM-аккаунта — влить сообщение некуда"
+        raise LlmAccountMissingError(message)
+
+    async def cancel_injected_message(self, message_id: str) -> bool:  # noqa: ARG002
+        return False
+
+
+class TrackerSdkClient(ClaudeSDKClient):
+    """
+    `ClaudeSDKClient` с влитием сообщения посреди хода и его отменой (раздел 7.3).
+
+    Сообщение с `uuid`, отправленное во время хода, CLI ставит в свою очередь и
+    показывает модели на ближайшей границе инструмента — в том же ходе, с одним
+    общим `ResultMessage`. Пока агент его не взял, CLI умеет его забрать:
+    управляющий запрос `cancel_async_message` (в обёртке SDK его нет, поэтому
+    вызывается через внутренний канал управляющих запросов; наличие проверяет
+    `tests/test_claude_agent.py`).
+    """
+
+    async def inject_message(self, text: str, message_id: str) -> None:
+        async def one_message() -> AsyncIterator[dict[str, object]]:
+            yield {
+                "type": "user",
+                "message": {"role": "user", "content": text},
+                "parent_tool_use_id": None,
+                "uuid": message_id,
+            }
+
+        await self.query(one_message())
+
+    async def cancel_injected_message(self, message_id: str) -> bool:
+        """`True` — сообщение снято с очереди CLI; `False` — агент его уже взял."""
+        control = getattr(self, "_query", None)
+        if control is None:
+            message = "Not connected. Call connect() first."
+            raise CLIConnectionError(message)
+        response = await control._send_control_request(  # noqa: SLF001
+            {"subtype": CANCEL_ASYNC_MESSAGE_SUBTYPE, "message_uuid": message_id},
+            timeout=_CANCEL_INJECTION_TIMEOUT_SECONDS,
+        )
+        return bool(response.get("cancelled"))
 
 
 def build_claude_agent_options(
@@ -370,12 +445,19 @@ class ClaudeCodeSession:
         on_abort: AbortHandler | None = None,
         on_rate_limit: RateLimitHandler | None = None,
         router: TurnRouter | None = None,
+        injection_observer: InjectionObserver | None = None,
     ) -> None:
         self._client = client
         self._on_text_delta = on_text_delta
         self._on_abort = on_abort
         self._on_rate_limit = on_rate_limit
         self._router = router
+        self._injection_observer = injection_observer
+        # Влитые в идущий ход сообщения: `message_id` → агент уже взял (раздел 7.3).
+        self._injections: dict[str, bool] = {}
+        # Ход модели идёт и принимает влитые сообщения: открыт обычный ход
+        # (не сжатие контекста), результат ещё не прочитан.
+        self._injectable = False
         # Маршрут последнего хода — и прерванного (таймаут, остановка): им ход
         # выполнялся, он попадает в `node_logs` (раздел 19.7).
         self.turn_route: TurnRoute | None = None
@@ -502,6 +584,9 @@ class ClaudeCodeSession:
 
     async def _interrupt_open_turn(self, *, drain_timeout_seconds: float) -> None:
         """`interrupt()` и вычитка хвоста прерванного хода — под мьютексом вызывающего."""
+        self._injectable = False
+        # Не взятые влитые сообщения CLI иначе выполнил бы следующим ходом (раздел 7.3).
+        await self._return_all_injections()
         await self._client.interrupt()
 
         async def drain() -> None:
@@ -514,6 +599,113 @@ class ClaudeCodeSession:
         except TimeoutError:
             logger.warning("session_abort_drain_timed_out")
         self._turn_open = False
+
+    def injection_refusal(self) -> str | None:
+        """
+        Почему сейчас нельзя влить сообщение в ход (раздел 7.3); `None` — можно.
+        Нет хода модели — `no_turn`, ход ждёт решения пользователя — `awaiting_decision`.
+        """
+        if not self._injectable or not self._turn_open:
+            return "no_turn"
+        if self.user_wait_clock.is_waiting():
+            return "awaiting_decision"
+        return None
+
+    async def inject_prompt(self, text: str, message_id: str) -> None:
+        """
+        Вливает сообщение в идущий ход (раздел 7.3): агент увидит его на ближайшей
+        границе инструмента, ответ войдёт в вывод текущего хода. Не берёт мьютекс
+        сессии — ход держит его до конца; `InjectionRefusedError`, если хода нет.
+        """
+        reason = self.injection_refusal()
+        if reason is not None:
+            raise InjectionRefusedError(reason)
+        self._injections[message_id] = False
+        try:
+            await self._client.inject_message(text, message_id)
+        except BaseException:
+            self._injections.pop(message_id, None)
+            raise
+        logger.info("session_message_injected", message_id=message_id)
+
+    async def cancel_injection(self, message_id: str) -> bool:
+        """
+        Возвращает влитое сообщение, пока агент его не взял (раздел 7.3); `False`,
+        если поздно (взято) или такого сообщения нет.
+        """
+        if self._injections.get(message_id, True):
+            return False
+        cancelled = await self._client.cancel_injected_message(message_id)
+        if cancelled:
+            self._injections.pop(message_id, None)
+            logger.info("session_injection_cancelled", message_id=message_id)
+        return cancelled
+
+    async def _note_taken_injection(self, message: Message) -> None:
+        """Эхо влитого сообщения (`replay-user-messages`): агент его взял."""
+        if not isinstance(message, UserMessage) or message.uuid is None:
+            return
+        if self._injections.get(message.uuid) is False:
+            self._injections[message.uuid] = True
+            logger.info("session_injection_taken", message_id=message.uuid)
+            if self._injection_observer is not None:
+                await self._injection_observer.taken(message.uuid)
+
+    async def _settle_injections(self) -> None:
+        """
+        Конец хода: влитые, но не взятые сообщения снимаются с очереди CLI и
+        возвращаются в очередь трекера. Если CLI уже начал сообщение отдельным
+        ходом, его результат вычитывается — иначе он достался бы следующему запросу.
+        """
+        for message_id, taken in list(self._injections.items()):
+            if taken:
+                self._injections.pop(message_id, None)
+                continue
+            try:
+                cancelled = await self._client.cancel_injected_message(message_id)
+            except Exception as error:  # noqa: BLE001 — ход уже завершён успешно: сбой отмены его не портит
+                # Сообщение не доказано взятым — лучше выполнить его ещё раз, чем потерять.
+                logger.warning(
+                    "session_injection_settle_failed",
+                    message_id=message_id,
+                    error_type=type(error).__name__,
+                )
+                cancelled = True
+            self._injections.pop(message_id, None)
+            if cancelled:
+                if self._injection_observer is not None:
+                    await self._injection_observer.returned(message_id)
+                continue
+            if self._injection_observer is not None:
+                await self._injection_observer.taken(message_id)
+            await self._drain_followup_turn()
+
+    async def _drain_followup_turn(self) -> None:
+        stream = self._client.receive_response().__aiter__()
+        timeout = _FOLLOWUP_FIRST_EVENT_SECONDS
+        try:
+            while True:
+                message = await asyncio.wait_for(stream.__anext__(), timeout=timeout)
+                timeout = _FOLLOWUP_EVENT_SECONDS
+                if isinstance(message, ResultMessage):
+                    return
+        except (TimeoutError, StopAsyncIteration):
+            return
+
+    async def _return_all_injections(self) -> None:
+        """Прерывание хода или падение CLI: не взятые сообщения возвращаются в очередь."""
+        pending = [message_id for message_id, taken in self._injections.items() if not taken]
+        self._injections.clear()
+        for message_id in pending:
+            try:
+                cancelled = await self._client.cancel_injected_message(message_id)
+            except Exception:  # noqa: BLE001 — процесс CLI мог уже упасть, сообщение всё равно не дойдёт
+                cancelled = True
+            if self._injection_observer is not None:
+                if cancelled:
+                    await self._injection_observer.returned(message_id)
+                else:
+                    await self._injection_observer.taken(message_id)
 
     async def set_permission_mode(self, mode: SdkPermissionMode) -> None:
         """Раздел 9.1/9.4: переключение режима разрешений посреди сессии
@@ -559,6 +751,7 @@ class ClaudeCodeSession:
             tool_durations_ms: list[int] = []
             tool_error_count = 0
             self._turn_open = True
+            self._injectable = True
             try:
                 self._turn_text_parts = []
                 self._turn_pending_stream = []
@@ -571,6 +764,9 @@ class ClaudeCodeSession:
                 tool_log_limit_reported = False
                 tool_finished_log_count = 0
                 async for message in self._client.receive_response():
+                    # Раздел 7.4: любое событие хода — активность, от неё идёт таймаут ноды.
+                    progress.mark_activity(time.monotonic(), self.user_wait_clock.waited_seconds())
+                    await self._note_taken_injection(message)
                     if first_event_at is None:
                         first_event_at = time.monotonic()
                     if isinstance(message, AssistantMessage | StreamEvent | ResultMessage):
@@ -618,7 +814,7 @@ class ClaudeCodeSession:
                         if own_blocks:
                             # Блок завершён и теперь целиком в `text_parts`.
                             self._turn_pending_stream = []
-                    if isinstance(message, UserMessage):
+                    if isinstance(message, UserMessage) and isinstance(message.content, list):
                         for result_block in message.content:
                             if isinstance(result_block, ToolResultBlock):
                                 tool_name = progress.tool_finished(result_block.tool_use_id)
@@ -652,6 +848,8 @@ class ClaudeCodeSession:
                 # Отмена корутины (остановка, таймаут) флаг не трогает — после
                 # неё хвост вычитывает `abort_turn`.
                 self._turn_open = False
+                self._injectable = False
+                await self._return_all_injections()
                 logger.info(
                     "session_query_finished",
                     status="error",
@@ -669,6 +867,7 @@ class ClaudeCodeSession:
                 )
                 raise
             except asyncio.CancelledError:
+                self._injectable = False
                 logger.info(
                     "session_query_finished",
                     status="cancelled",
@@ -685,7 +884,11 @@ class ClaudeCodeSession:
                     tool_duration_total_ms=sum(tool_durations_ms),
                 )
                 raise
-            self._turn_open = False
+            self._injectable = False
+            try:
+                await self._settle_injections()
+            finally:
+                self._turn_open = False
             self._turn_text_parts = []
             self._turn_pending_stream = []
             if result is None:

@@ -62,6 +62,31 @@ describe("JiraImportField", () => {
     });
   });
 
+  describe("вставленная ссылка", () => {
+    test("заменяется ключом, и запрос уходит по ключу", async ({ api }) => {
+      api.respond("GET /jira/issues/RR-20274", { ...draft, code: "RR-20274" });
+      const { user, onImported } = renderField(api);
+      const field = await screen.findByLabelText("Ключ задачи Jira");
+
+      await user.click(field);
+      await user.paste("https://example.atlassian.net/browse/RR-20274");
+
+      expect(field).toHaveValue("RR-20274");
+      await user.click(fillButton());
+      await expect.poll(() => onImported.mock.calls.length).toBe(1);
+      expect(api.requests.map((request) => request.path)).toContain("/jira/issues/RR-20274");
+    });
+
+    test("ключ, набранный по буквам, не меняется", async ({ api }) => {
+      const { user } = renderField(api);
+      const field = await screen.findByLabelText("Ключ задачи Jira");
+
+      await user.type(field, "rr-20274");
+
+      expect(field).toHaveValue("rr-20274");
+    });
+  });
+
   describe("запрос задачи", () => {
     test.for([
       { key: "  RR-12370 ", path: "/jira/issues/RR-12370" },

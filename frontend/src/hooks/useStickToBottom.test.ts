@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
-import { NEAR_BOTTOM_PX, useStickToBottom } from "@/hooks/useStickToBottom";
+import { JUMP_BUTTON_PX, NEAR_BOTTOM_PX, useStickToBottom } from "@/hooks/useStickToBottom";
 
 const SCROLL_HEIGHT = 2000;
 const CLIENT_HEIGHT = 600;
@@ -38,6 +38,9 @@ function setup() {
     },
     get hasUnseen() {
       return view.result.current.hasUnseen;
+    },
+    get awayFromBottom() {
+      return view.result.current.awayFromBottom;
     },
     scrollToBottom() {
       act(() => view.result.current.scrollToBottom());
@@ -131,6 +134,55 @@ describe("useStickToBottom", () => {
       expect(feed.scrollTo).toHaveBeenCalledWith({ top: SCROLL_HEIGHT });
       expect(feed.scrollTo).toHaveBeenCalledTimes(2);
       expect(feed.hasUnseen).toBe(false);
+    });
+  });
+
+  describe("кнопка «вниз»", () => {
+    test("у конца и в пределах порога её нет", () => {
+      const feed = setup();
+
+      act(() => feed.stopAt(0));
+      expect(feed.awayFromBottom).toBe(false);
+      act(() => feed.stopAt(JUMP_BUTTON_PX));
+      expect(feed.awayFromBottom).toBe(false);
+    });
+
+    test("пролистал заметно вверх — кнопка есть и без нового содержимого", () => {
+      const feed = setup();
+
+      act(() => feed.stopAt(JUMP_BUTTON_PX + 1));
+
+      expect(feed.awayFromBottom).toBe(true);
+      expect(feed.hasUnseen).toBe(false);
+    });
+
+    test("вернулся к концу вручную — кнопка уходит", () => {
+      const feed = setup();
+      act(() => feed.stopAt(800));
+
+      act(() => feed.stopAt(30));
+
+      expect(feed.awayFromBottom).toBe(false);
+    });
+
+    test("«вниз» прокручивает к концу и убирает кнопку", () => {
+      const feed = setup();
+      act(() => feed.stopAt(800));
+
+      feed.scrollToBottom();
+
+      expect(feed.scrollTo).toHaveBeenCalledWith({ top: SCROLL_HEIGHT });
+      expect(feed.awayFromBottom).toBe(false);
+    });
+
+    test("содержимое выросло, пока лента пролистана вверх, — кнопка остаётся", () => {
+      const feed = setup();
+      act(() => feed.stopAt(800));
+
+      feed.grow(1);
+
+      expect(feed.awayFromBottom).toBe(true);
+      expect(feed.hasUnseen).toBe(true);
     });
   });
 });

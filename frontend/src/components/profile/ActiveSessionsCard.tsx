@@ -4,13 +4,17 @@ import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
 import { hasLlmSession } from "@/components/tasks/taskStatusMeta";
 import { useActiveSessions } from "@/hooks/useTasks";
 import { REMOTE_CONTROL_STATUS_LABEL } from "@/lib/labels";
-import type { Task } from "@/lib/types";
+import { RemoteControlStatus, type Task } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { LoadingState } from "@/components/common/feedback/LoadingState";
 
-/** У задачи без LLM нет моста `/remote-control` (раздел 3.1). */
-function bridgeLabel(task: Task): string {
+/**
+ * У задачи без LLM нет моста `/remote-control` (раздел 3.1). Недоступный мост
+ * (через LLM-прокси он не настроен, раздел 6.3) не подписывается: это не состояние.
+ */
+function bridgeLabel(task: Task): string | null {
   if (!hasLlmSession(task)) return "без моста — задача без LLM";
+  if (task.remote_control_status === RemoteControlStatus.UNAVAILABLE) return null;
   return REMOTE_CONTROL_STATUS_LABEL[task.remote_control_status];
 }
 
@@ -43,9 +47,11 @@ export function ActiveSessionsCard() {
             <span className="min-w-0 flex-1 truncate text-body font-bold" title={task.title}>{task.title}</span>
             <TaskStatusBadge status={task.status} />
             {/* На узком экране статус моста уходит на свою строку, а не скрывается. */}
-            <span className="basis-full text-caption text-text-3 sm:basis-auto">
-              {bridgeLabel(task)}
-            </span>
+            {bridgeLabel(task) && (
+              <span className="basis-full text-caption text-text-3 sm:basis-auto">
+                {bridgeLabel(task)}
+              </span>
+            )}
           </Link>
         ))}
       </div>

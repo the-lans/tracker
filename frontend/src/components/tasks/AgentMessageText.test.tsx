@@ -34,4 +34,23 @@ describe("AgentMessageText", () => {
     expect(code).toHaveClass("font-bold");
     expect(screen.queryByText(/`/)).toBeNull();
   });
+
+  test("нумерованный список, разорванный блоками кода, продолжает нумерацию: у каждого <ol> свой start", () => {
+    const text = [
+      "Что нужно сделать:",
+      "",
+      "1. **Создать очередь**",
+      "   ```python",
+      "   queue = Queue()",
+      "   ```",
+      "2. **Добавить элемент**",
+      "   - через `put()`",
+      "3. **Взять элемент**",
+    ].join("\n");
+    const { container } = renderWithProviders(<AgentMessageText text={text} />);
+
+    const starts = Array.from(container.querySelectorAll("ol")).map((list) => list.getAttribute("start"));
+    expect(starts).toEqual(["1", "2", "3"]);
+    expect(container.querySelectorAll("ul")).toHaveLength(1);
+  });
 });

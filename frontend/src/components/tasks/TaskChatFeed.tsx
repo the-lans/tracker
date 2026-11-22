@@ -3,7 +3,7 @@ import { Maximize2, MessagesSquare, Minimize2 } from "lucide-react";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
 import { NodeLogEntry } from "@/components/tasks/NodeLogEntry";
 import { DateSeparator } from "@/components/tasks/DateSeparator";
-import { NewMessagesButton } from "@/components/tasks/NewMessagesButton";
+import { ScrollToBottomButton } from "@/components/tasks/ScrollToBottomButton";
 import { SessionEventNotice } from "@/components/tasks/SessionEventNotice";
 import { Composer } from "@/components/tasks/Composer";
 import { Button } from "@/components/ui/button";
@@ -86,6 +86,7 @@ export function TaskChatFeed({
     ref: feedRef,
     onScroll: handleFeedScroll,
     hasUnseen,
+    awayFromBottom,
     scrollToBottom,
   } = useStickToBottom<HTMLDivElement>(`${feedItems.length}:${streamedLength}`);
 
@@ -143,7 +144,9 @@ export function TaskChatFeed({
             );
           })}
         </div>
-        {hasUnseen && <NewMessagesButton onClick={scrollToBottom} />}
+        {(awayFromBottom || hasUnseen) && (
+          <ScrollToBottomButton hasUnseen={hasUnseen} onClick={scrollToBottom} />
+        )}
       </div>
 
       <Composer taskId={taskId} taskStatus={taskStatus} llmAvailable={llmAvailable} manualRequestsClosed={manualRequestsClosed} />

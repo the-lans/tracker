@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useInvalidatingMutation } from "@/hooks/useInvalidatingMutation";
+import { taskKeys } from "@/hooks/useTasks";
 import { api } from "@/lib/apiClient";
 import type { JiraAttachmentCopy, TaskArtifact } from "@/lib/types";
 
@@ -46,7 +47,9 @@ export const JIRA_COPY_REFETCH_INTERVAL_MS = 3_000;
 /**
  * Раздел 15.6: идёт ли копирование вложений Jira. Пока идёт — статус
  * перечитывается; когда закончилось — список артефактов перечитывается
- * последний раз, чтобы показать файлы, скопированные после прошлого опроса.
+ * последний раз, чтобы показать файлы, скопированные после прошлого опроса,
+ * а задача — чтобы показать отрисованное описание: его фоновая задача
+ * сохраняет в начале копирования, уже после создания задачи.
  */
 export function useJiraAttachmentCopy(taskId: string, enabled: boolean) {
   const queryClient = useQueryClient();
@@ -54,7 +57,10 @@ export function useJiraAttachmentCopy(taskId: string, enabled: boolean) {
     queryKey: ["tasks", taskId, "jira-attachments"] as const,
     queryFn: async () => {
       const copy = await api.get<JiraAttachmentCopy>(`/tasks/${taskId}/jira-attachments`);
-      if (!copy.pending) void queryClient.invalidateQueries({ queryKey: keyOf(taskId) });
+      if (!copy.pending) {
+        void queryClient.invalidateQueries({ queryKey: keyOf(taskId) });
+        void queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
+      }
       return copy;
     },
     enabled,

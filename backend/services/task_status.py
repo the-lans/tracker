@@ -30,10 +30,11 @@ from db.models.enums import (
     ManualRequestStatus,
     NodeLogStatus,
     NodeLogTriggerType,
+    NodeType,
     TaskStatus,
 )
 from db.models.logs import AppLog, NodeLog
-from db.models.pipelines import TaskNode
+from db.models.pipelines import Node, TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from db.queries.manual_requests import (
@@ -208,6 +209,53 @@ async def _current_run_filter(
     return [] if reset_at is None else [NodeLog.started_at >= reset_at]
 
 
+async def plan_accepted_in_run(db_session: AsyncSession, task_id: uuid.UUID) -> bool:
+    """
+    Раздел 9.5: в текущем прогоне пайплайна уже есть принятый план — успешная
+    запись `node_logs` ноды `plan_prompt`. После него план заново не
+    запрашивается, пока не начнётся следующая нода планирования.
+    """
+    found = await db_session.scalar(
+        sa.select(NodeLog.id)
+        .join(Node, Node.id == NodeLog.node_id)
+        .where(
+            NodeLog.task_id == task_id,
+            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+            NodeLog.status == NodeLogStatus.SUCCESS,
+            Node.node_type == NodeType.PLAN_PROMPT,
+            *await _current_run_filter(db_session, task_id),
+        )
+        .limit(1),
+    )
+    return found is not None
+
+
+async def run_started_frontier(db_session: AsyncSession, task: Task) -> int | None:
+    """
+    Раздел 13.2: наибольший `order_index` ноды, которая уже выполняется или
+    выполнялась в текущем прогоне (запись `node_logs` пайплайна), а в ожидании
+    лимита — и ждущей ноды (`limit_wait_order_index`), и ноды, которую оркестратор уже
+    выбрал, но запись ещё не создал (`claimed_order_index`). Всё, что стоит дальше,
+    ещё не начиналось и меняется свободно; `None` — ни одна нода не начата.
+    """
+    started = await db_session.scalar(
+        sa.select(sa.func.max(TaskNode.order_index)).where(
+            TaskNode.task_id == task.id,
+            NodeLog.task_id == task.id,
+            NodeLog.node_id == TaskNode.node_id,
+            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+            *await _current_run_filter(db_session, task.id),
+        ),
+    )
+    waiting = task.limit_wait_order_index if task.status is TaskStatus.AWAITING_LIMIT else None
+    positions = [
+        position
+        for position in (started, waiting, task.claimed_order_index)
+        if position is not None
+    ]
+    return max(positions) if positions else None
+
+
 async def restart_point_started(db_session: AsyncSession, task: Task) -> bool:
     """
     Раздел 13.2: нода на точке перезапуска (`last_failed_order_index`) уже
@@ -372,6 +420,8 @@ SESSION_ACTIVE_STATUSES = frozenset(
         TaskStatus.REBASE_CONFLICT,
     },
 )
+# Раздел 13.2: у запущенной задачи состав меняется только за границей начатых нод.
+RUN_COMPOSITION_STATUSES = SESSION_ACTIVE_STATUSES | {TaskStatus.AWAITING_LIMIT}
 # Раздел 8.2, 14.4, 19.7: ручные запросы принимаются у активной сессии, в чате
 # «Уточняется» и в ожидании лимита — выполнятся после сброса.
 MANUAL_REQUEST_STATUSES = SESSION_ACTIVE_STATUSES | {TaskStatus.REFINING, TaskStatus.AWAITING_LIMIT}
@@ -504,6 +554,15 @@ async def close_turn_after_error(
         )
         .values(status=ManualRequestStatus.DONE, processed_at=now),
     )
+    # Влитый, но не взятый агентом промт после падения хода возвращается в очередь.
+    await db_session.execute(
+        sa.update(TaskManualRequestQueue)
+        .where(
+            TaskManualRequestQueue.task_id == task_id,
+            TaskManualRequestQueue.status == ManualRequestStatus.INJECTED,
+        )
+        .values(status=ManualRequestStatus.QUEUED),
+    )
     await db_session.execute(
         sa.update(TaskLibraryPrompt)
         .where(
@@ -558,5 +617,6 @@ async def reset_task_run(
             "reset_at": datetime.now(UTC),
             "manual_requests_closed": False,
             "current_llm_account_id": None,
+            "claimed_order_index": None,
         },
     )

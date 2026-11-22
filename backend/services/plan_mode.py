@@ -61,6 +61,7 @@ from prompts.agent import (
     PLAN_ACCEPTED_TOOL_DENIED,
     PLAN_MODE_WRITE_DENIED,
     PLAN_REVISE_DENIED,
+    PLANNING_NOT_ACTIVE_DENIED,
     TOOL_DENIED_BY_USER,
 )
 from services.access import get_task_record_or_404
@@ -70,7 +71,7 @@ from services.task_signal import (
     publish_task_signal,
     subscribe_task_signal,
 )
-from services.task_status import transition_task_status
+from services.task_status import plan_accepted_in_run, transition_task_status
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -85,6 +86,7 @@ if TYPE_CHECKING:
 logger = get_logger("plan_mode")
 
 EXIT_PLAN_MODE_TOOL = "ExitPlanMode"
+ENTER_PLAN_MODE_TOOL = "EnterPlanMode"
 ASK_USER_QUESTION_TOOL = "AskUserQuestion"
 INTERCEPTED_TOOLS = frozenset({EXIT_PLAN_MODE_TOOL, ASK_USER_QUESTION_TOOL})
 
@@ -589,6 +591,21 @@ class _PermissionCallback:
             return PermissionResultDeny(message=PLAN_ACCEPTED_TOOL_DENIED, interrupt=False)
         if context.context_only:
             return PermissionResultDeny(message=CONTEXT_ONLY_TOOL_DENIED, interrupt=False)
+        # После принятого плана агент сам вызывает ExitPlanMode/EnterPlanMode, и это
+        # не повод снова просить решение (раздел 9.5). Окно плана остаётся у ноды
+        # `plan_prompt` и у чата, где плана в прогоне ещё не принимали (раздел 14.4).
+        if (
+            tool_name in (EXIT_PLAN_MODE_TOOL, ENTER_PLAN_MODE_TOOL)
+            and not context.plan_mode
+            and context.task_id is not None
+            and await self._plan_already_accepted(context.task_id)
+        ):
+            logger.info(
+                "plan_review_skipped",
+                task_id=str(context.task_id),
+                tool_name=tool_name,
+            )
+            return PermissionResultDeny(message=PLANNING_NOT_ACTIVE_DENIED, interrupt=False)
         if tool_name in INTERCEPTED_TOOLS:
             if not active:
                 return PermissionResultDeny(message=NO_ACTIVE_NODE_DENIED)
@@ -607,6 +624,10 @@ class _PermissionCallback:
             # действие», задача работает автономно.
             return PermissionResultAllow()
         return await self._approve_action(tool_name, tool_input)
+
+    async def _plan_already_accepted(self, task_id: uuid.UUID) -> bool:
+        async with self.session_factory() as db_session:
+            return await plan_accepted_in_run(db_session, task_id)
 
     async def _await_decision(
         self,

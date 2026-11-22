@@ -141,3 +141,64 @@ describe("highlightCode", () => {
     expect(tokens.map((token) => token.text).join("")).toBe('return "ok" # 42 тут не число\nx = 42');
   });
 });
+
+describe("нумерованные списки", () => {
+  const starts = (text: string) =>
+    parseMarkdown(text).flatMap((block) => (block.kind === "list" && block.ordered ? [block.start] : []));
+
+  it("пункты с блоком кода внутри продолжают нумерацию, а не начинают с «1.» заново", () => {
+    const text = [
+      "Что нужно сделать:",
+      "",
+      "1. **Создать очередь**",
+      "   ```python",
+      "   queue = Queue()",
+      "   ```",
+      "2. **Добавить элемент**",
+      "   ```python",
+      "   queue.put(1)",
+      "   ```",
+      "3. **Взять элемент**",
+    ].join("\n");
+
+    expect(starts(text)).toEqual([1, 2, 3]);
+  });
+
+  it("вложенный маркированный список и абзац внутри пункта не сбрасывают нумерацию", () => {
+    const text = [
+      "1. Подготовка",
+      "   - поставить зависимости",
+      "   - настроить окружение",
+      "2. Запуск",
+      "   Команда запускается из корня проекта.",
+      "3. Проверка",
+    ].join("\n");
+
+    expect(starts(text)).toEqual([1, 2, 3]);
+  });
+
+  it("пункты, которые модель пронумеровала одной «1.», нумеруются по порядку", () => {
+    const text = ["1. Первый", "1. Второй", "1. Третий"].join("\n");
+    const blocks = parseMarkdown(text);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ ordered: true, start: 1 });
+    expect((blocks[0] as { items: unknown[] }).items).toHaveLength(3);
+  });
+
+  it("«1.» у каждого пункта через блоки кода — тоже 1, 2, 3", () => {
+    const text = ["1. Шаг", "```bash", "a", "```", "1. Шаг", "```bash", "b", "```", "1. Шаг"].join("\n");
+
+    expect(starts(text)).toEqual([1, 2, 3]);
+  });
+
+  it("список, начатый не с единицы, сохраняет начальный номер", () => {
+    expect(starts("3. третий\n4. четвёртый")).toEqual([3]);
+  });
+
+  it("новый список после заголовка или абзаца отсчитывается заново", () => {
+    const text = ["1. a", "2. b", "", "## Другое", "", "1. c", "2. d", "", "Итог.", "", "5. e"].join("\n");
+
+    expect(starts(text)).toEqual([1, 1, 5]);
+  });
+});

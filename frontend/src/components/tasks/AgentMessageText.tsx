@@ -33,6 +33,7 @@ export function AgentMessageText({ text }: { text: string }) {
             return (
               <ListTag
                 key={index}
+                {...(block.ordered ? { start: block.start } : {})}
                 className={cn(
                   "flex flex-col gap-1 pl-5 marker:text-accent",
                   block.ordered ? "list-decimal marker:font-bold" : "list-disc",

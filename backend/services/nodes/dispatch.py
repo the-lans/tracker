@@ -10,7 +10,7 @@ import asyncio
 import contextlib
 import time
 import uuid
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +19,7 @@ from clients.claude_agent import ClaudeCodeSession, UserWaitClock
 from db.models.enums import AppLogLevel, NodeLogStatus, NodeType, PermissionMode, ReasoningEffort
 from db.models.logs import NodeLog
 from db.models.tasks import Task
+from services.agent_metrics import TurnProgress
 from services.failure_classification import is_transient_assistant_error
 from services.llm_account_choice import LlmLimitWaitError, NoLlmAccountAvailableError
 from services.llm_routing import TurnRoute
@@ -254,18 +255,33 @@ async def _run_within_active_time(
     *,
     timeout_seconds: float,
     clock: UserWaitClock,
+    progress: Callable[[], TurnProgress] | None = None,
 ) -> NodeExecutionOutcome:
     """
-    Как `asyncio.wait_for`, но время, пока ход ждёт решения пользователя
-    (`clock`), в таймаут не входит (раздел 7.3): срок сдвигается на него.
+    Таймаут по неактивности (раздел 7.4): срок отсчитывается от последнего
+    события хода (``progress``: ответ модели, вызов или результат инструмента),
+    а при его отсутствии — от начала хода; каждое новое событие продлевает его.
+    Время, пока ход ждёт решения пользователя (`clock`), в срок не входит
+    (раздел 7.3).
     """
     running = asyncio.ensure_future(turn)
     started = time.monotonic()
     waited_before = clock.waited_seconds()
     try:
         while True:
-            active = time.monotonic() - started - (clock.waited_seconds() - waited_before)
-            remaining = timeout_seconds - active
+            reference, waited_at_reference = started, waited_before
+            current = progress() if progress is not None else None
+            if (
+                current is not None
+                and current.last_activity_at is not None
+                and current.last_activity_at > started
+            ):
+                reference, waited_at_reference = (
+                    current.last_activity_at,
+                    current.waited_at_activity,
+                )
+            idle = time.monotonic() - reference - (clock.waited_seconds() - waited_at_reference)
+            remaining = timeout_seconds - idle
             if remaining <= 0:
                 raise TimeoutError
             if clock.is_waiting():
@@ -291,7 +307,9 @@ async def execute_llm_node_with_timeout(
 ) -> NodeExecutionOutcome:
     """Раздел 3.1: `timeout_seconds` применяется одинаково к нодам пайплайна
     и к запускам из библиотеки, для ЛЮБОГО типа ноды — включая LLM-ноды, не
-    только `script`. При истечении таймаута сессия прерывается
+    только `script`. У LLM-ноды это таймаут по неактивности: срок идёт от
+    последнего события хода, а не от начала (раздел 7.4). При истечении
+    таймаута сессия прерывается
     (`abort_turn()`), чтобы не оставлять зависший запрос в SDK и не отдать
     хвост прерванного хода следующему запросу.
     """
@@ -306,6 +324,7 @@ async def execute_llm_node_with_timeout(
             ),
             timeout_seconds=timeout_seconds,
             clock=claude_session.user_wait_clock,
+            progress=lambda: claude_session.turn_progress,
         )
     except TimeoutError:
         partial_text = claude_session.take_partial_turn_text()

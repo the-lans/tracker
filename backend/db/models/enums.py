@@ -102,6 +102,8 @@ class ManualRequestStatus(StrEnum):
     PROCESSING = "processing"
     DONE = "done"
     CANCELLED = "cancelled"
+    # Раздел 7.3: влит в идущий ход, агент его ещё не взял — пока не взят, возвращается в очередь.
+    INJECTED = "injected"
 
 
 class NodeLogTriggerType(StrEnum):

@@ -10,6 +10,19 @@ export const PRE_LAUNCH_STATUSES: readonly TaskStatus[] = [
   TaskStatus.NIGHT_WORKER,
 ];
 
+/**
+ * Раздел 13.2: зеркало `RUN_COMPOSITION_STATUSES` backend — у запущенной задачи
+ * состав нод меняется только за границей уже начатых нод.
+ */
+export const RUN_COMPOSITION_STATUSES: readonly TaskStatus[] = [
+  TaskStatus.IN_PROGRESS,
+  TaskStatus.PAUSED,
+  TaskStatus.PLAN_REVIEW,
+  TaskStatus.AWAITING_INPUT,
+  TaskStatus.REBASE_CONFLICT,
+  TaskStatus.AWAITING_LIMIT,
+];
+
 /** Раздел 14.4: очередь автора — дневная и ночная. */
 export const QUEUE_STATUSES: readonly TaskStatus[] = [TaskStatus.READY, TaskStatus.NIGHT_WORKER];
 
@@ -28,6 +41,10 @@ export const READ_ONLY_STATUSES: readonly TaskStatus[] = [TaskStatus.DONE, TaskS
 
 export function isPreLaunch(status: TaskStatus): boolean {
   return PRE_LAUNCH_STATUSES.includes(status);
+}
+
+export function isRunComposition(status: TaskStatus): boolean {
+  return RUN_COMPOSITION_STATUSES.includes(status);
 }
 
 export function isQueued(status: TaskStatus): boolean {

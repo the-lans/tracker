@@ -34,8 +34,9 @@ from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
 from db.models.users import User
 from services import pipeline_orchestrator
+from services import task_nodes as task_nodes_module
 from services.crypto import encrypt
-from services.errors import ValidationError
+from services.errors import ConflictError, ValidationError
 from services.node_runs import SESSION_ERROR_MESSAGE
 from services.nodes.dispatch import NodeExecutionOutcome, execute_node
 from services.pipeline_orchestrator import (
@@ -46,6 +47,7 @@ from services.pipeline_orchestrator import (
 )
 from services.plan_mode import ActiveNodeContext, PlanDecisionOption, build_can_use_tool_callback
 from services.task_control import TaskControlCommand, request_task_control
+from services.task_nodes import CustomNodeDraft, add_custom_task_node, set_task_node_enabled
 from services.task_status import transition_task_status
 from tests.factories import build_git_credential, set_execution_settings
 from tests.fakes import (
@@ -543,6 +545,252 @@ async def test_checkpoint_runs_before_each_enabled_node_and_can_stop(
     assert outcome.stopped is (decision is CheckpointDecision.STOP)
     assert outcome.completed is False
     assert outcome.failed_order_index == 2
+
+
+class TestCompositionChangedWhileRunning:
+    """Раздел 13.2: состав ещё не начатых нод меняют, пока задача идёт."""
+
+    @staticmethod
+    async def _three_nodes(
+        db_session: AsyncSession,
+        *,
+        disabled: tuple[int, ...] = (),
+    ) -> tuple[Task, list[Node]]:
+        task = await _make_task_with_pipeline(db_session)
+        nodes = [
+            await _add_node(
+                db_session,
+                task,
+                order_index=index,
+                is_enabled=index not in disabled,
+                node_type=NodeType.PLAIN_PROMPT,
+                prompt_template=f"шаг {index}",
+            )
+            for index in range(3)
+        ]
+        return task, nodes
+
+    async def test_node_disabled_before_it_starts_is_skipped(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task, _ = await self._three_nodes(db_session)
+        task_nodes = list((await db_session.execute(sa.select(TaskNode))).scalars().all())
+        by_index = {task_node.order_index: task_node for task_node in task_nodes}
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 2)
+        seen: list[int] = []
+
+        async def checkpoint(order_index: int) -> CheckpointDecision:
+            seen.append(order_index)
+            if order_index == 1 and seen.count(1) == 1:
+                # Пока ждали очередь запросов, ноду 1 отключили.
+                await set_task_node_enabled(
+                    db_session,
+                    task=task,
+                    task_node_id=by_index[1].id,
+                    is_enabled=False,
+                )
+            return CheckpointDecision.CONTINUE
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            checkpoint=checkpoint,
+        )
+
+        assert outcome.completed is True
+        assert fake.queries == ["шаг 0", "шаг 2"]
+        assert seen == [0, 1, 2]
+
+    async def test_disabled_before_run_skipped(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Без паузы и очереди состав всё равно перечитывается прямо перед нодой."""
+        task, _ = await self._three_nodes(db_session)
+        by_index = {
+            task_node.order_index: task_node
+            for task_node in (await db_session.execute(sa.select(TaskNode))).scalars().all()
+        }
+        real_load = task_nodes_module.load_task_node_rows
+        calls = {"count": 0}
+
+        async def load_and_disable_on_recheck(*args: Any, **kwargs: Any) -> Any:
+            calls["count"] += 1
+            if calls["count"] == 2:
+                # Второе чтение — повторная проверка перед нодой 0: её как раз отключили.
+                await set_task_node_enabled(
+                    db_session,
+                    task=task,
+                    task_node_id=by_index[0].id,
+                    is_enabled=False,
+                )
+            return await real_load(*args, **kwargs)
+
+        monkeypatch.setattr(
+            pipeline_orchestrator, "load_task_node_rows", load_and_disable_on_recheck
+        )
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 2)
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+        )
+
+        assert outcome.completed is True
+        assert fake.queries == ["шаг 1", "шаг 2"]
+
+    async def test_started_node_is_claimed_and_locked(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        """Выбранная нода занята ещё до записи `node_logs`: правка состава её не меняет."""
+        task, _ = await self._three_nodes(db_session)
+        by_index = {
+            task_node.order_index: task_node
+            for task_node in (await db_session.execute(sa.select(TaskNode))).scalars().all()
+        }
+        claims: list[int | None] = []
+        refused: list[bool] = []
+
+        async def on_query() -> None:
+            await db_session.refresh(task)
+            claims.append(task.claimed_order_index)
+            if len(claims) == 1:
+                with pytest.raises(ConflictError):
+                    await set_task_node_enabled(
+                        db_session,
+                        task=task,
+                        task_node_id=by_index[0].id,
+                        is_enabled=False,
+                    )
+                refused.append(True)
+
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()]] * 3,
+            on_query=on_query,
+        )
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+        )
+
+        assert outcome.completed is True
+        assert claims == [0, 1, 2]
+        assert refused == [True]
+
+    async def test_node_enabled_later_runs(self, db_session: AsyncSession, tmp_path: Path) -> None:
+        task, nodes = await self._three_nodes(db_session, disabled=(2,))
+        late = (
+            await db_session.execute(sa.select(TaskNode).where(TaskNode.node_id == nodes[2].id))
+        ).scalar_one()
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 3)
+
+        async def checkpoint(order_index: int) -> CheckpointDecision:
+            if order_index == 1:
+                await set_task_node_enabled(
+                    db_session,
+                    task=task,
+                    task_node_id=late.id,
+                    is_enabled=True,
+                )
+            return CheckpointDecision.CONTINUE
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            checkpoint=checkpoint,
+        )
+
+        assert outcome.completed is True
+        assert fake.queries == ["шаг 0", "шаг 1", "шаг 2"]
+
+    async def test_custom_prompt_runs_in_place(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task, nodes = await self._three_nodes(db_session)
+        first = (
+            await db_session.execute(sa.select(TaskNode).where(TaskNode.node_id == nodes[0].id))
+        ).scalar_one()
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 4)
+        seen: list[int] = []
+
+        async def checkpoint(order_index: int) -> CheckpointDecision:
+            seen.append(order_index)
+            if order_index == 1 and seen.count(1) == 1:
+                # Нода 0 уже выполнена: свой промт встаёт сразу за ней, остальные сдвигаются.
+                await add_custom_task_node(
+                    db_session,
+                    task=task,
+                    after_task_node_id=first.id,
+                    draft=CustomNodeDraft(
+                        name="Свой",
+                        node_type=NodeType.PLAIN_PROMPT,
+                        prompt_template="свой промт",
+                    ),
+                )
+            return CheckpointDecision.CONTINUE
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            checkpoint=checkpoint,
+        )
+
+        assert outcome.completed is True
+        # Ни одна нода не потеряна и не выполнена дважды, свой промт — на своём месте.
+        assert fake.queries == ["шаг 0", "свой промт", "шаг 1", "шаг 2"]
+        logs = await _node_logs_for(db_session, task.id)
+        assert [log.status for log in logs] == [NodeLogStatus.SUCCESS] * 4
+
+    async def test_all_disabled_completes_run(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        task, _ = await self._three_nodes(db_session)
+        task_nodes = list((await db_session.execute(sa.select(TaskNode))).scalars().all())
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]])
+
+        async def checkpoint(order_index: int) -> CheckpointDecision:
+            if order_index == 1:
+                for task_node in task_nodes:
+                    if task_node.order_index > 0:
+                        await set_task_node_enabled(
+                            db_session,
+                            task=task,
+                            task_node_id=task_node.id,
+                            is_enabled=False,
+                        )
+            return CheckpointDecision.CONTINUE
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+            checkpoint=checkpoint,
+        )
+
+        assert outcome.completed is True
+        assert fake.queries == ["шаг 0"]
 
 
 async def test_stop_during_node_marks_it_stopped_without_retry(
@@ -1266,7 +1514,7 @@ class TestLibraryLink:
             db_session,
             task,
             node_type=NodeType.PLAIN_PROMPT,
-            prompt_template="https://riorise.atlassian.net/browse/" + placeholder,
+            prompt_template="https://example.atlassian.net/browse/" + placeholder,
         )
         await _add_node(
             db_session,
@@ -1283,7 +1531,7 @@ class TestLibraryLink:
         )
 
         assert outcome.completed is True
-        assert fake.queries == [f"https://riorise.atlassian.net/browse/{task.code}"]
+        assert fake.queries == [f"https://example.atlassian.net/browse/{task.code}"]
         assert (await _node_logs_for(db_session, task.id))[0].rendered_prompt == fake.queries[0]
 
     @pytest.mark.parametrize(

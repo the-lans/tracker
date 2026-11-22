@@ -11,16 +11,27 @@ from __future__ import annotations
 import asyncio
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
+import sqlalchemy as sa
+import structlog
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from claude_agent_sdk.types import ToolPermissionContext
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.enums import NodeLogStatus, NodeLogTriggerType, PermissionMode, TaskStatus, UserRole
+from db.models.enums import (
+    NodeLogStatus,
+    NodeLogTriggerType,
+    NodeType,
+    PermissionMode,
+    TaskStatus,
+    UserRole,
+)
 from db.models.logs import NodeLog
+from db.models.pipelines import Node
 from db.models.tasks import Task
 from db.models.users import User
 from prompts.agent import (
@@ -29,6 +40,7 @@ from prompts.agent import (
     PLAN_ACCEPTED_TOOL_DENIED,
     PLAN_MODE_WRITE_DENIED,
     PLAN_REVISE_DENIED,
+    PLANNING_NOT_ACTIVE_DENIED,
 )
 from services.notifications import NotificationEvent
 from services.plan_mode import (
@@ -48,6 +60,7 @@ from services.plan_mode import (
     record_user_decision,
 )
 from services.task_signal import publish_task_signal
+from services.task_status import plan_accepted_in_run
 from tests.fakes import patch_plan_mode_signals
 
 if TYPE_CHECKING:
@@ -181,9 +194,105 @@ async def test_callback_denies_when_no_active_node_context(db_session: AsyncSess
     assert result.behavior == "deny"
 
 
+async def _accepted_plan_log(db_session: AsyncSession, task: Task) -> None:
+    """Нода `plan_prompt` текущего прогона с принятым планом."""
+    node = Node(
+        created_by=task.created_by,
+        name="Plan",
+        node_type=NodeType.PLAN_PROMPT,
+        prompt_template="Спланируй",
+        is_library_item=True,
+        timeout_seconds=60,
+        max_retries=1,
+    )
+    db_session.add(node)
+    await db_session.flush()
+    db_session.add(
+        NodeLog(
+            task_id=task.id,
+            node_id=node.id,
+            trigger_type=NodeLogTriggerType.PIPELINE,
+            attempt_number=1,
+            status=NodeLogStatus.SUCCESS,
+            started_at=datetime.now(UTC),
+        )
+    )
+    await db_session.flush()
+
+
+class TestPlanAfterAccept:
+    """Окно плана после принятого плана и до него (раздел 9.5, 14.4)."""
+
+    @pytest.mark.parametrize("tool_name", ["ExitPlanMode", "EnterPlanMode"])
+    @pytest.mark.parametrize("auto_accept_plan", [True, False])
+    async def test_plan_tools_denied_after_accept(
+        self,
+        db_session: AsyncSession,
+        tool_name: str,
+        auto_accept_plan: bool,
+    ) -> None:
+        """После принятого плана агент вызывает ExitPlanMode сам — окно плана не открывается."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, task)
+        context = ActiveNodeContext(
+            node_log_id=node_log.id, task_id=task.id, auto_accept_plan=auto_accept_plan
+        )
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=Redis(),  # не используется: ожидания решения нет
+        )
+
+        with structlog.testing.capture_logs() as logs:
+            result = await callback(tool_name, {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
+
+        assert result.behavior == "deny"
+        assert result.message == PLANNING_NOT_ACTIVE_DENIED
+        skipped = [e for e in logs if e["event"] == "plan_review_skipped"]
+        assert [(e["tool_name"], e["task_id"]) for e in skipped] == [(tool_name, str(task.id))]
+        await db_session.refresh(node_log)
+        assert node_log.pending_plan_text is None
+        assert node_log.status is NodeLogStatus.RUNNING
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.IN_PROGRESS
+
+    async def test_chat_plan_review(self, db_session: AsyncSession) -> None:
+        """Чат «Уточняется»: плана в прогоне ещё не принимали — план идёт на ревью (14.4)."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        context = ActiveNodeContext(
+            node_log_id=node_log.id, task_id=task.id, auto_accept_plan=True
+        )  # plan_mode не включён: ход чата, а не ноды планирования
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=Redis(),
+        )
+
+        result = await callback("ExitPlanMode", {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
+
+        assert _plan_accepted(result)
+        await db_session.refresh(node_log)
+        assert node_log.pending_plan_text == "1. Сделать X"
+
+    async def test_new_plan_node_has_review(
+        self,
+        db_session: AsyncSession,
+    ) -> None:
+        """Следующая нода `plan_prompt` снова планирует: окно плана у неё остаётся."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, task)
+        callback = _callback(db_session, task, node_log, auto_accept_plan=True, plan_mode=True)
+
+        result = await callback("ExitPlanMode", {"plan": "1. Новый план"}, _TEST_TOOL_CONTEXT)
+
+        assert _plan_accepted(result)
+
+
 async def test_callback_auto_accepts_plan_without_waiting(db_session: AsyncSession) -> None:
     task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=True)
+    context = ActiveNodeContext(
+        node_log_id=node_log.id, task_id=task.id, auto_accept_plan=True, plan_mode=True
+    )
     callback = build_can_use_tool_callback(
         context=context,
         session_factory=_non_closing_session_factory(db_session),
@@ -209,7 +318,9 @@ async def _review_plan_with_decision(
 ) -> tuple[Task, NodeLog, PermissionResultAllow | PermissionResultDeny]:
     """План на ревью; пользователь вскоре выбирает ``decision`` в виджете."""
     task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
+    context = ActiveNodeContext(
+        node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False, plan_mode=True
+    )
     callback = build_can_use_tool_callback(
         context=context,
         session_factory=_non_closing_session_factory(db_session),
@@ -290,7 +401,9 @@ async def test_unrelated_task_signal_does_not_reject_pending_plan(
     """Свободный промт, поставленный в очередь во время ревью плана, будит
     тот же канал задачи — план от этого не должен отклоняться."""
     task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
+    context = ActiveNodeContext(
+        node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False, plan_mode=True
+    )
     callback = build_can_use_tool_callback(
         context=context,
         session_factory=_non_closing_session_factory(db_session),
@@ -331,6 +444,7 @@ class TestDecisionWait:
             node_log_id=node_log.id,
             task_id=task.id,
             auto_accept_plan=False,
+            plan_mode=True,
         )
         callback = build_can_use_tool_callback(
             context=context,
@@ -364,7 +478,9 @@ async def test_callback_denies_on_timeout_without_resolution(
     redis_client: Redis,
 ) -> None:
     task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
+    context = ActiveNodeContext(
+        node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False, plan_mode=True
+    )
     callback = build_can_use_tool_callback(
         context=context,
         session_factory=_non_closing_session_factory(db_session),
@@ -459,6 +575,7 @@ class TestDecisionOutputOffset:
             task,
             node_log,
             auto_accept_plan=auto_accept_plan,
+            plan_mode=tool_name == "ExitPlanMode",
             output_length=None if output_length is None else lambda: output_length,
         )
 
@@ -533,7 +650,7 @@ class TestAskUserQuestion:
         node_log.user_input_text = "0"
         await db_session.flush()
         callback = build_can_use_tool_callback(
-            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True),
             session_factory=_non_closing_session_factory(db_session),
             redis_client=redis_client,
             decision_wait_timeout_seconds=0.3,
@@ -798,7 +915,7 @@ class TestDecisionStatus:
         monkeypatch.setattr("services.task_status.notify_task_event", capture_notification)
         task, node_log = await _make_task_with_running_node_log(db_session, status=start_status)
         callback = build_can_use_tool_callback(
-            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True),
             session_factory=_non_closing_session_factory(db_session),
             redis_client=redis_client,
             decision_wait_timeout_seconds=5.0,
@@ -834,7 +951,7 @@ class TestDecisionStatus:
         """Таймаут ноды или «Остановить» отменяют ход, пока ждётся решение."""
         task, node_log = await _make_task_with_running_node_log(db_session)
         callback = build_can_use_tool_callback(
-            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True),
             session_factory=_non_closing_session_factory(db_session),
             redis_client=redis_client,
         )
@@ -869,7 +986,7 @@ class TestDecisionStatus:
             status=TaskStatus.REBASE_CONFLICT,
         )
         callback = build_can_use_tool_callback(
-            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True),
             session_factory=_non_closing_session_factory(db_session),
             redis_client=redis_client,
             decision_wait_timeout_seconds=0.2,
@@ -895,6 +1012,7 @@ class TestDecisionStatus:
                 node_log_id=node_log.id,
                 task_id=task.id,
                 auto_accept_plan=True,
+                plan_mode=True,
             ),
             session_factory=_non_closing_session_factory(db_session),
             redis_client=redis_client,
@@ -918,7 +1036,7 @@ class TestCancelDecisionWait:
         SDK снимается, и статус возвращён к моменту, когда воркер продолжит.
         """
         task, node_log = await _make_task_with_running_node_log(db_session)
-        context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id)
+        context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True)
         callback = build_can_use_tool_callback(
             context=context,
             session_factory=_non_closing_session_factory(db_session),
@@ -956,7 +1074,7 @@ class TestCancelDecisionWait:
         """Ход прерван, пока после перехода в `plan_review` отправляется
         уведомление, — ожидание ещё не началось, но статус всё равно возвращён."""
         task, node_log = await _make_task_with_running_node_log(db_session)
-        context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id)
+        context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True)
         callback = build_can_use_tool_callback(
             context=context,
             session_factory=_non_closing_session_factory(db_session),
@@ -981,3 +1099,45 @@ class TestCancelDecisionWait:
 
         assert handler.cancelled()
         assert await _status_of(db_session, task) is TaskStatus.IN_PROGRESS
+
+
+class TestPlanAcceptedInRun:
+    """`plan_accepted_in_run`: на нём держится отказ повторного окна плана."""
+
+    async def test_no_plan_node_log_means_not_accepted(self, db_session: AsyncSession) -> None:
+        task, _ = await _make_task_with_running_node_log(db_session)
+
+        assert await plan_accepted_in_run(db_session, task.id) is False
+
+    async def test_successful_plan_node_counts(self, db_session: AsyncSession) -> None:
+        task, _ = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, task)
+
+        assert await plan_accepted_in_run(db_session, task.id) is True
+
+    async def test_plan_of_another_task_does_not_count(self, db_session: AsyncSession) -> None:
+        task, _ = await _make_task_with_running_node_log(db_session)
+        other, _ = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, other)
+
+        assert await plan_accepted_in_run(db_session, task.id) is False
+
+    async def test_plan_not_accepted_yet_does_not_count(self, db_session: AsyncSession) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, task)
+        await db_session.execute(
+            sa.update(NodeLog)
+            .where(NodeLog.task_id == task.id, NodeLog.node_id.is_not(None))
+            .values(status=NodeLogStatus.RUNNING)
+        )
+        await db_session.flush()
+
+        assert await plan_accepted_in_run(db_session, task.id) is False
+
+    async def test_reset_of_the_run_forgets_the_old_plan(self, db_session: AsyncSession) -> None:
+        task, _ = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, task)
+        task.reset_at = datetime.now(UTC) + timedelta(minutes=1)
+        await db_session.flush()
+
+        assert await plan_accepted_in_run(db_session, task.id) is False

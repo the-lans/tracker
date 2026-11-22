@@ -152,6 +152,8 @@ backend/
               архивных задач (SessionHistoryPass, ArtifactsPass, разделы
               6.4, 14.3); app_log_retention.py — срок хранения app_logs
               (раздел 17.2);
+              prompt_injection.py — влитие промта из очереди в идущий ход
+              (команды API → воркер через Redis, `injected`, раздел 7.3);
               очередь задач (раздел 14.4): task_queue.py — слоты автора,
               порядок очереди, ночное окно, ручная смена статуса;
               task_dispatcher.py — проход дневного и ночного воркера
@@ -313,17 +315,29 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               подпись, поле, подсказка), typography/TitledSection (раздел с
               заголовком и чертой между разделами);
               страница задачи (components/tasks): TaskHeader — шапка (кнопки,
-              аккаунт, надпись про claude.ai/code; раскладка и мобильная строка),
+              аккаунт; раскладка и мобильная строка),
               TaskStopButton — «Остановить» по шагам: запросы чата по одному,
               затем красная — задача с подтверждением (lib/manualRequests.ts),
               TaskDetailsDialog — окно «В отдельном окне» (общие части с
-              карточками: TaskDescriptionBody, TaskLinks, TaskArtifactList),
+              карточками: TaskDescriptionBody, TaskLinks, TaskArtifactList;
+              описание правит TaskDescriptionEditor только до запуска, длинное
+              в карточке обрезает common/typography/ClampedContent),
               ArtifactPreviewDialog/Body и lib/artifactPreview.ts — просмотр
               артефактов (SVG не открывается в новой вкладке: скрипт
               выполнился бы в origin приложения; предел размера), FeedNotice —
               служебная строка ленты (смена аккаунта, событие сессии, дата),
               lib/chatFeed.ts + hooks/useStickToBottom.ts — сборка ленты и
-              автопрокрутка с кнопкой «Новые сообщения»;
+              автопрокрутка с кнопкой «↓ В конец ленты» (ScrollToBottomButton);
+              lib/agentMarkdown.ts — разбор ответа агента (нумерация списков
+              продолжается через блоки кода), lib/textPreview.ts — превью
+              свёрнутого вывода без обрезки внутри блока кода, lib/jiraKey.ts —
+              ключ Jira из вставленной ссылки, lib/manualQueue.ts +
+              tasks/QueueInjectBar — индикатор «В очереди» и кнопки влития,
+              lib/taskNodes.ts — какие ноды
+              задачи можно менять (зеркало services/task_nodes.py),
+              layout/SidebarResizer + lib/sidebarWidth.ts — ширина бокового
+              меню и режим «только значки», pipelines/RenamePipelineButton —
+              переименование пайплайна, common/feedback/CountBadge (`max` — «99+»);
               по разделам — components/{tasks,nodes,profile,admin,
               taskCategories,daily,repositories,templates,llmAccounts,
               envVariables};
@@ -414,6 +428,7 @@ alembic/
                  git_credentials.ssh_known_hosts, users.session_version,
                  tasks.description_html — HTML описания из Jira для показа,
                  task_session_events — сброс контекста и новые сессии в ленте чата,
+                 tasks.claimed_order_index — нода, выбранная оркестратором до записи node_logs,
                  system_settings.llm_switch_threshold_week_pct — порог недели,
                  system_settings.llm_compact_min_context_chars — минимум контекста для сжатия);
                  новые миграции пишут DDL
@@ -626,7 +641,11 @@ Postgres из `backend/tests/conftest.py`:
 1. **Одна сессия — один запрос за раз.** Обращения к `ClaudeSDKClient` строго
    последовательны через mutex на уровне Celery-задачи; параллельные ручные
    запросы идут через FIFO-очередь `task_manual_request_queue`, а не
-   параллельно.
+   параллельно. Единственное исключение — «Влить в текущий ход» (ТЗ 7.3):
+   обычный текстовый промт из очереди уходит в уже идущий ход (статус
+   запроса `injected`), а не начинает новый; исполняет его воркер
+   (`services/prompt_injection.py`), слэш-команды, промты библиотеки и
+   пересказы так не вливаются.
 2. **Имя нативной слэш-команды передаётся буквально.** В настроенных
    аргументах нод и промтов библиотеки подставляются `{{task.*}}` общим
    механизмом с сохранением границ аргументов и без повторной интерпретации
@@ -687,11 +706,22 @@ Postgres из `backend/tests/conftest.py`:
     статусах до запуска (`new`, `refining`, `defined`, `ready`,
     `night_worker`; там же пайплайн меняется — снимок заменяется целиком;
     после запуска — возвратом из `failed`/`done` в статус до запуска,
-    `POST /tasks/{id}/status`); в `failed` — только для нод с `order_index >
+    `POST /tasks/{id}/status`); у запущенной задачи (`in_progress`, `paused`,
+    `plan_review`, `awaiting_input`, `rebase_conflict`, `awaiting_limit`) —
+    только для нод за границей начатых: `order_index` больше наибольшего у
+    ноды с записью `node_logs` пайплайна в текущем прогоне (в
+    `awaiting_limit` — и больше `limit_wait_order_index`; выбранная
+    оркестратором нода без записи — `tasks.claimed_order_index`, он ставится
+    под `lock_task`, как и правка состава), пока ничего не начато, доступны
+    все (`services/task_status.run_started_frontier`);
+    в `failed` — только для нод с `order_index >
     tasks.last_failed_order_index` и для ноды на самой точке перезапуска,
     если она не начинала выполняться в текущем прогоне (остановка на паузе
     после ноды ставит точку сразу за ней) (`services/task_nodes.py`,
-    `PATCH /tasks/{id}/nodes/{task_node_id}`). По тем же правилам между
+    `PATCH /tasks/{id}/nodes/{task_node_id}`). Оркестратор поэтому
+    перечитывает снимок нод перед каждой нодой и после контрольной точки и
+    ищет следующую по записи `task_nodes`, а не по позиции
+    (`services/pipeline_orchestrator.py`). По тем же правилам между
     нодами снимка вставляются, правятся и удаляются свои промты задачи
     (`nodes.task_id`, `POST`/`DELETE /tasks/{id}/nodes…`); своя нода с
     историей `node_logs` не удаляется. Отметка «пауза после»

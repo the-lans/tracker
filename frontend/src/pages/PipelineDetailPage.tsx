@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { LibraryLinkLabel } from "@/components/nodes/LibraryLinkLabel";
+import { RenamePipelineButton } from "@/components/pipelines/RenamePipelineButton";
 import { NodeForm } from "@/components/nodes/NodeForm";
 import { NodeReorderButton } from "@/components/nodes/NodeReorderButton";
 import { PipelineNodeActivity } from "@/components/nodes/PipelineNodeActivity";
@@ -42,8 +43,11 @@ export function PipelineDetailPage() {
         >
           <ArrowLeft className="size-4" />
         </Link>
-        <h1 className="text-heading font-extrabold">{pipeline?.name ?? "Пайплайн"}</h1>
-        <Button className="ml-auto" onClick={() => setDialogNode("new")}>
+        <h1 className="min-w-0 truncate text-heading font-extrabold" title={pipeline?.name}>
+          {pipeline?.name ?? "Пайплайн"}
+        </h1>
+        {pipeline && <RenamePipelineButton pipeline={pipeline} />}
+        <Button className="ml-auto shrink-0" onClick={() => setDialogNode("new")}>
           <Plus className="size-4" /> Нода
         </Button>
       </div>

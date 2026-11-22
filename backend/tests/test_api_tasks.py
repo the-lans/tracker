@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -31,8 +32,9 @@ from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
-from services import task_creation
+from services import prompt_injection, task_creation
 from services.plan_mode import PlanDecisionOption, encode_decision
+from services.redis_connection import redis_connection
 from services.task_control import (
     TaskControlCommand,
     consume_bridge_reconnect,
@@ -607,6 +609,30 @@ async def test_create_task_rejects_duplicate_repository(
     assert response.status_code == 422
 
 
+async def test_description_stored_trimmed(
+    authed_client: AsyncClient,
+) -> None:
+    created = await authed_client.post(
+        "/tasks",
+        json={
+            "code": "RR-10020",
+            "title": "t",
+            "description": "\n\n  Первая строка\n\nВторая  \n\n \t",
+        },
+    )
+    assert created.status_code == 201, created.text
+    # Внутренние переводы строк остаются: убираются только пробелы и переводы строк по краям.
+    assert created.json()["description"] == "Первая строка\n\nВторая"
+
+    updated = await authed_client.patch(
+        f"/tasks/{created.json()['id']}",
+        json={"description": "\r\n  Новое описание  \r\n\n"},
+    )
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["description"] == "Новое описание"
+
+
 async def test_update_task_sets_autostart_while_new(authed_client: AsyncClient) -> None:
     task_body = await _create_task(authed_client)
 
@@ -877,6 +903,49 @@ async def test_failed_task_locks_nodes_up_to_failure_point(
     assert locked.status_code == 409
     assert allowed.status_code == 200
     assert [node["editable"] for node in listed] == [False, False, True]
+
+
+async def test_running_task_edits_unstarted(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    task_body = await _create_task(authed_client)
+    nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 3)
+    task = await db_session.get(Task, uuid.UUID(task_body["id"]))
+    assert task is not None
+    task.status = TaskStatus.IN_PROGRESS
+    await make_node_log(
+        db_session,
+        task_id=task.id,
+        node_id=uuid.UUID(nodes[0]["node_id"]),
+        status=NodeLogStatus.RUNNING,
+    )
+    path = f"/tasks/{task_body['id']}/nodes"
+
+    started = await authed_client.patch(f"{path}/{nodes[0]['id']}", json={"is_enabled": False})
+    later = await authed_client.patch(f"{path}/{nodes[1]['id']}", json={"is_enabled": False})
+    before_started = await authed_client.post(
+        path,
+        json={"name": "Свой", "node_type": "plain_prompt", "prompt_template": "x"},
+    )
+    after_started = await authed_client.post(
+        path,
+        json={
+            "name": "Свой",
+            "node_type": "plain_prompt",
+            "prompt_template": "x",
+            "after_task_node_id": nodes[0]["id"],
+        },
+    )
+    listed = (await authed_client.get(path)).json()
+
+    assert started.status_code == 409
+    assert "уже выполнялась или выполняется" in started.text
+    assert later.status_code == 200
+    assert before_started.status_code == 409
+    assert after_started.status_code == 201
+    assert [node["name"] for node in listed] == ["node-0", "Свой", "node-1", "node-2"]
+    assert [node["editable"] for node in listed] == [False, True, True, True]
 
 
 class TestPauseAfterNode:
@@ -1255,6 +1324,78 @@ async def test_stop_button_interrupts_processing_request(
     assert response.status_code == 202
     assert await is_manual_stop_requested(redis_client, task_id, request_id)
     assert late.status_code == 409
+
+
+class TestInjectEndpoints:
+    """`POST /tasks/{id}/manual-queue/inject` и `…/inject/cancel` (раздел 7.3)."""
+
+    async def test_inject_requires_running_task(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.PAUSED)
+
+        response = await authed_client.post(f"/tasks/{task_body['id']}/manual-queue/inject")
+
+        assert response.status_code == 409
+
+    async def test_inject_without_worker_reply_is_conflict(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(prompt_injection, "REPLY_WAIT_SECONDS", 0.1)
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
+
+        response = await authed_client.post(f"/tasks/{task_body['id']}/manual-queue/inject")
+
+        assert response.status_code == 409
+
+    @pytest.mark.parametrize(
+        ("path", "action"),
+        [("inject", "inject"), ("inject/cancel", "cancel")],
+    )
+    async def test_inject_endpoints_relay_worker_reply(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        path: str,
+        action: str,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
+        task_id = uuid.UUID(task_body["id"])
+        request_id = uuid.uuid4()
+
+        class _Worker:
+            async def handle(
+                self, received: prompt_injection.InjectionAction
+            ) -> prompt_injection.InjectionReply:
+                assert received.value == action
+                return prompt_injection.InjectionReply(ok=True, request_id=str(request_id))
+
+        async with redis_connection() as redis_client:
+            server = asyncio.create_task(
+                prompt_injection.serve_injection_commands(
+                    redis_client,
+                    task_id,
+                    _Worker(),  # type: ignore[arg-type]
+                    poll_seconds=0.01,
+                ),
+            )
+            try:
+                response = await authed_client.post(f"/tasks/{task_id}/manual-queue/{path}")
+            finally:
+                server.cancel()
+
+        assert response.status_code == 200
+        assert json.loads(response.text) == {
+            "ok": True,
+            "request_id": str(request_id),
+            "reason": None,
+            "message": None,
+        }
 
 
 async def _make_script_pipeline(

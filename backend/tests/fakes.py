@@ -19,6 +19,7 @@ from claude_agent_sdk import (
     ResultMessage,
     StreamEvent,
     TextBlock,
+    UserMessage,
 )
 from claude_agent_sdk.types import AssistantMessageError, RateLimitStatus
 
@@ -114,6 +115,19 @@ class FakeClaudeAgentClient:
         self.max_observed_concurrency = 0
         self.permission_modes: list[str] = []
         self.message_delay_seconds = 0.01
+        # Пауза перед сообщением хода по его номеру (с нуля); остальные — `message_delay_seconds`.
+        self.message_delays: dict[int, float] = {}
+        # Влитые посреди хода сообщения (раздел 7.3): как их ведёт CLI. Пока не взяты,
+        # лежат в `_pending_injections`; взятое возвращается «эхом» `UserMessage`
+        # перед следующим сообщением хода, если не `hold_injections`.
+        self.injected: list[tuple[str, str]] = []
+        self.cancelled_injections: list[str] = []
+        self.hold_injections = False
+        # `cancel_injected_message` отвечает «поздно» (агент уже взял сообщение).
+        self.refuse_cancel = False
+        # Сообщения хода, который CLI начинает сам из влитого, не взятого к концу хода.
+        self.followup_turn: list[Message] = []
+        self._pending_injections: dict[str, str] = {}
         self._stream: list[Message] = []
 
     async def connect(self) -> None:
@@ -127,6 +141,17 @@ class FakeClaudeAgentClient:
 
     async def set_permission_mode(self, mode: str) -> None:
         self.permission_modes.append(mode)
+
+    async def inject_message(self, text: str, message_id: str) -> None:
+        self.injected.append((text, message_id))
+        self._pending_injections[message_id] = text
+
+    async def cancel_injected_message(self, message_id: str) -> bool:
+        if self.refuse_cancel or message_id not in self._pending_injections:
+            return False
+        del self._pending_injections[message_id]
+        self.cancelled_injections.append(message_id)
+        return True
 
     async def query(self, prompt: str) -> None:
         self.queries.append(prompt)
@@ -150,13 +175,22 @@ class FakeClaudeAgentClient:
         self.max_observed_concurrency = max(self.max_observed_concurrency, self.concurrent_calls)
         try:
             mid_turn_failure = self._failures_mid_turn.get(len(self.queries) - 1)
+            index = 0
             while self._stream:
-                await asyncio.sleep(self.message_delay_seconds)
+                await asyncio.sleep(self.message_delays.get(index, self.message_delay_seconds))
+                index += 1
                 if mid_turn_failure is not None and isinstance(self._stream[0], ResultMessage):
                     raise mid_turn_failure
+                if self._pending_injections and not self.hold_injections:
+                    message_id, text = next(iter(self._pending_injections.items()))
+                    del self._pending_injections[message_id]
+                    yield UserMessage(content=text, uuid=message_id)
                 message = self._stream.pop(0)
                 yield message
                 if isinstance(message, ResultMessage):
+                    if self._pending_injections and self.followup_turn:
+                        self._stream.extend(self.followup_turn)
+                        self._pending_injections.clear()
                     return
         finally:
             self.concurrent_calls -= 1

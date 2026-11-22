@@ -2,11 +2,16 @@ import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Menu } from "lucide-react";
 import { Sidebar, SidebarBrand } from "@/components/layout/Sidebar";
+import { SidebarResizer } from "@/components/layout/SidebarResizer";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { CountBadge } from "@/components/common/feedback/CountBadge";
 import { useAwaitingDecisionCount } from "@/hooks/useTasks";
+import { useSidebarWidth } from "@/hooks/useSidebarWidth";
 import { ensurePushSubscription } from "@/lib/push";
+
+/** Выше этого числа счётчик на кнопке меню показывает «99+»: иначе он заходит на заголовок. */
+const AWAITING_BADGE_MAX = 99;
 
 const TITLES: Record<string, string> = {
   "/": "Дашборд",
@@ -30,6 +35,7 @@ export function AppShell() {
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { data: awaitingCount } = useAwaitingDecisionCount();
+  const sidebar = useSidebarWidth();
 
   useEffect(() => {
     // Раздел 18.1: "подписка запрашивается при первом входе" — AppShell
@@ -41,8 +47,10 @@ export function AppShell() {
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-bg text-text">
-      <div className="hidden lg:block">
-        <Sidebar />
+      {/* Ширину меню на компьютере меняют за правую границу; в шторке телефона она фиксирована. */}
+      <div className="relative hidden shrink-0 lg:block" style={{ width: sidebar.width }}>
+        <Sidebar width={sidebar.width} compact={sidebar.compact} />
+        <SidebarResizer width={sidebar.width} onChange={sidebar.setWidth} onReset={sidebar.reset} />
       </div>
 
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
@@ -60,12 +68,13 @@ export function AppShell() {
       </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-1.5 short:py-0 lg:hidden">
+        <header className="flex items-center gap-6 border-b border-border bg-surface px-4 py-0.5 short:py-0 lg:hidden">
           {/* Раздел 18.3: счётчик ожидающих решения виден и без открытого меню. */}
           <Button
             variant="ghost"
             size="icon"
-            className="relative"
+            // Кнопка ниже шапки по высоте, а зона нажатия — прежние 44px (touch-hit).
+            className="touch-hit relative h-9 w-9 min-h-0! min-w-0!"
             aria-label={
               awaitingCount?.count
                 ? `Меню, ожидают решения: ${awaitingCount.count}`
@@ -74,7 +83,7 @@ export function AppShell() {
             onClick={() => setMobileNavOpen(true)}
           >
             <Menu className="size-5" />
-            <CountBadge count={awaitingCount?.count} className="absolute -right-1 -top-1" />
+            <CountBadge count={awaitingCount?.count} max={AWAITING_BADGE_MAX} className="absolute left-5 top-0" />
           </Button>
           <h1 className="text-title font-extrabold">
             {TITLES[location.pathname] ?? "Tracker"}

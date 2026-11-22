@@ -9,7 +9,7 @@ import { RepositoryForm } from "./RepositoryForm";
 
 const GITLAB_CREDENTIAL = {
   id: "cred1",
-  name: "GitLab RioRise",
+  name: "GitLab Рабочий",
   host: "gitlab.example.com",
   kind: "https_token",
   username: "oauth2",
@@ -40,7 +40,7 @@ describe("RepositoryForm", () => {
     await user.type(screen.getByLabelText("Название"), "repo");
     await user.type(screen.getByLabelText("Git URL"), "https://gitlab.example.com/repo.git");
     await user.click(screen.getByRole("combobox", { name: "Учётные данные Git" }));
-    await user.click(await screen.findByRole("option", { name: "GitLab RioRise · gitlab.example.com" }));
+    await user.click(await screen.findByRole("option", { name: "GitLab Рабочий · gitlab.example.com" }));
     await user.click(screen.getByRole("button", { name: "Создать" }));
 
     expect(api.mutations()).toEqual([

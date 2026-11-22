@@ -8,13 +8,6 @@ import { renderWithProviders } from "@/test/renderWithProviders";
 
 const NOTE = "Просмотр в claude.ai/code недоступен";
 
-/** Надпись, видимая пользователю: скрытый замерочный `span` шапки не считается. */
-function visibleNotes(): HTMLElement[] {
-  return screen
-    .queryAllByText(NOTE)
-    .filter((element) => element.closest("[aria-hidden]") === null);
-}
-
 function renderHeader(overrides: Partial<Task> = {}) {
   return renderWithProviders(
     <TaskHeader task={makeTask({ title: "Моя задача", ...overrides })} />,
@@ -38,25 +31,25 @@ describe("TaskHeader", () => {
     ).toBeInTheDocument();
   });
 
-  test("мост недоступен — надпись про claude.ai/code, кнопки переподключения нет", () => {
+  test("мост недоступен — ни надписи про claude.ai/code, ни кнопки переподключения", () => {
     renderHeader({
       status: TaskStatus.IN_PROGRESS,
       remote_control_status: RemoteControlStatus.UNAVAILABLE,
     });
 
-    expect(visibleNotes().length).toBeGreaterThan(0);
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /Переподключить/ }),
     ).not.toBeInTheDocument();
   });
 
-  test("мост подключён — надписи нет", () => {
+  test("мост подключён — надписи тоже нет", () => {
     renderHeader({
       status: TaskStatus.IN_PROGRESS,
       remote_control_status: RemoteControlStatus.CONNECTED,
     });
 
-    expect(visibleNotes()).toHaveLength(0);
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
   });
 
   test("в статусе до запуска вместо остановки — «Запустить»", () => {

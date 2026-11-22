@@ -27,6 +27,25 @@ async def test_create_and_get_pipeline(authed_client: AsyncClient) -> None:
     assert get_response.json()["is_archived"] is False
 
 
+async def test_rename_pipeline_trims_the_name(authed_client: AsyncClient) -> None:
+    pipeline_id = (await authed_client.post("/pipelines", json={"name": "Старое"})).json()["id"]
+
+    response = await authed_client.patch(f"/pipelines/{pipeline_id}", json={"name": "  Новое  "})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Новое"
+    assert (await authed_client.get(f"/pipelines/{pipeline_id}")).json()["name"] == "Новое"
+
+
+async def test_rename_pipeline_to_blank_is_rejected(authed_client: AsyncClient) -> None:
+    pipeline_id = (await authed_client.post("/pipelines", json={"name": "Старое"})).json()["id"]
+
+    response = await authed_client.patch(f"/pipelines/{pipeline_id}", json={"name": "   "})
+
+    assert response.status_code == 422
+    assert (await authed_client.get(f"/pipelines/{pipeline_id}")).json()["name"] == "Старое"
+
+
 async def test_list_pipelines_excludes_archived_by_default(authed_client: AsyncClient) -> None:
     create_response = await authed_client.post("/pipelines", json={"name": "Архивный"})
     pipeline_id = create_response.json()["id"]

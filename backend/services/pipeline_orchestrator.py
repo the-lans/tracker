@@ -53,9 +53,10 @@ from services.system_settings import (
 )
 from services.task_control import TaskControlCommand, read_task_control, run_stoppable
 from services.task_nodes import load_task_node_rows
+from services.task_status import lock_task
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterator
+    from collections.abc import Awaitable, Callable
     from pathlib import Path
 
     from redis.asyncio import Redis
@@ -413,26 +414,54 @@ class PipelineRunOutcome:
     stopped: bool = False
 
 
-def _nodes_to_run(
+def _next_node(
     rows: list[tuple[TaskNode, Node]],
     *,
     start_after_order_index: int | None,
-) -> Iterator[tuple[TaskNode, Node]]:
+    processed: set[uuid.UUID],
+) -> tuple[TaskNode, Node] | None:
     """
-    Ноды после точки продолжения; отключённые пропускаются без записи
-    `node_logs` (раздел 13.3).
+    Следующая нода после точки продолжения, которую прогон ещё не брал;
+    отключённые пропускаются без записи `node_logs` (раздел 13.3). Ноды
+    ищутся по записи `task_nodes`, а не по позиции: вставка и отключение ещё
+    не начатых нод запущенной задачи сдвигают позиции (раздел 13.2).
     """
     for task_node, node in rows:
+        if task_node.id in processed:
+            continue
         if start_after_order_index is not None and task_node.order_index <= start_after_order_index:
             continue
         if not task_node.is_enabled:
-            logger.info(
-                "node_skipped_disabled",
-                node_id=str(node.id),
-                order_index=task_node.order_index,
-            )
             continue
-        yield task_node, node
+        return task_node, node
+    return None
+
+
+async def _claim_node(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    selected: TaskNode,
+    start_after_order_index: int | None,
+    processed: set[uuid.UUID],
+) -> tuple[TaskNode, Node] | None:
+    """
+    Раздел 13.2: нода занимается под блокировкой строки задачи — той же, под которой
+    API меняет состав. Либо правка успела раньше и видна при перечитывании (нода
+    отключена или заменена), либо нода уже отмечена в `tasks.claimed_order_index` и
+    API её не тронет, пока не появится запись `node_logs`. Возвращает ноду к запуску:
+    ту же, другую (состав изменился) или `None`, если нод не осталось.
+    """
+    await lock_task(db_session, task.id)
+    current = _next_node(
+        await load_task_node_rows(db_session, task.id, refresh=True),
+        start_after_order_index=start_after_order_index,
+        processed=processed,
+    )
+    if current is not None and current[0].id == selected.id:
+        task.claimed_order_index = selected.order_index
+    await db_session.commit()
+    return current
 
 
 async def _should_pause_after(db_session: AsyncSession, task_node: TaskNode) -> bool:
@@ -506,9 +535,18 @@ async def run_pipeline(
     завершает прогон до её выполнения. ``pause_after_node`` — после успешной
     ноды с отметкой «пауза после»; `STOP` на этой паузе завершает прогон.
     """
-    rows = await load_task_node_rows(db_session, task.id)
-
-    for task_node, node in _nodes_to_run(rows, start_after_order_index=start_after_order_index):
+    # Раздел 13.2: состав ещё не начатых нод меняют, пока задача идёт, поэтому
+    # снимок перечитывается перед каждой нодой, а не один раз на весь прогон.
+    processed: set[uuid.UUID] = set()
+    while True:
+        selected = _next_node(
+            await load_task_node_rows(db_session, task.id, refresh=True),
+            start_after_order_index=start_after_order_index,
+            processed=processed,
+        )
+        if selected is None:
+            break
+        task_node, node = selected
         if checkpoint is not None:
             decision = await checkpoint(task_node.order_index)
             if decision is not CheckpointDecision.CONTINUE:
@@ -518,6 +556,19 @@ async def run_pipeline(
                     failed_order_index=task_node.order_index,
                     stopped=decision is CheckpointDecision.STOP,
                 )
+        claimed = await _claim_node(
+            db_session,
+            task=task,
+            selected=task_node,
+            start_after_order_index=start_after_order_index,
+            processed=processed,
+        )
+        if claimed is None:
+            break
+        if claimed[0].id != task_node.id:
+            continue
+        task_node, node = claimed
+        processed.add(task_node.id)
 
         if node.node_type is NodeType.CLEAR_CONTEXT:
             await _clear_session_context(

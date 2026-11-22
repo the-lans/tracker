@@ -20,7 +20,9 @@ export type TableAlign = "left" | "center" | "right";
 export type MarkdownBlock =
   | { kind: "heading"; level: number; parts: InlinePart[] }
   | { kind: "paragraph"; parts: InlinePart[] }
-  | { kind: "list"; ordered: boolean; items: InlinePart[][] }
+  // `start` — номер первого пункта нумерованного списка: список, разорванный блоком
+  // кода или вложенным списком, продолжает нумерацию, а не начинает с «1.».
+  | { kind: "list"; ordered: boolean; items: InlinePart[][]; start: number }
   | { kind: "code"; language: string; code: string }
   | { kind: "table"; align: TableAlign[]; header: InlinePart[][]; rows: InlinePart[][][] };
 
@@ -33,7 +35,8 @@ export interface CodeToken {
 
 const HEADING_RE = /^(#{1,4})\s+(.*)$/;
 const BULLET_RE = /^\s*[-*•]\s+(.*)$/;
-const ORDERED_RE = /^\s*\d+[.)]\s+(.*)$/;
+const ORDERED_RE = /^\s*(\d+)[.)]\s+(.*)$/;
+const INDENTED_RE = /^(?: {2,}|\t)/;
 const FENCE_RE = /^\s*```\s*([\w+-]*)\s*$/;
 const INLINE_RE = /(\*\*[^*\n]+\*\*)|(`[^`\n]+`)/g;
 const CODE_SPAN_RE = /`[^`\n]+`/g;
@@ -135,6 +138,11 @@ export function parseMarkdown(text: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   const lines = text.split("\n");
   let paragraph: string[] = [];
+  // Номер следующего пункта открытого нумерованного списка; `null` — списка нет.
+  // Блок кода, вложенный список и абзац внутри пункта список не закрывают: иначе
+  // каждый пункт, оторванный от соседнего, снова получил бы «1.».
+  let nextNumber: number | null = null;
+  let blankBefore = false;
 
   const flushParagraph = () => {
     if (paragraph.length) blocks.push({ kind: "paragraph", parts: parseInline(paragraph.join("\n")) });
@@ -143,6 +151,8 @@ export function parseMarkdown(text: string): MarkdownBlock[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const wasBlank = blankBefore;
+    blankBefore = !line.trim();
     const fence = line.match(FENCE_RE);
     if (fence) {
       flushParagraph();
@@ -156,6 +166,7 @@ export function parseMarkdown(text: string): MarkdownBlock[] {
     const heading = line.match(HEADING_RE);
     if (heading) {
       flushParagraph();
+      nextNumber = null;
       blocks.push({ kind: "heading", level: heading[1].length, parts: parseInline(heading[2]) });
       continue;
     }
@@ -164,15 +175,25 @@ export function parseMarkdown(text: string): MarkdownBlock[] {
     if (bullet || ordered) {
       flushParagraph();
       const isOrdered = Boolean(ordered);
-      const item = parseInline((bullet ?? ordered)![1]);
       const previous = blocks[blocks.length - 1];
+      let start = 1;
+      if (ordered) {
+        // Пункт открытого списка получает следующий номер, даже если модель написала «1.».
+        start = nextNumber ?? Number(ordered[1]);
+        nextNumber = start + 1;
+      } else if (!INDENTED_RE.test(line)) {
+        // Маркированный список на уровне нумерованного закрывает его; вложенный — нет.
+        nextNumber = null;
+      }
+      const item = parseInline((bullet ?? ordered)![bullet ? 1 : 2]);
       if (previous?.kind === "list" && previous.ordered === isOrdered) previous.items.push(item);
-      else blocks.push({ kind: "list", ordered: isOrdered, items: [item] });
+      else blocks.push({ kind: "list", ordered: isOrdered, items: [item], start });
       continue;
     }
     const table = parseTable(lines, i);
     if (table) {
       flushParagraph();
+      nextNumber = null;
       blocks.push(table.block);
       i = table.next - 1;
       continue;
@@ -181,6 +202,8 @@ export function parseMarkdown(text: string): MarkdownBlock[] {
       flushParagraph();
       continue;
     }
+    // Абзац после пустой строки без отступа — уже не продолжение пункта.
+    if (!paragraph.length && wasBlank && !INDENTED_RE.test(line)) nextNumber = null;
     paragraph.push(line);
   }
   flushParagraph();

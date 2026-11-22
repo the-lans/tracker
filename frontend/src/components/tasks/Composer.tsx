@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Clock, Eye, MessageSquarePlus, Send } from "lucide-react";
+import { Eye, MessageSquarePlus, Send } from "lucide-react";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,9 @@ import { useTemplatePreview } from "@/hooks/useTemplates";
 import { MANUAL_REQUEST_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { errorMessage } from "@/lib/errors";
 import { NO_LLM_ACCOUNT } from "@/lib/llmAccounts";
-import { ManualRequestStatus, ManualRequestType, TaskStatus } from "@/lib/types";
+import { TaskStatus } from "@/lib/types";
+import { summarizeQueue } from "@/lib/manualQueue";
+import { QueueInjectBar } from "@/components/tasks/QueueInjectBar";
 import { isPreLaunch } from "@/lib/taskStatusTransitions";
 import { ComposerResizeHandle } from "@/components/tasks/ComposerResizeHandle";
 
@@ -60,11 +62,7 @@ export function Composer({
   const refining = taskStatus === TaskStatus.REFINING;
   const acceptsRequests = MANUAL_REQUEST_STATUSES.includes(taskStatus) || refining;
   const sendDisabled = !text.trim() || submitFreeform.isPending || runCommand.isPending || (!isCommand && !llmAvailable);
-  const queuedFreeform = (queue ?? []).filter(
-    (request) =>
-      (request.request_type === ManualRequestType.FREEFORM_PROMPT || request.command_name) &&
-      request.status === ManualRequestStatus.QUEUED,
-  ).length;
+  const queueSummary = summarizeQueue(queue);
 
   function handleTextChange(value: string) {
     previewVersion.current += 1;
@@ -139,13 +137,8 @@ export function Composer({
   }
 
   return (
-    <div className="border-t border-border bg-surface p-3.5 short:sticky short:bottom-0 short:z-10 short:px-3 short:py-1.5">
-      {queuedFreeform > 0 && (
-        <div className="mb-2 flex items-center gap-1.5 text-meta font-bold text-info-text short:mb-1">
-          <Clock className="size-3" />
-          В очереди: {queuedFreeform}
-        </div>
-      )}
+    <div className={`border-t border-border bg-surface px-3.5 pb-3.5 ${queueSummary.shown ? "pt-1 md:pt-2" : "pt-3.5"} short:sticky short:bottom-0 short:z-10 short:px-3 short:py-1.5`}>
+      {queueSummary.shown && <QueueInjectBar taskId={taskId} taskStatus={taskStatus} summary={queueSummary} />}
       {manualRequestsClosed && acceptsRequests ? (
         <p className="rounded-lg bg-surface-2 px-3 py-2.5 text-note text-text-3">
           Задача завершается — приём новых промтов и команд закрыт

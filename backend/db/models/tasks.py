@@ -155,6 +155,9 @@ class Task(UUIDPrimaryKeyMixin, CreatedUpdatedAtMixin, Base):
     )
     limit_wait_until: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     limit_wait_order_index: Mapped[int | None] = mapped_column(sa.Integer)
+    # Раздел 13.2: нода, которую оркестратор уже выбрал для запуска, но запись `node_logs`
+    # ещё не создана: с этого момента её нельзя отключить или заменить.
+    claimed_order_index: Mapped[int | None] = mapped_column(sa.Integer)
     # Попытка ноды, ждавшей сброса: после него повторы продолжают счёт с неё.
     limit_wait_attempt: Mapped[int | None] = mapped_column(sa.Integer)
     # Раздел 15.7: категория автора; удалённая категория оставляет задачу без категории.
