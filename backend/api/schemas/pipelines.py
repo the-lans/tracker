@@ -5,8 +5,9 @@
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from db.models.enums import (
     NodeType,
@@ -19,13 +20,16 @@ from services.command_arguments import (
     MAX_COMMAND_LENGTH,
 )
 
+# Название пайплайна: без пробелов по краям и не пустое (переименование — раздел 15.1).
+PipelineName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
 
 class PipelineCreateRequest(BaseModel):
-    name: str
+    name: PipelineName
 
 
 class PipelineUpdateRequest(BaseModel):
-    name: str | None = None
+    name: PipelineName | None = None
     is_archived: bool | None = None
 
 

@@ -24,6 +24,7 @@ import {
 } from "@/hooks/usePipelines";
 import { errorMessage, toastError } from "@/lib/errors";
 import type { Pipeline } from "@/lib/types";
+import { RenamePipelineButton } from "@/components/pipelines/RenamePipelineButton";
 import { ArchiveToggleButton } from "@/components/common/actions/ArchiveToggleButton";
 import { ConfirmDeleteButton } from "@/components/common/actions/ConfirmDeleteButton";
 import { OwnerLabel } from "@/components/common/avatar/OwnerLabel";
@@ -109,6 +110,7 @@ export function PipelinesPage() {
                 )}
                 <OwnerLabel ownerId={pipeline.created_by} />
               </Link>
+              <RenamePipelineButton pipeline={pipeline} />
               <PipelineArchiveToggle pipeline={pipeline} />
               <ConfirmDeleteButton
                 kind="пайплайн"
