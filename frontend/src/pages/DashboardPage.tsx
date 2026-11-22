@@ -136,40 +136,39 @@ export function DashboardPage() {
       >
         <QueueSummaryLine />
       </PageHeader>
-      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-2 px-5 pb-3 sm:gap-2 sm:pb-4 lg:px-8">
-        {FILTERS.map((filterDef) => (
-          <ToggleChip
-            key={filterDef.key}
-            size="compact"
-            pressed={filter === filterDef.key}
-            onToggle={() => setFilter(filterDef.key)}
-          >
-            {filterDef.label} · {counts[filterDef.key]}
-          </ToggleChip>
-        ))}
-        <div className="flex w-full gap-1.5 sm:w-auto sm:gap-2">
-          <FilterSelect
-            value={categoryFilter}
-            onChange={setChosenCategory}
-            values={[WITHOUT_CATEGORY, ...(categories ?? []).map((category) => category.id)]}
-            labels={categoryLabels}
-            allLabel="Все категории"
-            label="Категория"
-            className="min-w-0 flex-1 sm:w-48 sm:flex-none"
-          />
-          <FilterSelect
-            value={markDayKey}
-            onChange={setMarkDayKey}
-            values={MARK_DAY_KEYS}
-            labels={MARK_DAY_LABEL}
-            allLabel="Все дни"
-            label="Отмечены на день"
-            className="min-w-0 flex-1 sm:w-36 sm:flex-none"
-          />
-        </div>
-      </div>
-
       <div className={PAGE_BODY}>
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-2 pb-3 sm:gap-2 sm:pb-4 lg:sticky lg:top-0 lg:z-10 lg:-mx-8 lg:bg-bg lg:px-8">
+          {FILTERS.map((filterDef) => (
+            <ToggleChip
+              key={filterDef.key}
+              size="compact"
+              pressed={filter === filterDef.key}
+              onToggle={() => setFilter(filterDef.key)}
+            >
+              {filterDef.label} · {counts[filterDef.key]}
+            </ToggleChip>
+          ))}
+          <div className="flex w-full gap-1.5 sm:w-auto sm:gap-2">
+            <FilterSelect
+              value={categoryFilter}
+              onChange={setChosenCategory}
+              values={[WITHOUT_CATEGORY, ...(categories ?? []).map((category) => category.id)]}
+              labels={categoryLabels}
+              allLabel="Все категории"
+              label="Категория"
+              className="min-w-0 flex-1 sm:w-48 sm:flex-none"
+            />
+            <FilterSelect
+              value={markDayKey}
+              onChange={setMarkDayKey}
+              values={MARK_DAY_KEYS}
+              labels={MARK_DAY_LABEL}
+              allLabel="Все дни"
+              label="Отмечены на день"
+              className="min-w-0 flex-1 sm:w-36 sm:flex-none"
+            />
+          </div>
+        </div>
         {isLoading && <div className="py-10 text-center text-text-3">Загрузка задач…</div>}
         {!isLoading && filtered.length === 0 && ((tasks ?? []).length === 0 ? (
           <EmptyState
