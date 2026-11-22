@@ -53,6 +53,7 @@ from services.system_settings import (
 )
 from services.task_control import TaskControlCommand, read_task_control, run_stoppable
 from services.task_nodes import load_task_node_rows
+from services.task_status import lock_task
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -436,6 +437,33 @@ def _next_node(
     return None
 
 
+async def _claim_node(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    selected: TaskNode,
+    start_after_order_index: int | None,
+    processed: set[uuid.UUID],
+) -> tuple[TaskNode, Node] | None:
+    """
+    Раздел 13.2: нода занимается под блокировкой строки задачи — той же, под которой
+    API меняет состав. Либо правка успела раньше и видна при перечитывании (нода
+    отключена или заменена), либо нода уже отмечена в `tasks.claimed_order_index` и
+    API её не тронет, пока не появится запись `node_logs`. Возвращает ноду к запуску:
+    ту же, другую (состав изменился) или `None`, если нод не осталось.
+    """
+    await lock_task(db_session, task.id)
+    current = _next_node(
+        await load_task_node_rows(db_session, task.id, refresh=True),
+        start_after_order_index=start_after_order_index,
+        processed=processed,
+    )
+    if current is not None and current[0].id == selected.id:
+        task.claimed_order_index = selected.order_index
+    await db_session.commit()
+    return current
+
+
 async def _should_pause_after(db_session: AsyncSession, task_node: TaskNode) -> bool:
     """Отметку могли поставить, пока нода выполнялась (раздел 13.2), — она перечитывается."""
     await db_session.refresh(task_node, ["pause_after"])
@@ -528,20 +556,18 @@ async def run_pipeline(
                     failed_order_index=task_node.order_index,
                     stopped=decision is CheckpointDecision.STOP,
                 )
-        # Перед самой нодой состав перечитывается ещё раз: пока шли пауза, очередь ручных
-        # запросов и проверки, ноду могли отключить или заменить (раздел 13.2). Граница
-        # «начатых» нод — запись `node_logs`, она появляется чуть позже; это окно сведено
-        # к проверкам хода (ворота лимита, подготовка промта).
-        again = _next_node(
-            await load_task_node_rows(db_session, task.id, refresh=True),
+        claimed = await _claim_node(
+            db_session,
+            task=task,
+            selected=task_node,
             start_after_order_index=start_after_order_index,
             processed=processed,
         )
-        if again is None:
+        if claimed is None:
             break
-        if again[0].id != task_node.id:
+        if claimed[0].id != task_node.id:
             continue
-        task_node, node = again
+        task_node, node = claimed
         processed.add(task_node.id)
 
         if node.node_type is NodeType.CLEAR_CONTEXT:

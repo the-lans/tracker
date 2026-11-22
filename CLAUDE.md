@@ -428,6 +428,7 @@ alembic/
                  git_credentials.ssh_known_hosts, users.session_version,
                  tasks.description_html — HTML описания из Jira для показа,
                  task_session_events — сброс контекста и новые сессии в ленте чата,
+                 tasks.claimed_order_index — нода, выбранная оркестратором до записи node_logs,
                  system_settings.llm_switch_threshold_week_pct — порог недели,
                  system_settings.llm_compact_min_context_chars — минимум контекста для сжатия);
                  новые миграции пишут DDL
@@ -709,8 +710,10 @@ Postgres из `backend/tests/conftest.py`:
     `plan_review`, `awaiting_input`, `rebase_conflict`, `awaiting_limit`) —
     только для нод за границей начатых: `order_index` больше наибольшего у
     ноды с записью `node_logs` пайплайна в текущем прогоне (в
-    `awaiting_limit` — и больше `limit_wait_order_index`), пока ничего не
-    начато, доступны все (`services/task_status.run_started_frontier`);
+    `awaiting_limit` — и больше `limit_wait_order_index`; выбранная
+    оркестратором нода без записи — `tasks.claimed_order_index`, он ставится
+    под `lock_task`, как и правка состава), пока ничего не начато, доступны
+    все (`services/task_status.run_started_frontier`);
     в `failed` — только для нод с `order_index >
     tasks.last_failed_order_index` и для ноды на самой точке перезапуска,
     если она не начинала выполняться в текущем прогоне (остановка на паузе

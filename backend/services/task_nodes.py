@@ -194,6 +194,8 @@ async def set_task_node_enabled(
     task_node_id: uuid.UUID,
     is_enabled: bool,
 ) -> TaskNode:
+    # Под блокировкой строки задачи: оркестратор выбирает ноду под той же блокировкой.
+    await lock_task(db_session, task.id)
     task_node = await _get_task_node_or_404(db_session, task=task, task_node_id=task_node_id)
     await _ensure_position_editable(db_session, task=task, order_index=task_node.order_index)
     task_node.is_enabled = is_enabled

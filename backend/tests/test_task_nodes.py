@@ -233,6 +233,38 @@ class TestRunningTaskComposition:
                     is_enabled=False,
                 )
 
+    async def test_claimed_node_is_locked(self, db_session: AsyncSession) -> None:
+        """Нода, выбранная оркестратором, но ещё без `node_logs`, уже не меняется."""
+        task, task_nodes = await _running_task(db_session, TaskStatus.IN_PROGRESS)
+        task.claimed_order_index = 2
+        await db_session.flush()
+
+        views = await list_task_nodes(db_session, task)
+        assert [view.editable for view in views] == [False, False, False, True]
+        with pytest.raises(ConflictError, match="уже выполнялась или выполняется"):
+            await set_task_node_enabled(
+                db_session,
+                task=task,
+                task_node_id=task_nodes[2].id,
+                is_enabled=False,
+            )
+        await set_task_node_enabled(
+            db_session,
+            task=task,
+            task_node_id=task_nodes[3].id,
+            is_enabled=False,
+        )
+
+    async def test_reset_clears_claim(self, db_session: AsyncSession) -> None:
+        task, _ = await _running_task(db_session, TaskStatus.DONE)
+        task.claimed_order_index = 3
+        await db_session.commit()
+
+        await reset_task_run(db_session, task_id=task.id)
+
+        await db_session.refresh(task)
+        assert task.claimed_order_index is None
+
     @pytest.mark.parametrize("status", _RUNNING_STATUSES)
     async def test_custom_prompt_after_started(
         self,

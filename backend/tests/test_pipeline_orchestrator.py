@@ -36,7 +36,7 @@ from db.models.users import User
 from services import pipeline_orchestrator
 from services import task_nodes as task_nodes_module
 from services.crypto import encrypt
-from services.errors import ValidationError
+from services.errors import ConflictError, ValidationError
 from services.node_runs import SESSION_ERROR_MESSAGE
 from services.nodes.dispatch import NodeExecutionOutcome, execute_node
 from services.pipeline_orchestrator import (
@@ -646,6 +646,49 @@ class TestCompositionChangedWhileRunning:
 
         assert outcome.completed is True
         assert fake.queries == ["шаг 1", "шаг 2"]
+
+    async def test_started_node_is_claimed_and_locked(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        """Выбранная нода занята ещё до записи `node_logs`: правка состава её не меняет."""
+        task, _ = await self._three_nodes(db_session)
+        by_index = {
+            task_node.order_index: task_node
+            for task_node in (await db_session.execute(sa.select(TaskNode))).scalars().all()
+        }
+        claims: list[int | None] = []
+        refused: list[bool] = []
+
+        async def on_query() -> None:
+            await db_session.refresh(task)
+            claims.append(task.claimed_order_index)
+            if len(claims) == 1:
+                with pytest.raises(ConflictError):
+                    await set_task_node_enabled(
+                        db_session,
+                        task=task,
+                        task_node_id=by_index[0].id,
+                        is_enabled=False,
+                    )
+                refused.append(True)
+
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()]] * 3,
+            on_query=on_query,
+        )
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+        )
+
+        assert outcome.completed is True
+        assert claims == [0, 1, 2]
+        assert refused == [True]
 
     async def test_node_enabled_later_runs(self, db_session: AsyncSession, tmp_path: Path) -> None:
         task, nodes = await self._three_nodes(db_session, disabled=(2,))

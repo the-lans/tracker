@@ -234,7 +234,8 @@ async def run_started_frontier(db_session: AsyncSession, task: Task) -> int | No
     """
     Раздел 13.2: наибольший `order_index` ноды, которая уже выполняется или
     выполнялась в текущем прогоне (запись `node_logs` пайплайна), а в ожидании
-    лимита — и ждущей ноды (`limit_wait_order_index`). Всё, что стоит дальше,
+    лимита — и ждущей ноды (`limit_wait_order_index`), и ноды, которую оркестратор уже
+    выбрал, но запись ещё не создал (`claimed_order_index`). Всё, что стоит дальше,
     ещё не начиналось и меняется свободно; `None` — ни одна нода не начата.
     """
     started = await db_session.scalar(
@@ -247,7 +248,11 @@ async def run_started_frontier(db_session: AsyncSession, task: Task) -> int | No
         ),
     )
     waiting = task.limit_wait_order_index if task.status is TaskStatus.AWAITING_LIMIT else None
-    positions = [position for position in (started, waiting) if position is not None]
+    positions = [
+        position
+        for position in (started, waiting, task.claimed_order_index)
+        if position is not None
+    ]
     return max(positions) if positions else None
 
 
@@ -612,5 +617,6 @@ async def reset_task_run(
             "reset_at": datetime.now(UTC),
             "manual_requests_closed": False,
             "current_llm_account_id": None,
+            "claimed_order_index": None,
         },
     )

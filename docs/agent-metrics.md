@@ -134,8 +134,9 @@ docker logs tracker-llm-gateway-1 --since 15m | grep llm_gateway_
 
 ### Влитие промта в идущий ход
 
-События пишутся в логах воркера сессий (раздел 7.3 ТЗ), содержимое промтов в них
-не попадает — только `request_id`. По `task_id` можно восстановить всю цепочку.
+События пишутся в логах воркера сессий (раздел 7.3 ТЗ), кроме `injection_command_unanswered`:
+его пишет API, смотреть нужно в логах контейнера `backend`. Содержимое промтов в логах не
+попадает — только `request_id`. По `task_id` можно восстановить всю цепочку.
 
 | Событие | Уровень | Поля и смысл |
 | --- | --- | --- |
@@ -148,7 +149,7 @@ docker logs tracker-llm-gateway-1 --since 15m | grep llm_gateway_
 | `injection_prompt_skipped` | warning | `request_id`, `error` — промт не удалось подготовить (например, неизвестная переменная), влитие взяло следующий. |
 | `session_injection_settle_failed` | warning | `message_id`, `error_type` — отмена в конце хода не прошла, сообщение возвращено в очередь, ход не пострадал. |
 | `injection_command_dropped` | info / debug | `age`, `stale` — команда API отброшена: `stale=true` (info) — воркер долго не опрашивал очередь, `false` (debug) — API уже ответил отказом. |
-| `injection_command_unanswered` | warning | `action` — воркер не ответил API за отведённое время. |
+| `injection_command_unanswered` | warning | Лог контейнера `backend`. `action` — воркер не ответил API за отведённое время. |
 | `injection_command_failed` | error | Неожиданный сбой исполнения команды, со стеком. |
 | `injection_listener_error` | error | Первый сбой Redis или БД в серии, со стеком. |
 | `injection_listener_error_repeated` | warning | `error_type`, `streak` — повторы того же сбоя без стека. |
