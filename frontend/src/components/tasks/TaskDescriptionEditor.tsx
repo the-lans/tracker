@@ -14,12 +14,14 @@ import type { Task } from "@/lib/types";
 export function TaskDescriptionEditor({ task, onClose }: { task: Task; onClose: () => void }) {
   const [text, setText] = useState(task.description);
   const updateTask = useUpdateTask(task.id);
-  const canSave = text !== task.description && !updateTask.isPending;
+  // Концевые пробелы и переводы строк не сохраняются (как и на сервере).
+  const trimmed = text.trimEnd();
+  const canSave = trimmed !== task.description && !updateTask.isPending;
 
   function save() {
     if (!canSave) return;
     updateTask.mutate(
-      { description: text },
+      { description: trimmed },
       {
         onSuccess: () => {
           toast.success("Описание сохранено");

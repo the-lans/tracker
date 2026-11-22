@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Self
+from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from db.models.enums import (
     LibraryPromptRunStatus,
@@ -28,6 +28,9 @@ from db.models.enums import (
     TaskStatus,
 )
 from db.models.tasks import MAX_QUEUE_PRIORITY, MIN_QUEUE_PRIORITY
+
+# Описание сохраняется без концевых пробелов и переводов строк (раздел 15.2).
+TaskDescription = Annotated[str, AfterValidator(str.rstrip)]
 
 
 class AwaitingDecisionCountResponse(BaseModel):
@@ -56,7 +59,7 @@ class TaskDuplicateRequest(BaseModel):
 
     code: str
     title: str
-    description: str
+    description: TaskDescription
     guide_url: str | None = None
     llm_account_id: uuid.UUID | None = None
     repositories: list[TaskRepositoryAttachRequest] = []
@@ -81,7 +84,7 @@ class TaskUpdateRequest(BaseModel):
     """
 
     title: str | None = None
-    description: str | None = None
+    description: TaskDescription | None = None
     guide_url: str | None = None
     llm_account_id: uuid.UUID | None = None
     auto_start_enabled: bool | None = None

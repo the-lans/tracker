@@ -412,6 +412,17 @@ class TestDescriptionHtml:
         assert issue.description_html == _DESCRIPTION_HTML
         assert "expand=renderedFields" in jira.requested_urls[0]
 
+    async def test_client_strips_trailing_whitespace_of_description(self) -> None:
+        def handle(_: httpx.Request) -> httpx.Response:
+            body = _issue_body()
+            body["fields"]["description"] = f"{_DESCRIPTION_TEXT}  \n\n"
+            return httpx.Response(200, json=body)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http_client:
+            issue = await _client(http_client).get_issue("PROJ-42")
+
+        assert issue.description == _DESCRIPTION_TEXT
+
     @pytest.mark.parametrize(
         "rendered",
         [None, {}, {"description": ""}, {"description": "  "}, {"description": 5}],
@@ -607,6 +618,27 @@ class TestRefreshDescription:
 
         assert response.status_code == 200, response.text
         assert response.json()["description"] == _DESCRIPTION_TEXT
+        assert response.json()["description_html"] == _DESCRIPTION_HTML
+
+    async def test_trailing_whitespace_saved_before_trimming_is_not_a_change(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        fake_jira: FakeJira,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        del fake_jira
+        task_id = await self._imported_task(authed_client, db_session, monkeypatch)
+        task = await db_session.get(Task, uuid.UUID(task_id))
+        assert task is not None
+        # Описание, сохранённое до обрезки концевых пробелов, у запущенной задачи.
+        task.description = f"{_DESCRIPTION_TEXT}\n\n"
+        task.status = TaskStatus.IN_PROGRESS
+        await db_session.commit()
+
+        response = await authed_client.post(f"/jira/tasks/{task_id}/description")
+
+        assert response.status_code == 200, response.text
         assert response.json()["description_html"] == _DESCRIPTION_HTML
 
     async def test_changed_description_of_a_started_task_is_not_replaced(
