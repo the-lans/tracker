@@ -69,7 +69,7 @@ describe("JiraImportField", () => {
       const field = await screen.findByLabelText("Ключ задачи Jira");
 
       await user.click(field);
-      await user.paste("https://riorise.atlassian.net/browse/RR-20274");
+      await user.paste("https://example.atlassian.net/browse/RR-20274");
 
       expect(field).toHaveValue("RR-20274");
       await user.click(fillButton());

@@ -1266,7 +1266,7 @@ class TestLibraryLink:
             db_session,
             task,
             node_type=NodeType.PLAIN_PROMPT,
-            prompt_template="https://riorise.atlassian.net/browse/" + placeholder,
+            prompt_template="https://example.atlassian.net/browse/" + placeholder,
         )
         await _add_node(
             db_session,
@@ -1283,7 +1283,7 @@ class TestLibraryLink:
         )
 
         assert outcome.completed is True
-        assert fake.queries == [f"https://riorise.atlassian.net/browse/{task.code}"]
+        assert fake.queries == [f"https://example.atlassian.net/browse/{task.code}"]
         assert (await _node_logs_for(db_session, task.id))[0].rendered_prompt == fake.queries[0]
 
     @pytest.mark.parametrize(
