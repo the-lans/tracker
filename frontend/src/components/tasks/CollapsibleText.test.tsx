@@ -67,4 +67,35 @@ describe("CollapsibleText", () => {
     expect(await createUrl.mock.calls[0][0].text()).toBe(longText);
     click.mockRestore();
   });
+
+  describe("блок кода в превью", () => {
+    const fenced = (lines: number) =>
+      `Вот код:\n\`\`\`python\n${Array.from({ length: lines }, (_, i) => `value_${i} = ${i}`).join("\n")}\n\`\`\`\nПосле блока.`;
+    const visible = () => document.querySelector("div.whitespace-pre-wrap")?.textContent ?? "";
+
+    test("предел внутри блока кода — блок показан до закрывающей ограды, многоточие под ним", () => {
+      renderWithProviders(<CollapsibleText text={fenced(25)} />);
+
+      expect(visible()).toContain("value_24");
+      expect(visible()).not.toContain("После блока");
+      expect(visible().endsWith("```\n…")).toBe(true);
+    });
+
+    test("слишком длинный блок кода обрезается и закрывается своей оградой", () => {
+      renderWithProviders(<CollapsibleText text={fenced(300)} />);
+
+      expect(visible()).not.toContain("value_299");
+      expect(visible().endsWith("```\n…")).toBe(true);
+      expect((visible().match(/```/g) ?? []).length).toBe(2);
+    });
+
+    test("после разворачивания виден весь текст блока", async () => {
+      const { user } = renderWithProviders(<CollapsibleText text={fenced(300)} />);
+
+      await user.click(screen.getByRole("button", EXPAND));
+
+      expect(visible()).toContain("value_299");
+      expect(visible()).toContain("После блока");
+    });
+  });
 });

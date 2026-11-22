@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { Copy, Download } from "lucide-react";
 import { copyText, downloadText } from "@/lib/textExport";
+import { collapsedPreview, previewOf } from "@/lib/textPreview";
 
-const PREVIEW_LENGTH = 320;
 
 /** Раздел 15.2: "каждый блок вывода по умолчанию свёрнут до короткого
  * превью... не должен автоматически растягивать страницу", плюс
@@ -33,9 +33,10 @@ export function CollapsibleText({
   // `null` — пользователь не разворачивал: текст, выросший после показа
   // (например, вывод скрипта вместо «(пусто)»), тоже остаётся свёрнутым.
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
-  const isTruncatable = text.length > PREVIEW_LENGTH;
+  const preview = previewOf(text);
+  const isTruncatable = preview.length < text.length;
   const expanded = !isTruncatable || (userExpanded ?? (live || defaultExpanded));
-  const shown = expanded ? text : `${text.slice(0, PREVIEW_LENGTH)}…`;
+  const shown = expanded ? text : collapsedPreview(text);
 
   return (
     <div className={className}>
