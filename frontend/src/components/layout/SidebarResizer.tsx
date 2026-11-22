@@ -68,10 +68,10 @@ export function SidebarResizer({ width, onChange, onReset }: Props) {
       onKeyDown={onKeyDown}
     >
       {/* Зона нажатия — снаружи меню, чтобы не перекрывать его полосу прокрутки; линия и «ручка» стоят на самой границе. */}
-      <span className="absolute inset-y-0 left-0 w-[3px] -translate-x-1/2 bg-border transition-colors group-hover:bg-accent group-active:bg-accent" />
+      <span className="absolute inset-y-0 left-0 w-[5px] -translate-x-1/2 bg-border transition-colors group-hover:bg-accent group-active:bg-accent" />
       <span
         aria-hidden
-        className="absolute left-0 top-1/2 h-16 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-surface bg-text-3 transition-colors group-hover:bg-accent group-active:bg-accent"
+        className="absolute left-0 top-1/2 h-16 w-[10px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-surface bg-text-3 transition-colors group-hover:bg-accent group-active:bg-accent"
       />
     </div>
   );
