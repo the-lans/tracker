@@ -58,7 +58,7 @@ function NavItem({ to, label, icon: Icon, badge, end, compact }: NavItemDef) {
             <span
               className={cn(
                 "absolute top-2 bottom-2 w-[3px] rounded-full bg-accent",
-                compact ? "-left-2" : "-left-3.5",
+                compact ? "-left-3" : "-left-3.5",
               )}
             />
           )}
@@ -66,7 +66,9 @@ function NavItem({ to, label, icon: Icon, badge, end, compact }: NavItemDef) {
           {!compact && <span className="truncate">{label}</span>}
           <CountBadge
             count={badge}
-            className={compact ? "absolute -right-0.5 -top-0.5 px-1 py-0 text-[10px] leading-4" : "ml-auto"}
+            className={compact
+                ? "absolute right-0 top-0 min-w-[18px] px-1 py-0 text-center text-[10px] leading-[18px]"
+                : "ml-auto"}
           />
         </>
       )}
@@ -118,7 +120,7 @@ interface SidebarProps {
 export function Sidebar({ onNavigate, hideBrand = false, width, compact = false }: SidebarProps) {
   const { user } = useAuth();
   const { data: awaitingCount } = useAwaitingDecisionCount();
-  const side = compact ? "px-2" : "px-3.5";
+  const side = compact ? "px-3" : "px-3.5";
 
   return (
     <aside
@@ -167,7 +169,7 @@ export function Sidebar({ onNavigate, hideBrand = false, width, compact = false 
       <div
         className={cn(
           "flex shrink-0 flex-col gap-2.5 border-t border-border py-3",
-          compact ? "items-center px-2" : "px-3.5",
+          compact ? "items-center px-3" : "px-3.5",
         )}
       >
         <ThemeToggle compact={compact} />

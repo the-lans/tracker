@@ -3,7 +3,7 @@
 const STORAGE_KEY = "tracker.sidebarWidth";
 
 /** Ширина меню только со значками. */
-export const SIDEBAR_COMPACT_WIDTH = 64;
+export const SIDEBAR_COMPACT_WIDTH = 72;
 export const SIDEBAR_DEFAULT_WIDTH = 248;
 export const SIDEBAR_MAX_WIDTH = 420;
 /** Уже этой ширины подписи не помещаются: меню схлопывается до значков. */

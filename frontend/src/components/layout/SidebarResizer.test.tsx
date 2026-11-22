@@ -43,7 +43,7 @@ describe("SidebarResizer", () => {
     fireEvent.keyDown(handle, { key: "ArrowLeft" });
     expect(onChange).toHaveBeenLastCalledWith(232);
     fireEvent.keyDown(handle, { key: "Home" });
-    expect(onChange).toHaveBeenLastCalledWith(64);
+    expect(onChange).toHaveBeenLastCalledWith(72);
     fireEvent.keyDown(handle, { key: "End" });
     expect(onChange).toHaveBeenLastCalledWith(420);
 

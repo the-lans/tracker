@@ -69,7 +69,7 @@ describe("Sidebar", () => {
 
   describe("режим значков", () => {
     test("подписей нет, но ссылки сохраняют имена и подсказки", () => {
-      renderSidebar(UserRole.ADMIN, "/", { compact: true, width: 64 });
+      renderSidebar(UserRole.ADMIN, "/", { compact: true, width: 72 });
 
       const events = screen.getByRole("link", { name: "События" });
       expect(events).toHaveAttribute("title", "События");
@@ -82,7 +82,7 @@ describe("Sidebar", () => {
 
     test("тема переключается одной кнопкой", async () => {
       const user = userEvent.setup();
-      renderSidebar(UserRole.USER, "/", { compact: true, width: 64 });
+      renderSidebar(UserRole.USER, "/", { compact: true, width: 72 });
 
       const toggle = screen.getByRole("button", { name: /Включить (тёмную|светлую) тему/ });
       const before = toggle.getAttribute("aria-label");
