@@ -132,6 +132,28 @@ docker logs tracker-llm-gateway-1 --since 15m | grep llm_gateway_
 
 В сообщение попадают только имена инструментов, без аргументов.
 
+### Влитие промта в идущий ход
+
+События пишутся в логах воркера сессий (раздел 7.3 ТЗ), содержимое промтов в них
+не попадает — только `request_id`. По `task_id` можно восстановить всю цепочку.
+
+| Событие | Уровень | Поля и смысл |
+| --- | --- | --- |
+| `session_message_injected` | info | `message_id` — сообщение отправлено в ход. |
+| `prompt_injected` | info | `request_id` — запрос очереди стал `injected`. |
+| `prompt_injection_taken` | info | `request_id`, `wait_ms` — сколько прошло от влития до взятия агентом (`null`, если момент влития неизвестен, например после перезапуска воркера). |
+| `prompt_injection_returned` | info | `request_id` — не взятое сообщение вернулось в очередь. |
+| `session_injection_cancelled` | info | `message_id` — «Отменить» сработало. |
+| `injection_refused` | info | `action` (`inject`/`cancel`), `reason` (`no_turn`, `awaiting_decision`, `nothing_to_inject`, `nothing_to_cancel`, `too_late`, `failed`) — как часто и почему влитие не удаётся. |
+| `injection_prompt_skipped` | warning | `request_id`, `error` — промт не удалось подготовить (например, неизвестная переменная), влитие взяло следующий. |
+| `session_injection_settle_failed` | warning | `message_id`, `error_type` — отмена в конце хода не прошла, сообщение возвращено в очередь, ход не пострадал. |
+| `injection_command_dropped` | info / debug | `age`, `stale` — команда API отброшена: `stale=true` (info) — воркер долго не опрашивал очередь, `false` (debug) — API уже ответил отказом. |
+| `injection_command_unanswered` | warning | `action` — воркер не ответил API за отведённое время. |
+| `injection_command_failed` | error | Неожиданный сбой исполнения команды, со стеком. |
+| `injection_listener_error` | error | Первый сбой Redis или БД в серии, со стеком. |
+| `injection_listener_error_repeated` | warning | `error_type`, `streak` — повторы того же сбоя без стека. |
+| `plan_review_skipped` | info | `tool_name` — агент после принятого плана вызвал `ExitPlanMode`/`EnterPlanMode`, окно плана не открыто (раздел 9.5). |
+
 ## Диагностическая конфигурация
 
 | Переменная | Значение по умолчанию | Назначение |

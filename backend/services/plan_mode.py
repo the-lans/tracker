@@ -600,6 +600,11 @@ class _PermissionCallback:
             and context.task_id is not None
             and await self._plan_already_accepted(context.task_id)
         ):
+            logger.info(
+                "plan_review_skipped",
+                task_id=str(context.task_id),
+                tool_name=tool_name,
+            )
             return PermissionResultDeny(message=PLANNING_NOT_ACTIVE_DENIED, interrupt=False)
         if tool_name in INTERCEPTED_TOOLS:
             if not active:

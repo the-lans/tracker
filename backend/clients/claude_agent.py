@@ -663,9 +663,13 @@ class ClaudeCodeSession:
                 continue
             try:
                 cancelled = await self._client.cancel_injected_message(message_id)
-            except Exception:  # noqa: BLE001 — ход уже завершён успешно: сбой отмены его не портит
+            except Exception as error:  # noqa: BLE001 — ход уже завершён успешно: сбой отмены его не портит
                 # Сообщение не доказано взятым — лучше выполнить его ещё раз, чем потерять.
-                logger.warning("session_injection_settle_failed", message_id=message_id)
+                logger.warning(
+                    "session_injection_settle_failed",
+                    message_id=message_id,
+                    error_type=type(error).__name__,
+                )
                 cancelled = True
             self._injections.pop(message_id, None)
             if cancelled:

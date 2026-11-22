@@ -1198,9 +1198,14 @@ class TestInjectIntoRunningTurn:
         session = ClaudeCodeSession(fake, injection_observer=_Observer(log))
         message_id = str(uuid.uuid4())
 
-        await self._during_turn(session, lambda: session.inject_prompt("поздно", message_id))
+        with structlog.testing.capture_logs() as logs:
+            await self._during_turn(session, lambda: session.inject_prompt("поздно", message_id))
 
         # Ход завершён успешно, сообщение не потеряно — оно вернулось в очередь.
+        failed = [e for e in logs if e["event"] == "session_injection_settle_failed"]
+        assert [(e["message_id"], e["error_type"]) for e in failed] == [
+            (message_id, "CLIConnectionError"),
+        ]
         assert log.returned == [message_id]
         assert session.injection_refusal() == "no_turn"
         outcome = await session.send_and_collect_text("следующий")

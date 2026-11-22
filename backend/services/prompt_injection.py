@@ -78,6 +78,7 @@ _COMMAND_ID = "id"
 _COMMAND_ACTION = "action"
 _COMMAND_SENT_AT = "at"
 _FLAG_SET = "1"
+_MS_IN_SECOND = 1000
 
 
 class InjectionAction(StrEnum):
@@ -178,10 +179,12 @@ async def _next_command(redis_client: Redis, task_id: uuid.UUID) -> dict[str, ob
         command: dict[str, object] = json.loads(text)
         command_id = str(command[_COMMAND_ID])
         age = time.time() - float(str(command[_COMMAND_SENT_AT]))
-        if age > STALE_COMMAND_SECONDS or await redis_client.get(
-            _abandoned_key(task_id, command_id),
-        ):
-            logger.info("injection_command_dropped", task_id=str(task_id), age=round(age, 1))
+        stale = age > STALE_COMMAND_SECONDS
+        if stale or await redis_client.get(_abandoned_key(task_id, command_id)):
+            # Брошенную API команду (пользователь уже получил отказ) отбрасывать — обычное дело;
+            # устаревшая, наоборот, говорит, что воркер долго не опрашивал очередь.
+            log = logger.info if stale else logger.debug
+            log("injection_command_dropped", task_id=str(task_id), age=round(age, 1), stale=stale)
             continue
         return command
 
@@ -205,6 +208,8 @@ class PromptInjector:
         self._session_factory = session_factory
         # Показываемый текст влитого запроса (секреты замаскированы) — для записи в ленте.
         self._display: dict[uuid.UUID, str] = {}
+        # Когда сообщение влито (`time.monotonic`): по нему считается ожидание взятия.
+        self._injected_at: dict[uuid.UUID, float] = {}
 
     def bind(self, session: ClaudeCodeSession) -> None:
         self._bound_session = session
@@ -217,11 +222,21 @@ class PromptInjector:
     async def handle(self, action: InjectionAction) -> InjectionReply:
         try:
             if action is InjectionAction.INJECT:
-                return await self._inject()
-            return await self._cancel()
+                reply = await self._inject()
+            else:
+                reply = await self._cancel()
         except Exception as exc:
             logger.exception("injection_command_failed", task_id=str(self._task_id))
             return InjectionReply(ok=False, reason=REASON_FAILED, message=str(exc))
+        if not reply.ok:
+            # Отказ виден пользователю в интерфейсе; в журнале нужен для разбора причин.
+            logger.info(
+                "injection_refused",
+                task_id=str(self._task_id),
+                action=action.value,
+                reason=reply.reason,
+            )
+        return reply
 
     async def _inject(self) -> InjectionReply:
         refusal = self._session.injection_refusal()
@@ -245,6 +260,12 @@ class PromptInjector:
                     await _release(db_session, request.id)
                     skipped.add(request.id)
                     first_error = first_error or str(error)
+                    logger.warning(
+                        "injection_prompt_skipped",
+                        task_id=str(self._task_id),
+                        request_id=str(request.id),
+                        error=str(error),
+                    )
                     continue
                 except BaseException:
                     await _release(db_session, request.id)
@@ -266,6 +287,7 @@ class PromptInjector:
         prompt = await render_freeform_prompt(db_session, task=task, text=request.raw_prompt_text)
         self._display[request.id] = prompt.display
         await self._session.inject_prompt(prompt.text, str(request.id))
+        self._injected_at[request.id] = time.monotonic()
 
     async def _cancel(self) -> InjectionReply:
         async with self._session_factory() as db_session:
@@ -284,6 +306,15 @@ class PromptInjector:
             return InjectionReply(ok=False, reason=REASON_TOO_LATE, request_id=str(request_id))
         await self.returned(str(request_id))
         return InjectionReply(ok=True, request_id=str(request_id))
+
+    def _wait_ms(self, request_id: uuid.UUID) -> int | None:
+        """
+        Сколько миллисекунд прошло от влития до взятия агентом; `None` — момент влития неизвестен.
+        """
+        injected_at = self._injected_at.pop(request_id, None)
+        if injected_at is None:
+            return None
+        return round((time.monotonic() - injected_at) * _MS_IN_SECOND)
 
     # --- InjectionObserver ---
 
@@ -320,12 +351,18 @@ class PromptInjector:
             request.status = ManualRequestStatus.DONE
             request.processed_at = now
             await db_session.commit()
-        logger.info("prompt_injection_taken", task_id=str(self._task_id), request_id=message_id)
+        logger.info(
+            "prompt_injection_taken",
+            task_id=str(self._task_id),
+            request_id=message_id,
+            wait_ms=self._wait_ms(request_id),
+        )
 
     async def returned(self, message_id: str) -> None:
         """Сообщение вернулось, не дойдя до агента: запрос снова в очереди."""
         request_id = uuid.UUID(message_id)
         self._display.pop(request_id, None)
+        self._injected_at.pop(request_id, None)
         async with self._session_factory() as db_session:
             await _set_status(
                 db_session,
@@ -449,6 +486,7 @@ async def serve_injection_commands(
     Пока сессия задачи жива, исполняет команды влития из Redis. Запускается
     фоновой задачей рядом с ходом модели и отменяется вместе с сессией.
     """
+    error_streak = 0
     while True:
         try:
             command = await _next_command(redis_client, task_id)
@@ -459,8 +497,19 @@ async def serve_injection_commands(
                 continue
             reply = await injector.handle(InjectionAction(str(command[_COMMAND_ACTION])))
             await _reply(redis_client, task_id, str(command[_COMMAND_ID]), reply)
-        except _LISTENER_ERRORS:
+            error_streak = 0
+        except _LISTENER_ERRORS as error:
             # Сбой Redis или БД не должен тихо убить слушателя: влитие продолжит
-            # работать, а на выходе из сессии нечего будет перевыбрасывать.
-            logger.exception("injection_listener_error", task_id=str(task_id))
+            # работать, а на выходе из сессии нечего будет перевыбрасывать. Стек — один
+            # раз за серию сбоев, дальше только предупреждение: пауза между попытками короткая.
+            if error_streak == 0:
+                logger.exception("injection_listener_error", task_id=str(task_id))
+            else:
+                logger.warning(
+                    "injection_listener_error_repeated",
+                    task_id=str(task_id),
+                    error_type=type(error).__name__,
+                    streak=error_streak,
+                )
+            error_streak += 1
             await asyncio.sleep(_SERVE_ERROR_PAUSE_SECONDS)

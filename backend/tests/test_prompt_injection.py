@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import sqlalchemy as sa
+import structlog
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -185,6 +186,20 @@ class TestInject:
         assert session.injected == []
         assert await _status(db_session, request) is ManualRequestStatus.QUEUED
 
+    async def test_refusal_is_logged(self, db_session: AsyncSession) -> None:
+        task = await _task(db_session)
+        await _enqueue(db_session, task, "текст")
+        injector, session = _injector(db_session, task)
+        session.refusal = "awaiting_decision"
+
+        with structlog.testing.capture_logs() as logs:
+            await injector.handle(InjectionAction.INJECT)
+
+        refused = [entry for entry in logs if entry["event"] == "injection_refused"]
+        assert [(e["reason"], e["action"], e["task_id"]) for e in refused] == [
+            ("awaiting_decision", "inject", str(task.id)),
+        ]
+
     async def test_session_fails(self, db_session: AsyncSession) -> None:
         task = await _task(db_session)
         request = await _enqueue(db_session, task, "текст")
@@ -203,9 +218,13 @@ class TestInject:
         good = await _enqueue(db_session, task, "нормальный", offset=1)
         injector, session = _injector(db_session, task)
 
-        reply = await injector.handle(InjectionAction.INJECT)
+        with structlog.testing.capture_logs() as logs:
+            reply = await injector.handle(InjectionAction.INJECT)
 
         assert reply.ok and reply.request_id == str(good.id)
+        skipped = [entry for entry in logs if entry["event"] == "injection_prompt_skipped"]
+        assert [entry["request_id"] for entry in skipped] == [str(broken.id)]
+        assert "Проверь" not in str(skipped[0])
         assert [text for text, _ in session.injected] == ["нормальный"]
         assert await _status(db_session, broken) is ManualRequestStatus.QUEUED
         assert await _status(db_session, good) is ManualRequestStatus.INJECTED
@@ -245,6 +264,19 @@ class TestObserver:
         assert logs[0].trigger_type is NodeLogTriggerType.FREEFORM_MANUAL
         assert logs[0].status is NodeLogStatus.SUCCESS
         assert logs[0].rendered_prompt == "влитый промт"
+
+    async def test_taken_logs_wait_time(self, db_session: AsyncSession) -> None:
+        task = await _task(db_session)
+        request = await _enqueue(db_session, task, "влитый")
+        injector, _ = _injector(db_session, task)
+        await injector.handle(InjectionAction.INJECT)
+
+        with structlog.testing.capture_logs() as logs:
+            await injector.taken(str(request.id))
+
+        taken = [entry for entry in logs if entry["event"] == "prompt_injection_taken"]
+        assert len(taken) == 1
+        assert isinstance(taken[0]["wait_ms"], int) and taken[0]["wait_ms"] >= 0
 
     async def test_taken_ignores_queued(self, db_session: AsyncSession) -> None:
         task = await _task(db_session)
@@ -402,13 +434,17 @@ class TestCommandChannel:
         injector, session = _injector(db_session, task)
         stale = {"id": uuid.uuid4().hex, "action": "inject", "at": time.time() - 3600}
         await redis_client.lpush(f"task:{task.id}:inject:commands", json.dumps(stale))
-        server = asyncio.create_task(
-            serve_injection_commands(redis_client, task.id, injector, poll_seconds=0.01),
-        )
-        await asyncio.sleep(0.2)
-        server.cancel()
+        with structlog.testing.capture_logs() as logs:
+            server = asyncio.create_task(
+                serve_injection_commands(redis_client, task.id, injector, poll_seconds=0.01),
+            )
+            await asyncio.sleep(0.2)
+            server.cancel()
 
         assert session.injected == []
+        dropped = [entry for entry in logs if entry["event"] == "injection_command_dropped"]
+        # Устаревшая команда — на уровне info, брошенная API — только debug.
+        assert [(e["stale"], e["log_level"]) for e in dropped] == [(True, "info")]
 
     async def test_survives_redis_error(
         self,
@@ -444,3 +480,31 @@ class TestCommandChannel:
         assert not server.done() or server.cancelled()
         assert reply.ok and reply.request_id == str(request.id)
         assert failures["left"] == 0
+
+    async def test_error_streak_logs_one_stack(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Стек пишется один раз за серию сбоев, дальше — короткие предупреждения."""
+        task = await _task(db_session)
+        injector, _ = _injector(db_session, task)
+        monkeypatch.setattr(prompt_injection, "_SERVE_ERROR_PAUSE_SECONDS", 0.01)
+
+        async def broken_next(client: Redis, task_id: uuid.UUID) -> dict[str, object] | None:
+            raise ConnectionError("redis недоступен")
+
+        monkeypatch.setattr(prompt_injection, "_next_command", broken_next)
+        with structlog.testing.capture_logs() as logs:
+            server = asyncio.create_task(
+                serve_injection_commands(redis_client, task.id, injector, poll_seconds=0.01),
+            )
+            await asyncio.sleep(0.2)
+            server.cancel()
+
+        events = [entry["event"] for entry in logs]
+        assert events.count("injection_listener_error") == 1
+        assert events.count("injection_listener_error_repeated") >= 2
+        repeated = next(e for e in logs if e["event"] == "injection_listener_error_repeated")
+        assert repeated["error_type"] == "ConnectionError"

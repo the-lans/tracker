@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 import sqlalchemy as sa
+import structlog
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from claude_agent_sdk.types import ToolPermissionContext
 from redis.asyncio import Redis
@@ -242,10 +243,13 @@ class TestPlanAfterAccept:
             redis_client=Redis(),  # не используется: ожидания решения нет
         )
 
-        result = await callback(tool_name, {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
+        with structlog.testing.capture_logs() as logs:
+            result = await callback(tool_name, {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
 
         assert result.behavior == "deny"
         assert result.message == PLANNING_NOT_ACTIVE_DENIED
+        skipped = [e for e in logs if e["event"] == "plan_review_skipped"]
+        assert [(e["tool_name"], e["task_id"]) for e in skipped] == [(tool_name, str(task.id))]
         await db_session.refresh(node_log)
         assert node_log.pending_plan_text is None
         assert node_log.status is NodeLogStatus.RUNNING
