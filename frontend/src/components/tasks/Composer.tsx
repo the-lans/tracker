@@ -191,7 +191,7 @@ export function Composer({
             {injectedCount > 0 && (
               <Button
                 size="sm"
-                variant="ghost"
+                variant="secondary"
                 className="h-6 min-h-0! min-w-7! gap-1 px-1.5 text-meta"
                 aria-label="Отменить"
                 title="Вернуть последний влитый промт в очередь, пока агент его не взял"
@@ -205,7 +205,7 @@ export function Composer({
             {queuedFreeform > 0 && (
               <Button
                 size="sm"
-                variant="secondary"
+                variant="primary"
                 className="h-6 min-h-0! min-w-7! gap-1 px-1.5 text-meta"
                 aria-label="Влить в текущий ход"
                 title={injectHint}
