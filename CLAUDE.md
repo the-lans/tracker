@@ -323,7 +323,7 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               выполнился бы в origin приложения; предел размера), FeedNotice —
               служебная строка ленты (смена аккаунта, событие сессии, дата),
               lib/chatFeed.ts + hooks/useStickToBottom.ts — сборка ленты и
-              автопрокрутка с кнопкой «Новые сообщения»;
+              автопрокрутка с кнопкой «↓ В конец ленты» (ScrollToBottomButton);
               по разделам — components/{tasks,nodes,profile,admin,
               taskCategories,daily,repositories,templates,llmAccounts,
               envVariables};
