@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 /**
  * Лента пролистана вверх: небольшая круглая кнопка у правого нижнего края ленты
  * возвращает к концу. Она плавает поверх ленты и ширину не отнимает: стоит левее полосы
- * прокрутки и над полем ввода, шапку и поле ввода не закрывает, а в самом низу
- * (ближе `JUMP_BUTTON_PX` к концу) скрыта. Точка на ней — ниже появилось новое.
+ * прокрутки и над полем ввода, шапку и поле ввода не закрывает. Цвет — как у кнопки
+ * «Отправить» (вариант `primary`). В самом низу (ближе `JUMP_BUTTON_PX` к концу) она
+ * скрыта. Красная точка на ней — ниже появилось новое.
  */
 export function ScrollToBottomButton({
   hasUnseen,
@@ -20,10 +21,10 @@ export function ScrollToBottomButton({
       <Button
         type="button"
         size="icon"
-        variant="secondary"
+        variant="primary"
         aria-label={hasUnseen ? "Новые сообщения — перейти в конец" : "Перейти в конец ленты"}
         title={hasUnseen ? "Новые сообщения" : "В конец ленты"}
-        className="touch-hit size-8 min-h-0! min-w-0! sm:size-9 rounded-full border border-border bg-surface/90 shadow-md backdrop-blur-sm"
+        className="touch-hit size-8 min-h-0! min-w-0! rounded-full shadow-md sm:size-9"
         onClick={onClick}
       >
         <ArrowDown className="size-4" />
@@ -31,7 +32,7 @@ export function ScrollToBottomButton({
           <span
             aria-hidden
             data-testid="unseen-dot"
-            className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full border-2 border-surface bg-accent"
+            className="absolute -right-0.5 -top-0.5 size-3 rounded-full border-2 border-surface bg-danger"
           />
         )}
       </Button>
