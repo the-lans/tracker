@@ -27,7 +27,7 @@ ENV PATH="/usr/local/go/bin:${PATH}" GOPATH=/tmp/go GOCACHE=/tmp/go-cache
 
 # CLI — тот, что встроен в claude-agent-sdk той же версии, что у воркера
 # (backend/pyproject.toml; совпадение проверяет tests/test_session_container.py).
-ARG CLAUDE_AGENT_SDK_VERSION=0.2.180
+ARG CLAUDE_AGENT_SDK_VERSION=0.2.185
 RUN pip install --no-cache-dir "claude-agent-sdk==${CLAUDE_AGENT_SDK_VERSION}" \
     && ln -s "$(python -c 'import claude_agent_sdk, pathlib; print(pathlib.Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude")')" /usr/local/bin/claude
 
