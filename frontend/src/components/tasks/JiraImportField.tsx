@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useJiraIssueDraft, useJiraServer, useProfile } from "@/hooks/useProfile";
 import { toastError } from "@/lib/errors";
+import { extractJiraKey } from "@/lib/jiraKey";
 import { formatFileSize } from "@/lib/utils";
 import type { JiraIssueDraft } from "@/lib/types";
 
@@ -69,12 +70,14 @@ export function JiraImportField({
         <Input
           id="jira-key"
           className="min-w-0 flex-1 basis-40"
-          placeholder="PROJ-123"
+          placeholder="PROJ-123 или ссылка на задачу"
           value={key}
           onChange={(event) => {
-            keyRef.current = event.target.value;
+            // Вставленная ссылка на задачу заменяется ключом.
+            const next = extractJiraKey(event.target.value);
+            keyRef.current = next;
             setImported(null);
-            onKeyChange(event.target.value);
+            onKeyChange(next);
           }}
         />
         <Button
