@@ -57,7 +57,7 @@ export function SidebarResizer({ width, onChange, onReset }: Props) {
       tabIndex={0}
       title="Потяните, чтобы изменить ширину меню; двойной щелчок — по умолчанию"
       className={cn(
-        "group absolute inset-y-0 -right-1.5 z-10 w-3 cursor-col-resize touch-none select-none outline-none",
+        "group absolute inset-y-0 -right-4 z-10 w-4 cursor-col-resize touch-none select-none outline-none",
         "focus-visible:[&>span]:bg-accent",
       )}
       onPointerDown={onPointerDown}
@@ -67,7 +67,12 @@ export function SidebarResizer({ width, onChange, onReset }: Props) {
       onDoubleClick={width === SIDEBAR_DEFAULT_WIDTH ? undefined : onReset}
       onKeyDown={onKeyDown}
     >
-      <span className="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full bg-transparent transition-colors group-hover:bg-accent/60 group-active:bg-accent" />
+      {/* Зона нажатия — снаружи меню, чтобы не перекрывать его полосу прокрутки; линия и «ручка» стоят на самой границе. */}
+      <span className="absolute inset-y-0 left-0 w-[3px] -translate-x-1/2 bg-border transition-colors group-hover:bg-accent group-active:bg-accent" />
+      <span
+        aria-hidden
+        className="absolute left-0 top-1/2 h-16 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-surface bg-text-3 transition-colors group-hover:bg-accent group-active:bg-accent"
+      />
     </div>
   );
 }
