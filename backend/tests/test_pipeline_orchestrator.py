@@ -34,6 +34,7 @@ from db.models.pipelines import Node, Pipeline, TaskNode
 from db.models.tasks import Task
 from db.models.users import User
 from services import pipeline_orchestrator
+from services import task_nodes as task_nodes_module
 from services.crypto import encrypt
 from services.errors import ValidationError
 from services.node_runs import SESSION_ERROR_MESSAGE
@@ -604,16 +605,13 @@ class TestCompositionChangedWhileRunning:
         assert fake.queries == ["шаг 0", "шаг 2"]
         assert seen == [0, 1, 2]
 
-    async def test_node_disabled_right_before_it_runs_is_skipped_without_checkpoint(
+    async def test_disabled_before_run_skipped(
         self,
         db_session: AsyncSession,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Без паузы и очереди состав всё равно перечитывается прямо перед нодой."""
-        from services import pipeline_orchestrator
-        from services import task_nodes as task_nodes_module
-
         task, _ = await self._three_nodes(db_session)
         by_index = {
             task_node.order_index: task_node
@@ -677,7 +675,7 @@ class TestCompositionChangedWhileRunning:
         assert outcome.completed is True
         assert fake.queries == ["шаг 0", "шаг 1", "шаг 2"]
 
-    async def test_custom_prompt_inserted_between_nodes_runs_in_its_place(
+    async def test_custom_prompt_runs_in_place(
         self,
         db_session: AsyncSession,
         tmp_path: Path,
@@ -719,7 +717,7 @@ class TestCompositionChangedWhileRunning:
         logs = await _node_logs_for(db_session, task.id)
         assert [log.status for log in logs] == [NodeLogStatus.SUCCESS] * 4
 
-    async def test_everything_disabled_while_waiting_completes_the_run(
+    async def test_all_disabled_completes_run(
         self,
         db_session: AsyncSession,
         tmp_path: Path,

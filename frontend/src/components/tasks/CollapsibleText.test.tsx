@@ -71,7 +71,7 @@ describe("CollapsibleText", () => {
   describe("блок кода в превью", () => {
     const fenced = (lines: number) =>
       `Вот код:\n\`\`\`python\n${Array.from({ length: lines }, (_, i) => `value_${i} = ${i}`).join("\n")}\n\`\`\`\nПосле блока.`;
-    const visible = () => document.querySelector("div.whitespace-pre-wrap")?.textContent ?? "";
+    const visible = () => screen.getByText(/Вот код:/).textContent ?? "";
 
     test("предел внутри блока кода — блок показан до закрывающей ограды, многоточие под ним", () => {
       renderWithProviders(<CollapsibleText text={fenced(25)} />);

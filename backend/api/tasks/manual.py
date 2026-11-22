@@ -293,7 +293,9 @@ async def cancel_injected_request(
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> InjectionResultResponse:
-    """«Отменить» (раздел 7.3): последний влитый промт возвращается в очередь, если его не взяли."""
+    """
+    «Отменить» (раздел 7.3): последний влитый промт возвращается в очередь, если его не взяли.
+    """
     return await _injection_result(db_session, current_user, task_id, InjectionAction.CANCEL)
 
 

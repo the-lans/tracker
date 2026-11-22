@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -31,8 +32,9 @@ from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
-from services import task_creation
+from services import prompt_injection, task_creation
 from services.plan_mode import PlanDecisionOption, encode_decision
+from services.redis_connection import redis_connection
 from services.task_control import (
     TaskControlCommand,
     consume_bridge_reconnect,
@@ -607,7 +609,7 @@ async def test_create_task_rejects_duplicate_repository(
     assert response.status_code == 422
 
 
-async def test_description_is_stored_without_edge_whitespace(
+async def test_description_stored_trimmed(
     authed_client: AsyncClient,
 ) -> None:
     created = await authed_client.post(
@@ -903,7 +905,7 @@ async def test_failed_task_locks_nodes_up_to_failure_point(
     assert [node["editable"] for node in listed] == [False, False, True]
 
 
-async def test_running_task_edits_only_nodes_that_have_not_started(
+async def test_running_task_edits_unstarted(
     authed_client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
@@ -1324,78 +1326,76 @@ async def test_stop_button_interrupts_processing_request(
     assert late.status_code == 409
 
 
-async def test_inject_requires_running_task(
-    authed_client: AsyncClient,
-    db_session: AsyncSession,
-) -> None:
-    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.PAUSED)
+class TestInjectEndpoints:
+    """`POST /tasks/{id}/manual-queue/inject` и `…/inject/cancel` (раздел 7.3)."""
 
-    response = await authed_client.post(f"/tasks/{task_body['id']}/manual-queue/inject")
+    async def test_inject_requires_running_task(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.PAUSED)
 
-    assert response.status_code == 409
+        response = await authed_client.post(f"/tasks/{task_body['id']}/manual-queue/inject")
 
+        assert response.status_code == 409
 
-async def test_inject_without_worker_reply_is_conflict(
-    authed_client: AsyncClient,
-    db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from services import prompt_injection
+    async def test_inject_without_worker_reply_is_conflict(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(prompt_injection, "REPLY_WAIT_SECONDS", 0.1)
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
 
-    monkeypatch.setattr(prompt_injection, "REPLY_WAIT_SECONDS", 0.1)
-    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
+        response = await authed_client.post(f"/tasks/{task_body['id']}/manual-queue/inject")
 
-    response = await authed_client.post(f"/tasks/{task_body['id']}/manual-queue/inject")
+        assert response.status_code == 409
 
-    assert response.status_code == 409
+    @pytest.mark.parametrize(
+        ("path", "action"),
+        [("inject", "inject"), ("inject/cancel", "cancel")],
+    )
+    async def test_inject_endpoints_relay_worker_reply(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        path: str,
+        action: str,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
+        task_id = uuid.UUID(task_body["id"])
+        request_id = uuid.uuid4()
 
+        class _Worker:
+            async def handle(
+                self, received: prompt_injection.InjectionAction
+            ) -> prompt_injection.InjectionReply:
+                assert received.value == action
+                return prompt_injection.InjectionReply(ok=True, request_id=str(request_id))
 
-@pytest.mark.parametrize(
-    ("path", "action"),
-    [("inject", "inject"), ("inject/cancel", "cancel")],
-)
-async def test_inject_endpoints_relay_worker_reply(
-    authed_client: AsyncClient,
-    db_session: AsyncSession,
-    path: str,
-    action: str,
-) -> None:
-    import asyncio
-    import json
+        async with redis_connection() as redis_client:
+            server = asyncio.create_task(
+                prompt_injection.serve_injection_commands(
+                    redis_client,
+                    task_id,
+                    _Worker(),  # type: ignore[arg-type]
+                    poll_seconds=0.01,
+                ),
+            )
+            try:
+                response = await authed_client.post(f"/tasks/{task_id}/manual-queue/{path}")
+            finally:
+                server.cancel()
 
-    from services import prompt_injection as injection
-    from services.redis_connection import redis_connection
-
-    task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
-    task_id = uuid.UUID(task_body["id"])
-    request_id = uuid.uuid4()
-
-    class _Worker:
-        async def handle(self, received: injection.InjectionAction) -> injection.InjectionReply:
-            assert received.value == action
-            return injection.InjectionReply(ok=True, request_id=str(request_id))
-
-    async with redis_connection() as redis_client:
-        server = asyncio.create_task(
-            injection.serve_injection_commands(
-                redis_client,
-                task_id,
-                _Worker(),  # type: ignore[arg-type]
-                poll_seconds=0.01,
-            ),
-        )
-        try:
-            response = await authed_client.post(f"/tasks/{task_id}/manual-queue/{path}")
-        finally:
-            server.cancel()
-
-    assert response.status_code == 200
-    assert json.loads(response.text) == {
-        "ok": True,
-        "request_id": str(request_id),
-        "reason": None,
-        "message": None,
-    }
+        assert response.status_code == 200
+        assert json.loads(response.text) == {
+            "ok": True,
+            "request_id": str(request_id),
+            "reason": None,
+            "message": None,
+        }
 
 
 async def _make_script_pipeline(

@@ -208,7 +208,7 @@ class TestRunningTaskComposition:
     """Раздел 13.2: у запущенной задачи меняются только ещё не начатые ноды."""
 
     @pytest.mark.parametrize("status", _RUNNING_STATUSES)
-    async def test_only_nodes_after_the_started_ones_are_editable(
+    async def test_only_unstarted_editable(
         self,
         db_session: AsyncSession,
         status: TaskStatus,
@@ -234,7 +234,7 @@ class TestRunningTaskComposition:
                 )
 
     @pytest.mark.parametrize("status", _RUNNING_STATUSES)
-    async def test_custom_prompt_is_inserted_only_after_the_started_nodes(
+    async def test_custom_prompt_after_started(
         self,
         db_session: AsyncSession,
         status: TaskStatus,
@@ -256,7 +256,7 @@ class TestRunningTaskComposition:
             with pytest.raises(ConflictError, match="уже выполнялась или выполняется"):
                 await _add(db_session, task, after=before)
 
-    async def test_custom_prompt_can_be_edited_and_deleted_until_it_starts(
+    async def test_custom_prompt_edit_until_start(
         self,
         db_session: AsyncSession,
     ) -> None:
@@ -303,7 +303,7 @@ class TestRunningTaskComposition:
 
         assert [view.editable for view in views] == [True, True, True]
 
-    async def test_awaiting_limit_keeps_the_waiting_node_locked(
+    async def test_limit_wait_locks_waiting_node(
         self,
         db_session: AsyncSession,
     ) -> None:

@@ -215,7 +215,9 @@ async def _log_skipped(task: Task, filename: str, reason: str) -> None:
 def _without_edge_whitespace(
     column: sa.SQLColumnExpression[str],
 ) -> sa.SQLColumnExpression[str]:
-    """Описание без пробелов по краям: у задач, созданных до обрезки, оно сравнивается с Jira."""
+    """
+    Описание без пробелов по краям: у задач, созданных до обрезки, оно сравнивается с Jira.
+    """
     return sa.func.regexp_replace(column, r"^\s+|\s+$", "", "g")
 
 

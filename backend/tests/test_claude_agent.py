@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 import json
 import uuid
 from typing import TYPE_CHECKING
@@ -18,6 +19,7 @@ import pytest
 import structlog
 from claude_agent_sdk import (
     AssistantMessage,
+    ClaudeAgentOptions,
     CLIConnectionError,
     ProcessError,
     RateLimitInfo,
@@ -26,6 +28,7 @@ from claude_agent_sdk import (
     ToolUseBlock,
     UserMessage,
 )
+from claude_agent_sdk._internal.query import Query
 
 from clients import claude_agent
 from clients.claude_agent import (
@@ -1168,7 +1171,7 @@ class TestInjectIntoRunningTurn:
         assert cancelled is False
         assert fake.cancelled_injections == []
 
-    async def test_message_not_taken_by_the_end_of_the_turn_goes_back(self) -> None:
+    async def test_untaken_goes_back(self) -> None:
         log = _InjectionLog()
         fake = FakeClaudeAgentClient(messages_per_query=[_tool_turn(1)])
         fake.message_delay_seconds = 0.03
@@ -1182,7 +1185,7 @@ class TestInjectIntoRunningTurn:
         assert log.returned == [message_id]
         assert log.taken == []
 
-    async def test_failed_cancel_at_turn_end_does_not_fail_the_finished_turn(self) -> None:
+    async def test_settle_error_keeps_turn(self) -> None:
         log = _InjectionLog()
         fake = FakeClaudeAgentClient(messages_per_query=[_tool_turn(1), [make_result_message()]])
         fake.message_delay_seconds = 0.03
@@ -1226,7 +1229,7 @@ class TestInjectIntoRunningTurn:
         outcome = await session.send_and_collect_text("следующий")
         assert outcome.text == ""
 
-    async def test_interrupt_takes_back_messages_the_agent_has_not_seen(self) -> None:
+    async def test_interrupt_returns_unseen(self) -> None:
         log = _InjectionLog()
         fake = FakeClaudeAgentClient(messages_per_query=[_tool_turn(6)])
         fake.message_delay_seconds = 0.05
@@ -1304,8 +1307,6 @@ class TestTrackerSdkClient:
 
     @staticmethod
     def _client() -> claude_agent.TrackerSdkClient:
-        from claude_agent_sdk import ClaudeAgentOptions
-
         return claude_agent.TrackerSdkClient(options=ClaudeAgentOptions())
 
     async def test_cancel_sends_the_documented_control_request(self) -> None:
@@ -1359,15 +1360,9 @@ class TestTrackerSdkClient:
         assert message["message"]["content"] == "поправка"
 
     async def test_cancel_without_connection_fails_clearly(self) -> None:
-        from claude_agent_sdk import CLIConnectionError
-
         with pytest.raises(CLIConnectionError):
             await self._client().cancel_injected_message("m-1")
 
     def test_sdk_still_has_the_private_control_channel(self) -> None:
-        import inspect
-
-        from claude_agent_sdk._internal.query import Query
-
         parameters = inspect.signature(Query._send_control_request).parameters  # noqa: SLF001
         assert {"request", "timeout"} <= set(parameters)

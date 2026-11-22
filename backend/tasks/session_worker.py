@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 import sqlalchemy as sa
 from claude_agent_sdk import ClaudeSDKError
 from redis.asyncio import Redis
+from sqlalchemy.exc import SQLAlchemyError
 
 from app_logging.config import bind_task_context, get_logger
 from clients.claude_agent import (
@@ -1286,13 +1287,18 @@ async def _serving_injections(
         listener.cancel()
         # Слушатель — вспомогательный: его сбой не должен ни подменять исход
         # сессии, ни ронять уже успешно завершённый прогон.
-        with contextlib.suppress(asyncio.CancelledError, Exception):
+        try:
             await listener
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001 — вспомогательный слушатель: причину пишем в лог
+            logger.exception("injection_listener_failed", task_id=str(task_id))
         try:
             await return_leftover_injections(db_session, task_id)
-        except Exception:  # noqa: BLE001 — сессия БД могла остаться в сбойной транзакции
+        except SQLAlchemyError:
+            # Сессия БД могла остаться в сбойной транзакции — сбрасываем её.
             logger.exception("injection_leftover_return_failed", task_id=str(task_id))
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(SQLAlchemyError):
                 await db_session.rollback()
 
 

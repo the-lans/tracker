@@ -84,7 +84,7 @@ class TestManualRequestInjectedMigration:
         finally:
             await engine.dispose()
 
-    async def test_downgrade_returns_injected_requests_to_the_queue(
+    async def test_downgrade_requeues(
         self,
         scratch_database: str,
     ) -> None:

@@ -219,66 +219,69 @@ async def _accepted_plan_log(db_session: AsyncSession, task: Task) -> None:
     await db_session.flush()
 
 
-@pytest.mark.parametrize("tool_name", ["ExitPlanMode", "EnterPlanMode"])
-@pytest.mark.parametrize("auto_accept_plan", [True, False])
-async def test_plan_tools_after_accepted_plan_are_denied_without_review(
-    db_session: AsyncSession,
-    tool_name: str,
-    auto_accept_plan: bool,
-) -> None:
-    """После принятого плана агент вызывает ExitPlanMode сам — окно плана не открывается."""
-    task, node_log = await _make_task_with_running_node_log(db_session)
-    await _accepted_plan_log(db_session, task)
-    context = ActiveNodeContext(
-        node_log_id=node_log.id, task_id=task.id, auto_accept_plan=auto_accept_plan
-    )
-    callback = build_can_use_tool_callback(
-        context=context,
-        session_factory=_non_closing_session_factory(db_session),
-        redis_client=Redis(),  # не используется: ожидания решения нет
-    )
+class TestPlanAfterAccept:
+    """Окно плана после принятого плана и до него (раздел 9.5, 14.4)."""
 
-    result = await callback(tool_name, {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
+    @pytest.mark.parametrize("tool_name", ["ExitPlanMode", "EnterPlanMode"])
+    @pytest.mark.parametrize("auto_accept_plan", [True, False])
+    async def test_plan_tools_denied_after_accept(
+        self,
+        db_session: AsyncSession,
+        tool_name: str,
+        auto_accept_plan: bool,
+    ) -> None:
+        """После принятого плана агент вызывает ExitPlanMode сам — окно плана не открывается."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, task)
+        context = ActiveNodeContext(
+            node_log_id=node_log.id, task_id=task.id, auto_accept_plan=auto_accept_plan
+        )
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=Redis(),  # не используется: ожидания решения нет
+        )
 
-    assert result.behavior == "deny"
-    assert result.message == PLANNING_NOT_ACTIVE_DENIED
-    await db_session.refresh(node_log)
-    assert node_log.pending_plan_text is None
-    assert node_log.status is NodeLogStatus.RUNNING
-    await db_session.refresh(task)
-    assert task.status is TaskStatus.IN_PROGRESS
+        result = await callback(tool_name, {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
 
+        assert result.behavior == "deny"
+        assert result.message == PLANNING_NOT_ACTIVE_DENIED
+        await db_session.refresh(node_log)
+        assert node_log.pending_plan_text is None
+        assert node_log.status is NodeLogStatus.RUNNING
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.IN_PROGRESS
 
-async def test_plan_review_in_chat_before_any_accepted_plan(db_session: AsyncSession) -> None:
-    """Чат «Уточняется»: плана в прогоне ещё не принимали — план идёт на ревью (14.4)."""
-    task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(
-        node_log_id=node_log.id, task_id=task.id, auto_accept_plan=True
-    )  # plan_mode не включён: ход чата, а не ноды планирования
-    callback = build_can_use_tool_callback(
-        context=context,
-        session_factory=_non_closing_session_factory(db_session),
-        redis_client=Redis(),
-    )
+    async def test_chat_plan_review(self, db_session: AsyncSession) -> None:
+        """Чат «Уточняется»: плана в прогоне ещё не принимали — план идёт на ревью (14.4)."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        context = ActiveNodeContext(
+            node_log_id=node_log.id, task_id=task.id, auto_accept_plan=True
+        )  # plan_mode не включён: ход чата, а не ноды планирования
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=Redis(),
+        )
 
-    result = await callback("ExitPlanMode", {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
+        result = await callback("ExitPlanMode", {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
 
-    assert _plan_accepted(result)
-    await db_session.refresh(node_log)
-    assert node_log.pending_plan_text == "1. Сделать X"
+        assert _plan_accepted(result)
+        await db_session.refresh(node_log)
+        assert node_log.pending_plan_text == "1. Сделать X"
 
+    async def test_new_plan_node_has_review(
+        self,
+        db_session: AsyncSession,
+    ) -> None:
+        """Следующая нода `plan_prompt` снова планирует: окно плана у неё остаётся."""
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, task)
+        callback = _callback(db_session, task, node_log, auto_accept_plan=True, plan_mode=True)
 
-async def test_new_planning_node_gets_its_review_after_an_accepted_plan(
-    db_session: AsyncSession,
-) -> None:
-    """Следующая нода `plan_prompt` снова планирует: окно плана у неё остаётся."""
-    task, node_log = await _make_task_with_running_node_log(db_session)
-    await _accepted_plan_log(db_session, task)
-    callback = _callback(db_session, task, node_log, auto_accept_plan=True, plan_mode=True)
+        result = await callback("ExitPlanMode", {"plan": "1. Новый план"}, _TEST_TOOL_CONTEXT)
 
-    result = await callback("ExitPlanMode", {"plan": "1. Новый план"}, _TEST_TOOL_CONTEXT)
-
-    assert _plan_accepted(result)
+        assert _plan_accepted(result)
 
 
 async def test_callback_auto_accepts_plan_without_waiting(db_session: AsyncSession) -> None:

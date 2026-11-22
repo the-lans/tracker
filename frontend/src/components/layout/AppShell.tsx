@@ -10,6 +10,9 @@ import { useAwaitingDecisionCount } from "@/hooks/useTasks";
 import { useSidebarWidth } from "@/hooks/useSidebarWidth";
 import { ensurePushSubscription } from "@/lib/push";
 
+/** Выше этого числа счётчик на кнопке меню показывает «99+»: иначе он заходит на заголовок. */
+const AWAITING_BADGE_MAX = 99;
+
 const TITLES: Record<string, string> = {
   "/": "Дашборд",
   "/daily": "Дейли",
@@ -80,7 +83,7 @@ export function AppShell() {
             onClick={() => setMobileNavOpen(true)}
           >
             <Menu className="size-5" />
-            <CountBadge count={awaitingCount?.count} max={99} className="absolute left-5 top-0" />
+            <CountBadge count={awaitingCount?.count} max={AWAITING_BADGE_MAX} className="absolute left-5 top-0" />
           </Button>
           <h1 className="text-title font-extrabold">
             {TITLES[location.pathname] ?? "Tracker"}

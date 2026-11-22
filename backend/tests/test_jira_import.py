@@ -412,7 +412,7 @@ class TestDescriptionHtml:
         assert issue.description_html == _DESCRIPTION_HTML
         assert "expand=renderedFields" in jira.requested_urls[0]
 
-    async def test_client_strips_edge_whitespace_of_description(self) -> None:
+    async def test_client_strips_description(self) -> None:
         def handle(_: httpx.Request) -> httpx.Response:
             body = _issue_body()
             body["fields"]["description"] = f"\n  {_DESCRIPTION_TEXT}  \n\n"
@@ -481,7 +481,7 @@ class TestDescriptionHtml:
         assert result is saved
         assert task.description_html == (html if saved else None)
 
-    async def test_description_saved_before_trimming_still_gets_the_html(
+    async def test_untrimmed_description_gets_html(
         self,
         authed_client: AsyncClient,
         db_session: AsyncSession,
@@ -622,7 +622,7 @@ class TestRefreshDescription:
         assert fake_jira.requested_urls
         assert [args[2] for args in queued] == ["PROJ-42"]
 
-    async def test_changed_description_is_replaced_with_the_one_from_jira(
+    async def test_changed_description_replaced(
         self,
         authed_client: AsyncClient,
         db_session: AsyncSession,
@@ -643,7 +643,7 @@ class TestRefreshDescription:
         assert response.json()["description"] == _DESCRIPTION_TEXT
         assert response.json()["description_html"] == _DESCRIPTION_HTML
 
-    async def test_edge_whitespace_saved_before_trimming_is_not_a_change(
+    async def test_untrimmed_not_a_change(
         self,
         authed_client: AsyncClient,
         db_session: AsyncSession,
@@ -664,7 +664,7 @@ class TestRefreshDescription:
         assert response.status_code == 200, response.text
         assert response.json()["description_html"] == _DESCRIPTION_HTML
 
-    async def test_changed_description_of_a_started_task_is_not_replaced(
+    async def test_started_task_keeps_description(
         self,
         authed_client: AsyncClient,
         db_session: AsyncSession,
@@ -690,7 +690,7 @@ class TestRefreshDescription:
         await db_session.refresh(task)
         assert task.description == "Устаревшее описание"
 
-    async def test_unchanged_text_of_a_started_task_still_gets_the_html(
+    async def test_started_unchanged_gets_html(
         self,
         authed_client: AsyncClient,
         db_session: AsyncSession,

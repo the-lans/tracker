@@ -548,7 +548,7 @@ class TestTimeoutCountsFromLastActivity:
         ]
         return [*chunks, make_result_message()]
 
-    async def test_long_turn_with_steady_activity_is_not_interrupted(self) -> None:
+    async def test_steady_activity_not_interrupted(self) -> None:
         # Ход идёт ~1,2 с, но события приходят каждые 0,2 с — таймаут 0,5 с не срабатывает.
         fake = FakeClaudeAgentClient(messages_per_query=[self._chatty_turn(5)])
         fake.message_delay_seconds = 0.2
@@ -559,7 +559,7 @@ class TestTimeoutCountsFromLastActivity:
         assert outcome.success is True
         assert fake.interrupted is False
 
-    async def test_silence_longer_than_timeout_after_activity_interrupts(self) -> None:
+    async def test_silence_after_activity_interrupts(self) -> None:
         fake = FakeClaudeAgentClient(messages_per_query=[self._chatty_turn(3)])
         fake.message_delays = {0: 0.05, 1: 0.05, 2: 0.05, 3: 1.0}
         session = ClaudeCodeSession(fake)
@@ -613,7 +613,7 @@ class TestTimeoutCountsFromLastActivity:
 
         assert outcome.success is True
 
-    async def test_activity_of_a_previous_turn_does_not_extend_the_next_one(self) -> None:
+    async def test_previous_turn_activity_ignored(self) -> None:
         fake = FakeClaudeAgentClient(
             messages_per_query=[[make_result_message()], [make_result_message()]],
         )
