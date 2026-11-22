@@ -19,7 +19,13 @@ from typing import TYPE_CHECKING, Any
 import pytest
 import sqlalchemy as sa
 import structlog
-from claude_agent_sdk import ClaudeAgentOptions, PermissionResultAllow, ProcessError
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    PermissionResultAllow,
+    ProcessError,
+    TextBlock,
+)
 from claude_agent_sdk.types import ToolPermissionContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +34,7 @@ from db.models.enums import (
     LlmAccountStatus,
     LlmSwitchReason,
     ManualRequestStatus,
+    ManualRequestType,
     McpAuthType,
     McpIsolationMode,
     MergeStatus,
@@ -65,6 +72,7 @@ from services.plan_mode import (
     PlanDecisionOption,
     encode_decision,
 )
+from services.prompt_injection import InjectionAction, InjectionReply, send_injection_command
 from services.session_context import clear_task_session_context
 from services.session_heartbeat import is_session_alive
 from services.system_settings import get_system_settings
@@ -2452,3 +2460,122 @@ class TestRepositoryAddedDuringRun:
         [query] = worker_env.client.queries
         assert query.endswith("шаг 0")
         assert (f"- {_REPOSITORY_NAME} (read-write)" in query) is (session_id is not None)
+
+
+# --- Влитие промта из очереди в идущий ход (раздел 7.3) ---
+
+
+def _long_turn(messages: int = 6) -> list[Message]:
+    """Ход из нескольких сообщений: между ними сессия принимает влитое сообщение."""
+    return [
+        *[
+            AssistantMessage(content=[TextBlock(text=f"шаг {i}")], model="claude")
+            for i in range(messages)
+        ],
+        make_result_message(session_id="sess-worker"),
+    ]
+
+
+async def test_injection_command_reaches_the_running_turn_and_lands_in_the_feed(
+    db_session: AsyncSession,
+    worker_env: WorkerEnv,
+    redis_client: Redis,
+) -> None:
+    """API → Redis → воркер: влитый промт идёт в идущий ход, а не отдельным запросом."""
+    task = await _make_task(db_session, status=TaskStatus.QUEUED)
+    await _add_node(db_session, task, order_index=0)
+    replies: list[InjectionReply] = []
+
+    async def user_queues_and_injects() -> None:
+        await _enqueue_freeform(db_session, task, "поправка по ходу")
+
+        async def press_inject() -> None:
+            await asyncio.sleep(0.4)
+            replies.append(
+                await send_injection_command(redis_client, task.id, InjectionAction.INJECT)
+            )
+
+        replies_task.append(asyncio.ensure_future(press_inject()))
+
+    replies_task: list[asyncio.Future[None]] = []
+    fake = FakeClaudeAgentClient(
+        messages_per_query=[_long_turn()],
+        on_query=user_queues_and_injects,
+    )
+    fake.message_delay_seconds = 0.2
+    worker_env.client = fake
+
+    await _run_worker(task)
+    await asyncio.gather(*replies_task)
+
+    assert [reply.ok for reply in replies] == [True]
+    assert [text for text, _ in fake.injected] == ["поправка по ходу"]
+    # Влитый промт — не отдельный запрос: сессия получила только ход ноды.
+    assert fake.queries == ["шаг 0"]
+    request = (
+        await db_session.scalars(
+            sa.select(TaskManualRequestQueue).where(TaskManualRequestQueue.task_id == task.id)
+        )
+    ).one()
+    await db_session.refresh(request)
+    assert request.status is ManualRequestStatus.DONE
+    feed = (
+        await db_session.scalars(
+            sa.select(NodeLog).where(
+                NodeLog.task_id == task.id,
+                NodeLog.trigger_type == NodeLogTriggerType.FREEFORM_MANUAL,
+            )
+        )
+    ).all()
+    assert [log.rendered_prompt for log in feed] == ["поправка по ходу"]
+    await db_session.refresh(task)
+    assert task.status is TaskStatus.DONE
+
+
+async def test_prompt_left_injected_by_a_crash_goes_back_to_the_queue_at_start(
+    db_session: AsyncSession,
+    worker_env: WorkerEnv,
+) -> None:
+    """Воркер упал после влития: на старте сессии промт возвращается в очередь и выполняется."""
+    task = await _make_task(db_session, status=TaskStatus.QUEUED)
+    await _add_node(db_session, task, order_index=0)
+    db_session.add(
+        TaskManualRequestQueue(
+            task_id=task.id,
+            request_type=ManualRequestType.FREEFORM_PROMPT,
+            raw_prompt_text="застрявший промт",
+            requested_by=task.created_by,
+            status=ManualRequestStatus.INJECTED,
+            requested_at=datetime.now(UTC),
+        )
+    )
+    await db_session.flush()
+    worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(2))
+
+    await _run_worker(task)
+
+    # Вернувшийся в очередь запрос идёт раньше первой ноды: очередь — прежде следующей ноды.
+    assert worker_env.client.queries == ["застрявший промт", "шаг 0"]
+    await db_session.refresh(task)
+    assert task.status is TaskStatus.DONE
+
+
+async def test_failed_injection_listener_does_not_fail_the_task(
+    db_session: AsyncSession,
+    worker_env: WorkerEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Сбой слушателя команд влития не роняет прогон: задача доходит до «Готово»."""
+    task = await _make_task(db_session, status=TaskStatus.QUEUED)
+    await _add_node(db_session, task, order_index=0)
+
+    async def broken_listener(*_args: Any, **_kwargs: Any) -> None:
+        raise ConnectionError("redis недоступен")
+
+    monkeypatch.setattr(session_worker, "serve_injection_commands", broken_listener)
+    worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+    await _run_worker(task)
+
+    await db_session.refresh(task)
+    assert task.status is TaskStatus.DONE

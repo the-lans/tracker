@@ -11,10 +11,11 @@ from __future__ import annotations
 import asyncio
 import uuid
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
+import sqlalchemy as sa
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from claude_agent_sdk.types import ToolPermissionContext
 from redis.asyncio import Redis
@@ -58,6 +59,7 @@ from services.plan_mode import (
     record_user_decision,
 )
 from services.task_signal import publish_task_signal
+from services.task_status import plan_accepted_in_run
 from tests.fakes import patch_plan_mode_signals
 
 if TYPE_CHECKING:
@@ -1090,3 +1092,45 @@ class TestCancelDecisionWait:
 
         assert handler.cancelled()
         assert await _status_of(db_session, task) is TaskStatus.IN_PROGRESS
+
+
+class TestPlanAcceptedInRun:
+    """`plan_accepted_in_run`: на нём держится отказ повторного окна плана."""
+
+    async def test_no_plan_node_log_means_not_accepted(self, db_session: AsyncSession) -> None:
+        task, _ = await _make_task_with_running_node_log(db_session)
+
+        assert await plan_accepted_in_run(db_session, task.id) is False
+
+    async def test_successful_plan_node_counts(self, db_session: AsyncSession) -> None:
+        task, _ = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, task)
+
+        assert await plan_accepted_in_run(db_session, task.id) is True
+
+    async def test_plan_of_another_task_does_not_count(self, db_session: AsyncSession) -> None:
+        task, _ = await _make_task_with_running_node_log(db_session)
+        other, _ = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, other)
+
+        assert await plan_accepted_in_run(db_session, task.id) is False
+
+    async def test_plan_not_accepted_yet_does_not_count(self, db_session: AsyncSession) -> None:
+        task, node_log = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, task)
+        await db_session.execute(
+            sa.update(NodeLog)
+            .where(NodeLog.task_id == task.id, NodeLog.node_id.is_not(None))
+            .values(status=NodeLogStatus.RUNNING)
+        )
+        await db_session.flush()
+
+        assert await plan_accepted_in_run(db_session, task.id) is False
+
+    async def test_reset_of_the_run_forgets_the_old_plan(self, db_session: AsyncSession) -> None:
+        task, _ = await _make_task_with_running_node_log(db_session)
+        await _accepted_plan_log(db_session, task)
+        task.reset_at = datetime.now(UTC) + timedelta(minutes=1)
+        await db_session.flush()
+
+        assert await plan_accepted_in_run(db_session, task.id) is False

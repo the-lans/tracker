@@ -405,3 +405,34 @@ async def test_listener_survives_a_redis_error(
     assert not server.done() or server.cancelled()
     assert reply.ok and reply.request_id == str(request.id)
     assert failures["left"] == 0
+
+
+async def test_turn_error_returns_an_injected_prompt_to_the_queue(db_session: AsyncSession) -> None:
+    from services.task_status import close_turn_after_error
+
+    task = await _task(db_session)
+    injected = await _enqueue(db_session, task, "влитый")
+    injected.status = ManualRequestStatus.INJECTED
+    processing = await _enqueue(db_session, task, "выполнялся", offset=1)
+    processing.status = ManualRequestStatus.PROCESSING
+    await db_session.commit()
+
+    await close_turn_after_error(db_session, task_id=task.id, error=RuntimeError("сбой хода"))
+
+    assert await _status(db_session, injected) is ManualRequestStatus.QUEUED
+    # Выполнявшийся запрос по-прежнему закрывается, а не возвращается.
+    assert await _status(db_session, processing) is ManualRequestStatus.DONE
+
+
+async def test_injected_prompt_blocks_finishing_the_task(db_session: AsyncSession) -> None:
+    from services.errors import ConflictError
+    from services.manual_admission import ensure_manual_requests_drained
+
+    task = await _task(db_session)
+    await ensure_manual_requests_drained(db_session, task.id)
+    request = await _enqueue(db_session, task, "влитый")
+    request.status = ManualRequestStatus.INJECTED
+    await db_session.flush()
+
+    with pytest.raises(ConflictError):
+        await ensure_manual_requests_drained(db_session, task.id)

@@ -604,6 +604,51 @@ class TestCompositionChangedWhileRunning:
         assert fake.queries == ["шаг 0", "шаг 2"]
         assert seen == [0, 1, 2]
 
+    async def test_node_disabled_right_before_it_runs_is_skipped_without_checkpoint(
+        self,
+        db_session: AsyncSession,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Без паузы и очереди состав всё равно перечитывается прямо перед нодой."""
+        from services import pipeline_orchestrator
+        from services import task_nodes as task_nodes_module
+
+        task, _ = await self._three_nodes(db_session)
+        by_index = {
+            task_node.order_index: task_node
+            for task_node in (await db_session.execute(sa.select(TaskNode))).scalars().all()
+        }
+        real_load = task_nodes_module.load_task_node_rows
+        calls = {"count": 0}
+
+        async def load_and_disable_on_recheck(*args: Any, **kwargs: Any) -> Any:
+            calls["count"] += 1
+            if calls["count"] == 2:
+                # Второе чтение — повторная проверка перед нодой 0: её как раз отключили.
+                await set_task_node_enabled(
+                    db_session,
+                    task=task,
+                    task_node_id=by_index[0].id,
+                    is_enabled=False,
+                )
+            return await real_load(*args, **kwargs)
+
+        monkeypatch.setattr(
+            pipeline_orchestrator, "load_task_node_rows", load_and_disable_on_recheck
+        )
+        fake = FakeClaudeAgentClient(messages_per_query=[[make_result_message()]] * 2)
+
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(fake),
+            repos_path=tmp_path,
+        )
+
+        assert outcome.completed is True
+        assert fake.queries == ["шаг 1", "шаг 2"]
+
     async def test_node_enabled_later_runs(self, db_session: AsyncSession, tmp_path: Path) -> None:
         task, nodes = await self._three_nodes(db_session, disabled=(2,))
         late = (
