@@ -65,12 +65,13 @@ export function AppShell() {
       </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-3 border-b border-border bg-surface px-4 py-1.5 short:py-0 lg:hidden">
+        <header className="flex items-center gap-5 border-b border-border bg-surface px-4 py-0.5 short:py-0 lg:hidden">
           {/* Раздел 18.3: счётчик ожидающих решения виден и без открытого меню. */}
           <Button
             variant="ghost"
             size="icon"
-            className="relative"
+            // Кнопка ниже шапки по высоте, а зона нажатия — прежние 44px (touch-hit).
+            className="touch-hit relative h-9 w-9 min-h-0! min-w-0!"
             aria-label={
               awaitingCount?.count
                 ? `Меню, ожидают решения: ${awaitingCount.count}`
@@ -79,7 +80,7 @@ export function AppShell() {
             onClick={() => setMobileNavOpen(true)}
           >
             <Menu className="size-5" />
-            <CountBadge count={awaitingCount?.count} className="absolute -right-1 -top-1" />
+            <CountBadge count={awaitingCount?.count} className="absolute left-7 top-0" />
           </Button>
           <h1 className="text-title font-extrabold">
             {TITLES[location.pathname] ?? "Tracker"}
