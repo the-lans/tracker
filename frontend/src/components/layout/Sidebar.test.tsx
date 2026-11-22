@@ -1,4 +1,6 @@
+import type { ComponentProps } from "react";
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect } from "vitest";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { UserRole } from "@/lib/types";
@@ -7,10 +9,10 @@ import { makeCurrentUser } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
-function renderSidebar(role: UserRole, path = "/") {
+function renderSidebar(role: UserRole, path = "/", props: ComponentProps<typeof Sidebar> = {}) {
   return renderWithProviders(
     <ThemeProvider>
-      <Sidebar />
+      <Sidebar {...props} />
     </ThemeProvider>,
     { currentUser: makeCurrentUser({ role }), path },
   );
@@ -63,5 +65,45 @@ describe("Sidebar", () => {
       .filter((link) => link.getAttribute("aria-current") === "page")
       .map((link) => link.textContent);
     expect(highlighted).toEqual([current]);
+  });
+
+  describe("режим значков", () => {
+    test("подписей нет, но ссылки сохраняют имена и подсказки", () => {
+      renderSidebar(UserRole.ADMIN, "/", { compact: true, width: 64 });
+
+      const events = screen.getByRole("link", { name: "События" });
+      expect(events).toHaveAttribute("title", "События");
+      expect(events.textContent).toBe("");
+      expect(screen.queryByText("Tracker")).not.toBeInTheDocument();
+      // Заголовок раздела остаётся только для скринридеров.
+      expect(screen.getByText("Настройки")).toHaveClass("sr-only");
+      expect(screen.getByRole("link", { name: /^Профиль:/ })).toHaveAttribute("href", "/profile");
+    });
+
+    test("тема переключается одной кнопкой", async () => {
+      const user = userEvent.setup();
+      renderSidebar(UserRole.USER, "/", { compact: true, width: 64 });
+
+      const toggle = screen.getByRole("button", { name: /Включить (тёмную|светлую) тему/ });
+      const before = toggle.getAttribute("aria-label");
+      await user.click(toggle);
+      expect(screen.getByRole("button", { name: /Включить (тёмную|светлую) тему/ }).getAttribute("aria-label")).not.toBe(before);
+    });
+
+    test("ширина задаётся стилем", () => {
+      renderSidebar(UserRole.USER, "/", { width: 320 });
+      expect(screen.getByRole("complementary", { name: "Основное меню" })).toHaveStyle({ width: "320px" });
+    });
+  });
+
+  test("у каждого пункта меню свой значок", () => {
+    renderSidebar(UserRole.ADMIN);
+
+    const icons = screen
+      .getAllByRole("link")
+      .map((link) => link.querySelector("svg")?.getAttribute("class") ?? "")
+      .filter((cls) => cls.includes("lucide-"))
+      .map((cls) => cls.split(" ").find((c) => c.startsWith("lucide-") && c !== "lucide")!);
+    expect(new Set(icons).size).toBe(icons.length);
   });
 });

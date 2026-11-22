@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Menu } from "lucide-react";
 import { Sidebar, SidebarBrand } from "@/components/layout/Sidebar";
+import { SidebarResizer } from "@/components/layout/SidebarResizer";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { CountBadge } from "@/components/common/feedback/CountBadge";
 import { useAwaitingDecisionCount } from "@/hooks/useTasks";
+import { useSidebarWidth } from "@/hooks/useSidebarWidth";
 import { ensurePushSubscription } from "@/lib/push";
 
 const TITLES: Record<string, string> = {
@@ -30,6 +32,7 @@ export function AppShell() {
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { data: awaitingCount } = useAwaitingDecisionCount();
+  const sidebar = useSidebarWidth();
 
   useEffect(() => {
     // Раздел 18.1: "подписка запрашивается при первом входе" — AppShell
@@ -41,8 +44,10 @@ export function AppShell() {
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-bg text-text">
-      <div className="hidden lg:block">
-        <Sidebar />
+      {/* Ширину меню на компьютере меняют за правую границу; в шторке телефона она фиксирована. */}
+      <div className="relative hidden shrink-0 lg:block" style={{ width: sidebar.width }}>
+        <Sidebar width={sidebar.width} compact={sidebar.compact} />
+        <SidebarResizer width={sidebar.width} onChange={sidebar.setWidth} onReset={sidebar.reset} />
       </div>
 
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
