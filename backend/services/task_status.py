@@ -527,6 +527,15 @@ async def close_turn_after_error(
         )
         .values(status=ManualRequestStatus.DONE, processed_at=now),
     )
+    # Влитый, но не взятый агентом промт после падения хода возвращается в очередь.
+    await db_session.execute(
+        sa.update(TaskManualRequestQueue)
+        .where(
+            TaskManualRequestQueue.task_id == task_id,
+            TaskManualRequestQueue.status == ManualRequestStatus.INJECTED,
+        )
+        .values(status=ManualRequestStatus.QUEUED),
+    )
     await db_session.execute(
         sa.update(TaskLibraryPrompt)
         .where(

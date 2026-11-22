@@ -9,15 +9,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from claude_agent_sdk import ClaudeSDKClient, ClaudeSDKError
+from claude_agent_sdk import ClaudeSDKError
 from redis.asyncio import Redis
 
 from app_logging.config import bind_task_context, get_logger
@@ -25,6 +27,7 @@ from clients.claude_agent import (
     ClaudeAgentClientProtocol,
     ClaudeCodeSession,
     OfflineAgentClient,
+    TrackerSdkClient,
     build_claude_agent_options,
 )
 from clients.cliproxy import open_cliproxy_client
@@ -71,6 +74,11 @@ from services.pipeline_orchestrator import (
     run_pipeline,
 )
 from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
+from services.prompt_injection import (
+    PromptInjector,
+    return_leftover_injections,
+    serve_injection_commands,
+)
 from services.rebase_resolution import has_unresolved_rebase_conflict, resolve_rebase_conflict
 from services.redis_connection import redis_connection
 from services.refining_chat import (
@@ -955,7 +963,7 @@ async def _summarize_parent_in_fork(
         ),
     )
     ensure_history_retention(str(parent_config_dir), days=history_retention_days())
-    fork = ClaudeCodeSession(ClaudeSDKClient(options=options), router=lane.router)
+    fork = ClaudeCodeSession(TrackerSdkClient(options=options), router=lane.router)
     try:
         await fork.connect()
     except ClaudeSDKError:
@@ -1061,7 +1069,7 @@ class _SessionClientFactory:
             cli_path=str(SESSION_CLI_PATH),
             cli_env=self.cli_env,
         )
-        return ClaudeSDKClient(options=options)
+        return TrackerSdkClient(options=options)
 
 
 async def _build_client_factory(
@@ -1165,6 +1173,7 @@ async def _run_claimed_task(
     enable_remote_control = (
         start_plan.enable_remote_control and make_client.has_llm and not bridge_unavailable(task)
     )
+    injector = PromptInjector(task_id=task.id, session_factory=async_session_factory)
     session = ClaudeCodeSession(
         make_client(
             resume_session_id=start_plan.resume_session_id,
@@ -1174,7 +1183,9 @@ async def _run_claimed_task(
         on_abort=active_node_context.cancel_decision_wait,
         on_rate_limit=lane.router.record_rate_limit,
         router=lane.router,
+        injection_observer=injector,
     )
+    injector.bind(session)
     if start_plan.resume_session_id is not None:
         # Продолжение сессии: о репозиториях, добавленных до запуска, агент
         # иначе не узнает (раздел 3.2).
@@ -1204,21 +1215,28 @@ async def _run_claimed_task(
     await session.connect()
     if enable_remote_control:
         await record_bridge_status(db_session, task=task, status=RemoteControlStatus.CONNECTED)
-    try:
-        outcome, rebase_resolved = await _run_connected_session(
-            db_session,
-            control=control,
-            parent_summary=parent_summary,
-            start_after_order_index=start_after_order_index,
-        )
-    except LlmLimitWaitError as wait:
-        await _persist_session_id(db_session, task=task, session=session)
-        await _disconnect_quietly(session)
-        await _wait_for_limit(db_session, task=task, wait=wait, redis_client=redis_client)
-        return
-    except BaseException:
-        await _disconnect_quietly(session)
-        raise
+    async with _serving_injections(
+        db_session,
+        task_id=task.id,
+        redis_client=redis_client,
+        injector=injector,
+        enabled=make_client.has_llm,
+    ):
+        try:
+            outcome, rebase_resolved = await _run_connected_session(
+                db_session,
+                control=control,
+                parent_summary=parent_summary,
+                start_after_order_index=start_after_order_index,
+            )
+        except LlmLimitWaitError as wait:
+            await _persist_session_id(db_session, task=task, session=session)
+            await _disconnect_quietly(session)
+            await _wait_for_limit(db_session, task=task, wait=wait, redis_client=redis_client)
+            return
+        except BaseException:
+            await _disconnect_quietly(session)
+            raise
 
     if outcome is not None and outcome.context_cleared_at_order_index is not None:
         # Раздел 11.5: оркестратор уже оборвал сессию. Следующий таск начнёт
@@ -1241,6 +1259,34 @@ async def _run_claimed_task(
         repos_root=repos_root,
         redis_client=redis_client,
     )
+
+
+@contextlib.asynccontextmanager
+async def _serving_injections(
+    db_session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    redis_client: Redis,
+    injector: PromptInjector,
+    enabled: bool,
+) -> AsyncIterator[None]:
+    """
+    Раздел 7.3: пока сессия задачи жива, воркер исполняет команды «Влить в
+    текущий ход» / «Отменить». Запросы, застрявшие в `injected` после падения,
+    возвращаются в очередь при входе и при выходе.
+    """
+    if not enabled:
+        yield
+        return
+    await return_leftover_injections(db_session, task_id)
+    listener = asyncio.create_task(serve_injection_commands(redis_client, task_id, injector))
+    try:
+        yield
+    finally:
+        listener.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await listener
+        await return_leftover_injections(db_session, task_id)
 
 
 async def _run_connected_session(

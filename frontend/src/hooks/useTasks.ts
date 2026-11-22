@@ -8,6 +8,7 @@ import type {
   BindPipelineRequest,
   DecisionRequest,
   LlmLimit,
+  InjectionResult,
   ManualRequest,
   NodeDependent,
   NodeLog,
@@ -309,6 +310,18 @@ export function useSubmitFreeformPrompt(taskId: string) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: taskKeys.nodeLogs(taskId) });
       void queryClient.invalidateQueries({ queryKey: taskKeys.manualQueue(taskId) });
+    },
+  });
+}
+
+/** Раздел 7.3: «Влить в текущий ход» (`inject`) и «Отменить» (`inject/cancel`). */
+export function useInjectManualRequest(taskId: string, action: "inject" | "inject/cancel") {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<InjectionResult>(`/tasks/${taskId}/manual-queue/${action}`),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.manualQueue(taskId) });
+      void queryClient.invalidateQueries({ queryKey: taskKeys.nodeLogs(taskId) });
     },
   });
 }

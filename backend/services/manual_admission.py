@@ -51,7 +51,11 @@ async def ensure_manual_requests_drained(session: AsyncSession, task_id: uuid.UU
         .where(
             TaskManualRequestQueue.task_id == task_id,
             TaskManualRequestQueue.status.in_(
-                (ManualRequestStatus.QUEUED, ManualRequestStatus.PROCESSING)
+                (
+                    ManualRequestStatus.QUEUED,
+                    ManualRequestStatus.PROCESSING,
+                    ManualRequestStatus.INJECTED,
+                )
             ),
         )
         .limit(1)

@@ -91,6 +91,8 @@ export type ManualRequestType = (typeof ManualRequestType)[keyof typeof ManualRe
 export const ManualRequestStatus = {
   QUEUED: "queued",
   PROCESSING: "processing",
+  /** Влит в идущий ход и ещё не взят агентом (раздел 7.3). */
+  INJECTED: "injected",
   DONE: "done",
   CANCELLED: "cancelled",
 } as const;
@@ -537,6 +539,14 @@ export interface ManualRequest {
   raw_prompt_text: string | null;
   status: ManualRequestStatus;
   requested_at: string;
+}
+
+/** Ответ на «Влить в текущий ход» / «Отменить»: `reason` — причина отказа (раздел 7.3). */
+export interface InjectionResult {
+  ok: boolean;
+  request_id: string | null;
+  reason: string | null;
+  message: string | null;
 }
 
 export interface TaskLibraryPrompt {

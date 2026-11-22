@@ -309,6 +309,19 @@ class ManualRequestResponse(BaseModel):
     requested_at: datetime
 
 
+class InjectionResultResponse(BaseModel):
+    """
+    Итог «Влить в текущий ход» / «Отменить» (раздел 7.3): ``ok`` — действие
+    выполнено; иначе ``reason`` — почему нет (`no_turn`, `awaiting_decision`,
+    `nothing_to_inject`, `nothing_to_cancel`, `too_late`, `failed`).
+    """
+
+    ok: bool
+    request_id: uuid.UUID | None = None
+    reason: str | None = None
+    message: str | None = None
+
+
 class TaskNodeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

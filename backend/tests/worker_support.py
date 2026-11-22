@@ -128,7 +128,7 @@ def install_worker_env(
     monkeypatch.setattr(session_worker, "open_cliproxy_client", fake_cliproxy_client)
     monkeypatch.setattr(
         session_worker,
-        "ClaudeSDKClient",
+        "TrackerSdkClient",
         lambda options: env.create_client(options),
     )
     monkeypatch.setattr(

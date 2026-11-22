@@ -51,7 +51,7 @@ from tests.fakes import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     from claude_agent_sdk import ContentBlock, Message
 
@@ -1052,3 +1052,300 @@ class TestToolFinishedLogs:
             await session.send_and_collect_text("go")
 
         assert all(entry["event"] != "session_tool_finished" for entry in logs)
+
+
+class _InjectionLog:
+    """Наблюдатель судьбы влитых сообщений: что взято, что возвращено."""
+
+    def __init__(self) -> None:
+        self.taken: list[str] = []
+        self.returned: list[str] = []
+
+    async def taken_message(self, message_id: str) -> None:
+        self.taken.append(message_id)
+
+    async def returned_message(self, message_id: str) -> None:
+        self.returned.append(message_id)
+
+
+class _Observer:
+    def __init__(self, log: _InjectionLog) -> None:
+        self._log = log
+
+    async def taken(self, message_id: str) -> None:
+        await self._log.taken_message(message_id)
+
+    async def returned(self, message_id: str) -> None:
+        await self._log.returned_message(message_id)
+
+
+def _tool_turn(steps: int = 3) -> list[Message]:
+    messages: list[Message] = []
+    for index in range(steps):
+        messages.append(
+            AssistantMessage(
+                content=[ToolUseBlock(id=f"t{index}", name="Read", input={})],
+                model="claude",
+            ),
+        )
+        messages.append(
+            UserMessage(content=[ToolResultBlock(tool_use_id=f"t{index}", content="ok")]),
+        )
+    messages.append(AssistantMessage(content=[TextBlock(text="готово")], model="claude"))
+    messages.append(make_result_message())
+    return messages
+
+
+class TestInjectIntoRunningTurn:
+    """Раздел 7.3: сообщение из очереди вливается в идущий ход."""
+
+    @staticmethod
+    async def _during_turn(
+        session: ClaudeCodeSession,
+        action: Callable[[], Awaitable[object]],
+    ) -> object:
+        started = asyncio.Event()
+        turn = asyncio.ensure_future(session.send_and_collect_text("go"))
+        # Ход открыт, как только `query()` ушёл.
+        while session.injection_refusal() == "no_turn":
+            await asyncio.sleep(0.005)
+        started.set()
+        outcome = await action()
+        await turn
+        return outcome
+
+    async def test_message_is_sent_and_reported_as_taken(self) -> None:
+        log = _InjectionLog()
+        fake = FakeClaudeAgentClient(messages_per_query=[_tool_turn()])
+        fake.message_delay_seconds = 0.05
+        session = ClaudeCodeSession(fake, injection_observer=_Observer(log))
+        message_id = str(uuid.uuid4())
+
+        await self._during_turn(session, lambda: session.inject_prompt("поправка", message_id))
+
+        assert fake.injected == [("поправка", message_id)]
+        assert log.taken == [message_id]
+        assert log.returned == []
+
+    async def test_cancel_before_the_agent_takes_it(self) -> None:
+        log = _InjectionLog()
+        fake = FakeClaudeAgentClient(messages_per_query=[_tool_turn()])
+        fake.message_delay_seconds = 0.05
+        fake.hold_injections = True
+        session = ClaudeCodeSession(fake, injection_observer=_Observer(log))
+        message_id = str(uuid.uuid4())
+
+        async def inject_and_cancel() -> bool:
+            await session.inject_prompt("поправка", message_id)
+            return await session.cancel_injection(message_id)
+
+        cancelled = await self._during_turn(session, inject_and_cancel)
+
+        assert cancelled is True
+        assert fake.cancelled_injections == [message_id]
+        # Ход закончился без этого сообщения, и оно не считается ни взятым, ни возвращённым.
+        assert log.taken == []
+        assert log.returned == []
+
+    async def test_cancel_after_it_was_taken_is_too_late(self) -> None:
+        log = _InjectionLog()
+        fake = FakeClaudeAgentClient(messages_per_query=[_tool_turn()])
+        fake.message_delay_seconds = 0.05
+        session = ClaudeCodeSession(fake, injection_observer=_Observer(log))
+        message_id = str(uuid.uuid4())
+
+        async def inject_wait_and_cancel() -> bool:
+            await session.inject_prompt("поправка", message_id)
+            while not log.taken:
+                await asyncio.sleep(0.01)
+            # Взято по «эху» посреди хода, а не при его завершении.
+            assert session.injection_refusal() is None
+            return await session.cancel_injection(message_id)
+
+        cancelled = await self._during_turn(session, inject_wait_and_cancel)
+
+        assert cancelled is False
+        assert fake.cancelled_injections == []
+
+    async def test_message_not_taken_by_the_end_of_the_turn_goes_back(self) -> None:
+        log = _InjectionLog()
+        fake = FakeClaudeAgentClient(messages_per_query=[_tool_turn(1)])
+        fake.message_delay_seconds = 0.03
+        fake.hold_injections = True
+        session = ClaudeCodeSession(fake, injection_observer=_Observer(log))
+        message_id = str(uuid.uuid4())
+
+        await self._during_turn(session, lambda: session.inject_prompt("поздно", message_id))
+
+        assert fake.cancelled_injections == [message_id]
+        assert log.returned == [message_id]
+        assert log.taken == []
+
+    async def test_followup_turn_started_by_the_cli_is_drained(self) -> None:
+        log = _InjectionLog()
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[_tool_turn(1), [make_result_message()]],
+        )
+        fake.message_delay_seconds = 0.03
+        fake.hold_injections = True
+        # CLI уже начал сообщение отдельным ходом: отмена «поздно», у хода свой результат.
+        fake.refuse_cancel = True
+        fake.followup_turn = [
+            AssistantMessage(content=[TextBlock(text="ответ на поправку")], model="claude"),
+            make_result_message(),
+        ]
+        session = ClaudeCodeSession(fake, injection_observer=_Observer(log))
+        message_id = str(uuid.uuid4())
+
+        await self._during_turn(session, lambda: session.inject_prompt("поправка", message_id))
+
+        assert log.taken == [message_id]
+        # Следующий запрос получает свой ответ, а не хвост чужого хода.
+        outcome = await session.send_and_collect_text("следующий")
+        assert outcome.text == ""
+
+    async def test_interrupt_takes_back_messages_the_agent_has_not_seen(self) -> None:
+        log = _InjectionLog()
+        fake = FakeClaudeAgentClient(messages_per_query=[_tool_turn(6)])
+        fake.message_delay_seconds = 0.05
+        fake.hold_injections = True
+        session = ClaudeCodeSession(fake, injection_observer=_Observer(log))
+        message_id = str(uuid.uuid4())
+        turn = asyncio.ensure_future(session.send_and_collect_text("go"))
+        while session.injection_refusal() == "no_turn":
+            await asyncio.sleep(0.005)
+        await session.inject_prompt("поправка", message_id)
+
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+        await session.abort_turn()
+
+        assert fake.cancelled_injections == [message_id]
+        assert log.returned == [message_id]
+        assert fake.interrupted is True
+
+    async def test_refused_without_a_running_turn(self) -> None:
+        session = ClaudeCodeSession(FakeClaudeAgentClient(messages_per_query=[]))
+
+        assert session.injection_refusal() == "no_turn"
+        with pytest.raises(claude_agent.InjectionRefusedError) as refused:
+            await session.inject_prompt("текст", str(uuid.uuid4()))
+        assert refused.value.reason == "no_turn"
+
+    async def test_refused_while_the_turn_waits_for_the_user(self) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[_tool_turn()])
+        fake.message_delay_seconds = 0.1
+        session = ClaudeCodeSession(fake)
+        turn = asyncio.ensure_future(session.send_and_collect_text("go"))
+        while session.injection_refusal() == "no_turn":
+            await asyncio.sleep(0.005)
+
+        session.user_wait_clock.begin()
+        try:
+            assert session.injection_refusal() == "awaiting_decision"
+        finally:
+            session.user_wait_clock.end()
+        await turn
+
+    async def test_message_of_a_finished_turn_is_not_accepted(self) -> None:
+        fake = FakeClaudeAgentClient(messages_per_query=[_tool_turn(1)])
+        session = ClaudeCodeSession(fake)
+        await session.send_and_collect_text("go")
+
+        assert session.injection_refusal() == "no_turn"
+        assert await session.cancel_injection("нет такого") is False
+
+    async def test_cli_crash_returns_pending_messages(self) -> None:
+        log = _InjectionLog()
+        fake = FakeClaudeAgentClient(
+            messages_per_query=[_tool_turn(4)],
+            failures_mid_turn={0: ProcessError("CLI упал", exit_code=1)},
+        )
+        fake.message_delay_seconds = 0.05
+        fake.hold_injections = True
+        session = ClaudeCodeSession(fake, injection_observer=_Observer(log))
+        message_id = str(uuid.uuid4())
+        turn = asyncio.ensure_future(session.send_and_collect_text("go"))
+        while session.injection_refusal() == "no_turn":
+            await asyncio.sleep(0.005)
+        await session.inject_prompt("поправка", message_id)
+
+        with pytest.raises(ProcessError):
+            await turn
+
+        assert log.returned == [message_id]
+
+
+class TestTrackerSdkClient:
+    """Влитие и отмена идут через внутренний канал SDK — тест падает, если он изменится."""
+
+    @staticmethod
+    def _client() -> claude_agent.TrackerSdkClient:
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        return claude_agent.TrackerSdkClient(options=ClaudeAgentOptions())
+
+    async def test_cancel_sends_the_documented_control_request(self) -> None:
+        calls: list[tuple[dict[str, object], float]] = []
+
+        class _Query:
+            async def _send_control_request(
+                self,
+                request: dict[str, object],
+                timeout: float,
+            ) -> dict[str, object]:
+                calls.append((request, timeout))
+                return {"cancelled": True}
+
+        client = self._client()
+        client._query = _Query()  # noqa: SLF001
+
+        assert await client.cancel_injected_message("m-1") is True
+        assert calls[0][0] == {"subtype": "cancel_async_message", "message_uuid": "m-1"}
+
+    async def test_cancel_too_late_is_false(self) -> None:
+        class _Query:
+            async def _send_control_request(
+                self,
+                request: dict[str, object],  # noqa: ARG002
+                timeout: float,  # noqa: ARG002
+            ) -> dict[str, object]:
+                return {"cancelled": False}
+
+        client = self._client()
+        client._query = _Query()  # noqa: SLF001
+
+        assert await client.cancel_injected_message("m-1") is False
+
+    async def test_inject_writes_a_user_message_with_our_uuid(self) -> None:
+        written: list[str] = []
+
+        class _Transport:
+            async def write(self, data: str) -> None:
+                written.append(data)
+
+        client = self._client()
+        client._query = object()  # noqa: SLF001
+        client._transport = _Transport()  # type: ignore[assignment]  # noqa: SLF001
+
+        await client.inject_message("поправка", "m-7")
+
+        message = json.loads(written[0])
+        assert message["type"] == "user"
+        assert message["uuid"] == "m-7"
+        assert message["message"]["content"] == "поправка"
+
+    async def test_cancel_without_connection_fails_clearly(self) -> None:
+        from claude_agent_sdk import CLIConnectionError
+
+        with pytest.raises(CLIConnectionError):
+            await self._client().cancel_injected_message("m-1")
+
+    def test_sdk_still_has_the_private_control_channel(self) -> None:
+        import inspect
+
+        from claude_agent_sdk._internal.query import Query
+
+        parameters = inspect.signature(Query._send_control_request).parameters  # noqa: SLF001
+        assert {"request", "timeout"} <= set(parameters)

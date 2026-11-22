@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 
 
 class TestTwg:
-
     @staticmethod
     async def test_personal_connection_lifecycle(
         authed_client: AsyncClient,
@@ -75,7 +74,6 @@ class TestTwg:
         assert await twg.session_environment(db_session, current_user.id) == {}
         assert (await authed_client.delete("/profile/twg")).status_code == 200
 
-
     @pytest.mark.parametrize(
         "site",
         [
@@ -101,7 +99,6 @@ class TestTwg:
         )
         assert response.status_code == 422
 
-
     @staticmethod
     async def test_token_required_and_cannot_follow_changed_identity(
         authed_client: AsyncClient,
@@ -121,12 +118,10 @@ class TestTwg:
             assert response.status_code == 422
             assert "saved-token" not in response.text
 
-
     @staticmethod
     async def test_requires_authentication(api_client: AsyncClient) -> None:
         assert (await api_client.get("/profile/twg")).status_code == 401
         assert (await api_client.delete("/profile/twg")).status_code == 401
-
 
     @staticmethod
     def test_worker_environment_cannot_supply_twg_credentials() -> None:
@@ -152,7 +147,6 @@ class TestTwg:
         assert "TWG_TOKEN" in args and "TWG_USER" in args
         assert "worker-secret" not in args
         assert "TWG_AUTH_STORAGE_KEY" not in args and "TWG_ENDPOINT" not in args
-
 
     @staticmethod
     async def test_disabled_twg_does_not_forward_credentials(
@@ -183,7 +177,6 @@ class TestTwg:
         )
         assert options.plugins == []
 
-
     @staticmethod
     def test_container_session_loads_shared_plugin() -> None:
         options = build_claude_agent_options(
@@ -197,7 +190,6 @@ class TestTwg:
         )
         assert options.plugins == [{"type": "local", "path": twg.TWG_PLUGIN_PATH}]
         assert "TWG" in str(options.system_prompt)
-
 
     @staticmethod
     async def test_container_spec_does_not_contain_personal_token(

@@ -16,6 +16,7 @@ from api.dependencies import get_current_user
 from api.schemas import (
     DecisionRequest,
     FreeformPromptRequest,
+    InjectionResultResponse,
     LibraryPromptAddRequest,
     ManualRequestResponse,
     TaskLibraryPromptListItem,
@@ -29,7 +30,7 @@ from api.tasks.common import (
     require_status,
     wake_session_for_request,
 )
-from db.models.enums import ManualRequestStatus
+from db.models.enums import ManualRequestStatus, TaskStatus
 from db.models.pipelines import Node
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.users import User
@@ -43,6 +44,12 @@ from services.manual_queue import (
     enqueue_library_prompt_run,
 )
 from services.plan_mode import record_user_decision
+from services.prompt_injection import (
+    InjectionAction,
+    InjectionReply,
+    InjectionUnavailableError,
+    send_injection_command,
+)
 from services.redis_connection import redis_connection
 from services.task_control import request_manual_stop
 from services.task_status import MANUAL_REQUEST_STATUSES
@@ -238,6 +245,56 @@ async def stop_manual_request(
         raise ConflictError("Запрос уже завершён — останавливать нечего")
     async with redis_connection() as redis_client:
         await request_manual_stop(redis_client, task_id, request_id)
+
+
+async def _injection_result(
+    db_session: AsyncSession,
+    current_user: User,
+    task_id: uuid.UUID,
+    action: InjectionAction,
+) -> InjectionResultResponse:
+    task = await get_task_or_404(db_session, task_id, current_user)
+    require_status(
+        task,
+        frozenset({TaskStatus.IN_PROGRESS}),
+        "Влить промт в текущий ход можно, пока агент работает над задачей",
+    )
+    async with redis_connection() as redis_client:
+        try:
+            reply: InjectionReply = await send_injection_command(redis_client, task_id, action)
+        except InjectionUnavailableError as exc:
+            raise ConflictError(
+                "Сессия задачи не ответила: она ещё запускается или занята — повторите позже",
+            ) from exc
+    return InjectionResultResponse(
+        ok=reply.ok,
+        request_id=uuid.UUID(reply.request_id) if reply.request_id else None,
+        reason=reply.reason,
+        message=reply.message,
+    )
+
+
+@router.post("/{task_id}/manual-queue/inject", response_model=InjectionResultResponse)
+async def inject_manual_request(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> InjectionResultResponse:
+    """
+    «Влить в текущий ход» (раздел 7.3): ближайший обычный текстовый промт очереди
+    уходит в идущий ход агента сейчас. Команды и промты библиотеки пропускаются.
+    """
+    return await _injection_result(db_session, current_user, task_id, InjectionAction.INJECT)
+
+
+@router.post("/{task_id}/manual-queue/inject/cancel", response_model=InjectionResultResponse)
+async def cancel_injected_request(
+    task_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> InjectionResultResponse:
+    """«Отменить» (раздел 7.3): последний влитый промт возвращается в очередь, если его не взяли."""
+    return await _injection_result(db_session, current_user, task_id, InjectionAction.CANCEL)
 
 
 @router.delete("/{task_id}/manual-queue/{request_id}", status_code=204)

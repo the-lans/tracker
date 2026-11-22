@@ -1,18 +1,38 @@
 import { useRef, useState } from "react";
-import { Clock, Eye, MessageSquarePlus, Send } from "lucide-react";
+import { Clock, CornerDownRight, Eye, MessageSquarePlus, Send, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { useManualQueue, useSubmitFreeformPrompt } from "@/hooks/useTasks";
+import { useInjectManualRequest, useManualQueue, useSubmitFreeformPrompt } from "@/hooks/useTasks";
 import { useCommandPreview, useRunTaskCommand, useTaskCommands, type TaskCommand } from "@/hooks/useTaskCommands";
 import { ApiError } from "@/lib/apiClient";
 import { useTemplatePreview } from "@/hooks/useTemplates";
 import { MANUAL_REQUEST_STATUSES } from "@/components/tasks/taskStatusMeta";
 import { errorMessage } from "@/lib/errors";
 import { NO_LLM_ACCOUNT } from "@/lib/llmAccounts";
-import { ManualRequestStatus, ManualRequestType, TaskStatus } from "@/lib/types";
+import { ManualRequestStatus, ManualRequestType, TaskStatus, type InjectionResult, type ManualRequest } from "@/lib/types";
 import { isPreLaunch } from "@/lib/taskStatusTransitions";
 import { ComposerResizeHandle } from "@/components/tasks/ComposerResizeHandle";
+
+/** Причины отказа воркера во влитии (раздел 7.3) — подписи для тоста. */
+const INJECTION_REFUSALS: Record<string, string> = {
+  no_turn: "Сейчас нет хода модели — влить нечего",
+  awaiting_decision: "Агент ждёт вашего решения — влить нельзя",
+  nothing_to_inject: "В очереди только команды — их нельзя влить",
+  nothing_to_cancel: "Нет влитого промта, который можно вернуть",
+  too_late: "Агент уже взял промт — отменить нельзя",
+  failed: "Не удалось влить промт",
+};
+
+/** Свободный текст без `/…`: слэш-команды, промты библиотеки и пересказы не вливаются. */
+function isInjectable(request: ManualRequest) {
+  return (
+    request.status === ManualRequestStatus.QUEUED &&
+    request.request_type === ManualRequestType.FREEFORM_PROMPT &&
+    !request.command_name &&
+    !(request.raw_prompt_text ?? "").trimStart().startsWith("/")
+  );
+}
 
 function isMobileDevice() {
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
@@ -65,6 +85,27 @@ export function Composer({
       (request.request_type === ManualRequestType.FREEFORM_PROMPT || request.command_name) &&
       request.status === ManualRequestStatus.QUEUED,
   ).length;
+  const injectableCount = (queue ?? []).filter(isInjectable).length;
+  const injectedCount = (queue ?? []).filter((request) => request.status === ManualRequestStatus.INJECTED).length;
+  const queueShown = queuedFreeform > 0 || injectedCount > 0;
+  const inject = useInjectManualRequest(taskId, "inject");
+  const cancelInjected = useInjectManualRequest(taskId, "inject/cancel");
+  const running = taskStatus === TaskStatus.IN_PROGRESS;
+  const injectHint = !running
+    ? "Влить можно, пока агент работает над задачей"
+    : injectableCount === 0
+      ? INJECTION_REFUSALS.nothing_to_inject
+      : "Влить в текущий ход: ближайший промт уйдёт агенту сейчас";
+
+  function runInjection(mutation: typeof inject, success: string) {
+    mutation.mutate(undefined, {
+      onSuccess: (result: InjectionResult) => {
+        if (result.ok) toast.success(success);
+        else toast.error(INJECTION_REFUSALS[result.reason ?? "failed"] ?? result.message ?? INJECTION_REFUSALS.failed);
+      },
+      onError: (error) => toast.error(errorMessage(error, INJECTION_REFUSALS.failed)),
+    });
+  }
 
   function handleTextChange(value: string) {
     previewVersion.current += 1;
@@ -139,11 +180,48 @@ export function Composer({
   }
 
   return (
-    <div className="border-t border-border bg-surface p-3.5 short:sticky short:bottom-0 short:z-10 short:px-3 short:py-1.5">
-      {queuedFreeform > 0 && (
-        <div className="mb-2 flex items-center gap-1.5 text-meta font-bold text-info-text short:mb-1">
-          <Clock className="size-3" />
-          В очереди: {queuedFreeform}
+    <div className={`border-t border-border bg-surface px-3.5 pb-3.5 ${queueShown ? "pt-1" : "pt-3.5"} short:sticky short:bottom-0 short:z-10 short:px-3 short:py-1.5`}>
+      {queueShown && (
+        <div className="mb-0.5 flex flex-wrap items-center gap-x-2 leading-tight">
+          <span className="flex items-center gap-1.5 text-meta font-bold text-info-text">
+            <Clock className="size-3" />
+            В очереди: {queuedFreeform}
+          </span>
+          <span className="ml-auto flex items-center gap-1">
+            {injectedCount > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 min-h-0! min-w-7! gap-1 px-1.5 text-meta"
+                aria-label="Отменить"
+                title="Вернуть последний влитый промт в очередь, пока агент его не взял"
+                disabled={cancelInjected.isPending}
+                onClick={() => runInjection(cancelInjected, "Промт возвращён в очередь")}
+              >
+                <Undo2 className="size-3.5" />
+                <span className="hidden sm:inline">Отменить</span>
+              </Button>
+            )}
+            {queuedFreeform > 0 && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="h-6 min-h-0! min-w-7! gap-1 px-1.5 text-meta"
+                aria-label="Влить в текущий ход"
+                title={injectHint}
+                disabled={!running || injectableCount === 0 || inject.isPending}
+                onClick={() => runInjection(inject, "Промт влит в текущий ход")}
+              >
+                <CornerDownRight className="size-3.5" />
+                <span className="hidden sm:inline">Влить в текущий ход</span>
+              </Button>
+            )}
+          </span>
+          {injectedCount > 0 && (
+            <span className="basis-full text-meta text-text-3">
+              Влито: {injectedCount} — дойдёт после текущего шага
+            </span>
+          )}
         </div>
       )}
       {manualRequestsClosed && acceptsRequests ? (

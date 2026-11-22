@@ -282,6 +282,87 @@ describe("Composer", () => {
       expect(await screen.findByText("В очереди: 2")).toBeInTheDocument();
     });
 
+    describe("влитие в текущий ход", () => {
+      const INJECT_PATH = "POST /tasks/t1/manual-queue/inject";
+      const CANCEL_PATH = "POST /tasks/t1/manual-queue/inject/cancel";
+
+      test("«Влить» отправляет запрос и сообщает об успехе", async ({ api, toasts }) => {
+        api.respond("GET /tasks/t1/manual-queue", [makeManualRequest({ id: "mq1" })]);
+        api.respond(INJECT_PATH, { ok: true, request_id: "mq1", reason: null, message: null });
+        const { user } = renderComposer();
+
+        await user.click(await screen.findByRole("button", { name: "Влить в текущий ход" }));
+
+        await expect.poll(() => toasts.success.mock.calls).toEqual([["Промт влит в текущий ход"]]);
+        expect(api.requests.some((r) => r.method === "POST" && r.path === "/tasks/t1/manual-queue/inject")).toBe(true);
+      });
+
+      test("отказ воркера показывается понятным текстом", async ({ api, toasts }) => {
+        api.respond("GET /tasks/t1/manual-queue", [makeManualRequest({ id: "mq1" })]);
+        api.respond(INJECT_PATH, { ok: false, request_id: null, reason: "awaiting_decision", message: null });
+        const { user } = renderComposer();
+
+        await user.click(await screen.findByRole("button", { name: "Влить в текущий ход" }));
+
+        await expect.poll(() => toasts.error.mock.calls).toEqual([["Агент ждёт вашего решения — влить нельзя"]]);
+      });
+
+      test("в очереди только команды — «Влить» неактивна с подсказкой", async ({ api }) => {
+        api.respond("GET /tasks/t1/manual-queue", [
+          makeManualRequest({ id: "mq1", raw_prompt_text: "/compact" }),
+          makeManualRequest({ id: "mq2", command_name: "review", raw_prompt_text: null }),
+        ]);
+        renderComposer();
+
+        const button = await screen.findByRole("button", { name: "Влить в текущий ход" });
+
+        expect(button).toBeDisabled();
+        expect(button).toHaveAttribute("title", "В очереди только команды — их нельзя влить");
+      });
+
+      test("не в ходе агента «Влить» неактивна", async ({ api }) => {
+        api.respond("GET /tasks/t1/manual-queue", [makeManualRequest({ id: "mq1" })]);
+        renderComposer({ status: TaskStatus.PAUSED });
+
+        expect(await screen.findByRole("button", { name: "Влить в текущий ход" })).toBeDisabled();
+      });
+
+      test("влитый промт: строка «Влито» и кнопка «Отменить»", async ({ api, toasts }) => {
+        api.respond("GET /tasks/t1/manual-queue", [
+          makeManualRequest({ id: "mq1", status: ManualRequestStatus.INJECTED }),
+          makeManualRequest({ id: "mq2" }),
+        ]);
+        api.respond(CANCEL_PATH, { ok: true, request_id: "mq1", reason: null, message: null });
+        const { user } = renderComposer();
+
+        expect(await screen.findByText("В очереди: 1")).toBeInTheDocument();
+        expect(screen.getByText("Влито: 1 — дойдёт после текущего шага")).toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Отменить" }));
+
+        await expect.poll(() => toasts.success.mock.calls).toEqual([["Промт возвращён в очередь"]]);
+      });
+
+      test("слишком поздно отменять — понятная причина", async ({ api, toasts }) => {
+        api.respond("GET /tasks/t1/manual-queue", [makeManualRequest({ id: "mq1", status: ManualRequestStatus.INJECTED })]);
+        api.respond(CANCEL_PATH, { ok: false, request_id: "mq1", reason: "too_late", message: null });
+        const { user } = renderComposer();
+
+        await user.click(await screen.findByRole("button", { name: "Отменить" }));
+
+        await expect.poll(() => toasts.error.mock.calls).toEqual([["Агент уже взял промт — отменить нельзя"]]);
+      });
+
+      test("без влитых промтов кнопки «Отменить» нет", async ({ api }) => {
+        api.respond("GET /tasks/t1/manual-queue", [makeManualRequest({ id: "mq1" })]);
+        renderComposer();
+
+        await screen.findByText("В очереди: 1");
+
+        expect(screen.queryByRole("button", { name: "Отменить" })).not.toBeInTheDocument();
+        expect(screen.queryByText(/Влито/)).not.toBeInTheDocument();
+      });
+    });
+
     test("пустая очередь — без индикатора", async ({ api }) => {
       renderComposer();
       await expect.poll(() => api.requests.length).toBeGreaterThan(0);
