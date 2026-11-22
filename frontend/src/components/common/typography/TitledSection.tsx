@@ -8,10 +8,13 @@ import { cn } from "@/lib/utils";
  */
 export function TitledSection({
   title,
+  action,
   className,
   children,
 }: {
   title: string;
+  /** Действие справа от заголовка, например «Изменить». */
+  action?: ReactNode;
   className?: string;
   children: ReactNode;
 }) {
@@ -22,7 +25,14 @@ export function TitledSection({
         className,
       )}
     >
-      <SectionTitle className="mb-2">{title}</SectionTitle>
+      {action ? (
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <SectionTitle>{title}</SectionTitle>
+          {action}
+        </div>
+      ) : (
+        <SectionTitle className="mb-2">{title}</SectionTitle>
+      )}
       {children}
     </section>
   );

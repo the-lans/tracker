@@ -4,13 +4,14 @@ import { Button } from "@/components/ui/button";
 import { useRefreshJiraDescription } from "@/hooks/useTasks";
 import { errorMessage } from "@/lib/errors";
 
-/** Раздел 15.6: подгружает отрисованное описание из Jira у задачи, импортированной раньше. */
+/** Раздел 15.6: заменяет описание задачи текущим описанием из Jira (правки в трекере теряются). */
 export function RefreshJiraDescriptionButton({ taskId }: { taskId: string }) {
   const refresh = useRefreshJiraDescription(taskId);
   return (
     <Button
       variant="ghost"
       size="sm"
+      title="Заменить описание текущим из Jira: правки, сделанные в трекере, будут потеряны"
       disabled={refresh.isPending}
       onClick={() =>
         refresh.mutate(undefined, {

@@ -1,6 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, vi } from "vitest";
 import { TaskDetailsDialog } from "@/components/tasks/TaskDetailsDialog";
+import { TaskStatus } from "@/lib/types";
 import { makeTask } from "@/test/factories";
 import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
@@ -119,5 +120,76 @@ describe("TaskDetailsDialog", () => {
     await user.click(screen.getByRole("button", { name: "Закрыть" }));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  describe("правка описания", () => {
+    test.for([
+      { status: TaskStatus.NEW, editable: true },
+      { status: TaskStatus.DEFINED, editable: true },
+      { status: TaskStatus.IN_PROGRESS, editable: false },
+      { status: TaskStatus.DONE, editable: false },
+    ])("статус $status → «Изменить» есть: $editable", ({ status, editable }, { api }) => {
+      renderDialog(api, { status, description: "d" });
+
+      expect(screen.queryByRole("button", { name: "Изменить" }) !== null).toBe(editable);
+    });
+
+    test("новый текст сохраняется, окно возвращается к просмотру", async ({ api, toasts }) => {
+      api.respond("PATCH /tasks/t1", makeTask({ id: "t1", description: "Новый текст", description_html: null }));
+      const { user } = renderDialog(api, {
+        description: "Старый текст",
+        description_html: "<p>Старый текст</p>",
+      });
+
+      await user.click(screen.getByRole("button", { name: "Изменить" }));
+      const field = screen.getByRole("textbox", { name: "Описание задачи" });
+      expect(field).toHaveValue("Старый текст");
+      expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+      await user.clear(field);
+      await user.type(field, "Новый текст");
+      await user.click(screen.getByRole("button", { name: "Сохранить" }));
+
+      await expect.poll(() => api.mutations()[0]?.body).toEqual({ description: "Новый текст" });
+      expect(api.mutations()[0]?.path).toBe("/tasks/t1");
+      await expect.poll(() => toasts.success).toHaveBeenCalledWith("Описание сохранено");
+      expect(screen.queryByRole("textbox", { name: "Описание задачи" })).not.toBeInTheDocument();
+    });
+
+    test("Ctrl+Enter сохраняет, ошибка сервера показывается и правка остаётся", async ({ api, toasts }) => {
+      api.respond("PATCH /tasks/t1", { error: { status: 422, message: "Поля задачи можно менять только до запуска" } });
+      const { user } = renderDialog(api, { description: "Старый" });
+
+      await user.click(screen.getByRole("button", { name: "Изменить" }));
+      await user.type(screen.getByRole("textbox", { name: "Описание задачи" }), " плюс{Control>}{Enter}{/Control}");
+
+      await expect
+        .poll(() => toasts.error)
+        .toHaveBeenCalledWith("Поля задачи можно менять только до запуска");
+      expect(screen.getByRole("textbox", { name: "Описание задачи" })).toHaveValue("Старый плюс");
+    });
+
+    test("Escape отменяет правку и не закрывает окно, второй Escape закрывает окно", async ({ api }) => {
+      const { user, onOpenChange } = renderDialog(api, { description: "Старый" });
+
+      await user.click(screen.getByRole("button", { name: "Изменить" }));
+      await user.type(screen.getByRole("textbox", { name: "Описание задачи" }), " правка{Escape}");
+
+      expect(screen.queryByRole("textbox", { name: "Описание задачи" })).not.toBeInTheDocument();
+      expect(onOpenChange).not.toHaveBeenCalled();
+      await user.keyboard("{Escape}");
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    test("«Отмена» закрывает редактор без сохранения", async ({ api }) => {
+      const { user } = renderDialog(api, { description: "Старый" });
+
+      await user.click(screen.getByRole("button", { name: "Изменить" }));
+      await user.type(screen.getByRole("textbox", { name: "Описание задачи" }), " правка");
+      await user.click(screen.getByRole("button", { name: "Отмена" }));
+
+      expect(screen.queryByRole("textbox", { name: "Описание задачи" })).not.toBeInTheDocument();
+      expect(screen.getByText("Старый")).toBeInTheDocument();
+      expect(api.mutations()).toHaveLength(0);
+    });
   });
 });

@@ -17,6 +17,7 @@ import pytest
 
 from api.jira import get_jira_http_client
 from clients.jira import JiraAttachment, JiraClient, JiraCredentials
+from db.models.enums import TaskStatus
 from db.models.tasks import Task
 from services.errors import ExternalServiceError, NotFoundError
 from services.jira_import import (
@@ -587,37 +588,86 @@ class TestRefreshDescription:
         assert fake_jira.requested_urls
         assert [args[2] for args in queued] == ["PROJ-42"]
 
-    @pytest.mark.parametrize(
-        ("description", "key", "message"),
-        [
-            ("Описание правили в трекере", "PROJ-42", "отличается от описания в Jira"),
-            (_DESCRIPTION_TEXT, None, "нет ссылки на задачу Jira"),
-        ],
-        ids=["description_edited", "not_imported"],
-    )
-    async def test_conflict(
+    async def test_changed_description_is_replaced_with_the_one_from_jira(
         self,
         authed_client: AsyncClient,
         db_session: AsyncSession,
         fake_jira: FakeJira,
         monkeypatch: pytest.MonkeyPatch,
-        description: str,
-        key: str | None,
-        message: str,
     ) -> None:
         del fake_jira
         task_id = await self._imported_task(
             authed_client,
             db_session,
             monkeypatch,
-            description=description,
-            key=key,
+            description="Устаревшее описание",
         )
 
         response = await authed_client.post(f"/jira/tasks/{task_id}/description")
 
+        assert response.status_code == 200, response.text
+        assert response.json()["description"] == _DESCRIPTION_TEXT
+        assert response.json()["description_html"] == _DESCRIPTION_HTML
+
+    async def test_changed_description_of_a_started_task_is_not_replaced(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        fake_jira: FakeJira,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        del fake_jira
+        task_id = await self._imported_task(
+            authed_client,
+            db_session,
+            monkeypatch,
+            description="Устаревшее описание",
+        )
+        task = await db_session.get(Task, uuid.UUID(task_id))
+        assert task is not None
+        task.status = TaskStatus.IN_PROGRESS
+        await db_session.commit()
+
+        response = await authed_client.post(f"/jira/tasks/{task_id}/description")
+
         assert response.status_code == 409
-        assert message in response.text
+        assert "только до запуска" in response.text
+        await db_session.refresh(task)
+        assert task.description == "Устаревшее описание"
+
+    async def test_unchanged_text_of_a_started_task_still_gets_the_html(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        fake_jira: FakeJira,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        del fake_jira
+        task_id = await self._imported_task(authed_client, db_session, monkeypatch)
+        task = await db_session.get(Task, uuid.UUID(task_id))
+        assert task is not None
+        task.status = TaskStatus.IN_PROGRESS
+        await db_session.commit()
+
+        response = await authed_client.post(f"/jira/tasks/{task_id}/description")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["description_html"] == _DESCRIPTION_HTML
+
+    async def test_conflict_without_a_jira_link(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+        fake_jira: FakeJira,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        del fake_jira
+        task_id = await self._imported_task(authed_client, db_session, monkeypatch, key=None)
+
+        response = await authed_client.post(f"/jira/tasks/{task_id}/description")
+
+        assert response.status_code == 409
+        assert "нет ссылки на задачу Jira" in response.text
 
     async def test_foreign_task_not_found(
         self,

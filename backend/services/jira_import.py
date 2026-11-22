@@ -33,6 +33,7 @@ from services.errors import AppError, ConflictError, ValidationError
 from services.system_settings import get_jira_url
 from services.task_artifacts import max_upload_bytes, save_artifact
 from services.task_codes import validate_task_code
+from services.task_status import PRE_LAUNCH_STATUSES
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -251,28 +252,38 @@ async def refresh_description_html(
     http_client: httpx.AsyncClient,
 ) -> str:
     """
-    Подгружает отрисованное описание у задачи, импортированной из Jira раньше
-    (раздел 15.6); возвращает ключ задачи Jira — по нему копируются вложения.
-    Только пока описание задачи совпадает с описанием в Jira: иначе HTML
-    показывал бы другой текст.
+    «Обновить из Jira» (раздел 15.6): описание задачи становится таким, как в
+    Jira сейчас, вместе с отрисованным HTML; возвращает ключ задачи Jira — по
+    нему копируются вложения. Изменившийся текст заменяет описание только до
+    запуска задачи, как и любая правка её полей (раздел 12.1): запущенная
+    задача берёт описание в шаблоны нод. Если текст не изменился, подгружается
+    только HTML — в любом статусе.
     """
     key = issue_key_of_url(task.jira_issue_url)
     if key is None:
         raise ConflictError("У задачи нет ссылки на задачу Jira")
     credentials = await jira_credentials_for(db_session, user)
     issue = await JiraClient(credentials=credentials, http_client=http_client).get_issue(key)
-    if issue.description != task.description:
-        raise ConflictError("Описание задачи отличается от описания в Jira — обновить нельзя")
-    if not issue.description_html:
-        raise ConflictError("Jira не вернула отрисованное описание")
-    saved = await save_description_html(
-        db_session,
-        task=task,
-        description=issue.description,
-        description_html=issue.description_html,
+    text_changed = issue.description != task.description
+    if text_changed and task.status not in PRE_LAUNCH_STATUSES:
+        raise ConflictError(
+            "Описание в Jira изменилось, но описание задачи можно менять только до запуска",
+        )
+    description_html = issue.description_html
+    if description_html is not None and len(description_html) > DESCRIPTION_HTML_MAX_CHARS:
+        description_html = None
+    if not text_changed and not description_html:
+        raise ConflictError("Jira не вернула отрисованное описание или оно слишком большое")
+    # Условие в самом UPDATE: правка описания между чтением и записью не пропадёт.
+    result = await db_session.execute(
+        sa.update(Task)
+        .where(Task.id == task.id, Task.description == task.description)
+        .values(description=issue.description, description_html=description_html)
+        .returning(Task.id),
     )
-    if not saved:
-        raise ConflictError("Описание изменилось или слишком большое для показа")
+    await db_session.commit()
+    if result.scalar_one_or_none() is None:
+        raise ConflictError("Описание задачи изменилось — повторите обновление")
     return key
 
 
