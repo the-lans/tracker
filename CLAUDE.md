@@ -47,25 +47,25 @@ check` / `npm ls`, чтобы поймать конфликт версий до 
 | Компонент | Версия |
 |---|---|
 | Python | 3.12* |
-| FastAPI (async) | 0.162.0 |
+| FastAPI (async) | 0.165.0 |
 | Uvicorn[standard] | 0.54.0* (ASGI-сервер, не назван в ТЗ напрямую) |
-| SQLAlchemy (async) | 2.1.8 |
+| SQLAlchemy (async) | 2.1.9 |
 | asyncpg | 0.32.0* (асинхронный драйвер Postgres для SQLAlchemy async) |
 | Alembic | 1.20.1 |
 | Celery | 5.7.0 |
 | redis-py | 8.1.0 |
 | structlog | 26.1.0 |
-| claude-agent-sdk | 0.2.180 |
+| claude-agent-sdk | 0.2.185 |
 | asyncssh | 2.24.1* (SFTP-шлюз, раздел 19.6) |
 | httpx | 0.28.1* (клиенты GitLab и Jira, тесты API) |
 | cryptography | 50.0.2* (шифрование секретов и токена сессии, раздел 19.4) |
 | google-auth | 2.62.1* (проверка Google id_token, раздел 19.1) |
 | pywebpush | 2.5.0* (Web Push, раздел 18.1) |
-| boto3 | 1.43.127* (выгрузка резервных копий в S3, раздел 20.4) |
+| boto3 | 1.44.6* (выгрузка резервных копий в S3, раздел 20.4) |
 | PostgreSQL | 15+ |
-| pytest / pytest-asyncio / pytest-cov | 9.2.0 / 1.4.1.post1* / 7.1.0* |
+| pytest / pytest-asyncio / pytest-cov | 9.2.0 / 1.5.0* / 7.1.0* |
 | pip-audit | 2.10.1* (`make audit`, `security.yml`) |
-| ruff | 0.17.3 |
+| ruff | 0.17.6 |
 | mypy | 2.4.1 |
 
 ### Frontend (`frontend/package.json`)
