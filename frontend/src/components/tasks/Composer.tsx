@@ -180,7 +180,7 @@ export function Composer({
   }
 
   return (
-    <div className={`border-t border-border bg-surface px-3.5 pb-3.5 ${queueShown ? "pt-1" : "pt-3.5"} short:sticky short:bottom-0 short:z-10 short:px-3 short:py-1.5`}>
+    <div className={`border-t border-border bg-surface px-3.5 pb-3.5 ${queueShown ? "pt-1 md:pt-2" : "pt-3.5"} short:sticky short:bottom-0 short:z-10 short:px-3 short:py-1.5`}>
       {queueShown && (
         <div className="mb-0.5 flex flex-wrap items-center gap-x-2 leading-tight">
           <span className="flex items-center gap-1.5 text-meta font-bold text-info-text">
