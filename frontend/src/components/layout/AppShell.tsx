@@ -65,7 +65,7 @@ export function AppShell() {
       </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-4 border-b border-border bg-surface px-4 py-0.5 short:py-0 lg:hidden">
+        <header className="flex items-center gap-6 border-b border-border bg-surface px-4 py-0.5 short:py-0 lg:hidden">
           {/* Раздел 18.3: счётчик ожидающих решения виден и без открытого меню. */}
           <Button
             variant="ghost"
@@ -80,7 +80,7 @@ export function AppShell() {
             onClick={() => setMobileNavOpen(true)}
           >
             <Menu className="size-5" />
-            <CountBadge count={awaitingCount?.count} className="absolute left-5 top-0" />
+            <CountBadge count={awaitingCount?.count} max={99} className="absolute left-5 top-0" />
           </Button>
           <h1 className="text-title font-extrabold">
             {TITLES[location.pathname] ?? "Tracker"}

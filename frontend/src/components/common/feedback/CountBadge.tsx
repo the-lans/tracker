@@ -4,7 +4,8 @@ import { cn } from "@/lib/utils";
  * Счётчик в навигации (раздел 18.3: задачи, ожидающие решения); при нуле
  * не показывается.
  */
-export function CountBadge({ count, className }: { count?: number; className?: string }) {
+/** `max` — предел показа: больше него в кружке «99+», чтобы он не раздувался на узких экранах. */
+export function CountBadge({ count, max, className }: { count?: number; max?: number; className?: string }) {
   if (!count) return null;
   return (
     <span
@@ -13,7 +14,7 @@ export function CountBadge({ count, className }: { count?: number; className?: s
         className,
       )}
     >
-      {count}
+      {max !== undefined && count > max ? `${max}+` : count}
     </span>
   );
 }
