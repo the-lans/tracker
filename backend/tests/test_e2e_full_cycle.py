@@ -37,7 +37,7 @@ from db.models.pipelines import Node, Pipeline
 from db.models.repositories import Repository
 from db.models.tasks import Task
 from db.models.users import User
-from prompts.agent import PLAN_ACCEPTED_MESSAGE
+from prompts.agent import PLAN_ACCEPTED_MESSAGE, PLANNING_NOT_ACTIVE_DENIED
 from services.autostart import run_scheduled_autostart_check
 from services.plan_mode import PlanDecisionOption
 from services.task_dispatcher import dispatch_queued_tasks
@@ -246,6 +246,18 @@ class TestFullCycle:
                 )
                 assert isinstance(decision, PermissionResultDeny)
                 assert decision.message == PLAN_ACCEPTED_MESSAGE
+            elif query == f"Реализуй: {_PLAN_TEXT}":
+                # Агент после принятого плана сам зовёт ExitPlanMode: окно плана
+                # заново не открывается (решение по плану остаётся одно).
+                can_use_tool = worker_env.options[0].can_use_tool
+                assert can_use_tool is not None
+                decision = await can_use_tool(
+                    "ExitPlanMode",
+                    {"plan": _PLAN_TEXT},
+                    ToolPermissionContext(),
+                )
+                assert isinstance(decision, PermissionResultDeny)
+                assert decision.message == PLANNING_NOT_ACTIVE_DENIED
 
         fake = FakeClaudeAgentClient(
             messages_per_query=[[make_result_message()] for _ in range(5)],

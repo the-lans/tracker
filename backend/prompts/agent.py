@@ -61,6 +61,15 @@ PLAN_ACCEPTED_MESSAGE = (
     "План принят пользователем. Реализацию выполнит следующий запрос — "
     "сейчас ничего не меняй и заверши ответ."
 )
+# План показывается пользователю только в ноде планирования; вызов
+# ExitPlanMode / EnterPlanMode в обычном ходе (после принятого плана)
+# отклоняется без окна — агент продолжает работу.
+# Перевод: «Режим планирования сейчас не включён: план заново не нужен —
+# продолжайте выполнять задание».
+PLANNING_NOT_ACTIVE_DENIED = (
+    "Planning mode is not active and no plan is needed now. Do not call "
+    "ExitPlanMode or EnterPlanMode: continue carrying out the task."
+)
 PLAN_ACCEPTED_TOOL_DENIED = "План принят: изменения — в следующем запросе. Заверши ответ."
 CONTEXT_ONLY_TOOL_DENIED = "Сейчас только прими контекст: задание придёт следующим сообщением."
 DECISION_TIMEOUT_DENIED = "Истекло время ожидания решения пользователя"

@@ -29,6 +29,7 @@ from prompts.agent import (
     PLAN_ACCEPTED_TOOL_DENIED,
     PLAN_MODE_WRITE_DENIED,
     PLAN_REVISE_DENIED,
+    PLANNING_NOT_ACTIVE_DENIED,
 )
 from services.notifications import NotificationEvent
 from services.plan_mode import (
@@ -181,9 +182,40 @@ async def test_callback_denies_when_no_active_node_context(db_session: AsyncSess
     assert result.behavior == "deny"
 
 
+@pytest.mark.parametrize("tool_name", ["ExitPlanMode", "EnterPlanMode"])
+@pytest.mark.parametrize("auto_accept_plan", [True, False])
+async def test_plan_tools_outside_planning_are_denied_without_review(
+    db_session: AsyncSession,
+    tool_name: str,
+    auto_accept_plan: bool,
+) -> None:
+    """После принятого плана агент вызывает ExitPlanMode сам — окно плана не открывается."""
+    task, node_log = await _make_task_with_running_node_log(db_session)
+    context = ActiveNodeContext(
+        node_log_id=node_log.id, task_id=task.id, auto_accept_plan=auto_accept_plan
+    )
+    callback = build_can_use_tool_callback(
+        context=context,
+        session_factory=_non_closing_session_factory(db_session),
+        redis_client=Redis(),  # не используется: ожидания решения нет
+    )
+
+    result = await callback(tool_name, {"plan": "1. Сделать X"}, _TEST_TOOL_CONTEXT)
+
+    assert result.behavior == "deny"
+    assert result.message == PLANNING_NOT_ACTIVE_DENIED
+    await db_session.refresh(node_log)
+    assert node_log.pending_plan_text is None
+    assert node_log.status is NodeLogStatus.RUNNING
+    await db_session.refresh(task)
+    assert task.status is TaskStatus.IN_PROGRESS
+
+
 async def test_callback_auto_accepts_plan_without_waiting(db_session: AsyncSession) -> None:
     task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=True)
+    context = ActiveNodeContext(
+        node_log_id=node_log.id, task_id=task.id, auto_accept_plan=True, plan_mode=True
+    )
     callback = build_can_use_tool_callback(
         context=context,
         session_factory=_non_closing_session_factory(db_session),
@@ -209,7 +241,9 @@ async def _review_plan_with_decision(
 ) -> tuple[Task, NodeLog, PermissionResultAllow | PermissionResultDeny]:
     """План на ревью; пользователь вскоре выбирает ``decision`` в виджете."""
     task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
+    context = ActiveNodeContext(
+        node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False, plan_mode=True
+    )
     callback = build_can_use_tool_callback(
         context=context,
         session_factory=_non_closing_session_factory(db_session),
@@ -290,7 +324,9 @@ async def test_unrelated_task_signal_does_not_reject_pending_plan(
     """Свободный промт, поставленный в очередь во время ревью плана, будит
     тот же канал задачи — план от этого не должен отклоняться."""
     task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
+    context = ActiveNodeContext(
+        node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False, plan_mode=True
+    )
     callback = build_can_use_tool_callback(
         context=context,
         session_factory=_non_closing_session_factory(db_session),
@@ -331,6 +367,7 @@ class TestDecisionWait:
             node_log_id=node_log.id,
             task_id=task.id,
             auto_accept_plan=False,
+            plan_mode=True,
         )
         callback = build_can_use_tool_callback(
             context=context,
@@ -364,7 +401,9 @@ async def test_callback_denies_on_timeout_without_resolution(
     redis_client: Redis,
 ) -> None:
     task, node_log = await _make_task_with_running_node_log(db_session)
-    context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False)
+    context = ActiveNodeContext(
+        node_log_id=node_log.id, task_id=task.id, auto_accept_plan=False, plan_mode=True
+    )
     callback = build_can_use_tool_callback(
         context=context,
         session_factory=_non_closing_session_factory(db_session),
@@ -459,6 +498,7 @@ class TestDecisionOutputOffset:
             task,
             node_log,
             auto_accept_plan=auto_accept_plan,
+            plan_mode=tool_name == "ExitPlanMode",
             output_length=None if output_length is None else lambda: output_length,
         )
 
@@ -533,7 +573,7 @@ class TestAskUserQuestion:
         node_log.user_input_text = "0"
         await db_session.flush()
         callback = build_can_use_tool_callback(
-            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True),
             session_factory=_non_closing_session_factory(db_session),
             redis_client=redis_client,
             decision_wait_timeout_seconds=0.3,
@@ -798,7 +838,7 @@ class TestDecisionStatus:
         monkeypatch.setattr("services.task_status.notify_task_event", capture_notification)
         task, node_log = await _make_task_with_running_node_log(db_session, status=start_status)
         callback = build_can_use_tool_callback(
-            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True),
             session_factory=_non_closing_session_factory(db_session),
             redis_client=redis_client,
             decision_wait_timeout_seconds=5.0,
@@ -834,7 +874,7 @@ class TestDecisionStatus:
         """Таймаут ноды или «Остановить» отменяют ход, пока ждётся решение."""
         task, node_log = await _make_task_with_running_node_log(db_session)
         callback = build_can_use_tool_callback(
-            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True),
             session_factory=_non_closing_session_factory(db_session),
             redis_client=redis_client,
         )
@@ -869,7 +909,7 @@ class TestDecisionStatus:
             status=TaskStatus.REBASE_CONFLICT,
         )
         callback = build_can_use_tool_callback(
-            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id),
+            context=ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True),
             session_factory=_non_closing_session_factory(db_session),
             redis_client=redis_client,
             decision_wait_timeout_seconds=0.2,
@@ -895,6 +935,7 @@ class TestDecisionStatus:
                 node_log_id=node_log.id,
                 task_id=task.id,
                 auto_accept_plan=True,
+                plan_mode=True,
             ),
             session_factory=_non_closing_session_factory(db_session),
             redis_client=redis_client,
@@ -918,7 +959,7 @@ class TestCancelDecisionWait:
         SDK снимается, и статус возвращён к моменту, когда воркер продолжит.
         """
         task, node_log = await _make_task_with_running_node_log(db_session)
-        context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id)
+        context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True)
         callback = build_can_use_tool_callback(
             context=context,
             session_factory=_non_closing_session_factory(db_session),
@@ -956,7 +997,7 @@ class TestCancelDecisionWait:
         """Ход прерван, пока после перехода в `plan_review` отправляется
         уведомление, — ожидание ещё не началось, но статус всё равно возвращён."""
         task, node_log = await _make_task_with_running_node_log(db_session)
-        context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id)
+        context = ActiveNodeContext(node_log_id=node_log.id, task_id=task.id, plan_mode=True)
         callback = build_can_use_tool_callback(
             context=context,
             session_factory=_non_closing_session_factory(db_session),

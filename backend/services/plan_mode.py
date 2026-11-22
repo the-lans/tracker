@@ -61,6 +61,7 @@ from prompts.agent import (
     PLAN_ACCEPTED_TOOL_DENIED,
     PLAN_MODE_WRITE_DENIED,
     PLAN_REVISE_DENIED,
+    PLANNING_NOT_ACTIVE_DENIED,
     TOOL_DENIED_BY_USER,
 )
 from services.access import get_task_record_or_404
@@ -85,6 +86,7 @@ if TYPE_CHECKING:
 logger = get_logger("plan_mode")
 
 EXIT_PLAN_MODE_TOOL = "ExitPlanMode"
+ENTER_PLAN_MODE_TOOL = "EnterPlanMode"
 ASK_USER_QUESTION_TOOL = "AskUserQuestion"
 INTERCEPTED_TOOLS = frozenset({EXIT_PLAN_MODE_TOOL, ASK_USER_QUESTION_TOOL})
 
@@ -589,6 +591,11 @@ class _PermissionCallback:
             return PermissionResultDeny(message=PLAN_ACCEPTED_TOOL_DENIED, interrupt=False)
         if context.context_only:
             return PermissionResultDeny(message=CONTEXT_ONLY_TOOL_DENIED, interrupt=False)
+        # Окно плана — только у ноды `plan_prompt`: после принятого плана
+        # агент сам вызывает ExitPlanMode/EnterPlanMode, и это не повод
+        # снова просить решение (раздел 9.1).
+        if tool_name in (EXIT_PLAN_MODE_TOOL, ENTER_PLAN_MODE_TOOL) and not context.plan_mode:
+            return PermissionResultDeny(message=PLANNING_NOT_ACTIVE_DENIED, interrupt=False)
         if tool_name in INTERCEPTED_TOOLS:
             if not active:
                 return PermissionResultDeny(message=NO_ACTIVE_NODE_DENIED)
