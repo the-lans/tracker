@@ -55,7 +55,7 @@ from services.task_control import TaskControlCommand, read_task_control, run_sto
 from services.task_nodes import load_task_node_rows
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterator
+    from collections.abc import Awaitable, Callable
     from pathlib import Path
 
     from redis.asyncio import Redis
@@ -413,26 +413,27 @@ class PipelineRunOutcome:
     stopped: bool = False
 
 
-def _nodes_to_run(
+def _next_node(
     rows: list[tuple[TaskNode, Node]],
     *,
     start_after_order_index: int | None,
-) -> Iterator[tuple[TaskNode, Node]]:
+    processed: set[uuid.UUID],
+) -> tuple[TaskNode, Node] | None:
     """
-    Ноды после точки продолжения; отключённые пропускаются без записи
-    `node_logs` (раздел 13.3).
+    Следующая нода после точки продолжения, которую прогон ещё не брал;
+    отключённые пропускаются без записи `node_logs` (раздел 13.3). Ноды
+    ищутся по записи `task_nodes`, а не по позиции: вставка и отключение ещё
+    не начатых нод запущенной задачи сдвигают позиции (раздел 13.2).
     """
     for task_node, node in rows:
+        if task_node.id in processed:
+            continue
         if start_after_order_index is not None and task_node.order_index <= start_after_order_index:
             continue
         if not task_node.is_enabled:
-            logger.info(
-                "node_skipped_disabled",
-                node_id=str(node.id),
-                order_index=task_node.order_index,
-            )
             continue
-        yield task_node, node
+        return task_node, node
+    return None
 
 
 async def _should_pause_after(db_session: AsyncSession, task_node: TaskNode) -> bool:
@@ -506,9 +507,18 @@ async def run_pipeline(
     завершает прогон до её выполнения. ``pause_after_node`` — после успешной
     ноды с отметкой «пауза после»; `STOP` на этой паузе завершает прогон.
     """
-    rows = await load_task_node_rows(db_session, task.id)
-
-    for task_node, node in _nodes_to_run(rows, start_after_order_index=start_after_order_index):
+    # Раздел 13.2: состав ещё не начатых нод меняют, пока задача идёт, поэтому
+    # снимок перечитывается перед каждой нодой, а не один раз на весь прогон.
+    processed: set[uuid.UUID] = set()
+    while True:
+        selected = _next_node(
+            await load_task_node_rows(db_session, task.id, refresh=True),
+            start_after_order_index=start_after_order_index,
+            processed=processed,
+        )
+        if selected is None:
+            break
+        task_node, node = selected
         if checkpoint is not None:
             decision = await checkpoint(task_node.order_index)
             if decision is not CheckpointDecision.CONTINUE:
@@ -518,6 +528,18 @@ async def run_pipeline(
                     failed_order_index=task_node.order_index,
                     stopped=decision is CheckpointDecision.STOP,
                 )
+            # Пока шли пауза или очередь ручных запросов, состав мог измениться.
+            again = _next_node(
+                await load_task_node_rows(db_session, task.id, refresh=True),
+                start_after_order_index=start_after_order_index,
+                processed=processed,
+            )
+            if again is None:
+                break
+            if again[0].id != task_node.id:
+                continue
+            task_node, node = again
+        processed.add(task_node.id)
 
         if node.node_type is NodeType.CLEAR_CONTEXT:
             await _clear_session_context(

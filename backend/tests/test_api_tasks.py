@@ -903,6 +903,49 @@ async def test_failed_task_locks_nodes_up_to_failure_point(
     assert [node["editable"] for node in listed] == [False, False, True]
 
 
+async def test_running_task_edits_only_nodes_that_have_not_started(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    task_body = await _create_task(authed_client)
+    nodes = await _bind_pipeline_with_nodes(authed_client, db_session, task_body, 3)
+    task = await db_session.get(Task, uuid.UUID(task_body["id"]))
+    assert task is not None
+    task.status = TaskStatus.IN_PROGRESS
+    await make_node_log(
+        db_session,
+        task_id=task.id,
+        node_id=uuid.UUID(nodes[0]["node_id"]),
+        status=NodeLogStatus.RUNNING,
+    )
+    path = f"/tasks/{task_body['id']}/nodes"
+
+    started = await authed_client.patch(f"{path}/{nodes[0]['id']}", json={"is_enabled": False})
+    later = await authed_client.patch(f"{path}/{nodes[1]['id']}", json={"is_enabled": False})
+    before_started = await authed_client.post(
+        path,
+        json={"name": "Свой", "node_type": "plain_prompt", "prompt_template": "x"},
+    )
+    after_started = await authed_client.post(
+        path,
+        json={
+            "name": "Свой",
+            "node_type": "plain_prompt",
+            "prompt_template": "x",
+            "after_task_node_id": nodes[0]["id"],
+        },
+    )
+    listed = (await authed_client.get(path)).json()
+
+    assert started.status_code == 409
+    assert "уже выполнялась или выполняется" in started.text
+    assert later.status_code == 200
+    assert before_started.status_code == 409
+    assert after_started.status_code == 201
+    assert [node["name"] for node in listed] == ["node-0", "Свой", "node-1", "node-2"]
+    assert [node["editable"] for node in listed] == [False, True, True, True]
+
+
 class TestPauseAfterNode:
     """Раздел 13.1, 13.2: отметка «пауза после» меняется и у запущенной задачи."""
 

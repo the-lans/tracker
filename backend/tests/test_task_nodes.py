@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
@@ -150,23 +151,204 @@ async def test_failed_task_allows_only_nodes_after_failure_point(
     assert [view.is_enabled for view in views] == [True, True, False]
 
 
-@pytest.mark.parametrize(
-    "status",
-    [TaskStatus.QUEUED, TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.DONE],
-)
-async def test_started_task_locks_all_nodes(
+@pytest.mark.parametrize("status", [TaskStatus.QUEUED, TaskStatus.DONE, TaskStatus.ARCHIVED])
+async def test_queued_and_finished_task_locks_all_nodes(
     db_session: AsyncSession,
     status: TaskStatus,
 ) -> None:
     task, task_nodes = await _make_task_with_nodes(db_session, status=status, node_count=1)
 
-    with pytest.raises(ConflictError, match="только до запуска"):
+    with pytest.raises(ConflictError, match="до запуска, после сбоя"):
         await set_task_node_enabled(
             db_session,
             task=task,
             task_node_id=task_nodes[0].id,
             is_enabled=False,
         )
+
+
+_RUNNING_STATUSES = [
+    TaskStatus.IN_PROGRESS,
+    TaskStatus.PAUSED,
+    TaskStatus.PLAN_REVIEW,
+    TaskStatus.AWAITING_INPUT,
+    TaskStatus.REBASE_CONFLICT,
+    TaskStatus.AWAITING_LIMIT,
+]
+
+
+async def _running_task(
+    db_session: AsyncSession,
+    status: TaskStatus,
+    *,
+    node_count: int = 4,
+) -> tuple[Task, list[TaskNode]]:
+    """Задача в работе: нода 0 выполнена, нода 1 выполняется, остальные не начаты."""
+    task, task_nodes = await _make_task_with_nodes(
+        db_session,
+        status=status,
+        node_count=node_count,
+    )
+    await make_node_log(
+        db_session,
+        task_id=task.id,
+        node_id=task_nodes[0].node_id,
+        status=NodeLogStatus.SUCCESS,
+    )
+    await make_node_log(
+        db_session,
+        task_id=task.id,
+        node_id=task_nodes[1].node_id,
+        status=NodeLogStatus.RUNNING,
+    )
+    return task, task_nodes
+
+
+class TestRunningTaskComposition:
+    """Раздел 13.2: у запущенной задачи меняются только ещё не начатые ноды."""
+
+    @pytest.mark.parametrize("status", _RUNNING_STATUSES)
+    async def test_only_nodes_after_the_started_ones_are_editable(
+        self,
+        db_session: AsyncSession,
+        status: TaskStatus,
+    ) -> None:
+        task, task_nodes = await _running_task(db_session, status)
+
+        views = await list_task_nodes(db_session, task)
+        assert [view.editable for view in views] == [False, False, True, True]
+
+        await set_task_node_enabled(
+            db_session,
+            task=task,
+            task_node_id=task_nodes[2].id,
+            is_enabled=False,
+        )
+        for started in task_nodes[:2]:
+            with pytest.raises(ConflictError, match="уже выполнялась или выполняется"):
+                await set_task_node_enabled(
+                    db_session,
+                    task=task,
+                    task_node_id=started.id,
+                    is_enabled=False,
+                )
+
+    @pytest.mark.parametrize("status", _RUNNING_STATUSES)
+    async def test_custom_prompt_is_inserted_only_after_the_started_nodes(
+        self,
+        db_session: AsyncSession,
+        status: TaskStatus,
+    ) -> None:
+        task, task_nodes = await _running_task(db_session, status)
+
+        added = await _add(db_session, task, after=task_nodes[1])
+
+        assert added.order_index == 2
+        assert await _names(db_session, task) == [
+            "node-0",
+            "node-1",
+            "Уточнения",
+            "node-2",
+            "node-3",
+        ]
+        # Вставка перед началом и между выполненными нодами отклоняется.
+        for before in (None, task_nodes[0]):
+            with pytest.raises(ConflictError, match="уже выполнялась или выполняется"):
+                await _add(db_session, task, after=before)
+
+    async def test_custom_prompt_can_be_edited_and_deleted_until_it_starts(
+        self,
+        db_session: AsyncSession,
+    ) -> None:
+        task, task_nodes = await _running_task(db_session, TaskStatus.IN_PROGRESS)
+        added = await _add(db_session, task, after=task_nodes[1])
+        draft = replace(_PROMPT, name="Уточнения 2")
+
+        await update_custom_task_node(db_session, task=task, task_node_id=added.id, draft=draft)
+        assert (await _names(db_session, task))[2] == "Уточнения 2"
+        await delete_custom_task_node(db_session, task=task, task_node_id=added.id)
+
+        assert await _names(db_session, task) == ["node-0", "node-1", "node-2", "node-3"]
+
+    async def test_custom_prompt_that_has_started_is_locked(
+        self,
+        db_session: AsyncSession,
+    ) -> None:
+        task, task_nodes = await _running_task(db_session, TaskStatus.IN_PROGRESS)
+        added = await _add(db_session, task, after=task_nodes[1])
+        await make_node_log(
+            db_session,
+            task_id=task.id,
+            node_id=added.node_id,
+            status=NodeLogStatus.RUNNING,
+        )
+
+        with pytest.raises(ConflictError, match="уже выполнялась или выполняется"):
+            await delete_custom_task_node(db_session, task=task, task_node_id=added.id)
+        with pytest.raises(ConflictError, match="уже выполнялась или выполняется"):
+            await update_custom_task_node(
+                db_session,
+                task=task,
+                task_node_id=added.id,
+                draft=_PROMPT,
+            )
+
+    async def test_nothing_started_yet_everything_is_editable(
+        self,
+        db_session: AsyncSession,
+    ) -> None:
+        task, _ = await _make_task_with_nodes(db_session, status=TaskStatus.IN_PROGRESS)
+
+        views = await list_task_nodes(db_session, task)
+
+        assert [view.editable for view in views] == [True, True, True]
+
+    async def test_awaiting_limit_keeps_the_waiting_node_locked(
+        self,
+        db_session: AsyncSession,
+    ) -> None:
+        # Нода 2 ждёт лимит и ещё не записала выполнение — её уже нельзя менять.
+        task, _ = await _make_task_with_nodes(db_session, status=TaskStatus.AWAITING_LIMIT)
+        task.limit_wait_order_index = 1
+        await db_session.flush()
+
+        views = await list_task_nodes(db_session, task)
+
+        assert [view.editable for view in views] == [False, False, True]
+
+    async def test_runs_before_the_reset_do_not_count(self, db_session: AsyncSession) -> None:
+        task, task_nodes = await _running_task(db_session, TaskStatus.PAUSED)
+        task.reset_at = datetime.now(UTC) + timedelta(seconds=5)
+        await db_session.flush()
+
+        views = await list_task_nodes(db_session, task)
+
+        assert [view.editable for view in views] == [True] * len(task_nodes)
+
+    async def test_pause_mark_is_still_free(self, db_session: AsyncSession) -> None:
+        task, task_nodes = await _running_task(db_session, TaskStatus.PAUSED)
+
+        await set_task_node_pause_after(
+            db_session,
+            task=task,
+            task_node_id=task_nodes[0].id,
+            pause_after=True,
+        )
+
+    async def test_pipeline_cannot_be_replaced_while_running(
+        self,
+        db_session: AsyncSession,
+    ) -> None:
+        task, _ = await _running_task(db_session, TaskStatus.IN_PROGRESS)
+        assert task.pipeline_id is not None
+
+        with pytest.raises(ValidationError, match="до запуска"):
+            await bind_pipeline_to_task(
+                db_session,
+                task=task,
+                pipeline_id=task.pipeline_id,
+                disabled_node_ids=None,
+            )
 
 
 async def test_node_of_another_task_is_not_found(db_session: AsyncSession) -> None:
@@ -317,8 +499,6 @@ class TestAddCustomNode:
             (TaskStatus.FAILED, 0, False),
             (TaskStatus.FAILED, None, False),
             (TaskStatus.FAILED, 1, True),
-            (TaskStatus.IN_PROGRESS, 2, False),
-            (TaskStatus.PAUSED, 2, False),
             (TaskStatus.DONE, 2, False),
         ],
     )

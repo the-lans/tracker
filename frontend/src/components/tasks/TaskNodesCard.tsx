@@ -26,21 +26,22 @@ import {
   type TaskNodeUpdateRequest,
 } from "@/lib/types";
 import { EmptyState } from "@/components/common/feedback/EmptyState";
-import { isFinished, isPreLaunch } from "@/lib/taskStatusTransitions";
+import { isFinished, isPreLaunch, isRunComposition } from "@/lib/taskStatusTransitions";
 
 /** Раздел 13.2, 15.2: пояснение к блокировке чекбоксов нод. */
-function nodesHint({ status, chat_active }: Task): string {
+function nodesHint({ status }: Task): string {
   if (isPreLaunch(status))
     return "Снимите галочку, чтобы пропустить ноду в этой задаче, или вставьте свой промт кнопкой «+ Промт»";
+  if (isRunComposition(status)) {
+    return "Не начатые ноды можно отключать и дополнять своими промтами («+ Промт»)";
+  }
   if (status === TaskStatus.FAILED) {
     return "Пройденные и упавшая ноды уже выполнены — менять можно только ноды после точки сбоя. Чтобы сменить пайплайн, переведите задачу в статус до запуска";
   }
   if (isFinished(status)) {
     return "Задача завершена — чтобы сменить пайплайн и запустить заново, переведите её в статус до запуска";
   }
-  // Раздел 14.4: вопрос агента в чате «Уточняется» — пайплайн ещё не запускался.
-  if (chat_active) return "Состав нод заблокирован, пока агент ждёт ответа в чате";
-  return "Состав нод заблокирован — задача уже запущена";
+  return "Состав нод заблокирован, пока задача ждёт запуска";
 }
 
 /** Раздел 13.1–13.3, 15.2: ноды задачи с чекбоксами включения и своими

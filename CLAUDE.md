@@ -687,11 +687,20 @@ Postgres из `backend/tests/conftest.py`:
     статусах до запуска (`new`, `refining`, `defined`, `ready`,
     `night_worker`; там же пайплайн меняется — снимок заменяется целиком;
     после запуска — возвратом из `failed`/`done` в статус до запуска,
-    `POST /tasks/{id}/status`); в `failed` — только для нод с `order_index >
+    `POST /tasks/{id}/status`); у запущенной задачи (`in_progress`, `paused`,
+    `plan_review`, `awaiting_input`, `rebase_conflict`, `awaiting_limit`) —
+    только для нод за границей начатых: `order_index` больше наибольшего у
+    ноды с записью `node_logs` пайплайна в текущем прогоне (в
+    `awaiting_limit` — и больше `limit_wait_order_index`), пока ничего не
+    начато, доступны все (`services/task_status.run_started_frontier`);
+    в `failed` — только для нод с `order_index >
     tasks.last_failed_order_index` и для ноды на самой точке перезапуска,
     если она не начинала выполняться в текущем прогоне (остановка на паузе
     после ноды ставит точку сразу за ней) (`services/task_nodes.py`,
-    `PATCH /tasks/{id}/nodes/{task_node_id}`). По тем же правилам между
+    `PATCH /tasks/{id}/nodes/{task_node_id}`). Оркестратор поэтому
+    перечитывает снимок нод перед каждой нодой и после контрольной точки и
+    ищет следующую по записи `task_nodes`, а не по позиции
+    (`services/pipeline_orchestrator.py`). По тем же правилам между
     нодами снимка вставляются, правятся и удаляются свои промты задачи
     (`nodes.task_id`, `POST`/`DELETE /tasks/{id}/nodes…`); своя нода с
     историей `node_logs` не удаляется. Отметка «пауза после»

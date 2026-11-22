@@ -15,6 +15,7 @@ import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
 const NODES_PATH = "/tasks/t1/nodes";
+const RUN_HINT = "Не начатые ноды можно отключать и дополнять своими промтами («+ Промт»)";
 
 const analysis = makeTaskNode({
   id: "tn1",
@@ -102,20 +103,14 @@ describe("TaskNodesCard", () => {
       { status: TaskStatus.NEW, hint: /Снимите галочку.*кнопкой «\+ Промт»/ },
       { status: TaskStatus.FAILED, hint: /менять можно только ноды после точки сбоя/ },
       { status: TaskStatus.DONE, hint: /Задача завершена — чтобы сменить пайплайн/ },
-      { status: TaskStatus.QUEUED, hint: "Состав нод заблокирован — задача уже запущена" },
-      { status: TaskStatus.IN_PROGRESS, hint: "Состав нод заблокирован — задача уже запущена" },
-      { status: TaskStatus.PAUSED, hint: "Состав нод заблокирован — задача уже запущена" },
-      { status: TaskStatus.AWAITING_INPUT, hint: "Состав нод заблокирован — задача уже запущена" },
-      {
-        status: TaskStatus.AWAITING_INPUT,
-        chatActive: true,
-        hint: "Состав нод заблокирован, пока агент ждёт ответа в чате",
-      },
-      {
-        status: TaskStatus.PLAN_REVIEW,
-        chatActive: true,
-        hint: "Состав нод заблокирован, пока агент ждёт ответа в чате",
-      },
+      { status: TaskStatus.QUEUED, hint: "Состав нод заблокирован, пока задача ждёт запуска" },
+      { status: TaskStatus.IN_PROGRESS, hint: RUN_HINT },
+      { status: TaskStatus.PAUSED, hint: RUN_HINT },
+      { status: TaskStatus.AWAITING_INPUT, hint: RUN_HINT },
+      { status: TaskStatus.AWAITING_LIMIT, hint: RUN_HINT },
+      { status: TaskStatus.REBASE_CONFLICT, hint: RUN_HINT },
+      { status: TaskStatus.AWAITING_INPUT, chatActive: true, hint: RUN_HINT },
+      { status: TaskStatus.PLAN_REVIEW, chatActive: true, hint: RUN_HINT },
     ].map((row) => ({ chatActive: false, ...row })))("$status (чат: $chatActive): подсказка о правке состава", ({ status, chatActive, hint }, { api }) => {
       renderCard(api, { status, chatActive });
 
@@ -130,6 +125,21 @@ describe("TaskNodesCard", () => {
   });
 
   describe("доступность чекбоксов", () => {
+    test("у задачи в работе открыты только ещё не начатые ноды", async ({ api }) => {
+      renderCard(api, {
+        status: TaskStatus.IN_PROGRESS,
+        nodes: [
+          { ...analysis, editable: false },
+          { ...tests, editable: false },
+          { ...report, is_enabled: true },
+        ],
+      });
+
+      expect(await checkbox(analysis.name)).toHaveProperty("disabled", true);
+      expect(await checkbox(tests.name)).toHaveProperty("disabled", true);
+      expect(await checkbox(report.name)).toHaveProperty("disabled", false);
+    });
+
     test.for([
       { editable: true, disabled: false },
       { editable: false, disabled: true },
@@ -303,14 +313,41 @@ describe("TaskNodesCard", () => {
         after: ["после ноды Тесты и линтеры", "после ноды Отчёт для MR"],
       },
       { status: TaskStatus.FAILED, lastFailed: 3, after: ["после ноды Отчёт для MR"] },
-      { status: TaskStatus.IN_PROGRESS, lastFailed: null, after: [] },
       { status: TaskStatus.DONE, lastFailed: null, after: [] },
+      { status: TaskStatus.QUEUED, lastFailed: null, after: [] },
     ])("$status, перезапуск с $lastFailed → «+ Промт» $after", async ({ status, lastFailed, restartPointOpen = false, after }, { api }) => {
       // Нода на точке перезапуска редактируема, только если ещё не начинала выполняться.
       const nodes = [analysis, tests, report].map((node) =>
         node.order_index === lastFailed ? { ...node, editable: restartPointOpen } : node,
       );
       renderCard(api, { status, lastFailed, nodes });
+      await checkbox(analysis.name);
+
+      expect(insertButtons()).toEqual(after.map((place) => `Вставить свой промт ${place}`));
+    });
+
+    test.for([
+      {
+        name: "выполняется первая нода",
+        started: 1,
+        after: ["после ноды Анализ задачи", "после ноды Тесты и линтеры", "после ноды Отчёт для MR"],
+      },
+      {
+        name: "выполняется вторая нода",
+        started: 2,
+        after: ["после ноды Тесты и линтеры", "после ноды Отчёт для MR"],
+      },
+      { name: "начаты все ноды", started: 3, after: ["после ноды Отчёт для MR"] },
+      {
+        name: "ничего не начато",
+        started: 0,
+        after: ["в начало", "после ноды Анализ задачи", "после ноды Тесты и линтеры", "после ноды Отчёт для MR"],
+      },
+    ])("задача в работе, $name → «+ Промт» только за начатыми нодами", async ({ started, after }, { api }) => {
+      const nodes = [analysis, tests, report].map((node) =>
+        node.order_index < started ? { ...node, editable: false } : node,
+      );
+      renderCard(api, { status: TaskStatus.IN_PROGRESS, nodes });
       await checkbox(analysis.name);
 
       expect(insertButtons()).toEqual(after.map((place) => `Вставить свой промт ${place}`));

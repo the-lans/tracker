@@ -208,6 +208,27 @@ async def _current_run_filter(
     return [] if reset_at is None else [NodeLog.started_at >= reset_at]
 
 
+async def run_started_frontier(db_session: AsyncSession, task: Task) -> int | None:
+    """
+    Раздел 13.2: наибольший `order_index` ноды, которая уже выполняется или
+    выполнялась в текущем прогоне (запись `node_logs` пайплайна), а в ожидании
+    лимита — и ждущей ноды (`limit_wait_order_index`). Всё, что стоит дальше,
+    ещё не начиналось и меняется свободно; `None` — ни одна нода не начата.
+    """
+    started = await db_session.scalar(
+        sa.select(sa.func.max(TaskNode.order_index)).where(
+            TaskNode.task_id == task.id,
+            NodeLog.task_id == task.id,
+            NodeLog.node_id == TaskNode.node_id,
+            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+            *await _current_run_filter(db_session, task.id),
+        ),
+    )
+    waiting = task.limit_wait_order_index if task.status is TaskStatus.AWAITING_LIMIT else None
+    positions = [position for position in (started, waiting) if position is not None]
+    return max(positions) if positions else None
+
+
 async def restart_point_started(db_session: AsyncSession, task: Task) -> bool:
     """
     Раздел 13.2: нода на точке перезапуска (`last_failed_order_index`) уже
@@ -372,6 +393,8 @@ SESSION_ACTIVE_STATUSES = frozenset(
         TaskStatus.REBASE_CONFLICT,
     },
 )
+# Раздел 13.2: у запущенной задачи состав меняется только за границей начатых нод.
+RUN_COMPOSITION_STATUSES = SESSION_ACTIVE_STATUSES | {TaskStatus.AWAITING_LIMIT}
 # Раздел 8.2, 14.4, 19.7: ручные запросы принимаются у активной сессии, в чате
 # «Уточняется» и в ожидании лимита — выполнятся после сброса.
 MANUAL_REQUEST_STATUSES = SESSION_ACTIVE_STATUSES | {TaskStatus.REFINING, TaskStatus.AWAITING_LIMIT}

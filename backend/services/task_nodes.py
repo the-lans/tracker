@@ -27,7 +27,13 @@ from services.pipeline_validation import (
     validate_custom_node_templates,
     validate_node_shape,
 )
-from services.task_status import PRE_LAUNCH_STATUSES, lock_task, restart_point_started
+from services.task_status import (
+    PRE_LAUNCH_STATUSES,
+    RUN_COMPOSITION_STATUSES,
+    lock_task,
+    restart_point_started,
+    run_started_frontier,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,27 +69,45 @@ class CustomNodeDraft:
     reasoning_effort: ReasoningEffort | None = None
 
 
-def is_position_editable(task: Task, order_index: int, *, restart_point_open: bool) -> bool:
+@dataclass(frozen=True, slots=True)
+class CompositionState:
+    """Что нужно знать о прогоне, чтобы решить, какие позиции состава можно менять."""
+
+    # `failed`: нода на точке перезапуска ещё не начинала выполняться.
+    restart_point_open: bool = False
+    # Запущенная задача: наибольшая позиция начатой ноды; `None` — ничего не начато.
+    run_frontier: int | None = None
+
+
+def is_position_editable(task: Task, order_index: int, *, state: CompositionState) -> bool:
     """
-    Правило 11 CLAUDE.md, раздел 13.2: до запуска — любая позиция; в `failed` —
-    только ещё не начинавшие выполнение: за точкой перезапуска
+    Правило 11 CLAUDE.md, раздел 13.2: до запуска — любая позиция; у
+    запущенной задачи (работа, пауза, ожидание решения или лимита, конфликт
+    ребейза) — только за границей начатых нод (`order_index > run_frontier`);
+    в `failed` — только ещё не начинавшие выполнение: за точкой перезапуска
     (`order_index > last_failed_order_index`) и на ней самой, если нода там
     не начинала выполняться (``restart_point_open``: остановка на паузе,
     сбой после последней ноды); в остальных статусах — никакая.
     """
     if task.status in PRE_LAUNCH_STATUSES:
         return True
+    if task.status in RUN_COMPOSITION_STATUSES:
+        return state.run_frontier is None or order_index > state.run_frontier
     if task.status is TaskStatus.FAILED and task.last_failed_order_index is not None:
         if order_index == task.last_failed_order_index:
-            return restart_point_open
+            return state.restart_point_open
         return order_index > task.last_failed_order_index
     return False
 
 
-async def _is_restart_point_open(db_session: AsyncSession, task: Task) -> bool:
-    if task.status is not TaskStatus.FAILED:
-        return False
-    return not await restart_point_started(db_session, task)
+async def composition_state(db_session: AsyncSession, task: Task) -> CompositionState:
+    if task.status is TaskStatus.FAILED:
+        return CompositionState(
+            restart_point_open=not await restart_point_started(db_session, task)
+        )
+    if task.status in RUN_COMPOSITION_STATUSES:
+        return CompositionState(run_frontier=await run_started_frontier(db_session, task))
+    return CompositionState()
 
 
 async def _ensure_position_editable(
@@ -92,23 +116,29 @@ async def _ensure_position_editable(
     task: Task,
     order_index: int,
 ) -> None:
-    restart_point_open = await _is_restart_point_open(db_session, task)
-    if not is_position_editable(task, order_index, restart_point_open=restart_point_open):
+    state = await composition_state(db_session, task)
+    if not is_position_editable(task, order_index, state=state):
         raise ConflictError(_locked_composition_message(task))
 
 
 def _locked_composition_message(task: Task) -> str:
     if task.status is TaskStatus.FAILED:
         return "Нода уже выполнялась в этом прогоне — менять её нельзя (раздел 13.2)"
-    return "Состав нод можно менять только до запуска или после сбоя (раздел 13.2)"
+    if task.status in RUN_COMPOSITION_STATUSES:
+        return "Нода уже выполнялась или выполняется — менять её нельзя (раздел 13.2)"
+    return "Состав нод можно менять до запуска, после сбоя или у ещё не начатых нод (раздел 13.2)"
 
 
 async def load_task_node_rows(
     db_session: AsyncSession,
     task_id: uuid.UUID,
+    *,
+    refresh: bool = False,
 ) -> list[tuple[TaskNode, Node]]:
     """
     Снимок нод задачи (`task_nodes`) вместе с нодами, в порядке выполнения.
+    ``refresh`` — перечитать поля уже загруженных записей: состав запущенной
+    задачи меняют снаружи (раздел 13.2).
     """
     stmt = (
         sa.select(TaskNode, Node)
@@ -116,11 +146,13 @@ async def load_task_node_rows(
         .where(TaskNode.task_id == task_id)
         .order_by(TaskNode.order_index)
     )
+    if refresh:
+        stmt = stmt.execution_options(populate_existing=True)
     return [(task_node, node) for task_node, node in (await db_session.execute(stmt)).all()]
 
 
 async def list_task_nodes(db_session: AsyncSession, task: Task) -> list[TaskNodeView]:
-    restart_point_open = await _is_restart_point_open(db_session, task)
+    state = await composition_state(db_session, task)
     return [
         TaskNodeView(
             id=task_node.id,
@@ -130,11 +162,7 @@ async def list_task_nodes(db_session: AsyncSession, task: Task) -> list[TaskNode
             pause_after=task_node.pause_after,
             name=node.name,
             node_type=node.node_type,
-            editable=is_position_editable(
-                task,
-                task_node.order_index,
-                restart_point_open=restart_point_open,
-            ),
+            editable=is_position_editable(task, task_node.order_index, state=state),
             is_custom=node.task_id is not None,
             prompt_template=node.prompt_template if node.task_id is not None else None,
             command_invocation=node.command_invocation if node.task_id is not None else None,
