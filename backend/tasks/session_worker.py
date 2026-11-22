@@ -1285,14 +1285,16 @@ async def _serving_injections(
         yield
     finally:
         listener.cancel()
-        # Слушатель — вспомогательный: его сбой не должен ни подменять исход
-        # сессии, ни ронять уже успешно завершённый прогон.
-        try:
-            await listener
-        except asyncio.CancelledError:
-            pass
-        except Exception:  # noqa: BLE001 — вспомогательный слушатель: причину пишем в лог
-            logger.exception("injection_listener_failed", task_id=str(task_id))
+        # `wait` не пробрасывает ни отмену слушателя, ни его ошибку, зато отмена самой
+        # сессии во время ожидания не теряется. Слушатель вспомогательный: его сбой не
+        # должен ни подменять исход сессии, ни ронять уже успешно завершённый прогон.
+        await asyncio.wait({listener})
+        if not listener.cancelled() and listener.exception() is not None:
+            logger.error(
+                "injection_listener_failed",
+                task_id=str(task_id),
+                error_type=type(listener.exception()).__name__,
+            )
         try:
             await return_leftover_injections(db_session, task_id)
         except SQLAlchemyError:

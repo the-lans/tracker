@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
@@ -53,6 +53,8 @@ class _StubSession:
         self.injected: list[tuple[str, str]] = []
         self.cancel_result = True
         self.fail_with: Exception | None = None
+        # Что происходит, пока вызов влития ещё не вернулся (агент уже взял сообщение).
+        self.on_inject: Callable[[str], Awaitable[None]] | None = None
 
     def injection_refusal(self) -> str | None:
         return self.refusal
@@ -63,6 +65,8 @@ class _StubSession:
         if self.refusal is not None:
             raise InjectionRefusedError(self.refusal)
         self.injected.append((text, message_id))
+        if self.on_inject is not None:
+            await self.on_inject(message_id)
 
     async def cancel_injection(self, message_id: str) -> bool:
         return self.cancel_result
@@ -277,6 +281,40 @@ class TestObserver:
         taken = [entry for entry in logs if entry["event"] == "prompt_injection_taken"]
         assert len(taken) == 1
         assert isinstance(taken[0]["wait_ms"], int) and taken[0]["wait_ms"] >= 0
+
+    async def test_taken_before_inject_returns(self, db_session: AsyncSession) -> None:
+        """Агент взял сообщение, не дожидаясь возврата вызова: время ожидания известно."""
+        task = await _task(db_session)
+        request = await _enqueue(db_session, task, "влитый")
+        injector, session = _injector(db_session, task)
+        session.on_inject = injector.taken
+
+        with structlog.testing.capture_logs() as logs:
+            reply = await injector.handle(InjectionAction.INJECT)
+
+        assert reply.ok
+        taken = [entry for entry in logs if entry["event"] == "prompt_injection_taken"]
+        assert isinstance(taken[0]["wait_ms"], int)
+        assert await _status(db_session, request) is ManualRequestStatus.DONE
+        assert injector._injected_at == {}  # noqa: SLF001
+        assert injector._display == {}  # noqa: SLF001
+
+    async def test_nothing_left_after_failed_inject(self, db_session: AsyncSession) -> None:
+        task = await _task(db_session)
+        await _enqueue(db_session, task, "текст")
+        injector, session = _injector(db_session, task)
+        session.refusal = "no_turn"
+        session.fail_with = None
+
+        async def refuse_late(message_id: str) -> None:
+            raise InjectionRefusedError("awaiting_decision")
+
+        session.refusal = None
+        session.on_inject = refuse_late
+        await injector.handle(InjectionAction.INJECT)
+
+        assert injector._injected_at == {}  # noqa: SLF001
+        assert injector._display == {}  # noqa: SLF001
 
     async def test_taken_ignores_queued(self, db_session: AsyncSession) -> None:
         task = await _task(db_session)

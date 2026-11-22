@@ -2583,3 +2583,42 @@ class TestInjection:
 
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
+
+    async def test_cancel_during_listener_stop_is_kept(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Отмену самой сессии, пришедшую пока останавливается слушатель, не глотаем."""
+        task = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
+        started = asyncio.Event()
+        stopping = asyncio.Event()
+
+        async def slow_listener(*_args: Any, **_kwargs: Any) -> None:
+            started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                stopping.set()
+                await asyncio.sleep(0.3)  # слушатель останавливается не мгновенно
+                raise
+
+        monkeypatch.setattr(session_worker, "serve_injection_commands", slow_listener)
+
+        async def run_session() -> None:
+            async with session_worker._serving_injections(  # noqa: SLF001
+                db_session,
+                task_id=task.id,
+                redis_client=redis_client,
+                injector=None,  # type: ignore[arg-type]
+                enabled=True,
+            ):
+                await started.wait()
+
+        outer = asyncio.ensure_future(run_session())
+        await stopping.wait()
+        outer.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await outer

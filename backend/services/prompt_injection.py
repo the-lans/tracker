@@ -254,9 +254,11 @@ class PromptInjector:
                 try:
                     await self._deliver(db_session, request)
                 except InjectionRefusedError as refused:
+                    self._forget(request.id)
                     await _release(db_session, request.id)
                     return InjectionReply(ok=False, reason=refused.reason)
                 except AppError as error:
+                    self._forget(request.id)
                     await _release(db_session, request.id)
                     skipped.add(request.id)
                     first_error = first_error or str(error)
@@ -268,6 +270,7 @@ class PromptInjector:
                     )
                     continue
                 except BaseException:
+                    self._forget(request.id)
                     await _release(db_session, request.id)
                     raise
                 logger.info(
@@ -286,8 +289,16 @@ class PromptInjector:
         assert request.raw_prompt_text is not None
         prompt = await render_freeform_prompt(db_session, task=task, text=request.raw_prompt_text)
         self._display[request.id] = prompt.display
-        await self._session.inject_prompt(prompt.text, str(request.id))
+        # Момент влития — до отправки: агент может взять сообщение раньше, чем вернётся вызов.
         self._injected_at[request.id] = time.monotonic()
+        await self._session.inject_prompt(prompt.text, str(request.id))
+
+    def _forget(self, request_id: uuid.UUID) -> None:
+        """
+        Запрос не влит: показываемый текст и время влития больше не нужны.
+        """
+        self._display.pop(request_id, None)
+        self._injected_at.pop(request_id, None)
 
     async def _cancel(self) -> InjectionReply:
         async with self._session_factory() as db_session:
@@ -323,11 +334,12 @@ class PromptInjector:
         Агент взял сообщение: в ленте появляется запись о нём, запрос выполнен.
         """
         request_id = uuid.UUID(message_id)
+        wait_ms = self._wait_ms(request_id)
+        display = self._display.pop(request_id, None)
         async with self._session_factory() as db_session:
             request = await db_session.get(TaskManualRequestQueue, request_id)
             if request is None or request.status is not ManualRequestStatus.INJECTED:
                 return
-            display = self._display.pop(request_id, None)
             if display is None and request.raw_prompt_text is not None:
                 task = await db_session.get(Task, self._task_id)
                 assert task is not None
@@ -355,7 +367,7 @@ class PromptInjector:
             "prompt_injection_taken",
             task_id=str(self._task_id),
             request_id=message_id,
-            wait_ms=self._wait_ms(request_id),
+            wait_ms=wait_ms,
         )
 
     async def returned(self, message_id: str) -> None:
