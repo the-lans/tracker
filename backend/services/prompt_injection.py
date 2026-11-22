@@ -36,6 +36,7 @@ from db.models.enums import (
 from db.models.logs import NodeLog
 from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task
+from services.errors import AppError
 from services.manual_queue import render_freeform_prompt
 from services.templating import is_slash_command_text
 
@@ -50,13 +51,15 @@ if TYPE_CHECKING:
 logger = get_logger("prompt_injection")
 
 # Сколько API ждёт ответ воркера, прежде чем сказать «воркер не отвечает».
-REPLY_WAIT_SECONDS = 5.0
+REPLY_WAIT_SECONDS = 8.0
 # Команда старше этого уже не исполняется: пользователь давно получил отказ.
 STALE_COMMAND_SECONDS = 15.0
 _KEY_TTL_SECONDS = 60
 _SERVE_POLL_SECONDS = 0.25
 # Сколько очереди просматривать в поисках подходящего промта.
 _QUEUE_SCAN_LIMIT = 100
+# Пауза слушателя после сбоя Redis или БД, чтобы не крутиться вхолостую.
+_SERVE_ERROR_PAUSE_SECONDS = 2.0
 
 # Причины отказа — машинные, их переводит интерфейс.
 REASON_NO_TURN = "no_turn"
@@ -204,39 +207,45 @@ class PromptInjector:
         refusal = self._session.injection_refusal()
         if refusal is not None:
             return InjectionReply(ok=False, reason=refusal)
+        # Промт, который не удалось подготовить (например, неизвестная переменная),
+        # пропускается: он не должен закрывать путь остальным.
+        skipped: set[uuid.UUID] = set()
+        first_error: str | None = None
         async with self._session_factory() as db_session:
-            request = await _claim_next_injectable(db_session, self._task_id)
-            if request is None:
-                return InjectionReply(ok=False, reason=REASON_NOTHING_TO_INJECT)
-            try:
-                task = await db_session.get(Task, self._task_id)
-                assert task is not None
-                assert request.raw_prompt_text is not None
-                prompt = await render_freeform_prompt(
-                    db_session,
-                    task=task,
-                    text=request.raw_prompt_text,
+            while True:
+                request = await _claim_next_injectable(db_session, self._task_id, skipped)
+                if request is None:
+                    if first_error is not None:
+                        return InjectionReply(ok=False, reason=REASON_FAILED, message=first_error)
+                    return InjectionReply(ok=False, reason=REASON_NOTHING_TO_INJECT)
+                try:
+                    task = await db_session.get(Task, self._task_id)
+                    assert task is not None
+                    assert request.raw_prompt_text is not None
+                    prompt = await render_freeform_prompt(
+                        db_session,
+                        task=task,
+                        text=request.raw_prompt_text,
+                    )
+                    self._display[request.id] = prompt.display
+                    await self._session.inject_prompt(prompt.text, str(request.id))
+                except InjectionRefusedError as refused:
+                    await _release(db_session, request.id)
+                    return InjectionReply(ok=False, reason=refused.reason)
+                except AppError as error:
+                    await _release(db_session, request.id)
+                    skipped.add(request.id)
+                    first_error = first_error or str(error)
+                    continue
+                except Exception:
+                    await _release(db_session, request.id)
+                    raise
+                logger.info(
+                    "prompt_injected",
+                    task_id=str(self._task_id),
+                    request_id=str(request.id),
                 )
-                self._display[request.id] = prompt.display
-                await self._session.inject_prompt(prompt.text, str(request.id))
-            except InjectionRefusedError as refused:
-                await _set_status(
-                    db_session,
-                    request.id,
-                    ManualRequestStatus.INJECTED,
-                    ManualRequestStatus.QUEUED,
-                )
-                return InjectionReply(ok=False, reason=refused.reason)
-            except Exception:
-                await _set_status(
-                    db_session,
-                    request.id,
-                    ManualRequestStatus.INJECTED,
-                    ManualRequestStatus.QUEUED,
-                )
-                raise
-        logger.info("prompt_injected", task_id=str(self._task_id), request_id=str(request.id))
-        return InjectionReply(ok=True, request_id=str(request.id))
+                return InjectionReply(ok=True, request_id=str(request.id))
 
     async def _cancel(self) -> InjectionReply:
         async with self._session_factory() as db_session:
@@ -305,9 +314,20 @@ class PromptInjector:
         logger.info("prompt_injection_returned", task_id=str(self._task_id), request_id=message_id)
 
 
+async def _release(db_session: AsyncSession, request_id: uuid.UUID) -> None:
+    """Не влитый промт возвращается в очередь на прежнее место."""
+    await _set_status(
+        db_session,
+        request_id,
+        ManualRequestStatus.INJECTED,
+        ManualRequestStatus.QUEUED,
+    )
+
+
 async def _claim_next_injectable(
     db_session: AsyncSession,
     task_id: uuid.UUID,
+    skipped: set[uuid.UUID] | None = None,
 ) -> TaskManualRequestQueue | None:
     """Ближайший по очереди обычный текстовый промт: `queued` → `injected`; прочие не трогаются."""
     candidates = (
@@ -326,7 +346,7 @@ async def _claim_next_injectable(
         .all()
     )
     for candidate in candidates:
-        if not is_injectable_text(candidate):
+        if not is_injectable_text(candidate) or candidate.id in (skipped or ()):
             continue
         claimed = await _set_status(
             db_session,
@@ -393,11 +413,19 @@ async def serve_injection_commands(
     фоновой задачей рядом с ходом модели и отменяется вместе с сессией.
     """
     while True:
-        command = await _next_command(redis_client, task_id)
-        if command is None:
-            if on_idle is not None:
-                await on_idle()
-            await asyncio.sleep(poll_seconds)
-            continue
-        reply = await injector.handle(InjectionAction(str(command["action"])))
-        await _reply(redis_client, task_id, str(command["id"]), reply)
+        try:
+            command = await _next_command(redis_client, task_id)
+            if command is None:
+                if on_idle is not None:
+                    await on_idle()
+                await asyncio.sleep(poll_seconds)
+                continue
+            reply = await injector.handle(InjectionAction(str(command["action"])))
+            await _reply(redis_client, task_id, str(command["id"]), reply)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Сбой Redis или БД не должен тихо убить слушателя: влитие продолжит
+            # работать, а на выходе из сессии нечего будет перевыбрасывать.
+            logger.exception("injection_listener_error", task_id=str(task_id))
+            await asyncio.sleep(_SERVE_ERROR_PAUSE_SECONDS)

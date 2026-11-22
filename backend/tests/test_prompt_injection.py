@@ -338,3 +338,70 @@ async def test_serve_drops_stale_command(db_session: AsyncSession, redis_client:
     server.cancel()
 
     assert session.injected == []
+
+
+async def test_inject_skips_a_prompt_that_cannot_be_prepared(db_session: AsyncSession) -> None:
+    """Промт с ошибкой подстановки не закрывает путь остальным."""
+    task = await _task(db_session)
+    broken = await _enqueue(db_session, task, "Проверь {{task.no_such_field}}", offset=0)
+    good = await _enqueue(db_session, task, "нормальный", offset=1)
+    injector, session = _injector(db_session, task)
+
+    reply = await injector.handle(InjectionAction.INJECT)
+
+    assert reply.ok and reply.request_id == str(good.id)
+    assert [text for text, _ in session.injected] == ["нормальный"]
+    assert await _status(db_session, broken) is ManualRequestStatus.QUEUED
+    assert await _status(db_session, good) is ManualRequestStatus.INJECTED
+
+
+async def test_inject_reports_the_error_when_every_prompt_is_broken(
+    db_session: AsyncSession,
+) -> None:
+    task = await _task(db_session)
+    broken = await _enqueue(db_session, task, "Проверь {{task.no_such_field}}")
+    injector, session = _injector(db_session, task)
+
+    reply = await injector.handle(InjectionAction.INJECT)
+
+    assert not reply.ok and reply.reason == REASON_FAILED
+    assert reply.message and "no_such_field" in reply.message
+    assert session.injected == []
+    assert await _status(db_session, broken) is ManualRequestStatus.QUEUED
+
+
+async def test_listener_survives_a_redis_error(
+    db_session: AsyncSession,
+    redis_client: Redis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Сбой Redis не убивает слушателя: после него команды исполняются."""
+    from services import prompt_injection
+
+    task = await _task(db_session)
+    request = await _enqueue(db_session, task, "после сбоя")
+    injector, session = _injector(db_session, task)
+    monkeypatch.setattr(prompt_injection, "_SERVE_ERROR_PAUSE_SECONDS", 0.01)
+    real_next = prompt_injection._next_command  # noqa: SLF001
+    failures = {"left": 2}
+
+    async def flaky_next(client: Redis, task_id: uuid.UUID) -> dict[str, object] | None:
+        if failures["left"] > 0:
+            failures["left"] -= 1
+            raise ConnectionError("redis недоступен")
+        return await real_next(client, task_id)
+
+    monkeypatch.setattr(prompt_injection, "_next_command", flaky_next)
+    server = asyncio.create_task(
+        serve_injection_commands(redis_client, task.id, injector, poll_seconds=0.01),
+    )
+    try:
+        reply = await send_injection_command(
+            redis_client, task.id, InjectionAction.INJECT, wait_seconds=3
+        )
+    finally:
+        server.cancel()
+
+    assert not server.done() or server.cancelled()
+    assert reply.ok and reply.request_id == str(request.id)
+    assert failures["left"] == 0

@@ -528,17 +528,20 @@ async def run_pipeline(
                     failed_order_index=task_node.order_index,
                     stopped=decision is CheckpointDecision.STOP,
                 )
-            # Пока шли пауза или очередь ручных запросов, состав мог измениться.
-            again = _next_node(
-                await load_task_node_rows(db_session, task.id, refresh=True),
-                start_after_order_index=start_after_order_index,
-                processed=processed,
-            )
-            if again is None:
-                break
-            if again[0].id != task_node.id:
-                continue
-            task_node, node = again
+        # Перед самой нодой состав перечитывается ещё раз: пока шли пауза, очередь ручных
+        # запросов и проверки, ноду могли отключить или заменить (раздел 13.2). Граница
+        # «начатых» нод — запись `node_logs`, она появляется чуть позже; это окно сведено
+        # к проверкам хода (ворота лимита, подготовка промта).
+        again = _next_node(
+            await load_task_node_rows(db_session, task.id, refresh=True),
+            start_after_order_index=start_after_order_index,
+            processed=processed,
+        )
+        if again is None:
+            break
+        if again[0].id != task_node.id:
+            continue
+        task_node, node = again
         processed.add(task_node.id)
 
         if node.node_type is NodeType.CLEAR_CONTEXT:

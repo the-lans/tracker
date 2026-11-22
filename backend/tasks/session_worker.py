@@ -1284,9 +1284,16 @@ async def _serving_injections(
         yield
     finally:
         listener.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        # Слушатель — вспомогательный: его сбой не должен ни подменять исход
+        # сессии, ни ронять уже успешно завершённый прогон.
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await listener
-        await return_leftover_injections(db_session, task_id)
+        try:
+            await return_leftover_injections(db_session, task_id)
+        except Exception:  # noqa: BLE001 — сессия БД могла остаться в сбойной транзакции
+            logger.exception("injection_leftover_return_failed", task_id=str(task_id))
+            with contextlib.suppress(Exception):
+                await db_session.rollback()
 
 
 async def _run_connected_session(

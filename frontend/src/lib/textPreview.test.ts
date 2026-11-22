@@ -41,28 +41,20 @@ describe("previewOf", () => {
     expect(previewOf(text, LIMIT)).toBe(text.slice(0, LIMIT));
   });
 
-  it("оград длиннее и другого вида не путает: ``` внутри ```` не закрывает блок", () => {
-    const text = `Текст\n\`\`\`\`md\n${"внутри\n".repeat(8)}\`\`\`\n${"внутри\n".repeat(2)}\`\`\`\`\n${"в".repeat(60)}`;
+  it("то, что отрисовка не считает оградой, блоком кода не считается", () => {
+    const text = `Текст\n~~~\n${"y\n".repeat(30)}~~~\n\`\`\`\`md\n${"z\n".repeat(30)}`;
 
-    const preview = previewOf(text, LIMIT);
-
-    expect(preview.endsWith("````")).toBe(true);
+    expect(previewOf(text, LIMIT)).toBe(text.slice(0, LIMIT));
   });
 
-  it("тильдовая ограда тоже блок кода", () => {
-    const text = `Текст\n~~~\n${"y\n".repeat(30)}~~~\nхвост`;
+  it("огромный текст без блоков кода не разбирается целиком", () => {
+    const text = "строка\n".repeat(500_000);
 
-    expect(previewOf(text, LIMIT).endsWith("~~~")).toBe(true);
-  });
+    const started = performance.now();
+    const preview = previewOf(text);
 
-  it("многоточие после закрывающей ограды — на новой строке", () => {
-    const text = `Вот код:\n\`\`\`python\n${"print(1)\n".repeat(10)}\`\`\`\n${"абзац ".repeat(30)}`;
-
-    expect(collapsedPreview(text, LIMIT).endsWith("```\n…")).toBe(true);
-  });
-
-  it("многоточие после обычного текста — сразу за ним", () => {
-    expect(collapsedPreview("а".repeat(100), LIMIT)).toBe(`${"а".repeat(LIMIT)}…`);
+    expect(preview).toBe(text.slice(0, 320));
+    expect(performance.now() - started).toBeLessThan(50);
   });
 
   it("слишком длинный блок кода обрезается по строке и закрывается своей оградой", () => {

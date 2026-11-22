@@ -30,10 +30,11 @@ from db.models.enums import (
     ManualRequestStatus,
     NodeLogStatus,
     NodeLogTriggerType,
+    NodeType,
     TaskStatus,
 )
 from db.models.logs import AppLog, NodeLog
-from db.models.pipelines import TaskNode
+from db.models.pipelines import Node, TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from db.queries.manual_requests import (
@@ -206,6 +207,27 @@ async def _current_run_filter(
     """
     reset_at = await db_session.scalar(sa.select(Task.reset_at).where(Task.id == task_id))
     return [] if reset_at is None else [NodeLog.started_at >= reset_at]
+
+
+async def plan_accepted_in_run(db_session: AsyncSession, task_id: uuid.UUID) -> bool:
+    """
+    Раздел 9.5: в текущем прогоне пайплайна уже есть принятый план — успешная
+    запись `node_logs` ноды `plan_prompt`. После него план заново не
+    запрашивается, пока не начнётся следующая нода планирования.
+    """
+    found = await db_session.scalar(
+        sa.select(NodeLog.id)
+        .join(Node, Node.id == NodeLog.node_id)
+        .where(
+            NodeLog.task_id == task_id,
+            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+            NodeLog.status == NodeLogStatus.SUCCESS,
+            Node.node_type == NodeType.PLAN_PROMPT,
+            *await _current_run_filter(db_session, task_id),
+        )
+        .limit(1),
+    )
+    return found is not None
 
 
 async def run_started_frontier(db_session: AsyncSession, task: Task) -> int | None:

@@ -319,13 +319,23 @@ frontend/    — React SPA: дашборд, страница задачи (об�
               TaskStopButton — «Остановить» по шагам: запросы чата по одному,
               затем красная — задача с подтверждением (lib/manualRequests.ts),
               TaskDetailsDialog — окно «В отдельном окне» (общие части с
-              карточками: TaskDescriptionBody, TaskLinks, TaskArtifactList),
+              карточками: TaskDescriptionBody, TaskLinks, TaskArtifactList;
+              описание правит TaskDescriptionEditor только до запуска, длинное
+              в карточке обрезает common/typography/ClampedContent),
               ArtifactPreviewDialog/Body и lib/artifactPreview.ts — просмотр
               артефактов (SVG не открывается в новой вкладке: скрипт
               выполнился бы в origin приложения; предел размера), FeedNotice —
               служебная строка ленты (смена аккаунта, событие сессии, дата),
               lib/chatFeed.ts + hooks/useStickToBottom.ts — сборка ленты и
               автопрокрутка с кнопкой «↓ В конец ленты» (ScrollToBottomButton);
+              lib/agentMarkdown.ts — разбор ответа агента (нумерация списков
+              продолжается через блоки кода), lib/textPreview.ts — превью
+              свёрнутого вывода без обрезки внутри блока кода, lib/jiraKey.ts —
+              ключ Jira из вставленной ссылки, lib/taskNodes.ts — какие ноды
+              задачи можно менять (зеркало services/task_nodes.py),
+              layout/SidebarResizer + lib/sidebarWidth.ts — ширина бокового
+              меню и режим «только значки», pipelines/RenamePipelineButton —
+              переименование пайплайна, common/feedback/CountBadge (`max` — «99+»);
               по разделам — components/{tasks,nodes,profile,admin,
               taskCategories,daily,repositories,templates,llmAccounts,
               envVariables};

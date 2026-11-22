@@ -18,6 +18,7 @@ import pytest
 import structlog
 from claude_agent_sdk import (
     AssistantMessage,
+    CLIConnectionError,
     ProcessError,
     RateLimitInfo,
     TextBlock,
@@ -1180,6 +1181,27 @@ class TestInjectIntoRunningTurn:
         assert fake.cancelled_injections == [message_id]
         assert log.returned == [message_id]
         assert log.taken == []
+
+    async def test_failed_cancel_at_turn_end_does_not_fail_the_finished_turn(self) -> None:
+        log = _InjectionLog()
+        fake = FakeClaudeAgentClient(messages_per_query=[_tool_turn(1), [make_result_message()]])
+        fake.message_delay_seconds = 0.03
+        fake.hold_injections = True
+
+        async def broken_cancel(message_id: str) -> bool:
+            raise CLIConnectionError("control request timeout")
+
+        fake.cancel_injected_message = broken_cancel  # type: ignore[method-assign]
+        session = ClaudeCodeSession(fake, injection_observer=_Observer(log))
+        message_id = str(uuid.uuid4())
+
+        await self._during_turn(session, lambda: session.inject_prompt("поздно", message_id))
+
+        # Ход завершён успешно, сообщение не потеряно — оно вернулось в очередь.
+        assert log.returned == [message_id]
+        assert session.injection_refusal() == "no_turn"
+        outcome = await session.send_and_collect_text("следующий")
+        assert outcome.text == ""
 
     async def test_followup_turn_started_by_the_cli_is_drained(self) -> None:
         log = _InjectionLog()

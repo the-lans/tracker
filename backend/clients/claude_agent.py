@@ -84,7 +84,9 @@ COMPACT_COMMAND = "/compact"
 COMPACT_TIMEOUT_SECONDS = 600.0
 # Управляющий запрос CLI: снять ещё не взятое сообщение с его очереди (раздел 7.3).
 CANCEL_ASYNC_MESSAGE_SUBTYPE = "cancel_async_message"
-_CANCEL_INJECTION_TIMEOUT_SECONDS = 10.0
+# Меньше ожидания ответа API (`prompt_injection.REPLY_WAIT_SECONDS`): иначе отмена,
+# которую воркер ещё выполняет, выглядела бы для пользователя ошибкой.
+_CANCEL_INJECTION_TIMEOUT_SECONDS = 4.0
 # Влитое сообщение, не взятое до конца хода и уже начатое CLI отдельным ходом:
 # сколько ждать его начала и каждого следующего события при вычитке (раздел 7.3).
 _FOLLOWUP_FIRST_EVENT_SECONDS = 3.0
@@ -659,7 +661,12 @@ class ClaudeCodeSession:
             if taken:
                 self._injections.pop(message_id, None)
                 continue
-            cancelled = await self._client.cancel_injected_message(message_id)
+            try:
+                cancelled = await self._client.cancel_injected_message(message_id)
+            except Exception:  # noqa: BLE001 — ход уже завершён успешно: сбой отмены его не портит
+                # Сообщение не доказано взятым — лучше выполнить его ещё раз, чем потерять.
+                logger.warning("session_injection_settle_failed", message_id=message_id)
+                cancelled = True
             self._injections.pop(message_id, None)
             if cancelled:
                 if self._injection_observer is not None:
@@ -874,8 +881,10 @@ class ClaudeCodeSession:
                 )
                 raise
             self._injectable = False
-            await self._settle_injections()
-            self._turn_open = False
+            try:
+                await self._settle_injections()
+            finally:
+                self._turn_open = False
             self._turn_text_parts = []
             self._turn_pending_stream = []
             if result is None:

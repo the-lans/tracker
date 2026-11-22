@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Copy, Download } from "lucide-react";
 import { copyText, downloadText } from "@/lib/textExport";
 import { collapsedPreview, previewOf } from "@/lib/textPreview";
@@ -33,10 +33,11 @@ export function CollapsibleText({
   // `null` — пользователь не разворачивал: текст, выросший после показа
   // (например, вывод скрипта вместо «(пусто)»), тоже остаётся свёрнутым.
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
-  const preview = previewOf(text);
+  // Превью считается один раз на текст, а не на каждый рендер.
+  const preview = useMemo(() => previewOf(text), [text]);
   const isTruncatable = preview.length < text.length;
   const expanded = !isTruncatable || (userExpanded ?? (live || defaultExpanded));
-  const shown = expanded ? text : collapsedPreview(text);
+  const shown = useMemo(() => (expanded ? text : collapsedPreview(text)), [expanded, text]);
 
   return (
     <div className={className}>
