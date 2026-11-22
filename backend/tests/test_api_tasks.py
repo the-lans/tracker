@@ -607,7 +607,7 @@ async def test_create_task_rejects_duplicate_repository(
     assert response.status_code == 422
 
 
-async def test_description_is_stored_without_trailing_whitespace(
+async def test_description_is_stored_without_edge_whitespace(
     authed_client: AsyncClient,
 ) -> None:
     created = await authed_client.post(
@@ -615,16 +615,16 @@ async def test_description_is_stored_without_trailing_whitespace(
         json={
             "code": "RR-10020",
             "title": "t",
-            "description": "  Первая строка\n\nВторая  \n\n \t",
+            "description": "\n\n  Первая строка\n\nВторая  \n\n \t",
         },
     )
     assert created.status_code == 201, created.text
-    # Начало и внутренние переводы строк остаются: убираются только концевые символы.
-    assert created.json()["description"] == "  Первая строка\n\nВторая"
+    # Внутренние переводы строк остаются: убираются только пробелы и переводы строк по краям.
+    assert created.json()["description"] == "Первая строка\n\nВторая"
 
     updated = await authed_client.patch(
         f"/tasks/{created.json()['id']}",
-        json={"description": "Новое описание  \r\n\n"},
+        json={"description": "\r\n  Новое описание  \r\n\n"},
     )
 
     assert updated.status_code == 200, updated.text

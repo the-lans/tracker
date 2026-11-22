@@ -14,8 +14,8 @@ import type { Task } from "@/lib/types";
 export function TaskDescriptionEditor({ task, onClose }: { task: Task; onClose: () => void }) {
   const [text, setText] = useState(task.description);
   const updateTask = useUpdateTask(task.id);
-  // Концевые пробелы и переводы строк не сохраняются (как и на сервере).
-  const trimmed = text.trimEnd();
+  // Пробелы и переводы строк по краям не сохраняются (как и на сервере).
+  const trimmed = text.trim();
   const canSave = trimmed !== task.description && !updateTask.isPending;
 
   function save() {

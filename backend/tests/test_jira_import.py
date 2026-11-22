@@ -412,10 +412,10 @@ class TestDescriptionHtml:
         assert issue.description_html == _DESCRIPTION_HTML
         assert "expand=renderedFields" in jira.requested_urls[0]
 
-    async def test_client_strips_trailing_whitespace_of_description(self) -> None:
+    async def test_client_strips_edge_whitespace_of_description(self) -> None:
         def handle(_: httpx.Request) -> httpx.Response:
             body = _issue_body()
-            body["fields"]["description"] = f"{_DESCRIPTION_TEXT}  \n\n"
+            body["fields"]["description"] = f"\n  {_DESCRIPTION_TEXT}  \n\n"
             return httpx.Response(200, json=body)
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http_client:
@@ -480,6 +480,29 @@ class TestDescriptionHtml:
 
         assert result is saved
         assert task.description_html == (html if saved else None)
+
+    async def test_description_saved_before_trimming_still_gets_the_html(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        created = await self._task(authed_client, _DESCRIPTION_TEXT)
+        task = await db_session.get(Task, uuid.UUID(created["id"]))
+        assert task is not None
+        # Описание, сохранённое до обрезки по краям, — в БД остаётся с пробелами.
+        task.description = f"\n  {_DESCRIPTION_TEXT}  \n\n"
+        await db_session.commit()
+
+        result = await save_description_html(
+            db_session,
+            task=task,
+            description=_DESCRIPTION_TEXT,
+            description_html=_DESCRIPTION_HTML,
+        )
+        await db_session.refresh(task)
+
+        assert result is True
+        assert task.description_html == _DESCRIPTION_HTML
 
     async def test_background_copy_saves_html(
         self,
@@ -620,7 +643,7 @@ class TestRefreshDescription:
         assert response.json()["description"] == _DESCRIPTION_TEXT
         assert response.json()["description_html"] == _DESCRIPTION_HTML
 
-    async def test_trailing_whitespace_saved_before_trimming_is_not_a_change(
+    async def test_edge_whitespace_saved_before_trimming_is_not_a_change(
         self,
         authed_client: AsyncClient,
         db_session: AsyncSession,
@@ -631,8 +654,8 @@ class TestRefreshDescription:
         task_id = await self._imported_task(authed_client, db_session, monkeypatch)
         task = await db_session.get(Task, uuid.UUID(task_id))
         assert task is not None
-        # Описание, сохранённое до обрезки концевых пробелов, у запущенной задачи.
-        task.description = f"{_DESCRIPTION_TEXT}\n\n"
+        # Описание, сохранённое до обрезки по краям, у запущенной задачи.
+        task.description = f"\n  {_DESCRIPTION_TEXT}\n\n"
         task.status = TaskStatus.IN_PROGRESS
         await db_session.commit()
 

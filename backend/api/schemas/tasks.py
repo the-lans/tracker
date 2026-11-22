@@ -29,8 +29,8 @@ from db.models.enums import (
 )
 from db.models.tasks import MAX_QUEUE_PRIORITY, MIN_QUEUE_PRIORITY
 
-# Описание сохраняется без концевых пробелов и переводов строк (раздел 15.2).
-TaskDescription = Annotated[str, AfterValidator(str.rstrip)]
+# Описание сохраняется без пробелов и переводов строк по краям (раздел 15.2).
+TaskDescription = Annotated[str, AfterValidator(str.strip)]
 
 
 class AwaitingDecisionCountResponse(BaseModel):

@@ -156,8 +156,8 @@ class JiraClient:
         return JiraIssue(
             key=issue_key,
             summary=str(fields.get("summary") or ""),
-            # Как у описания задачи в трекере: без концевых пробелов и переводов строк.
-            description=str(fields.get("description") or "").rstrip(),
+            # Как у описания задачи в трекере: без пробелов и переводов строк по краям.
+            description=str(fields.get("description") or "").strip(),
             description_html=_rendered_description(body),
             browse_url=f"{self._base_url}/browse/{issue_key}",
             attachments=_attachments(fields),

@@ -212,11 +212,11 @@ async def _log_skipped(task: Task, filename: str, reason: str) -> None:
     )
 
 
-def _without_trailing_whitespace(
+def _without_edge_whitespace(
     column: sa.SQLColumnExpression[str],
 ) -> sa.SQLColumnExpression[str]:
-    """Описание без концевых пробелов: у задач, созданных до обрезки, оно сравнивается с Jira."""
-    return sa.func.regexp_replace(column, r"\s+$", "")
+    """Описание без пробелов по краям: у задач, созданных до обрезки, оно сравнивается с Jira."""
+    return sa.func.regexp_replace(column, r"^\s+|\s+$", "", "g")
 
 
 async def save_description_html(
@@ -235,7 +235,7 @@ async def save_description_html(
         return False
     result = await db_session.execute(
         sa.update(Task)
-        .where(Task.id == task.id, _without_trailing_whitespace(Task.description) == description)
+        .where(Task.id == task.id, _without_edge_whitespace(Task.description) == description)
         .values(description_html=description_html)
         .returning(Task.id),
     )
@@ -271,8 +271,8 @@ async def refresh_description_html(
         raise ConflictError("У задачи нет ссылки на задачу Jira")
     credentials = await jira_credentials_for(db_session, user)
     issue = await JiraClient(credentials=credentials, http_client=http_client).get_issue(key)
-    # Описание, сохранённое до обрезки концевых пробелов, с описанием Jira не расходится.
-    text_changed = issue.description != task.description.rstrip()
+    # Описание, сохранённое до обрезки по краям, с описанием Jira не расходится.
+    text_changed = issue.description != task.description.strip()
     if text_changed and task.status not in PRE_LAUNCH_STATUSES:
         raise ConflictError(
             "Описание в Jira изменилось, но описание задачи можно менять только до запуска",

@@ -155,17 +155,18 @@ describe("TaskDetailsDialog", () => {
       expect(screen.queryByRole("textbox", { name: "Описание задачи" })).not.toBeInTheDocument();
     });
 
-    test("концевые пробелы и переводы строк не отправляются, а одни они — не изменение", async ({ api }) => {
+    test("пробелы и переводы строк по краям не отправляются, а одни они — не изменение", async ({ api }) => {
       api.respond("PATCH /tasks/t1", makeTask({ id: "t1", description: "Новый текст" }));
       const { user } = renderDialog(api, { description: "Старый текст" });
 
       await user.click(screen.getByRole("button", { name: "Изменить" }));
       const field = screen.getByRole("textbox", { name: "Описание задачи" });
       await user.type(field, "  {Enter}{Enter}");
+      await user.type(field, "{Control>}{Home}{/Control}{Enter}  ");
       expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
 
       await user.clear(field);
-      await user.type(field, "Новый текст  {Enter}{Enter}  ");
+      await user.type(field, "  {Enter}Новый текст  {Enter}{Enter}  ");
       await user.click(screen.getByRole("button", { name: "Сохранить" }));
 
       await expect.poll(() => api.mutations()[0]?.body).toEqual({ description: "Новый текст" });
