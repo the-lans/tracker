@@ -1,5 +1,6 @@
 Check whether the written code follows the rules below. You are in Agent mode: after listing the needed fixes, apply them immediately!
 Follow these rules when writing code:
+Choose the rule sections by the format (extension) of the changed files, i.e. by the repository's language: `.py` -> Backend (Python); `.ts`/`.tsx`/`.js`/`.jsx` -> Frontend; `.go` -> Go. Apply only the sections for languages present in the diff; ignore the others.
 
 === Backend ===
 1. Follow professional, state-of-the-art development and testing practices.
@@ -42,5 +43,30 @@ Follow these rules when writing code:
 31. Use one state-management approach across the project (e.g. only React Query + Context, or only Pinia). Do not mix strategies without justification.
 32. Cover components with tests via Vitest + Testing Library. Test behavior (what the user sees and does), not implementation details (internal methods, state).
 33. Use dynamic imports (import()) for heavy dependencies and routes. Do not add a library to the bundle for one function — find a tree-shaking-friendly alternative or write the utility yourself.
+
+=== Go ===
+34. Write idiomatic Go (Effective Go, Go Code Review Comments). The code must be `gofmt`/`goimports`-clean.
+35. Group imports at the top of the file: standard library, third-party, internal. No dot imports, no unused imports; a blank import (`_`) only with a comment explaining why.
+36. In SQL queries do not use table aliases — only real table names. Always use placeholders (`$1`, `?`), never build SQL by string concatenation.
+37. Use explicit types. Avoid `any`/`interface{}` unless really needed. Define small interfaces on the consumer side (accept interfaces, return structs).
+38. Decompose code into small functions/methods (Single Responsibility Principle). Prefer early returns over deep nesting.
+39. No magic numbers/strings — move them to constants (typed constants with `iota` for enums) or config. Allowed only in tests.
+40. Never ignore errors (no bare `_ =` without a justifying comment). Wrap with context: `fmt.Errorf("doing x: %w", err)`; compare with `errors.Is`/`errors.As`, not by string. No `panic` in business/library code. Define sentinel or custom error types where callers must distinguish errors.
+41. Handle transactions explicitly: begin, `defer tx.Rollback()`, commit; or one consistent approach (unit of work). Pass `context.Context` to every DB/network call.
+42. `context.Context` is the first parameter and is never stored in a struct. Every goroutine must have a clear lifecycle: no leaks, stop via context, wait via `sync.WaitGroup`/`errgroup`; only the sender closes a channel.
+43. Do not optimize without measurement: benchmarks (`testing.B`) and `pprof` first, then optimize.
+44. Avoid global mutable state and `init()`. Pass dependencies explicitly (constructors, options). Always `defer` the release of resources (`Close`, `Unlock`, `cancel`).
+45. Use the standard `testing` package (plus the assertion library already used in the project). Set up the environment with helpers marked `t.Helper()`, `t.Cleanup` and `TestMain`. Always check which helpers/fixtures already exist.
+46. Cover happy path, main negative scenarios and edge cases with tests. Run `go test -race ./...` for code with concurrency.
+47. Where tests check several same-shape scenarios, write table-driven tests with `t.Run` subtests instead of copy-pasted test functions.
+48. Test and function names must be short and meaningful (`TestParse_EmptyInput`). Follow Go naming: MixedCaps, no underscores outside tests, short receiver names, no stuttering (`user.UserName` -> `user.Name`).
+49. Exported identifiers need a doc comment starting with the identifier name. Write only meaningful comments.
+50. If the API is affected, generate and maintain the spec (OpenAPI/proto). When an endpoint signature changes, update the spec in the same commit.
+51. Validate input data: types, ranges, formats (especially in handlers). Handle `nil`, empty slices/maps and zero values explicitly.
+52. Follow project structure: separate transport (handlers), business logic (service), data access (repository) and utilities; keep `internal/` for non-public code. Move shared functionality into a package.
+53. Structs for DB/API models live in their own package and contain only fields and tags; DB access functions go to a separate repository layer.
+54. If a function has more than five parameters, do not pass them positionally: use an options/params struct or functional options, and name fields in struct literals at every call site.
+55. Keep a consistent code style: `gofmt -s`, `goimports`, `go vet` and `golangci-lint run` (at least `errcheck`, `staticcheck`, `govet`, `ineffassign`). Trailing commas are required in multi-line literals and calls (`gofmt` enforces it); none in short one-line constructs.
+56. In SQL migrations use IF NOT EXISTS / IF EXISTS for CREATE, ALTER, DROP so a repeated run doesn't crash the service.
 
 IMPORTANT: all output for the user must be in Russian (answers, reports, questions, plans, summaries and any generated texts), even though this prompt is in English.
