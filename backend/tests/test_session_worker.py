@@ -64,6 +64,7 @@ from services import task_status as task_status_module
 from services.account_router import TaskAccountRouter
 from services.claude_config import DEFAULT_HISTORY_RETENTION_DAYS
 from services.crypto import encrypt
+from services.go_cache import GO_CACHE_LIMIT_BYTES
 from services.llm_routing import resolve_session_token
 from services.manual_admission import close_manual_requests
 from services.manual_queue import enqueue_freeform_prompt_run
@@ -112,7 +113,7 @@ from tests.worker_support import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from claude_agent_sdk import Message
     from redis.asyncio import Redis
@@ -516,6 +517,92 @@ async def test_stop_while_paused_completes_task(
     assert task.status is TaskStatus.DONE
     assert task.last_failed_order_index is None
     assert worker_env.client.queries == ["шаг 0"]
+
+
+class TestGoCache:
+    """Кеши Go в каталоге задачи: порог между нодами и удаление при `done`."""
+
+    async def _run_paused_then_stopped(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        tmp_path: Path,
+        on_pause: Callable[[Path], None] = lambda _directory: None,
+    ) -> Path:
+        """Две ноды: пауза после первой, затем остановка. Возвращает каталог сессии задачи."""
+        task = await _make_task(db_session, status=TaskStatus.QUEUED)
+        await _add_node(db_session, task, order_index=0)
+        await _add_node(db_session, task, order_index=1)
+        session_dir = tmp_path / "sessions" / task.code
+        (session_dir / "go-cache").mkdir(parents=True)
+        (session_dir / "go-mod").mkdir()
+        # Разрежённый файл: размер больше порога, места на диске он не занимает.
+        with (session_dir / "go-cache" / "entry").open("wb") as entry:
+            entry.truncate(GO_CACHE_LIMIT_BYTES + 1)
+
+        async def user_presses_pause() -> None:
+            await request_task_control(redis_client, task.id, TaskControlCommand.PAUSE)
+
+        async def while_paused(_observed: list[TaskStatus]) -> None:
+            on_pause(session_dir)
+            await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+
+        _patch_pause_wait(monkeypatch, while_paused)
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(1),
+            on_query=user_presses_pause,
+        )
+        await _run_worker(task)
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        return session_dir
+
+    async def test_oversized_cache_trimmed_between_nodes(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        seen: dict[str, bool] = {}
+
+        def record(session_dir: Path) -> None:
+            seen["build"] = (session_dir / "go-cache").exists()
+            seen["modules"] = (session_dir / "go-mod").exists()
+
+        await self._run_paused_then_stopped(
+            db_session,
+            worker_env,
+            redis_client,
+            monkeypatch,
+            tmp_path=tmp_path,
+            on_pause=record,
+        )
+
+        assert seen == {"build": False, "modules": True}
+
+    async def test_done_removes_caches(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        session_dir = await self._run_paused_then_stopped(
+            db_session,
+            worker_env,
+            redis_client,
+            monkeypatch,
+            tmp_path=tmp_path,
+        )
+
+        assert not (session_dir / "go-cache").exists()
+        assert not (session_dir / "go-mod").exists()
 
 
 async def test_stop_during_node_interrupts_session_and_completes_task(

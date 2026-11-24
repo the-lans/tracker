@@ -13,7 +13,7 @@ import { useTaskOutputStream } from "@/hooks/useTaskStatusSocket";
 import { useTaskLibraryPrompts, useTaskNodes, useTaskSessionEvents } from "@/hooks/useTasks";
 import { cn } from "@/lib/utils";
 import { isAgentTurn } from "@/components/tasks/messageKinds";
-import { mergeFeed, withDateSeparators } from "@/lib/chatFeed";
+import { mergeFeed, splitInjected, withDateSeparators } from "@/lib/chatFeed";
 import { TaskStatus, type NodeLog, type NodeType } from "@/lib/types";
 import { isPreLaunch } from "@/lib/taskStatusTransitions";
 
@@ -75,7 +75,8 @@ export function TaskChatFeed({
     ...(taskNodes ?? []).map((node): [string, NodeType] => [node.node_id, node.node_type]),
   ]);
   const { data: sessionEvents } = useTaskSessionEvents(taskId);
-  const feedItems = mergeFeed(nodeLogs, sessionEvents ?? []);
+  const { logs: feedLogs, injectedBy } = splitInjected(nodeLogs);
+  const feedItems = mergeFeed(feedLogs, sessionEvents ?? []);
   const feedEntries = withDateSeparators(feedItems);
   const { data: llmAccounts } = useLlmAccounts();
   const llmAvailable = useLlmAvailable(ownerId);
@@ -88,7 +89,9 @@ export function TaskChatFeed({
     hasUnseen,
     awayFromBottom,
     scrollToBottom,
-  } = useStickToBottom<HTMLDivElement>(`${feedItems.length}:${streamedLength}`);
+  } = useStickToBottom<HTMLDivElement>(
+    `${nodeLogs.length + (sessionEvents?.length ?? 0)}:${streamedLength}`,
+  );
 
   return (
     <div
@@ -139,6 +142,7 @@ export function TaskChatFeed({
                 }
                 streamedText={outputStream[log.id]}
                 isAgentTurn={isAgentTurn(log, nodeTypes)}
+                injectedPrompts={injectedBy.get(log.id)}
                 accountLabel={log.llm_account_id ? accountLabels.get(log.llm_account_id) : undefined}
               />
             );

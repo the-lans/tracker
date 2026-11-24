@@ -33,6 +33,7 @@ from pathlib import Path
 from services.claude_config import resolve_sessions_root
 from services.docker_mounts import mount_args
 from services.git_ops import AGENT_GIT_IDENTITY
+from services.go_cache import go_cache_env, prepare_go_directories
 from services.task_artifacts import resolve_user_files_root
 from services.task_workspace import resolve_repos_root
 
@@ -72,8 +73,11 @@ def _network_args() -> list[str]:
     return ["--network", network]
 
 
-def _isolation_args(task_id: uuid.UUID) -> list[str]:
-    """Метка задачи, пользователь воркера, сети, лимиты и урезанные привилегии."""
+def _isolation_args(task_id: uuid.UUID, config_dir: Path) -> list[str]:
+    """
+    Метка задачи, пользователь воркера, сети, лимиты, урезанные привилегии и
+    кеши Go.
+    """
     return [
         "--label",
         f"{SESSION_TASK_LABEL}={task_id}",
@@ -90,16 +94,21 @@ def _isolation_args(task_id: uuid.UUID) -> list[str]:
         _CONTAINER_HOME,
         "-e",
         f"HOME={_CONTAINER_HOME}",
+        *_env_args(go_cache_env(config_dir)),
         *_git_identity_args(),
     ]
 
 
-def _git_identity_args() -> list[str]:
-    """Агент коммитит в рабочую ветку, а git-конфига в контейнере нет."""
+def _env_args(environment: dict[str, str]) -> list[str]:
     args: list[str] = []
-    for name, value in AGENT_GIT_IDENTITY.items():
+    for name, value in environment.items():
         args += ["-e", f"{name}={value}"]
     return args
+
+
+def _git_identity_args() -> list[str]:
+    """Агент коммитит в рабочую ветку, а git-конфига в контейнере нет."""
+    return _env_args(AGENT_GIT_IDENTITY)
 
 
 async def _task_mount_args(
@@ -132,8 +141,9 @@ async def build_session_cli_env(
     ``session_token`` — токен сессии для шлюза, ``artifacts_dir`` — каталог
     артефактов, если он нужен сессии.
     """
+    prepare_go_directories(config_dir)
     docker_args = [
-        *_isolation_args(task_id),
+        *_isolation_args(task_id, config_dir),
         *(knowledge_mounts or []),
         *await _task_mount_args(cwd=cwd, config_dir=config_dir, artifacts_dir=artifacts_dir),
         "-w",

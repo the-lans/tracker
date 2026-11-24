@@ -27,7 +27,9 @@ type FilterKey = "all" | "pre_launch" | "queue" | "in_progress" | "awaiting" | "
 const FILTERS: { key: FilterKey; label: string; statuses: readonly TaskStatus[] | null }[] = [
   { key: "all", label: "Все", statuses: null },
   { key: "pre_launch", label: "До запуска", statuses: PRE_LAUNCH_STATUSES },
-  { key: "queue", label: "В очереди", statuses: QUEUE_STATUSES },
+  // `queued` — задача поставлена на запуск (ждёт воркера сессий), у неё тот же бейдж «В очереди»,
+  // что и у очереди автора (`ready`, `night_worker`).
+  { key: "queue", label: "В очереди", statuses: [...QUEUE_STATUSES, TaskStatus.QUEUED] },
   { key: "in_progress", label: "В работе", statuses: [TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.AWAITING_LIMIT] },
   {
     key: "awaiting",

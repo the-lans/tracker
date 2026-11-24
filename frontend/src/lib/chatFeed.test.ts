@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { mergeFeed, withDateSeparators } from "@/lib/chatFeed";
-import { TaskSessionEventKind, type TaskSessionEvent } from "@/lib/types";
+import { mergeFeed, splitInjected, withDateSeparators } from "@/lib/chatFeed";
+import {
+  NodeLogStatus,
+  NodeLogTriggerType,
+  TaskSessionEventKind,
+  type TaskSessionEvent,
+} from "@/lib/types";
 import { makeNodeLog } from "@/test/factories";
 
 const event = (id: string, created_at: string): TaskSessionEvent => ({
@@ -11,6 +16,95 @@ const event = (id: string, created_at: string): TaskSessionEvent => ({
 
 const order = (items: ReturnType<typeof mergeFeed>) =>
   items.map((item) => (item.type === "log" ? item.log.id : item.event.id));
+
+const injected = (id: string, at: string) =>
+  makeNodeLog({
+    id,
+    node_id: null,
+    trigger_type: NodeLogTriggerType.FREEFORM_MANUAL,
+    rendered_prompt: "влитое сообщение",
+    started_at: at,
+    finished_at: at,
+  });
+
+describe("splitInjected", () => {
+  const turn = (overrides = {}) =>
+    makeNodeLog({
+      id: "turn",
+      started_at: "2026-01-01T10:00:00Z",
+      finished_at: null,
+      status: NodeLogStatus.RUNNING,
+      ...overrides,
+    });
+  const ids = (logs: ReturnType<typeof makeNodeLog>[]) => logs.map((log) => log.id);
+
+  test("влитый промт уходит в идущий ход и пропадает из ленты", () => {
+    const { logs, injectedBy } = splitInjected([turn(), injected("inj", "2026-01-01T10:05:00Z")]);
+
+    expect(ids(logs)).toEqual(["turn"]);
+    expect(ids(injectedBy.get("turn") ?? [])).toEqual(["inj"]);
+  });
+
+  test("после завершения хода остаётся в нём", () => {
+    const { logs, injectedBy } = splitInjected([
+      turn({ finished_at: "2026-01-01T10:20:00Z", status: NodeLogStatus.SUCCESS }),
+      injected("inj", "2026-01-01T10:05:00Z"),
+    ]);
+
+    expect(ids(logs)).toEqual(["turn"]);
+    expect(ids(injectedBy.get("turn") ?? [])).toEqual(["inj"]);
+  });
+
+  test("несколько влитых — в порядке взятия", () => {
+    const { injectedBy } = splitInjected([
+      turn(),
+      injected("second", "2026-01-01T10:09:00Z"),
+      injected("first", "2026-01-01T10:05:00Z"),
+    ]);
+
+    expect(ids(injectedBy.get("turn") ?? [])).toEqual(["first", "second"]);
+  });
+
+  test("запись, не попавшая в ход, остаётся в ленте по времени", () => {
+    const { logs, injectedBy } = splitInjected([
+      turn({ finished_at: "2026-01-01T10:20:00Z" }),
+      injected("later", "2026-01-01T11:00:00Z"),
+    ]);
+
+    expect(ids(logs)).toEqual(["turn", "later"]);
+    expect(injectedBy.size).toBe(0);
+  });
+
+  test("обычный ручной промт с ответом не считается влитым", () => {
+    const manual = makeNodeLog({
+      id: "manual",
+      trigger_type: NodeLogTriggerType.FREEFORM_MANUAL,
+      rendered_prompt: "вопрос",
+      llm_output_text: "ответ",
+      started_at: "2026-01-01T10:05:00Z",
+      finished_at: "2026-01-01T10:06:00Z",
+    });
+
+    const { logs, injectedBy } = splitInjected([turn({ finished_at: "2026-01-01T10:20:00Z" }), manual]);
+
+    expect(ids(logs)).toEqual(["turn", "manual"]);
+    expect(injectedBy.size).toBe(0);
+  });
+
+  test("скрипт ходом модели не считается", () => {
+    const script = makeNodeLog({
+      id: "script",
+      started_at: "2026-01-01T10:00:00Z",
+      finished_at: "2026-01-01T10:20:00Z",
+      script_stdout: "ok",
+      script_exit_code: 0,
+    });
+
+    const { logs } = splitInjected([script, injected("inj", "2026-01-01T10:05:00Z")]);
+
+    expect(ids(logs)).toEqual(["script", "inj"]);
+  });
+});
 
 describe("mergeFeed", () => {
   test("события стоят между записями нод по времени", () => {

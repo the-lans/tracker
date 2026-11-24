@@ -20,6 +20,7 @@ from db.queries.archived_tasks import ArchiveFilters, ArchivePage, select_archiv
 from db.queries.finished_tasks import FinishedTask, select_tasks_past_author_term
 from services.access import is_admin
 from services.errors import ConflictError, ValidationError
+from services.go_cache import remove_go_cache
 from services.task_cleanup import cleanup_task_repositories
 from services.task_passes import TaskPass
 from services.task_status import FINAL_STATUSES, FINISHED_STATUSES, transition_task_status
@@ -95,7 +96,7 @@ class ArchivePass(TaskPass):
         False — статус успел смениться (перезапуск, возврат в статус до запуска).
         """
         try:
-            await archive_finished_task(
+            archived = await archive_finished_task(
                 self.db_session,
                 task_id=task.id,
                 from_status=task.status,
@@ -103,6 +104,7 @@ class ArchivePass(TaskPass):
             )
         except ConflictError as exc:
             return await self.skip(task.id, exc)
+        await remove_go_cache(archived.code)
         logger.info("task_archived", task_id=str(task.id), from_status=task.status)
         return True
 

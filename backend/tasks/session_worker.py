@@ -46,6 +46,7 @@ from services.claude_config import (
     session_config_dir,
 )
 from services.errors import ConflictError
+from services.go_cache import remove_go_cache, trim_go_cache
 from services.knowledge_agent import build_knowledge_tools
 from services.knowledge_sections import section_snapshot
 from services.knowledge_views import knowledge_mounts
@@ -383,6 +384,7 @@ class _SessionControl:
         return await read_task_control(self.redis_client, self.task.id)
 
     async def checkpoint(self, _order_index: int) -> CheckpointDecision:
+        await trim_go_cache(self.task.code)
         command = await self._serve_between_nodes(status=TaskStatus.IN_PROGRESS)
         if command is CheckpointDecision.FAIL:
             return CheckpointDecision.FAIL
@@ -494,6 +496,7 @@ async def _finish_stopped_task(db_session: AsyncSession, task: Task) -> None:
         to_status=TaskStatus.DONE,
         stopped_by_user=True,
     )
+    await remove_go_cache(task.code)
     wake_task_dispatcher()
 
 
@@ -1404,6 +1407,7 @@ async def _settle_pipeline_run(
             from_status=TaskStatus.IN_PROGRESS,
             to_status=TaskStatus.DONE,
         )
+        await remove_go_cache(task.code)
         # Раздел 14.4: `done` освобождает слот автора.
         wake_task_dispatcher()
     elif outcome.stopped:

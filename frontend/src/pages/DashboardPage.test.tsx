@@ -34,7 +34,7 @@ describe("DashboardPage", () => {
       expect(await screen.findByRole("button", { name: "Все · 14" })).toBeInTheDocument();
       for (const name of [
         "До запуска · 5",
-        "В очереди · 2",
+        "В очереди · 3",
         "В работе · 3",
         "Ждут решения · 2",
         "Завершено · 1",
@@ -46,7 +46,7 @@ describe("DashboardPage", () => {
 
     test.for([
       { filter: "До запуска", codes: ["RR-new", "RR-refining", "RR-defined", "RR-ready", "RR-night_worker"] },
-      { filter: "В очереди", codes: ["RR-ready", "RR-night_worker"] },
+      { filter: "В очереди", codes: ["RR-ready", "RR-night_worker", "RR-queued"] },
       { filter: "В работе", codes: ["RR-in_progress", "RR-paused", "RR-awaiting_limit"] },
       { filter: "Ждут решения", codes: ["RR-plan_review", "RR-awaiting_input"] },
       { filter: "Завершено", codes: ["RR-done"] },

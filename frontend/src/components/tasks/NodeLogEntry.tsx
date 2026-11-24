@@ -44,6 +44,7 @@ export function NodeLogEntry({
   streamedText,
   isAgentTurn = false,
   accountLabel,
+  injectedPrompts = [],
 }: {
   taskId: string;
   log: NodeLog;
@@ -53,6 +54,8 @@ export function NodeLogEntry({
   isAgentTurn?: boolean;
   /** Пометка аккаунта обращения (`log.llm_account_id`). */
   accountLabel?: string;
+  /** Промты, влитые в этот ход (раздел 7.3): между промтом ноды и ответом модели. */
+  injectedPrompts?: NodeLog[];
 }) {
   const [outputOpen, setOutputOpen] = useState(false);
   // Раздел 15.2: служебная реплика помечена источником — один раз, в заголовке записи.
@@ -121,6 +124,15 @@ export function NodeLogEntry({
         />
       )}
       {isScript && <ScriptOutputBlock stdout={log.script_stdout} exitCode={log.script_exit_code} />}
+      {injectedPrompts.map((injected) => (
+        <MessageBubble
+          key={injected.id}
+          role="user"
+          text={injected.rendered_prompt ?? ""}
+          kind={promptKindOf(injected)}
+          timestamp={injected.started_at}
+        />
+      ))}
       {showTurnOutput && before && (
         <MessageBubble
           role="llm"
