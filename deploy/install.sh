@@ -123,6 +123,13 @@ LEGACY_ACCOUNTS_MOUNT="/data/claude-accounts"
 # script-нода на прежнем образе его сохраняют) и кеш сборки старше недели.
 RUNNER_IMAGE_LABEL="tracker.image=runner"
 BUILD_CACHE_KEEP="168h"
+# Регулярная чистка диска (раздел 20.6): скрипт и таймер systemd, который его
+# запускает раз в сутки между обновлениями.
+CLEANUP_SCRIPT="${INSTALL_DIR}/deploy/cleanup.sh"
+CLEANUP_UNIT_SOURCE_DIR="${INSTALL_DIR}/deploy/systemd"
+SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
+CLEANUP_TIMER="tracker-cleanup.timer"
+CLEANUP_UNITS=("tracker-cleanup.service" "${CLEANUP_TIMER}")
 
 log() { echo "[install.sh] $*"; }
 
@@ -595,6 +602,43 @@ step_prune_docker() {
     || log "Предупреждение: не удалось очистить кеш сборки"
 }
 
+# Кеш сборки сверх лимита, остановленные контейнеры, безымянные тома и
+# давно не используемые образы (`deploy/cleanup.sh`); сбой не роняет
+# уже завершённое обновление.
+step_cleanup_host() {
+  if [ ! -f "${CLEANUP_SCRIPT}" ]; then
+    log "Предупреждение: ${CLEANUP_SCRIPT} не найден — чистка диска пропущена"
+    return 0
+  fi
+  log "Чистка диска: кеш сборки сверх лимита, неиспользуемые образы, тома и журналы"
+  as_root bash "${CLEANUP_SCRIPT}" \
+    || log "Предупреждение: чистка диска завершилась с ошибкой"
+}
+
+# Таймер systemd, который раз в сутки запускает deploy/cleanup.sh; без
+# systemd (контейнер, нестандартный хост) шаг пропускается.
+step_install_cleanup_timer() {
+  command -v systemctl >/dev/null 2>&1 || {
+    log "systemctl не найден — таймер чистки диска не установлен"
+    return 0
+  }
+  local unit rendered
+  rendered="$(mktemp)"
+  for unit in "${CLEANUP_UNITS[@]}"; do
+    sed "s|@INSTALL_DIR@|${INSTALL_DIR}|g" "${CLEANUP_UNIT_SOURCE_DIR}/${unit}" > "${rendered}" \
+      && as_root cp "${rendered}" "${SYSTEMD_UNIT_DIR}/${unit}" \
+      || {
+        log "Предупреждение: не удалось установить ${unit}"
+        rm -f "${rendered}"
+        return 0
+      }
+  done
+  rm -f "${rendered}"
+  as_root systemctl daemon-reload \
+    && as_root systemctl enable --now "${CLEANUP_TIMER}" \
+    || log "Предупреждение: таймер чистки диска не включён"
+}
+
 # --- Восстановление на новом сервере (раздел 20.4, docs/migration.md) ---
 
 # До установки чего-либо: перенос без полного набора файлов бессмысленен.
@@ -695,6 +739,7 @@ run_install() {
   step_run_migrations
   step_seed_data
   step_start_app_services
+  step_install_cleanup_timer
   step_wait_tls
   step_final_instructions
   log "Установка завершена"
@@ -885,6 +930,8 @@ run_update() {
   step_start_app_services
   step_remove_legacy_accounts_volume
   step_prune_docker
+  step_cleanup_host
+  step_install_cleanup_timer
   _clear_maintenance_flag
   log "Обновление завершено: $(git -C "${INSTALL_DIR}" rev-parse HEAD)"
 }

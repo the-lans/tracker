@@ -43,6 +43,8 @@ if TYPE_CHECKING:
 
 
 _INSTALL_SCRIPT = Path(__file__).resolve().parents[2] / "deploy" / "install.sh"
+_CLEANUP_SCRIPT = _INSTALL_SCRIPT.with_name("cleanup.sh")
+_SYSTEMD_UNITS = _INSTALL_SCRIPT.with_name("systemd")
 # Системные утилиты, которые нужны скрипту и заглушкам. PATH теста состоит
 # только из каталога заглушек: настоящий docker (на CI он в /usr/bin) не
 # должен быть виден.
@@ -969,6 +971,15 @@ class TestUpdate:
         assert _calls(stubs) == []
 
 
+# Чистка диска `deploy/cleanup.sh` после обновления и по таймеру (разделы 20.6, 17).
+_CLEANUP_DOCKER_CALLS = (
+    "docker builder prune -f --keep-storage 4GB",
+    "docker container prune -f --filter until=24h",
+    "docker volume prune -f",
+    "docker image prune -a -f --filter until=720h --filter label!=tracker.image=runner",
+)
+
+
 def _prune_calls(stubs: Path) -> list[str]:
     return [call for call in _calls(stubs) if call.startswith("docker") and " prune " in call]
 
@@ -981,6 +992,7 @@ class TestUpdateCleanup:
         (install_dir / ".env").write_text(_installed_env(REDIS_PASSWORD=_REDIS_PASSWORD))
         (install_dir / "deploy").mkdir()
         shutil.copy(_INSTALL_SCRIPT, install_dir / "deploy" / "install.sh")
+        shutil.copy(_CLEANUP_SCRIPT, install_dir / "deploy" / "cleanup.sh")
 
     def test_prune_only_dangling_tracker_images(self, stubs: Path, install_dir: Path) -> None:
         """Без -a: образ, на котором есть контейнер сессии или ноды, Docker не удаляет."""
@@ -992,6 +1004,7 @@ class TestUpdateCleanup:
             "docker image prune -f --filter label=com.docker.compose.project=tracker",
             "docker image prune -f --filter label=tracker.image=runner",
             "docker builder prune -f --filter until=168h",
+            *_CLEANUP_DOCKER_CALLS,
         ]
 
     def test_prune_failure_keeps_update(self, stubs: Path, install_dir: Path) -> None:
@@ -1295,3 +1308,131 @@ async def test_deploy_live_count_supports_chat_and_legacy_schema(
         )
     )
     assert await db_session.scalar(sa.text(sql)) == 1
+
+
+class TestCleanupScript:
+    """`deploy/cleanup.sh`: чистка Docker, журнала и кеша пакетов."""
+
+    def _run(self, stubs: Path, install_dir: Path) -> subprocess.CompletedProcess[str]:
+        return _run_bash(
+            f'exec bash "{_CLEANUP_SCRIPT}"',
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+    def test_docker_steps(self, stubs: Path, install_dir: Path) -> None:
+        result = self._run(stubs, install_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert _prune_calls(stubs) == list(_CLEANUP_DOCKER_CALLS)
+
+    def test_keeps_runner_images_and_named_volumes(self, stubs: Path, install_dir: Path) -> None:
+        self._run(stubs, install_dir)
+
+        calls = _calls(stubs)
+        # Образы раннеров и сессии — по метке; тома — без -a, только безымянные.
+        assert any("label!=tracker.image=runner" in call for call in calls)
+        assert "docker volume prune -f" in calls
+        assert not any("volume prune" in call and "-a" in call for call in calls)
+
+    def test_failed_step_does_not_stop_the_rest(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "fail-prune").touch()
+
+        result = self._run(stubs, install_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert len(_prune_calls(stubs)) == len(_CLEANUP_DOCKER_CALLS)
+        assert result.stdout.count("Предупреждение: не удалось") == 2
+        assert "Чистка завершена" in result.stdout
+
+    def test_host_logs_and_package_cache(self, stubs: Path, install_dir: Path) -> None:
+        _write_executable(stubs / "journalctl", _LOGGING_STUB.format(name="journalctl"))
+        _write_executable(stubs / "dnf", _LOGGING_STUB.format(name="dnf"))
+
+        self._run(stubs, install_dir)
+
+        calls = _calls(stubs)
+        assert "journalctl --vacuum-size=200M" in calls
+        assert "dnf clean packages" in calls
+
+    def test_without_docker(self, stubs: Path, install_dir: Path) -> None:
+        (stubs / "docker").unlink()
+
+        result = self._run(stubs, install_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "docker не найден" in result.stdout
+
+
+class TestCleanupTimer:
+    """Таймер `systemd` ставится при обновлении и запускает чистку раз в сутки."""
+
+    @pytest.fixture(autouse=True)
+    def installed(self, install_dir: Path) -> None:
+        (install_dir / ".env").write_text(_installed_env(REDIS_PASSWORD=_REDIS_PASSWORD))
+        deploy = install_dir / "deploy"
+        deploy.mkdir()
+        shutil.copy(_INSTALL_SCRIPT, deploy / "install.sh")
+        shutil.copy(_CLEANUP_SCRIPT, deploy / "cleanup.sh")
+        shutil.copytree(_SYSTEMD_UNITS, deploy / "systemd")
+
+    def _update_with_units(
+        self,
+        stubs: Path,
+        install_dir: Path,
+        unit_dir: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        return _run_bash(
+            f'export SYSTEMD_UNIT_DIR="{unit_dir}"; exec bash "{_INSTALL_SCRIPT}" "$@"',
+            "--update",
+            stubs=stubs,
+            install_dir=install_dir,
+        )
+
+    def test_units_installed_and_enabled(
+        self,
+        tmp_path: Path,
+        stubs: Path,
+        install_dir: Path,
+    ) -> None:
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+        _write_executable(stubs / "systemctl", _LOGGING_STUB.format(name="systemctl"))
+
+        result = self._update_with_units(stubs, install_dir, unit_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        service = (unit_dir / "tracker-cleanup.service").read_text()
+        assert f"ExecStart={install_dir}/deploy/cleanup.sh" in service
+        assert "@INSTALL_DIR@" not in service
+        assert "OnCalendar=" in (unit_dir / "tracker-cleanup.timer").read_text()
+        _assert_in_order(
+            _calls(stubs),
+            ["systemctl daemon-reload", "systemctl enable --now tracker-cleanup.timer"],
+        )
+
+    def test_without_systemd(self, tmp_path: Path, stubs: Path, install_dir: Path) -> None:
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+
+        result = self._update_with_units(stubs, install_dir, unit_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "таймер чистки диска не установлен" in result.stdout
+        assert list(unit_dir.iterdir()) == []
+
+    def test_failed_enable_keeps_update(
+        self,
+        tmp_path: Path,
+        stubs: Path,
+        install_dir: Path,
+    ) -> None:
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+        _write_executable(stubs / "systemctl", "#!/bin/sh\nexit 1\n")
+
+        result = self._update_with_units(stubs, install_dir, unit_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "таймер чистки диска не включён" in result.stdout
+        assert "Обновление завершено" in result.stdout
