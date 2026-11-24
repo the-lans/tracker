@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { mergeFeed, withDateSeparators } from "@/lib/chatFeed";
-import { TaskSessionEventKind, type TaskSessionEvent } from "@/lib/types";
+import {
+  NodeLogStatus,
+  NodeLogTriggerType,
+  TaskSessionEventKind,
+  type TaskSessionEvent,
+} from "@/lib/types";
 import { makeNodeLog } from "@/test/factories";
 
 const event = (id: string, created_at: string): TaskSessionEvent => ({
@@ -11,6 +16,107 @@ const event = (id: string, created_at: string): TaskSessionEvent => ({
 
 const order = (items: ReturnType<typeof mergeFeed>) =>
   items.map((item) => (item.type === "log" ? item.log.id : item.event.id));
+
+const injected = (id: string, at: string) =>
+  makeNodeLog({
+    id,
+    node_id: null,
+    trigger_type: NodeLogTriggerType.FREEFORM_MANUAL,
+    rendered_prompt: "влитое сообщение",
+    started_at: at,
+    finished_at: at,
+  });
+
+describe("влитый в ход промт", () => {
+  const turn = (overrides = {}) =>
+    makeNodeLog({
+      id: "turn",
+      started_at: "2026-01-01T10:00:00Z",
+      finished_at: null,
+      status: NodeLogStatus.RUNNING,
+      ...overrides,
+    });
+
+  test("стоит перед идущим ходом, ответ модели — последний", () => {
+    const items = mergeFeed(
+      [turn(), injected("inj", "2026-01-01T10:05:00Z")],
+      [],
+    );
+
+    expect(order(items)).toEqual(["inj", "turn"]);
+  });
+
+  test("после завершения хода остаётся перед ним", () => {
+    const items = mergeFeed(
+      [
+        turn({
+          finished_at: "2026-01-01T10:20:00Z",
+          status: NodeLogStatus.SUCCESS,
+        }),
+        injected("inj", "2026-01-01T10:05:00Z"),
+      ],
+      [],
+    );
+
+    expect(order(items)).toEqual(["inj", "turn"]);
+  });
+
+  test("несколько влитых — в порядке взятия", () => {
+    const items = mergeFeed(
+      [
+        turn(),
+        injected("second", "2026-01-01T10:09:00Z"),
+        injected("first", "2026-01-01T10:05:00Z"),
+      ],
+      [],
+    );
+
+    expect(order(items)).toEqual(["first", "second", "turn"]);
+  });
+
+  test("запись, не попавшая в ход, остаётся по времени", () => {
+    const items = mergeFeed(
+      [
+        turn({ finished_at: "2026-01-01T10:20:00Z" }),
+        injected("later", "2026-01-01T11:00:00Z"),
+      ],
+      [],
+    );
+
+    expect(order(items)).toEqual(["turn", "later"]);
+  });
+
+  test("обычный ручной промт с ответом не считается влитым", () => {
+    const manual = makeNodeLog({
+      id: "manual",
+      trigger_type: NodeLogTriggerType.FREEFORM_MANUAL,
+      rendered_prompt: "вопрос",
+      llm_output_text: "ответ",
+      started_at: "2026-01-01T10:05:00Z",
+      finished_at: "2026-01-01T10:06:00Z",
+    });
+
+    expect(
+      order(
+        mergeFeed([turn({ finished_at: "2026-01-01T10:20:00Z" }), manual], []),
+      ),
+    ).toEqual(["turn", "manual"]);
+  });
+
+  test("скрипт ходом модели не считается", () => {
+    const script = makeNodeLog({
+      id: "script",
+      started_at: "2026-01-01T10:00:00Z",
+      finished_at: "2026-01-01T10:20:00Z",
+      script_stdout: "ok",
+      script_exit_code: 0,
+    });
+
+    expect(
+      order(mergeFeed([script, injected("inj", "2026-01-01T10:05:00Z")], [])),
+    ).toEqual(["script", "inj"]);
+  });
+});
 
 describe("mergeFeed", () => {
   test("события стоят между записями нод по времени", () => {
