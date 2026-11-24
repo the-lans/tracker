@@ -42,7 +42,9 @@ _OWNER_RWX = 0o700
 
 
 def go_cache_env(config_dir: Path) -> dict[str, str]:
-    """Переменные Go контейнера сессии: кеши внутри каталога задачи `config_dir`."""
+    """
+    Переменные Go контейнера сессии: кеши внутри каталога задачи `config_dir`.
+    """
     return {
         "GOCACHE": str(config_dir / BUILD_CACHE_DIRNAME),
         "GOMODCACHE": str(config_dir / MODULE_CACHE_DIRNAME),
@@ -59,7 +61,10 @@ def prepare_go_directories(config_dir: Path) -> None:
 
 
 def directory_size(path: Path) -> int:
-    """Сумма размеров файлов каталога; ссылки не разворачиваются, отсутствующий путь — 0."""
+    """
+    Сумма размеров файлов каталога; ссылки не разворачиваются, отсутствующий
+    путь — 0.
+    """
     total = 0
     try:
         with os.scandir(path) as entries:
@@ -73,16 +78,28 @@ def directory_size(path: Path) -> int:
     return total
 
 
-def _make_removable(function: Callable[[str], object], path: str, _error: BaseException) -> None:
-    """Обработчик `rmtree`: открывает каталог на запись и повторяет операцию."""
-    parent = os.path.dirname(path)
-    os.chmod(parent, _OWNER_RWX)
+def _make_removable(
+    root: Path,
+    function: Callable[[str], object],
+    path: str,
+    error: BaseException,
+) -> None:
+    """
+    Обработчик `rmtree`: открывает на запись каталог внутри удаляемого дерева и
+    повторяет операцию. Каталог вне дерева (родитель самого `root`) не трогается.
+    """
+    if Path(path) == root:
+        raise error
+    os.chmod(os.path.dirname(path), _OWNER_RWX)
     function(path)
 
 
 def _remove_tree(path: Path) -> None:
     if path.exists():
-        shutil.rmtree(path, onexc=_make_removable)
+        shutil.rmtree(
+            path,
+            onexc=lambda function, failed, error: _make_removable(path, function, failed, error),
+        )
 
 
 def _task_directory(task_code: str) -> Path:
@@ -90,11 +107,16 @@ def _task_directory(task_code: str) -> Path:
 
 
 def _clear_contents(path: Path) -> None:
-    """Каталог остаётся: контейнер сессии живёт дальше и ждёт его на месте."""
+    """
+    Каталог остаётся: контейнер сессии живёт дальше и ждёт его на месте.
+    """
     if not path.is_dir():
         return
     for entry in path.iterdir():
-        _remove_tree(entry) if entry.is_dir() and not entry.is_symlink() else entry.unlink()
+        if entry.is_dir() and not entry.is_symlink():
+            _remove_tree(entry)
+        else:
+            entry.unlink()
 
 
 def _trim(directory: Path, *, limit: int) -> int:
@@ -137,7 +159,10 @@ def _remove_all(directory: Path) -> None:
 
 
 async def remove_go_cache(task_code: str) -> None:
-    """Задача в `done` или `archived`: кеши Go удаляются целиком; отсутствие кеша — не ошибка."""
+    """
+    Задача в `done` или `archived`: кеши Go удаляются целиком; отсутствие кеша —
+    не ошибка.
+    """
     directory = _task_directory(task_code)
     try:
         await asyncio.to_thread(_remove_all, directory)

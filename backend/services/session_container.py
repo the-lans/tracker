@@ -74,7 +74,10 @@ def _network_args() -> list[str]:
 
 
 def _isolation_args(task_id: uuid.UUID, config_dir: Path) -> list[str]:
-    """Метка задачи, пользователь воркера, сети, лимиты, урезанные привилегии и кеши Go."""
+    """
+    Метка задачи, пользователь воркера, сети, лимиты, урезанные привилегии и
+    кеши Go.
+    """
     return [
         "--label",
         f"{SESSION_TASK_LABEL}={task_id}",

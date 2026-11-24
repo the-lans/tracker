@@ -115,9 +115,13 @@ class TestTrim:
         os.chmod(modules / "ab" / "entry", stat.S_IRUSR)
         os.chmod(modules / "ab", stat.S_IRUSR | stat.S_IXUSR)
 
+        mode_before = stat.S_IMODE(task_dir.stat().st_mode)
+
         await trim_go_cache(CODE, limit=LIMIT)
 
         assert not modules.exists()
+        # Права открываются только внутри удаляемого дерева, каталог задачи не меняется.
+        assert stat.S_IMODE(task_dir.stat().st_mode) == mode_before
 
 
 class TestRemove:
