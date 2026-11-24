@@ -610,9 +610,16 @@ step_cleanup_host() {
     log "Предупреждение: ${CLEANUP_SCRIPT} не найден — чистка диска пропущена"
     return 0
   fi
-  log "Чистка диска: кеш сборки сверх лимита, неиспользуемые образы, тома и журналы"
-  as_root bash "${CLEANUP_SCRIPT}" \
+  log "Чистка диска: кеш сборки сверх лимита, неиспользуемые образы и тома"
+  # Без sudo: развёртывание идёт от пользователя `deploy` (группа docker, но не
+  # sudo); журнал systemd и кеш пакетов скрипт чистит только под root.
+  bash "${CLEANUP_SCRIPT}" \
     || log "Предупреждение: чистка диска завершилась с ошибкой"
+}
+
+# Можно ли выполнять команды от root без пароля: root или sudo без запроса.
+_can_use_root() {
+  [ "$(id -u)" -eq 0 ] || sudo -n true >/dev/null 2>&1
 }
 
 # Таймер systemd, который раз в сутки запускает deploy/cleanup.sh; без
@@ -620,6 +627,11 @@ step_cleanup_host() {
 step_install_cleanup_timer() {
   command -v systemctl >/dev/null 2>&1 || {
     log "systemctl не найден — таймер чистки диска не установлен"
+    return 0
+  }
+  _can_use_root || {
+    log "Таймер чистки диска не установлен: нужны права root. Один раз выполните на сервере:" \
+      "sudo env INSTALL_DIR=${INSTALL_DIR} bash -c 'source ${INSTALL_DIR}/deploy/install.sh && step_install_cleanup_timer'"
     return 0
   }
   local unit rendered

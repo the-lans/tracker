@@ -70,6 +70,7 @@ _SYSTEM_TOOLS = (
     "sleep",
     "head",
     "wc",
+    "true",
 )
 _PREVIOUS_SHA = "1" * 40
 _RETENTION_TASKS = (
@@ -164,7 +165,13 @@ while [ "$#" -gt 0 ]; do
 done
 """
 _SUDO_STUB = """#!/bin/sh
+# `sudo -n` без пароля: проверка права, не команда.
+[ "$1" = "-n" ] && shift
 exec "$@"
+"""
+_NO_SUDO_STUB = """#!/bin/sh
+echo "sudo: a password is required" >&2
+exit 1
 """
 _APT_STUB = """#!/bin/sh
 echo "apt-get $*" >> "$STUB_LOG"
@@ -1345,15 +1352,31 @@ class TestCleanupScript:
         assert result.stdout.count("Предупреждение: не удалось") == 2
         assert "Чистка завершена" in result.stdout
 
-    def test_host_logs_and_package_cache(self, stubs: Path, install_dir: Path) -> None:
+    def _with_user(self, stubs: Path, uid: int) -> None:
+        (stubs / "id").unlink()
+        _write_executable(stubs / "id", f"#!/bin/sh\necho {uid}\n")
         _write_executable(stubs / "journalctl", _LOGGING_STUB.format(name="journalctl"))
         _write_executable(stubs / "dnf", _LOGGING_STUB.format(name="dnf"))
+
+    def test_host_logs_and_package_cache_as_root(self, stubs: Path, install_dir: Path) -> None:
+        self._with_user(stubs, 0)
 
         self._run(stubs, install_dir)
 
         calls = _calls(stubs)
         assert "journalctl --vacuum-size=200M" in calls
         assert "dnf clean packages" in calls
+
+    def test_host_cleanup_skipped_without_root(self, stubs: Path, install_dir: Path) -> None:
+        """Развёртывание идёт от `deploy` без sudo: журнал и кеш пакетов чистит таймер."""
+        self._with_user(stubs, 1000)
+
+        result = self._run(stubs, install_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "нужны права root" in result.stdout
+        assert not any(call.startswith(("journalctl", "dnf")) for call in _calls(stubs))
+        assert _prune_calls(stubs) == list(_CLEANUP_DOCKER_CALLS)
 
     def test_without_docker(self, stubs: Path, install_dir: Path) -> None:
         (stubs / "docker").unlink()
@@ -1435,4 +1458,26 @@ class TestCleanupTimer:
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert "таймер чистки диска не включён" in result.stdout
+        assert "Обновление завершено" in result.stdout
+
+    def test_without_root_rights(self, tmp_path: Path, stubs: Path, install_dir: Path) -> None:
+        """
+        Развёртывание от `deploy`: sudo без пароля нет — чистка Docker выполняется
+        без него, а таймер не ставится и подсказывает разовую команду.
+        """
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+        _write_executable(stubs / "systemctl", _LOGGING_STUB.format(name="systemctl"))
+        (stubs / "id").unlink()
+        _write_executable(stubs / "id", "#!/bin/sh\necho 1000\n")
+        _write_executable(stubs / "sudo", _NO_SUDO_STUB)
+
+        result = self._update_with_units(stubs, install_dir, unit_dir)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "нужны права root" in result.stdout
+        assert "step_install_cleanup_timer" in result.stdout
+        assert list(unit_dir.iterdir()) == []
+        assert not any(call.startswith("systemctl") for call in _calls(stubs))
+        assert _prune_calls(stubs)[-len(_CLEANUP_DOCKER_CALLS) :] == list(_CLEANUP_DOCKER_CALLS)
         assert "Обновление завершено" in result.stdout

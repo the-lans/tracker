@@ -332,6 +332,19 @@ chown -R deploy:deploy "$INSTALL_DIR"
 install -d -m 700 -o deploy -g deploy /home/deploy/.ssh
 ```
 
+Пользователь `deploy` не получает sudo, поэтому ночную чистку диска (таймер
+systemd `tracker-cleanup.timer`, `deploy/cleanup.sh`) ставит root. На сервере, где
+ставили Tracker до появления таймера, выполните один раз от root:
+
+```bash
+sudo env INSTALL_DIR="$INSTALL_DIR" bash -c \
+  'source "$INSTALL_DIR/deploy/install.sh" && step_install_cleanup_timer'
+```
+
+После каждого обновления чистка кеша сборки, неиспользуемых образов и
+томов выполняется и без таймера — от `deploy` (достаточно группы docker); журнал
+systemd и кеш пакетов чистит только таймер.
+
 Группа docker даёт права уровня root на хосте. Не меняйте владельца чужого
 каталога: `INSTALL_DIR` должен указывать на проверенный checkout Tracker.
 Не заменяйте работающий deploy-ключ без необходимости. Новый ключ создайте

@@ -47,6 +47,12 @@ clean_docker() {
 }
 
 clean_host() {
+  # Журнал systemd и кеш пакетов чистит только root: при развёртывании от
+  # `deploy` этот шаг делает ночной таймер.
+  if [ "$(id -u)" -ne 0 ]; then
+    log "Журнал systemd и кеш пакетов пропущены: нужны права root (их чистит таймер)"
+    return 0
+  fi
   if command -v journalctl >/dev/null 2>&1; then
     best_effort "уменьшить журнал systemd" journalctl "--vacuum-size=${JOURNAL_MAX_SIZE}"
   fi
