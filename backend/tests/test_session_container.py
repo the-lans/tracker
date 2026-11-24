@@ -175,6 +175,10 @@ class TestSessionDockerArgs:
         assert args[args.index("--security-opt") + 1] == "no-new-privileges"
         assert args[args.index("--tmpfs") + 1] == "/tmp"
         assert "HOME=/tmp" in args
+        # Кеши Go — в каталоге задачи на томе сессий, а не в tmpfs.
+        config_dir = tmp_path / "sessions" / "RR-1"
+        assert f"GOCACHE={config_dir}/go-cache" in args
+        assert f"GOMODCACHE={config_dir}/go-mod" in args
 
     @pytest.mark.parametrize(
         ("variable", "value", "read"),

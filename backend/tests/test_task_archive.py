@@ -157,6 +157,25 @@ class TestArchivePass:
             finished_at,
         )
 
+    async def test_removes_go_cache(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Архивация удаляет кеши Go задачи, но не остальной каталог сессии."""
+        monkeypatch.setenv("CLAUDE_SESSIONS_ROOT", str(tmp_path))
+        task = await _finished_task(db_session, await _author(db_session), age=timedelta(days=20))
+        session_dir = tmp_path / task.code
+        (session_dir / "go-cache").mkdir(parents=True)
+        (session_dir / "go-mod").mkdir()
+        (session_dir / "settings.json").write_text("{}")
+
+        await ArchivePass(db_session, now=NOW).run(redis_client)
+
+        assert sorted(path.name for path in session_dir.iterdir()) == ["settings.json"]
+
     async def test_status_changed_meanwhile(
         self,
         db_session: AsyncSession,
