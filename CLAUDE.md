@@ -152,7 +152,7 @@ backend/
               архивных задач (SessionHistoryPass, ArtifactsPass, разделы
               6.4, 14.3); app_log_retention.py — срок хранения app_logs
               (раздел 17.2);
-              go_cache.py — кеши Go сессии в каталоге задачи: порог 2 ГБ между
+              go_cache.py — кеши Go и `GOTMPDIR` сессии в каталоге задачи: порог 2 ГБ между
               нодами и удаление при `done`/`archived` (раздел 19.3);
               prompt_injection.py — влитие промта из очереди в идущий ход
               (команды API → воркер через Redis, `injected`, раздел 7.3);

@@ -33,7 +33,7 @@ from pathlib import Path
 from services.claude_config import resolve_sessions_root
 from services.docker_mounts import mount_args
 from services.git_ops import AGENT_GIT_IDENTITY
-from services.go_cache import go_cache_env
+from services.go_cache import go_cache_env, prepare_go_directories
 from services.task_artifacts import resolve_user_files_root
 from services.task_workspace import resolve_repos_root
 
@@ -138,6 +138,7 @@ async def build_session_cli_env(
     ``session_token`` — токен сессии для шлюза, ``artifacts_dir`` — каталог
     артефактов, если он нужен сессии.
     """
+    prepare_go_directories(config_dir)
     docker_args = [
         *_isolation_args(task_id, config_dir),
         *(knowledge_mounts or []),

@@ -179,6 +179,8 @@ class TestSessionDockerArgs:
         config_dir = tmp_path / "sessions" / "RR-1"
         assert f"GOCACHE={config_dir}/go-cache" in args
         assert f"GOMODCACHE={config_dir}/go-mod" in args
+        assert f"GOTMPDIR={config_dir}/go-tmp" in args
+        assert (config_dir / "go-tmp").is_dir()
 
     @pytest.mark.parametrize(
         ("variable", "value", "read"),
