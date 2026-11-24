@@ -981,9 +981,8 @@ class TestUpdate:
 # Чистка диска `deploy/cleanup.sh` после обновления и по таймеру (разделы 20.6, 17).
 _CLEANUP_DOCKER_CALLS = (
     "docker builder prune -f --keep-storage 4GB",
-    "docker container prune -f --filter until=24h",
+    "docker container prune -f --filter until=24h --filter label!=com.docker.compose.project",
     "docker volume prune -f",
-    "docker image prune -a -f --filter until=720h --filter label!=tracker.image=runner",
 )
 
 
@@ -1333,14 +1332,19 @@ class TestCleanupScript:
         assert result.returncode == 0, result.stdout + result.stderr
         assert _prune_calls(stubs) == list(_CLEANUP_DOCKER_CALLS)
 
-    def test_keeps_runner_images_and_named_volumes(self, stubs: Path, install_dir: Path) -> None:
+    def test_keeps_compose_containers_images_and_named_volumes(
+        self,
+        stubs: Path,
+        install_dir: Path,
+    ) -> None:
         self._run(stubs, install_dir)
 
         calls = _calls(stubs)
-        # Образы раннеров и сессии — по метке; тома — без -a, только безымянные.
-        assert any("label!=tracker.image=runner" in call for call in calls)
+        # Контейнеры compose — по метке; тома — без -a, только безымянные; образы не удаляются.
+        assert any("label!=com.docker.compose.project" in call for call in calls)
         assert "docker volume prune -f" in calls
         assert not any("volume prune" in call and "-a" in call for call in calls)
+        assert not any("image prune -a" in call for call in calls)
 
     def test_failed_step_does_not_stop_the_rest(self, stubs: Path, install_dir: Path) -> None:
         (stubs / "fail-prune").touch()
@@ -1349,7 +1353,7 @@ class TestCleanupScript:
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert len(_prune_calls(stubs)) == len(_CLEANUP_DOCKER_CALLS)
-        assert result.stdout.count("Предупреждение: не удалось") == 2
+        assert result.stdout.count("Предупреждение: не удалось") == 1
         assert "Чистка завершена" in result.stdout
 
     def _with_user(self, stubs: Path, uid: int) -> None:
