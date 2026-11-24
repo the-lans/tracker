@@ -21,7 +21,14 @@ function renderEntry(
     streamedText,
     isAgentTurn,
     accountLabel,
-  }: { title?: string; streamedText?: string; isAgentTurn?: boolean; accountLabel?: string } = {},
+    injectedPrompts,
+  }: {
+    title?: string;
+    streamedText?: string;
+    isAgentTurn?: boolean;
+    accountLabel?: string;
+    injectedPrompts?: NodeLog[];
+  } = {},
 ) {
   return renderWithProviders(
     <NodeLogEntry
@@ -31,6 +38,7 @@ function renderEntry(
       streamedText={streamedText}
       isAgentTurn={isAgentTurn}
       accountLabel={accountLabel}
+      injectedPrompts={injectedPrompts}
     />,
   );
 }
@@ -395,6 +403,22 @@ describe("NodeLogEntry", () => {
       });
 
       expect(times(container)).toEqual([]);
+    });
+  });
+
+  describe("влитые промты", () => {
+    test("между промтом ноды и ответом модели", () => {
+      const injected = makeNodeLog({
+        id: "inj",
+        trigger_type: NodeLogTriggerType.FREEFORM_MANUAL,
+        rendered_prompt: "ВЛИТОЕ сообщение",
+      });
+      const { container } = renderEntry(
+        { rendered_prompt: "ПРОМТ ноды", llm_output_text: "ОТВЕТ модели" },
+        { isAgentTurn: true, injectedPrompts: [injected] },
+      );
+
+      expectOrder(container, ["ПРОМТ ноды", "ВЛИТОЕ сообщение", "ОТВЕТ модели"]);
     });
   });
 });

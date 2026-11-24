@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mergeFeed, withDateSeparators } from "@/lib/chatFeed";
+import { mergeFeed, splitInjected, withDateSeparators } from "@/lib/chatFeed";
 import {
   NodeLogStatus,
   NodeLogTriggerType,
@@ -27,7 +27,7 @@ const injected = (id: string, at: string) =>
     finished_at: at,
   });
 
-describe("влитый в ход промт", () => {
+describe("splitInjected", () => {
   const turn = (overrides = {}) =>
     makeNodeLog({
       id: "turn",
@@ -36,54 +36,43 @@ describe("влитый в ход промт", () => {
       status: NodeLogStatus.RUNNING,
       ...overrides,
     });
+  const ids = (logs: ReturnType<typeof makeNodeLog>[]) => logs.map((log) => log.id);
 
-  test("стоит перед идущим ходом, ответ модели — последний", () => {
-    const items = mergeFeed(
-      [turn(), injected("inj", "2026-01-01T10:05:00Z")],
-      [],
-    );
+  test("влитый промт уходит в идущий ход и пропадает из ленты", () => {
+    const { logs, injectedBy } = splitInjected([turn(), injected("inj", "2026-01-01T10:05:00Z")]);
 
-    expect(order(items)).toEqual(["inj", "turn"]);
+    expect(ids(logs)).toEqual(["turn"]);
+    expect(ids(injectedBy.get("turn") ?? [])).toEqual(["inj"]);
   });
 
-  test("после завершения хода остаётся перед ним", () => {
-    const items = mergeFeed(
-      [
-        turn({
-          finished_at: "2026-01-01T10:20:00Z",
-          status: NodeLogStatus.SUCCESS,
-        }),
-        injected("inj", "2026-01-01T10:05:00Z"),
-      ],
-      [],
-    );
+  test("после завершения хода остаётся в нём", () => {
+    const { logs, injectedBy } = splitInjected([
+      turn({ finished_at: "2026-01-01T10:20:00Z", status: NodeLogStatus.SUCCESS }),
+      injected("inj", "2026-01-01T10:05:00Z"),
+    ]);
 
-    expect(order(items)).toEqual(["inj", "turn"]);
+    expect(ids(logs)).toEqual(["turn"]);
+    expect(ids(injectedBy.get("turn") ?? [])).toEqual(["inj"]);
   });
 
   test("несколько влитых — в порядке взятия", () => {
-    const items = mergeFeed(
-      [
-        turn(),
-        injected("second", "2026-01-01T10:09:00Z"),
-        injected("first", "2026-01-01T10:05:00Z"),
-      ],
-      [],
-    );
+    const { injectedBy } = splitInjected([
+      turn(),
+      injected("second", "2026-01-01T10:09:00Z"),
+      injected("first", "2026-01-01T10:05:00Z"),
+    ]);
 
-    expect(order(items)).toEqual(["first", "second", "turn"]);
+    expect(ids(injectedBy.get("turn") ?? [])).toEqual(["first", "second"]);
   });
 
-  test("запись, не попавшая в ход, остаётся по времени", () => {
-    const items = mergeFeed(
-      [
-        turn({ finished_at: "2026-01-01T10:20:00Z" }),
-        injected("later", "2026-01-01T11:00:00Z"),
-      ],
-      [],
-    );
+  test("запись, не попавшая в ход, остаётся в ленте по времени", () => {
+    const { logs, injectedBy } = splitInjected([
+      turn({ finished_at: "2026-01-01T10:20:00Z" }),
+      injected("later", "2026-01-01T11:00:00Z"),
+    ]);
 
-    expect(order(items)).toEqual(["turn", "later"]);
+    expect(ids(logs)).toEqual(["turn", "later"]);
+    expect(injectedBy.size).toBe(0);
   });
 
   test("обычный ручной промт с ответом не считается влитым", () => {
@@ -96,11 +85,10 @@ describe("влитый в ход промт", () => {
       finished_at: "2026-01-01T10:06:00Z",
     });
 
-    expect(
-      order(
-        mergeFeed([turn({ finished_at: "2026-01-01T10:20:00Z" }), manual], []),
-      ),
-    ).toEqual(["turn", "manual"]);
+    const { logs, injectedBy } = splitInjected([turn({ finished_at: "2026-01-01T10:20:00Z" }), manual]);
+
+    expect(ids(logs)).toEqual(["turn", "manual"]);
+    expect(injectedBy.size).toBe(0);
   });
 
   test("скрипт ходом модели не считается", () => {
@@ -112,9 +100,9 @@ describe("влитый в ход промт", () => {
       script_exit_code: 0,
     });
 
-    expect(
-      order(mergeFeed([script, injected("inj", "2026-01-01T10:05:00Z")], [])),
-    ).toEqual(["script", "inj"]);
+    const { logs } = splitInjected([script, injected("inj", "2026-01-01T10:05:00Z")]);
+
+    expect(ids(logs)).toEqual(["script", "inj"]);
   });
 });
 
