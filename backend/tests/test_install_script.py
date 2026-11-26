@@ -67,7 +67,6 @@ _SYSTEM_TOOLS = (
     "openssl",
     "mkdir",
     "date",
-    "sleep",
     "head",
     "wc",
     "true",
@@ -87,7 +86,7 @@ echo "docker $*" >> "$STUB_LOG"
 if [ "$1 $2" = "compose version" ] && [ -f "$STUB_DIR/no-compose" ]; then
   exit 1
 fi
-if [ "$1 $2 $3" = "compose exec -T" ]; then
+if [ "$1 $2 $3 $4" = "compose exec -T postgres" ]; then
   cat > "$STUB_DIR/psql-input"
 fi
 case "$*" in
@@ -100,6 +99,9 @@ if [ "$1" = "version" ]; then
 fi
 case "$*" in
   "compose config") echo "name: tracker"; echo "services:" ;;
+  "compose ps -q "*) echo "test-container" ;;
+  "inspect --format "*Config.Hostname*) echo "test-host" ;;
+  "inspect --format "*) echo "running:healthy" ;;
   # Том каталогов прежних LLM-аккаунтов: есть, пока лежит файл legacy-volume.
   "volume create "*) echo "$3" > "$STUB_DIR/legacy-volume" ;;
   "volume ls "*) cat "$STUB_DIR/legacy-volume" 2>/dev/null ;;
@@ -108,6 +110,7 @@ case "$*" in
     rm -f "$STUB_DIR/legacy-volume" ;;
   "image prune"*|"builder prune"*) [ -f "$STUB_DIR/fail-prune" ] && exit 1 ;;
   *"redis-cli SET"*) echo "OK" ;;
+  *"SELECT version_num FROM alembic_version"*) echo "e4ac0721df52" ;;
   *psql*)
     # Число живых сессий: по строке файла на опрос, последняя повторяется.
     if [ -s "$STUB_DIR/live-sessions" ]; then
@@ -197,6 +200,7 @@ def stubs(tmp_path: Path) -> Path:
         assert tool_path is not None, f"нет системной утилиты {tool}"
         (stub_dir / tool).symlink_to(tool_path)
     _write_executable(stub_dir / "docker", _DOCKER_STUB)
+    _write_executable(stub_dir / "sleep", "#!/bin/sh\nexit 0\n")
     (stub_dir / "docker.real").write_text(_DOCKER_STUB)
     _write_executable(stub_dir / "git", _GIT_STUB)
     _write_executable(stub_dir / "curl", _CURL_STUB)
@@ -703,7 +707,7 @@ class TestUpdate:
         assert not any("migrate_claude_sessions" in call for call in calls)
         assert not any("seed_admin_allowlist" in call or "git clone" in call for call in calls)
         assert not any(_REDIS_PASSWORD in call for call in calls)
-        assert not any("psql" in call for call in calls)
+        assert not any("count(*) FROM tasks" in call for call in calls)
         env = _env(install_dir)
         assert (env["GIT_SHA"], env["CLIPROXY_VERSION"]) == (_TARGET_SHA, "v8.0.48")
         assert len(env["CLIPROXY_API_KEY"]) == 64
@@ -927,7 +931,7 @@ class TestUpdate:
 
         assert result.returncode == 0, result.stdout + result.stderr
         calls = _calls(stubs)
-        assert sum("psql" in call for call in calls) == 3
+        assert sum("psql" in call and "count(*) FROM tasks" in call for call in calls) == 3
         assert "redis-cli SET maintenance:deploy 1 EX 3900" in "\n".join(calls)
         _assert_in_order(calls, ["redis-cli SET", "psql", "fetch origin"])
 
