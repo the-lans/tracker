@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -35,8 +36,13 @@ def _volume_names(service: dict[str, Any]) -> set[str]:
 class TestBackupWorker:
     def test_own_queue_one_process(self, compose: dict[str, Any]) -> None:
         command = compose["services"]["backup-worker"]["command"]
-        assert command[command.index("-Q") + 1] == BACKUPS_QUEUE
-        assert command[command.index("--concurrency") + 1] == "1"
+        assert command[:2] == ["sh", "-c"]
+        startup, celery = command[2].split(" && ", 1)
+        assert startup == "python -m tasks.backup_worker_startup"
+        args = shlex.split(celery)
+        assert args[:2] == ["exec", "celery"]
+        assert args[args.index("-Q") + 1] == BACKUPS_QUEUE
+        assert args[args.index("--concurrency") + 1] == "1"
 
     def test_tasks_routed(self) -> None:
         routes = celery_app.conf.task_routes

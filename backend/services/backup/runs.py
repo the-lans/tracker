@@ -16,7 +16,8 @@ import sqlalchemy as sa
 
 from app_logging.config import get_logger
 from db.models.backups import BackupRun
-from db.models.enums import BackupRunKind, BackupRunStatus
+from db.models.enums import BackupRunKind, BackupRunStatus, PeriodicRunStatus
+from db.models.periodic import PeriodicTask
 from services.backup.bundle import BundleError
 from services.backup.crypto_gpg import GpgError
 from services.backup.dump import DumpError
@@ -90,6 +91,29 @@ async def close_interrupted_runs(db_session: AsyncSession, *, current: BackupRun
     if closed:
         logger.warning("backup_interrupted_runs_closed", count=closed)
     return closed
+
+
+async def close_runs_after_worker_restart(db_session: AsyncSession) -> int:
+    """Единственный backup-worker только запущен: предыдущие запуски прерваны."""
+    result = await db_session.execute(
+        sa.update(BackupRun)
+        .where(BackupRun.status == BackupRunStatus.RUNNING)
+        .values(
+            status=BackupRunStatus.FAILED,
+            finished_at=datetime.now(UTC),
+            error_message=INTERRUPTED_MESSAGE,
+        )
+    )
+    await db_session.execute(
+        sa.update(PeriodicTask)
+        .where(
+            PeriodicTask.name.in_(("backup_to_s3", "verify_s3_backup")),
+            PeriodicTask.last_run_status == PeriodicRunStatus.RUNNING,
+        )
+        .values(last_run_status=PeriodicRunStatus.FAILED)
+    )
+    await db_session.commit()
+    return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
 
 async def start_run(db_session: AsyncSession, *, kind: BackupRunKind) -> BackupRun:

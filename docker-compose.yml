@@ -246,8 +246,7 @@ services:
     <<: *worker
     command:
       [
-        "celery", "-A", "tasks.celery_app", "worker", "-Q", "backups",
-        "--concurrency", "1", "-l", "info",
+        "sh", "-c", "python -m tasks.backup_worker_startup && exec celery -A tasks.celery_app worker -Q backups --concurrency 1 -l info",
       ]
     environment:
       <<: *backend_env
