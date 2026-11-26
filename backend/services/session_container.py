@@ -67,6 +67,24 @@ _CPU_LIMIT = "2.0"
 _CONTAINER_HOME = "/tmp"
 
 
+def kubernetes_args() -> list[str]:
+    """Необязательные доступы к кластерам: файлы хоста, только для чтения."""
+    directory = os.environ.get("TRACKER_SESSION_KUBERNETES_DIR", "")
+    if not directory:
+        return []
+    root = Path(directory)
+    if not root.is_absolute():
+        raise ValueError("TRACKER_SESSION_KUBERNETES_DIR должен быть абсолютным путём хоста")
+    return [
+        "--mount",
+        f"type=bind,src={root / 'kubectl'},dst=/usr/local/bin/kubectl,readonly",
+        "--mount",
+        f"type=bind,src={root / 'config'},dst=/opt/tracker-kubernetes/config,readonly",
+        "-e",
+        "KUBECONFIG=/opt/tracker-kubernetes/config",
+    ]
+
+
 def _network_args() -> list[str]:
     llm_network = os.environ.get(SESSION_LLM_NETWORK_ENV, DEFAULT_SESSION_LLM_NETWORK)
     network = llm_network or os.environ.get(SESSION_NETWORK_ENV, DEFAULT_SESSION_NETWORK)
@@ -144,6 +162,7 @@ async def build_session_cli_env(
     prepare_go_directories(config_dir)
     docker_args = [
         *_isolation_args(task_id, config_dir),
+        *kubernetes_args(),
         *(knowledge_mounts or []),
         *await _task_mount_args(cwd=cwd, config_dir=config_dir, artifacts_dir=artifacts_dir),
         "-w",

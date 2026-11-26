@@ -156,6 +156,7 @@ services:
       CLAUDE_DIAGNOSTICS: ${CLAUDE_DIAGNOSTICS:-false}
       CLAUDE_DIAGNOSTICS_MAX_TURNS: ${CLAUDE_DIAGNOSTICS_MAX_TURNS:-20}
       TRACKER_TWG_ENABLED: ${TRACKER_TWG_ENABLED:-true}
+      TRACKER_SESSION_KUBERNETES_DIR: ${TRACKER_SESSION_KUBERNETES_DIR:-}
       # Раздел 14.4: воркер очереди не запускает больше задач, чем процессов
       # воркера сессий (session-worker, `--concurrency`).
       SESSION_WORKER_CONCURRENCY: ${SESSION_WORKER_CONCURRENCY:-4}
