@@ -12,9 +12,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,7 +32,14 @@ from clients.claude_agent import (
     build_claude_agent_options,
 )
 from clients.cliproxy import open_cliproxy_client
-from db.models.enums import NodeType, ParentSummaryStatus, RemoteControlStatus, TaskStatus
+from db.models.enums import (
+    NodeLogStatus,
+    NodeType,
+    ParentSummaryStatus,
+    RemoteControlStatus,
+    TaskStatus,
+)
+from db.models.logs import NodeLog
 from db.models.mcp import McpServer
 from db.models.repositories import Repository, TemplateMcpServer
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
@@ -45,6 +52,7 @@ from services.claude_config import (
     history_retention_days,
     session_config_dir,
 )
+from services.container_monitor import DockerCommandError, stop_task_session_containers
 from services.errors import ConflictError
 from services.go_cache import remove_go_cache, trim_go_cache
 from services.knowledge_agent import build_knowledge_tools
@@ -75,7 +83,13 @@ from services.pipeline_orchestrator import (
     StopGuard,
     run_pipeline,
 )
-from services.plan_mode import ActiveNodeContext, build_can_use_tool_callback
+from services.plan_mode import (
+    ActiveNodeContext,
+    advance_recovered_question,
+    apply_plan_decision,
+    build_can_use_tool_callback,
+    parse_decision,
+)
 from services.prompt_injection import (
     PromptInjector,
     return_leftover_injections,
@@ -95,9 +109,12 @@ from services.session_events import record_new_session
 from services.session_heartbeat import (
     SESSION_OWNER_WAIT_SECONDS,
     SessionAlreadyOwnedError,
+    SessionOwnershipLostError,
     keep_session_heartbeat,
+    require_session_owner,
 )
 from services.session_lifecycle import plan_session_start
+from services.session_recovery_metrics import RecoveryOutcome, record_recovery
 from services.system_settings import resolve_execution_settings
 from services.task_artifacts import task_artifacts_dir
 from services.task_control import (
@@ -110,9 +127,14 @@ from services.task_control import (
 from services.task_launch import task_uses_llm
 from services.task_signal import wait_for_task_signal
 from services.task_status import (
+    can_restore_between_nodes,
+    can_restore_paused_session,
     fail_task_after_error,
     fail_task_from_current_status,
     first_unfinished_order_index,
+    interrupted_pipeline_turn,
+    pending_pipeline_plan,
+    pending_pipeline_question,
     transition_task_status,
 )
 from services.task_workspace import (
@@ -195,6 +217,244 @@ def run_task_session(
     )
 
 
+@celery_app.task(name="restore_paused_task", queue="sessions")
+def restore_paused_task(task_id: str) -> None:
+    run_with_fresh_pool(_restore_paused_task(uuid.UUID(task_id)))
+
+
+async def _restore_paused_task(task_id: uuid.UUID) -> None:
+    with bind_task_context(task_id):
+        async with async_session_factory() as db_session, redis_connection() as redis_client:
+            if await maintenance_active(redis_client):
+                return
+            try:
+                async with keep_session_heartbeat(redis_client, task_id, acquire_timeout=0):
+                    task = await db_session.get(Task, task_id, populate_existing=True)
+                    if task is None:
+                        return
+                    if await can_restore_paused_session(db_session, task):
+                        await _restore_paused_session(
+                            db_session, task=task, redis_client=redis_client
+                        )
+                    elif (plan := await pending_pipeline_plan(db_session, task)) is not None:
+                        await _restore_plan_review(
+                            db_session, task=task, plan=plan, redis_client=redis_client
+                        )
+                    elif (
+                        question := await pending_pipeline_question(db_session, task)
+                    ) is not None:
+                        await _restore_question(
+                            db_session, task=task, log=question, redis_client=redis_client
+                        )
+                    elif (turn := await interrupted_pipeline_turn(db_session, task)) is not None:
+                        await _pause_interrupted_turn(
+                            db_session, task=task, log=turn, redis_client=redis_client
+                        )
+                    elif await can_restore_between_nodes(db_session, task):
+                        await transition_task_status(
+                            db_session=db_session,
+                            task_id=task.id,
+                            from_status=TaskStatus.IN_PROGRESS,
+                            to_status=TaskStatus.PAUSED,
+                        )
+                        await db_session.refresh(task)
+                        await _restore_paused_session(
+                            db_session, task=task, redis_client=redis_client
+                        )
+            except SessionAlreadyOwnedError:
+                logger.info("task_session_already_owned", task_id=str(task_id))
+
+
+async def _pause_interrupted_turn(
+    db_session: AsyncSession, *, task: Task, log: NodeLog, redis_client: Redis
+) -> None:
+    try:
+        await stop_task_session_containers(task.id, task_code=task.code)
+    except (TimeoutError, DockerCommandError, OSError):
+        logger.warning("interrupted_turn_recovery_deferred", task_id=str(task.id))
+        return
+
+    await require_session_owner()
+    log.status = NodeLogStatus.STOPPED
+    log.finished_at = datetime.now(UTC)
+    log.error_message = (
+        "Воркер перезапустился во время выполнения. Результат действий неизвестен. "
+        "Проверьте результаты шага перед командой «Продолжить»."
+    )
+    await transition_task_status(
+        db_session=db_session,
+        task_id=task.id,
+        from_status=TaskStatus.IN_PROGRESS,
+        to_status=TaskStatus.PAUSED,
+    )
+    await db_session.refresh(task)
+    await _restore_paused_session(db_session, task=task, redis_client=redis_client)
+
+
+async def _restore_question(
+    db_session: AsyncSession, *, task: Task, log: NodeLog, redis_client: Redis
+) -> None:
+    try:
+        await stop_task_session_containers(task.id)
+    except (TimeoutError, DockerCommandError, OSError):
+        logger.warning("question_recovery_deferred", task_id=str(task.id))
+        return
+
+    while True:
+        await require_session_owner()
+        await db_session.refresh(log)
+        if log.user_input_text is not None:
+            answers = await advance_recovered_question(db_session, log, log.user_input_text)
+            if answers is not None:
+                break
+            continue
+        await db_session.commit()
+        await wait_for_task_signal(redis_client, task.id, timeout=_PAUSE_POLL_SECONDS)
+
+    log.user_input_text = answers
+    log.decision_checkpoint = {
+        **(log.decision_checkpoint or {}),
+        "recovery_notice": (
+            "Ход был прерван перезапуском. Пользователь ответил на сохранённые вопросы. "
+            "Продолжи с учётом ответов и проверь уже сделанное перед повтором действий.\n\n"
+            f"{answers}"
+        ),
+    }
+    log.status = NodeLogStatus.STOPPED
+    log.finished_at = datetime.now(UTC)
+    await transition_task_status(
+        db_session=db_session,
+        task_id=task.id,
+        from_status=TaskStatus.AWAITING_INPUT,
+        to_status=TaskStatus.PAUSED,
+    )
+    await db_session.refresh(task)
+    start_after = await first_unfinished_order_index(db_session, task.id) - 1
+    await _run_owned_session(
+        db_session,
+        task=task,
+        redis_client=redis_client,
+        start_after_order_index=start_after,
+        continuation=True,
+        resume_paused=True,
+    )
+
+
+async def _restore_plan_review(
+    db_session: AsyncSession, *, task: Task, plan: NodeLog, redis_client: Redis
+) -> None:
+    try:
+        await stop_task_session_containers(task.id)
+    except (TimeoutError, DockerCommandError, OSError):
+        logger.warning("plan_review_recovery_deferred", task_id=str(task.id))
+        return
+
+    while True:
+        await db_session.refresh(plan)
+        if plan.user_input_text is not None:
+            break
+        await db_session.commit()
+        await wait_for_task_signal(redis_client, task.id, timeout=_PAUSE_POLL_SECONDS)
+
+    await require_session_owner()
+    option, feedback = parse_decision(plan.user_input_text)
+    try:
+        decision = apply_plan_decision(option, feedback_text=feedback)
+    except ValueError:
+        logger.warning("restored_plan_decision_invalid", task_id=str(task.id))
+        decision = None
+    if decision is None:
+        await fail_task_after_error(
+            db_session,
+            task_id=task.id,
+            error=ValueError("Некорректное решение по плану"),
+        )
+        return
+
+    recovery_notice = None
+    if not decision.allow:
+        recovery_notice = (
+            "Пользователь запросил доработку сохранённого плана. "
+            "Обнови план с учётом комментария и предложи его на принятие.\n\n"
+            f"Сохранённый план:\n{plan.pending_plan_text}\n\n"
+            f"Комментарий пользователя:\n{decision.feedback_text or 'Без комментария'}"
+        )
+        plan.decision_checkpoint = {
+            **(plan.decision_checkpoint or {}),
+            "recovery_notice": recovery_notice,
+        }
+    plan.status = NodeLogStatus.SUCCESS if decision.allow else NodeLogStatus.STOPPED
+    plan.finished_at = datetime.now(UTC)
+    permission_update: dict[str, object] | None = (
+        {"current_permission_mode": decision.updated_permission_mode} if decision.allow else None
+    )
+    await transition_task_status(
+        db_session=db_session,
+        task_id=task.id,
+        from_status=TaskStatus.PLAN_REVIEW,
+        to_status=TaskStatus.IN_PROGRESS,
+        extra_values=permission_update,
+    )
+    await db_session.refresh(task)
+    start_after = await first_unfinished_order_index(db_session, task.id) - 1
+    await _run_owned_session(
+        db_session,
+        task=task,
+        redis_client=redis_client,
+        start_after_order_index=start_after,
+        continuation=True,
+    )
+
+
+async def _restore_paused_session(
+    db_session: AsyncSession, *, task: Task, redis_client: Redis
+) -> None:
+    clock = asyncio.get_running_loop()
+    started_at = clock.time()
+    task_id = str(task.id)
+    ready = False
+
+    async def record(outcome: RecoveryOutcome) -> None:
+        duration_ms = round((clock.time() - started_at) * 1000)
+        logger.info(
+            "paused_session_recovery_result",
+            task_id=task_id,
+            outcome=outcome,
+            duration_ms=duration_ms,
+        )
+
+        await record_recovery(redis_client, outcome, duration_ms)
+
+    async def mark_ready() -> None:
+        nonlocal ready
+        ready = True
+        await record("ready")
+
+    outcome: RecoveryOutcome = "not_ready"
+    try:
+        try:
+            await stop_task_session_containers(task.id)
+        except TimeoutError:
+            outcome = "docker_timeout"
+            return
+        except (DockerCommandError, OSError):
+            outcome = "docker_error"
+            return
+        start_after = await first_unfinished_order_index(db_session, task.id) - 1
+        await _run_owned_session(
+            db_session,
+            task=task,
+            redis_client=redis_client,
+            start_after_order_index=start_after,
+            continuation=True,
+            resume_paused=True,
+            on_paused_ready=mark_ready,
+        )
+    finally:
+        if not ready:
+            await record(outcome)
+
+
 async def _claim_task(
     db_session: AsyncSession,
     task: Task,
@@ -257,6 +517,7 @@ class _SessionControl:
     limit_gate: LimitGate | None = None
     # Продолжение после сброса лимита задачи, ждавшей на паузе: сначала — пауза.
     resume_paused: bool = False
+    on_paused_ready: Callable[[], Awaitable[None]] | None = None
     # Продолжение после сброса лимита: попытка, с которой продолжает первая нода.
     first_attempt: int = 1
 
@@ -376,6 +637,7 @@ class _SessionControl:
         ребейз, ручные запросы — и команда управления после них.
         Неразобранный конфликт ребейза означает сбой.
         """
+        await require_session_owner()
         await self.reconnect_bridge_if_requested()
         await self.clone_added_repositories()
         if not await self.resolve_rebase_conflict_if_any(resume_status=status):
@@ -440,6 +702,7 @@ class _SessionControl:
             if command is TaskControlCommand.STOP:
                 return CheckpointDecision.STOP
             if command is TaskControlCommand.RESUME:
+                await require_session_owner()
                 # Команда забирается только после перехода: проигранный
                 # переход не должен терять «Продолжить».
                 if not await self._try_transition(TaskStatus.PAUSED, TaskStatus.IN_PROGRESS):
@@ -652,6 +915,7 @@ async def _run_chat_in_context(task_id: uuid.UUID) -> None:
         if await maintenance_active(redis_client):
             _defer_until_maintenance_ends(task_id, None, chat_only=True)
             return
+        succeeded = False
         try:
             async with keep_session_heartbeat(
                 redis_client,
@@ -708,7 +972,9 @@ async def _run_owned_chat(db_session: AsyncSession, *, task: Task, redis_client:
         await settle_chat_after_error(db_session, task_id=task.id, error=exc)
         return False
     finally:
-        await finish_chat(db_session, task_id=task.id)
+        with contextlib.suppress(SessionOwnershipLostError):
+            await require_session_owner()
+            await finish_chat(db_session, task_id=task.id)
     stopped = await read_task_control(redis_client, task.id) is TaskControlCommand.STOP
     if wait is None:
         return not stopped
@@ -773,8 +1039,12 @@ async def _run_chat(
         )
     finally:
         # Раздел 14.4: «Выполнить» продолжит ту же сессию — и после сбоя хода.
-        await _persist_session_id(db_session, task=task, session=session)
-        await _disconnect_quietly(session)
+        try:
+            with contextlib.suppress(SessionOwnershipLostError):
+                await require_session_owner()
+                await _persist_session_id(db_session, task=task, session=session)
+        finally:
+            await _disconnect_quietly(session)
 
 
 async def _resume_after_limit_in_context(task_id: uuid.UUID) -> None:
@@ -881,6 +1151,7 @@ async def _run_owned_session(
     continuation: bool,
     resume_paused: bool = False,
     first_attempt: int = 1,
+    on_paused_ready: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     try:
         if not continuation:
@@ -906,6 +1177,7 @@ async def _run_owned_session(
                 start_after_order_index=start_after_order_index,
                 resume_paused=resume_paused,
                 first_attempt=first_attempt,
+                on_paused_ready=on_paused_ready,
             )
     except Exception as exc:
         # Раздел 17.3: любая ошибка сессии переводит задачу в `failed`,
@@ -913,7 +1185,9 @@ async def _run_owned_session(
         logger.exception("task_session_failed", task_id=str(task.id))
         await fail_task_after_error(db_session, task_id=task.id, error=exc)
     finally:
-        await _settle_bridge_request(db_session, task_id=task.id, redis_client=redis_client)
+        with contextlib.suppress(SessionOwnershipLostError):
+            await require_session_owner()
+            await _settle_bridge_request(db_session, task_id=task.id, redis_client=redis_client)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1135,6 +1409,7 @@ async def _run_claimed_task(
     start_after_order_index: int | None,
     resume_paused: bool = False,
     first_attempt: int = 1,
+    on_paused_ready: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     repos_root = resolve_repos_root()
     added = await clone_missing_repositories(db_session, task=task, repos_root=repos_root)
@@ -1215,6 +1490,7 @@ async def _run_claimed_task(
         limit_gate=lane.router.limit_gate if make_client.has_llm else None,
         resume_paused=resume_paused,
         first_attempt=first_attempt,
+        on_paused_ready=on_paused_ready,
     )
     await session.connect()
     if enable_remote_control:
@@ -1255,6 +1531,7 @@ async def _run_claimed_task(
         )
         return
     await session.disconnect()
+    await require_session_owner()
     await _settle_pipeline_run(
         db_session,
         task=task,
@@ -1338,6 +1615,9 @@ async def _run_connected_session(
     if not await control.resolve_rebase_conflict_if_any(resume_status=TaskStatus.IN_PROGRESS):
         return None, False
     if control.resume_paused:
+        await require_session_owner()
+        if control.on_paused_ready is not None:
+            await control.on_paused_ready()
         decision = await control.stay_paused_after_limit_wait()
         if decision is not CheckpointDecision.CONTINUE:
             resume_index = 0 if start_after_order_index is None else start_after_order_index + 1

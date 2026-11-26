@@ -37,8 +37,9 @@ from db.models.pipelines import Node
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
 from db.queries.manual_requests import active_prompt_request
+from services.access import get_task_record_or_404
 from services.distributed_lock import LockNotAcquiredError, acquire_task_operation_lock
-from services.errors import ConflictError, ValidationError
+from services.errors import ConflictError, NotFoundError, ValidationError
 from services.integrity import ensure_library_prompt_attachable
 from services.library_commands import load_snapshot, render_command
 from services.library_links import COMMAND_ARGUMENTS_ENV
@@ -57,6 +58,7 @@ from services.nodes.dispatch import (
 from services.notifications import NotificationEvent, notify_task_event
 from services.parent_summary import run_parent_summary_request
 from services.pipeline_orchestrator import StopGuard, run_node_execution
+from services.session_heartbeat import require_session_owner
 from services.system_settings import resolve_execution_settings, resolve_runner_image
 from services.task_control import clear_manual_stop, is_manual_stop_requested
 from services.task_launch import ensure_llm_for_request, requires_llm_account
@@ -101,6 +103,16 @@ async def attach_library_prompt(
 ) -> TaskLibraryPrompt:
     """Раздел 7.3: промт из библиотеки добавляется в список задачи; архивный — нет."""
     ensure_library_prompt_attachable(node)
+    await lock_manual_task(db_session, task_id)
+    existing = await db_session.scalar(
+        sa.select(TaskLibraryPrompt).where(
+            TaskLibraryPrompt.task_id == task_id,
+            TaskLibraryPrompt.node_id == node.id,
+        )
+    )
+    if existing is not None:
+        await db_session.commit()
+        return existing
     task_library_prompt = TaskLibraryPrompt(
         task_id=task_id,
         node_id=node.id,
@@ -110,6 +122,23 @@ async def attach_library_prompt(
     db_session.add(task_library_prompt)
     await db_session.commit()
     return task_library_prompt
+
+
+async def detach_library_prompt(
+    db_session: AsyncSession, *, task_id: uuid.UUID, task_library_prompt_id: uuid.UUID
+) -> None:
+    await lock_manual_task(db_session, task_id)
+    prompt = await get_task_record_or_404(
+        db_session,
+        TaskLibraryPrompt,
+        task_library_prompt_id,
+        task_id=task_id,
+        not_found=f"Промт {task_library_prompt_id} не найден у этой задачи",
+    )
+    if await active_prompt_request(db_session, task_id=task_id, node_id=prompt.node_id):
+        raise ConflictError("Остановите запуск промта перед удалением из списка")
+    await db_session.delete(prompt)
+    await db_session.commit()
 
 
 def _add_queued_request(
@@ -146,6 +175,13 @@ async def enqueue_library_prompt_run(
 ) -> TaskManualRequestQueue:
     task = await lock_manual_task(db_session, task_library_prompt.task_id)
     ensure_manual_requests_open(task)
+    # Удаление из списка и запуск используют одну блокировку задачи.
+    # Перечитываем привязку после захвата: её могли удалить после чтения в API.
+    attached = await db_session.get(
+        TaskLibraryPrompt, task_library_prompt.id, populate_existing=True
+    )
+    if attached is None:
+        raise NotFoundError("Промт не найден у этой задачи")
     existing = await active_prompt_request(db_session, task_id=task.id, node_id=node.id)
     if existing is not None:
         raise ConflictError("Промт уже выполняется или ожидает выполнения")
@@ -159,7 +195,7 @@ async def enqueue_library_prompt_run(
         requested_by=requested_by,
         node_id=node.id,
     )
-    task_library_prompt.last_run_status = LibraryPromptRunStatus.QUEUED
+    attached.last_run_status = LibraryPromptRunStatus.QUEUED
     await db_session.commit()
     logger.info(
         "library_prompt_enqueued",
@@ -284,6 +320,7 @@ def _activate_context(
     *,
     node_log: NodeLog,
     task: Task,
+    request_id: uuid.UUID,
 ) -> None:
     """
     Вопрос агента во время ручного запроса (раздел 9.6) и потоковый вывод
@@ -293,7 +330,7 @@ def _activate_context(
         active_node_context.activate(
             node_log_id=node_log.id,
             task_id=task.id,
-            auto_accept_plan=task.auto_accept_plan,
+            manual_request_id=request_id,
         )
 
 
@@ -384,7 +421,7 @@ async def _run_library_prompt(
             command_revision=request.command_revision,
         ),
     )
-    _activate_context(active_node_context, node_log=node_log, task=task)
+    _activate_context(active_node_context, node_log=node_log, task=task, request_id=request.id)
 
     outcome = await _run_stoppable_request(
         execute_node(
@@ -404,6 +441,7 @@ async def _run_library_prompt(
     )
 
     if outcome is None:
+        await db_session.refresh(node_log)
         mark_node_log_stopped(node_log, node_type=node.node_type, claude_session=claude_session)
         _settle_library_prompt_run(
             task_library_prompt,
@@ -458,7 +496,7 @@ async def _run_freeform_prompt(
             rendered_prompt=prompt.display,
         ),
     )
-    _activate_context(active_node_context, node_log=node_log, task=task)
+    _activate_context(active_node_context, node_log=node_log, task=task, request_id=request.id)
 
     # Свободный промт (раздел 8) — всегда обычный текст, без своей ноды и
     # без понятия node_type: `execute_node` здесь не подходит (ему нужен
@@ -477,6 +515,7 @@ async def _run_freeform_prompt(
     )
 
     if outcome is None:
+        await db_session.refresh(node_log)
         mark_node_log_stopped(node_log, node_type=None, claude_session=claude_session)
         await db_session.commit()
         logger.info("freeform_prompt_run_stopped")
@@ -615,6 +654,7 @@ async def process_manual_queue_once(
                 operation=MANUAL_QUEUE_LOCK_OPERATION,
                 ttl_seconds=_MANUAL_QUEUE_LOCK_TTL_SECONDS,
             ):
+                await require_session_owner()
                 executed = await _process_single_request(
                     db_session,
                     task=task,

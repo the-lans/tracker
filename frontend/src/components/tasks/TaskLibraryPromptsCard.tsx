@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Play, Plus, Square } from "lucide-react";
+import { Play, Plus, Square, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { SearchSelect } from "@/components/common/inputs/SearchSelect";
 import { Label } from "@/components/ui/label";
 import {
   useAddLibraryPrompt,
+  useRemoveLibraryPrompt,
   useRunLibraryPrompt,
   useStopManualRequest,
   useTaskLibraryPrompts,
@@ -58,6 +59,10 @@ export function TaskLibraryPromptsCard({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string>("");
   const addLibraryPrompt = useAddLibraryPrompt(task.id);
+  const removeLibraryPrompt = useRemoveLibraryPrompt(task.id);
+  const attachedNodeIds = new Set(prompts?.map((prompt) => prompt.node_id));
+  const availableNodes = libraryNodes.filter((node) => !attachedNodeIds.has(node.id));
+  const selectedIsAvailable = availableNodes.some((node) => node.id === selectedNodeId);
   const runLibraryPrompt = useRunLibraryPrompt(task.id);
   const stopManualRequest = useStopManualRequest(task.id);
   const acceptsRequests = MANUAL_REQUEST_STATUSES.includes(task.status);
@@ -79,7 +84,7 @@ export function TaskLibraryPromptsCard({
   }
 
   function handleAdd() {
-    if (!selectedNodeId) return;
+    if (!selectedIsAvailable) return;
     addLibraryPrompt.mutate(selectedNodeId, {
       onSuccess: () => {
         setPickerOpen(false);
@@ -87,6 +92,14 @@ export function TaskLibraryPromptsCard({
       },
       onError: (error) => {
         toast.error(errorMessage(error, "Не удалось добавить промт"));
+      },
+    });
+  }
+
+  function handleRemove(promptId: string) {
+    removeLibraryPrompt.mutate(promptId, {
+      onError: (error) => {
+        toast.error(errorMessage(error, "Не удалось удалить промт из списка"));
       },
     });
   }
@@ -152,6 +165,16 @@ export function TaskLibraryPromptsCard({
               <span className="shrink-0 rounded-full bg-surface-2 px-2 py-0.5 text-caption font-bold text-text-3">
                 {RUN_STATUS_LABEL[prompt.last_run_status]}
               </span>
+              <Button
+                size="icon"
+                variant="secondary"
+                onClick={() => handleRemove(prompt.id)}
+                disabled={Boolean(activeRequestId) || removeLibraryPrompt.isPending || runLibraryPrompt.isPending}
+                aria-label={`Удалить промт ${prompt.name} из списка`}
+                title={activeRequestId ? "Сначала остановите запуск промта" : "Удалить из списка"}
+              >
+                <Trash2 />
+              </Button>
             </div>
           );
         })}
@@ -177,8 +200,8 @@ export function TaskLibraryPromptsCard({
             <Label htmlFor="task-library-prompt">Промт библиотеки</Label>
             <SearchSelect
               id="task-library-prompt"
-              value={selectedNodeId || null}
-              options={libraryNodes.map((node) => ({
+              value={selectedIsAvailable ? selectedNodeId : null}
+              options={availableNodes.map((node) => ({
                 value: node.id,
                 label: node.slash_name ? `${node.name} (/${node.slash_name})` : node.name,
               }))}
@@ -189,6 +212,9 @@ export function TaskLibraryPromptsCard({
               showClearOption={false}
             />
           </div>
+          {libraryNodes.length > 0 && availableNodes.length === 0 && (
+            <EmptyState compact title="Все промты из библиотеки уже добавлены" />
+          )}
           {libraryNodes.length === 0 && (
             <EmptyState
               compact
@@ -200,7 +226,7 @@ export function TaskLibraryPromptsCard({
             <Button variant="secondary" onClick={() => setPickerOpen(false)}>
               Отмена
             </Button>
-            <Button onClick={handleAdd} disabled={!selectedNodeId || addLibraryPrompt.isPending}>
+            <Button onClick={handleAdd} disabled={!selectedIsAvailable || addLibraryPrompt.isPending}>
               Добавить
             </Button>
           </DialogFooter>

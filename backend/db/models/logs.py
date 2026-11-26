@@ -20,6 +20,7 @@ from db.models.enums import (
 from db.models.mixins import JsonValue, UUIDPrimaryKeyMixin, pg_enum
 
 _DEFAULT_ATTEMPT_NUMBER = 1
+DECISION_CHECKPOINT_ID = "id"
 
 
 class NodeLog(UUIDPrimaryKeyMixin, Base):
@@ -70,12 +71,19 @@ class NodeLog(UUIDPrimaryKeyMixin, Base):
         pg_enum(NodeLogStatus, name="node_log_status"),
         default=NodeLogStatus.PENDING,
     )
+    decision_checkpoint: Mapped[JsonValue | None] = mapped_column(JSONB)
     pending_question: Mapped[str | None] = mapped_column(sa.Text)
     pending_plan_text: Mapped[str | None] = mapped_column(sa.Text)
     # Массив вариантов ответа [{"id": "...", "label": "..."}] (раздел 9.6).
     pending_options: Mapped[list[JsonValue] | None] = mapped_column(JSONB)
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+
+    @property
+    def pending_decision_id(self) -> str | None:
+        if self.status is NodeLogStatus.AWAITING_DECISION and self.decision_checkpoint is not None:
+            return self.decision_checkpoint.get(DECISION_CHECKPOINT_ID)
+        return None
 
 
 class AppLog(UUIDPrimaryKeyMixin, Base):

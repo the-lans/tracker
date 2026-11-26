@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -101,15 +101,16 @@ async def _copy_library_prompts(
         sa.select(TaskLibraryPrompt)
         .join(Node, Node.id == TaskLibraryPrompt.node_id)
         .where(TaskLibraryPrompt.task_id == source.id, Node.is_archived == False)  # noqa: E712
+        .order_by(TaskLibraryPrompt.added_at, TaskLibraryPrompt.id)
     )
     now = datetime.now(UTC)
-    for prompt in (await db_session.execute(stmt)).scalars().all():
+    for index, prompt in enumerate((await db_session.execute(stmt)).scalars()):
         db_session.add(
             TaskLibraryPrompt(
                 task_id=target.id,
                 node_id=prompt.node_id,
                 added_by=added_by,
-                added_at=now,
+                added_at=now + timedelta(microseconds=index),
             ),
         )
 

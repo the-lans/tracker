@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { RemoteControlButton } from "@/components/tasks/RemoteControlButton";
 import { RemoteControlNotice } from "@/components/tasks/RemoteControlNotice";
@@ -19,11 +19,14 @@ import type { Task } from "@/lib/types";
  */
 export function TaskHeader({ task }: { task: Task }) {
   const bridgeView = bridgeViewOf(task);
+  const { state } = useLocation();
+  const dashboardSearch = typeof state?.dashboardSearch === "string" ? state.dashboardSearch : "";
 
   return (
     <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-b border-border bg-surface px-4 py-3 short:gap-y-1 short:py-1.5 lg:px-7">
       <Link
-        to="/"
+        to={{ pathname: "/", search: dashboardSearch }}
+        replace
         aria-label="К списку задач"
         className="flex touch-target size-8 shrink-0 items-center justify-center rounded-[9px] border border-border text-text-2"
       >

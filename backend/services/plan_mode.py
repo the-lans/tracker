@@ -48,13 +48,15 @@ import sqlalchemy as sa
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from app_logging.config import get_logger
-from db.models.enums import NodeLogStatus, NodeType, PermissionMode, TaskStatus
-from db.models.logs import NodeLog
-from db.models.pipelines import Node, TaskNode
+from db.models.enums import NodeLogStatus, PermissionMode, TaskStatus
+from db.models.enums import PlanDecisionOption as PlanDecisionOption
+from db.models.logs import DECISION_CHECKPOINT_ID, NodeLog
+from db.models.mixins import JsonValue
 from db.models.tasks import Task
 from prompts.agent import (
     CONTEXT_ONLY_TOOL_DENIED,
     DECISION_TIMEOUT_DENIED,
+    EMPTY_PLAN_DENIED,
     NO_ACTIVE_NODE_DENIED,
     NO_QUESTIONS_DENIED,
     PLAN_ACCEPTED_MESSAGE,
@@ -66,6 +68,7 @@ from prompts.agent import (
 )
 from services.access import get_task_record_or_404
 from services.errors import ConflictError, ValidationError
+from services.session_heartbeat import require_session_owner
 from services.task_signal import (
     TaskSignalSubscription,
     publish_task_signal,
@@ -92,6 +95,7 @@ INTERCEPTED_TOOLS = frozenset({EXIT_PLAN_MODE_TOOL, ASK_USER_QUESTION_TOOL})
 
 # Ответ на вопрос агента своим текстом (SDK сам добавляет вариант «Другое»).
 CUSTOM_ANSWER_OPTION = "custom"
+PREVIOUS_QUESTION_OPTION = "previous_question"
 TOOL_APPROVAL_ALLOW = "allow"
 TOOL_APPROVAL_DENY = "deny"
 TOOL_APPROVAL_OPTIONS: list[dict[str, str]] = [
@@ -99,16 +103,6 @@ TOOL_APPROVAL_OPTIONS: list[dict[str, str]] = [
     {"id": TOOL_APPROVAL_DENY, "label": "Запретить"},
 ]
 _TOOL_DESCRIPTION_LIMIT = 500
-
-
-class PlanDecisionOption:
-    """Раздел 9.3: три варианта решения после завершения `plan_prompt` — идентификаторы
-    `pending_options[].id`, которые API получает от пользователя обратно как решение.
-    """
-
-    ACCEPT_AUTO = "accept_auto"
-    ACCEPT_DEFAULT = "accept_default"
-    REVISE = "revise"
 
 
 DEFAULT_PLAN_OPTIONS: list[dict[str, str]] = [
@@ -174,7 +168,7 @@ class ActiveNodeContext:
 
     node_log_id: uuid.UUID | None = None
     task_id: uuid.UUID | None = None
-    auto_accept_plan: bool = False
+    manual_request_id: uuid.UUID | None = None
     # Идёт нода `plan_prompt` и план ещё не принят: изменения запрещены (9.1).
     plan_mode: bool = False
     # План принят, ход ноды `plan_prompt` дописывается: инструменты запрещены (9.3).
@@ -193,7 +187,7 @@ class ActiveNodeContext:
         *,
         node_log_id: uuid.UUID,
         task_id: uuid.UUID,
-        auto_accept_plan: bool = False,
+        manual_request_id: uuid.UUID | None = None,
         plan_mode: bool = False,
         context_only: bool = False,
     ) -> None:
@@ -203,7 +197,7 @@ class ActiveNodeContext:
         """
         self.node_log_id = node_log_id
         self.task_id = task_id
-        self.auto_accept_plan = auto_accept_plan
+        self.manual_request_id = manual_request_id
         self.plan_mode = plan_mode
         self.plan_accepted = False
         self.context_only = context_only
@@ -249,6 +243,22 @@ async def _get_node_log(db_session: AsyncSession, node_log_id: uuid.UUID) -> Nod
     return node_log
 
 
+def _decision_checkpoint(
+    *,
+    resume_status: TaskStatus | None,
+    awaiting_status: TaskStatus,
+    manual_request_id: uuid.UUID | None,
+    questionnaire: JsonValue | None,
+) -> JsonValue:
+    return {
+        DECISION_CHECKPOINT_ID: str(uuid.uuid4()),
+        "resume_status": resume_status.value if resume_status is not None else None,
+        "awaiting_status": awaiting_status.value,
+        "manual_request_id": str(manual_request_id) if manual_request_id is not None else None,
+        "questionnaire": questionnaire,
+    }
+
+
 async def _mark_awaiting_decision(
     db_session: AsyncSession,
     *,
@@ -257,10 +267,12 @@ async def _mark_awaiting_decision(
     pending_plan_text: str | None,
     pending_options: list[dict[str, str]],
     output_offset: int | None,
+    checkpoint: JsonValue,
 ) -> None:
     node_log = await _get_node_log(db_session, node_log_id)
     node_log.status = NodeLogStatus.AWAITING_DECISION
     node_log.decision_output_offset = output_offset
+    node_log.decision_checkpoint = checkpoint
     node_log.pending_question = pending_question
     node_log.pending_plan_text = pending_plan_text
     node_log.pending_options = pending_options
@@ -300,6 +312,7 @@ async def record_user_decision(
     option_id: str,
     feedback_text: str | None,
     redis_client: Redis,
+    decision_id: uuid.UUID | None = None,
 ) -> None:
     """
     Раздел 9.6: решение по плану, ответ на вопрос агента и подтверждение
@@ -316,7 +329,30 @@ async def record_user_decision(
     )
     if node_log.status is not NodeLogStatus.AWAITING_DECISION:
         raise ValidationError("Эта запись не ожидает решения")
-    node_log.user_input_text = encode_decision(option_id, feedback_text=feedback_text)
+    current_id = node_log.pending_decision_id
+    submitted_id = str(decision_id) if decision_id is not None else None
+    if submitted_id != current_id:
+        raise ConflictError("Вопрос уже изменился")
+    resolution = encode_decision(option_id, feedback_text=feedback_text)
+    saved = await db_session.scalar(
+        sa.update(NodeLog)
+        .where(
+            NodeLog.id == node_log_id,
+            NodeLog.status == NodeLogStatus.AWAITING_DECISION,
+            NodeLog.user_input_text.is_(None),
+            NodeLog.decision_checkpoint[DECISION_CHECKPOINT_ID]
+            .as_string()
+            .is_not_distinct_from(current_id),
+        )
+        .values(user_input_text=resolution)
+        .returning(NodeLog.id)
+    )
+    if saved is None:
+        await db_session.refresh(node_log)
+        if node_log.status is not NodeLogStatus.AWAITING_DECISION:
+            raise ValidationError("Эта запись не ожидает решения")
+        if node_log.pending_decision_id != current_id or node_log.user_input_text != resolution:
+            raise ConflictError("Ответ на этот запрос уже сохранён")
     await db_session.commit()
     await publish_task_signal(redis_client, task.id)
 
@@ -504,6 +540,44 @@ async def _task_permission_mode(
     return task.current_permission_mode if task is not None else None
 
 
+async def advance_recovered_question(
+    db_session: AsyncSession, log: NodeLog, resolution: str
+) -> str | None:
+    """Сохраняет следующий вопрос или возвращает ответы завершённой серии."""
+    assert log.decision_checkpoint is not None
+    checkpoint = dict(log.decision_checkpoint)
+    state = checkpoint["questionnaire"]
+    questions = state["questions"]
+    index = state["index"]
+    answers = dict(state["answers"])
+    if index and resolution == PREVIOUS_QUESTION_OPTION:
+        index -= 1
+    else:
+        question = questions[index]
+        answers[str(question.get("question", ""))] = answer_from_resolution(
+            resolution, _question_options(question)
+        )
+        index += 1
+    if index == len(questions):
+        return "\n".join(f"{question}: {answer}" for question, answer in answers.items())
+    question = questions[index]
+    options = _question_options(question)
+    if index:
+        options.append({"id": PREVIOUS_QUESTION_OPTION, "label": "Назад"})
+    checkpoint[DECISION_CHECKPOINT_ID] = str(uuid.uuid4())
+    checkpoint["questionnaire"] = {"questions": questions, "index": index, "answers": answers}
+    await _mark_awaiting_decision(
+        db_session,
+        node_log_id=log.id,
+        pending_question=str(question.get("question", "")),
+        pending_plan_text=None,
+        pending_options=options,
+        output_offset=log.decision_output_offset,
+        checkpoint=checkpoint,
+    )
+    return None
+
+
 async def _finish_question(
     db_session: AsyncSession,
     *,
@@ -583,6 +657,7 @@ class _PermissionCallback:
         tool_input: dict[str, Any],
         _permission_context: ToolPermissionContext,
     ) -> PermissionResult:
+        await require_session_owner()
         context = self.context
         active = context.node_log_id is not None and context.task_id is not None
         # Вопрос тоже отклоняется: ожидание ответа перевело бы запись плана из
@@ -636,6 +711,7 @@ class _PermissionCallback:
         question: str | None,
         plan_text: str | None,
         options: list[dict[str, str]],
+        questionnaire: JsonValue | None = None,
     ) -> str | None:
         """Решение пользователя в виджете (9.6); `None` — истёк таймаут ожидания."""
         context = self.context
@@ -650,6 +726,7 @@ class _PermissionCallback:
         try:
             async with subscribe_task_signal(self.redis_client, task_id) as signals:
                 async with self.session_factory() as db_session:
+                    resume_status = await resumable_decision_status(db_session, task_id=task_id)
                     await _mark_awaiting_decision(
                         db_session,
                         node_log_id=node_log_id,
@@ -657,8 +734,13 @@ class _PermissionCallback:
                         pending_plan_text=plan_text,
                         pending_options=options,
                         output_offset=context.output_offset(),
+                        checkpoint=_decision_checkpoint(
+                            resume_status=resume_status,
+                            awaiting_status=awaiting_status,
+                            manual_request_id=context.manual_request_id,
+                            questionnaire=questionnaire,
+                        ),
                     )
-                    resume_status = await resumable_decision_status(db_session, task_id=task_id)
                     if resume_status is not None:
                         await enter_decision_status(
                             db_session,
@@ -679,6 +761,7 @@ class _PermissionCallback:
             # остаться в ожидании.
             context.untrack_decision_wait()
             if resume_status is not None:
+                await require_session_owner()
                 async with self.session_factory() as db_session:
                     await leave_decision_status(
                         db_session,
@@ -701,18 +784,27 @@ class _PermissionCallback:
         if not questions:
             return PermissionResultDeny(message=NO_QUESTIONS_DENIED)
         answers: dict[str, str] = {}
-        for question in questions:
+        index = 0
+        while index < len(questions):
+            question = questions[index]
             text = str(question.get("question", ""))
             options = _question_options(question)
             resolution = await self._await_decision(
                 awaiting_status=TaskStatus.AWAITING_INPUT,
                 question=text,
                 plan_text=None,
-                options=options,
+                options=[*options, {"id": PREVIOUS_QUESTION_OPTION, "label": "Назад"}]
+                if index
+                else options,
+                questionnaire={"questions": questions, "index": index, "answers": answers},
             )
             if resolution is None:
                 return PermissionResultDeny(message=DECISION_TIMEOUT_DENIED)
+            if index and resolution == PREVIOUS_QUESTION_OPTION:
+                index -= 1
+                continue
             answers[text] = answer_from_resolution(resolution, options)
+            index += 1
         await self._finish_question("\n".join(f"{q}: {a}" for q, a in answers.items()))
         return PermissionResultAllow(updated_input={**tool_input, "answers": answers})
 
@@ -742,22 +834,15 @@ class _PermissionCallback:
         context = self.context
         assert context.node_log_id is not None and context.task_id is not None
         plan_text = tool_input.get("plan")
-        # У библиотечного плана пауза означает ручное принятие, а не вторую
-        # остановку после него. Читаем актуальный снимок задачи при ExitPlanMode:
-        # пользователь мог поменять паузу, пока агент составлял план.
-        async with self.session_factory() as db_session:
-            pause_after = await db_session.scalar(
-                sa.select(TaskNode.pause_after)
-                .join(Node, Node.id == TaskNode.node_id)
-                .join(NodeLog, NodeLog.node_id == Node.id)
-                .where(
-                    NodeLog.id == context.node_log_id,
-                    TaskNode.task_id == context.task_id,
-                    Node.library_node_id.is_not(None),
-                    Node.node_type == NodeType.PLAN_PROMPT,
-                )
+        if not isinstance(plan_text, str) or not plan_text.strip():
+            return PermissionResultDeny(
+                message=EMPTY_PLAN_DENIED,
+                interrupt=False,
             )
-        auto_accept = context.auto_accept_plan if pause_after is None else not pause_after
+        async with self.session_factory() as db_session:
+            auto_accept = await db_session.scalar(
+                sa.select(Task.auto_accept_plan).where(Task.id == context.task_id)
+            )
         if auto_accept:
             async with self.session_factory() as db_session:
                 await _record_plan_auto_accept(
@@ -798,6 +883,7 @@ class _PermissionCallback:
         Раздел 9.3: план принят — ход ноды заканчивается без изменений, режим
         сессии переключает `execute_plan_prompt_node` после хода (9.4).
         """
+        interrupt = self.context.plan_mode
         self.context.plan_mode = False
         self.context.plan_accepted = True
-        return PermissionResultDeny(message=PLAN_ACCEPTED_MESSAGE, interrupt=False)
+        return PermissionResultDeny(message=PLAN_ACCEPTED_MESSAGE, interrupt=interrupt)

@@ -18,7 +18,7 @@ name: Deploy
       force:
         description: "Не ждать завершения живых сессий"
         type: boolean
-        default: false
+        default: true
 
 concurrency:
   group: deploy-production
@@ -124,8 +124,9 @@ jobs:
         env:
           SHA: ${{ steps.target.outputs.sha }}
           FORCE: ${{ inputs.force }}
+          RECOVERY_ENABLED: ${{ vars.DEPLOY_SESSION_RECOVERY_ENABLED }}
         run: |
-          if [ "${FORCE}" = "true" ]; then
+          if [ "${RECOVERY_ENABLED}" = "true" ] && [ "${FORCE}" != "false" ]; then
             flags="--force"
           else
             flags="--wait-idle ${DEPLOY_WAIT_IDLE_MINUTES}"

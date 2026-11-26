@@ -15,6 +15,9 @@ from db.models.mixins import UUIDPrimaryKeyMixin, pg_enum
 
 class TaskLibraryPrompt(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "task_library_prompts"
+    __table_args__ = (
+        sa.UniqueConstraint("task_id", "node_id", name="uq_task_library_prompts_task_node"),
+    )
 
     task_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("tasks.id"))
     node_id: Mapped[uuid.UUID] = mapped_column(sa.ForeignKey("nodes.id"))

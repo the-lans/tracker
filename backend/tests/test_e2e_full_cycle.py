@@ -162,7 +162,11 @@ class _User:
         [pending] = [log for log in logs if log["status"] == NodeLogStatus.AWAITING_DECISION.value]
         await self.post(
             "/decision",
-            {"node_log_id": pending["id"], "option_id": PlanDecisionOption.ACCEPT_DEFAULT},
+            {
+                "node_log_id": pending["id"],
+                "decision_id": pending["pending_decision_id"],
+                "option_id": PlanDecisionOption.ACCEPT_DEFAULT,
+            },
         )
         return True
 

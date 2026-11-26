@@ -12,6 +12,7 @@ from claude_agent_sdk import (
     CLIConnectionError,
     CLINotFoundError,
     Message,
+    PermissionResultDeny,
     ProcessError,
     TextBlock,
 )
@@ -46,9 +47,13 @@ from services.pipeline_orchestrator import (
     run_pipeline,
 )
 from services.plan_mode import ActiveNodeContext, PlanDecisionOption, build_can_use_tool_callback
-from services.task_control import TaskControlCommand, request_task_control
+from services.task_control import TaskControlCommand, clear_task_control, request_task_control
 from services.task_nodes import CustomNodeDraft, add_custom_task_node, set_task_node_enabled
-from services.task_status import transition_task_status
+from services.task_status import (
+    first_unfinished_order_index,
+    plan_accepted_in_run,
+    transition_task_status,
+)
 from tests.factories import build_git_credential, set_execution_settings
 from tests.fakes import (
     FakeClaudeAgentClient,
@@ -448,6 +453,7 @@ async def test_run_pipeline_executes_plan_prompt_node_with_active_node_context(
         node_log = await db_session.get(NodeLog, context.node_log_id)
         assert node_log is not None
         node_log.pending_plan_text = "1. Шаг раз\n2. Шаг два"
+        node_log.user_input_text = PlanDecisionOption.ACCEPT_AUTO
         node_log.status = NodeLogStatus.SUCCESS
         await db_session.commit()
         node_logs_snapshot.append(node_log)
@@ -842,6 +848,110 @@ async def test_stop_during_node_marks_it_stopped_without_retry(
     assert fake.interrupted is True
     logs = await _node_logs_for(db_session, task.id)
     assert [log.status for log in logs] == [NodeLogStatus.STOPPED]
+
+
+class TestPlanContinuation:
+    @pytest.mark.parametrize("auto_accept", [False, True])
+    @pytest.mark.parametrize("accepted_before_stop", [False, True])
+    async def test_resume_second_plan(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        auto_accept: bool,
+        accepted_before_stop: bool,
+    ) -> None:
+        task = await _make_task_with_pipeline(db_session)
+        task.auto_accept_plan = auto_accept
+        for index, (kind, prompt) in enumerate(
+            [
+                (NodeType.PLAN_PROMPT, "Plan A"),
+                (NodeType.PLAIN_PROMPT, "Implement A: {{node.plan_text}}"),
+                (NodeType.PLAN_PROMPT, "Plan B"),
+                (NodeType.PLAIN_PROMPT, "Implement B: {{node.plan_text}}"),
+            ]
+        ):
+            await _add_node(
+                db_session, task, order_index=index, node_type=kind, prompt_template=prompt
+            )
+        context = ActiveNodeContext()
+        callback = build_can_use_tool_callback(
+            context=context,
+            session_factory=_non_closing_session_factory(db_session),
+            redis_client=redis_client,
+            decision_wait_timeout_seconds=5,
+        )
+        approvals: list[str] = []
+
+        async def approve_manually(**_kwargs: object) -> bool:
+            assert not auto_accept
+            log = await db_session.get(NodeLog, context.node_log_id)
+            assert log is not None and log.pending_plan_text is not None
+            approvals.append(log.pending_plan_text)
+            log.user_input_text = PlanDecisionOption.ACCEPT_AUTO
+            await db_session.commit()
+            return True
+
+        patch_plan_mode_signals(monkeypatch, approve_manually)
+
+        async def submit_plan(letter: str) -> None:
+            assert _plan_accepted(
+                await callback("ExitPlanMode", {"plan": letter}, _TEST_TOOL_CONTEXT)
+            )
+
+        async def first_turn() -> None:
+            prompt = first_cli.queries[-1]
+            if prompt == "Plan A":
+                await submit_plan("A")
+            elif prompt == "Plan B":
+                # Новый этап уже начался: принятие A больше не действует.
+                assert not await plan_accepted_in_run(db_session, task.id)
+                if accepted_before_stop:
+                    await submit_plan("B")
+                await request_task_control(redis_client, task.id, TaskControlCommand.STOP)
+                await asyncio.Future()
+
+        first_cli = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()] for _ in range(3)], on_query=first_turn
+        )
+        outcome = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(first_cli),
+            repos_path=tmp_path,
+            active_node_context=context,
+            stop_guard=StopGuard(redis_client=redis_client, task_id=task.id),
+        )
+
+        assert outcome.stopped
+        assert first_cli.queries == ["Plan A", "Implement A: A", "Plan B"]
+        assert await plan_accepted_in_run(db_session, task.id) is accepted_before_stop
+        resume_at = await first_unfinished_order_index(db_session, task.id)
+        assert resume_at == (3 if accepted_before_stop else 2)
+        assert outcome.failed_order_index == resume_at
+        await clear_task_control(redis_client, task.id)
+
+        async def resumed_turn() -> None:
+            if context.plan_mode:
+                await submit_plan("B")
+
+        resumed_cli = FakeClaudeAgentClient(
+            messages_per_query=[[make_result_message()] for _ in range(2)], on_query=resumed_turn
+        )
+        resumed = await run_pipeline(
+            db_session,
+            task=task,
+            claude_session=ClaudeCodeSession(resumed_cli),
+            repos_path=tmp_path,
+            active_node_context=context,
+            start_after_order_index=resume_at - 1,
+        )
+        assert resumed.completed
+        assert resumed_cli.queries == (
+            ["Implement B: B"] if accepted_before_stop else ["Plan B", "Implement B: B"]
+        )
+        assert approvals == ([] if auto_accept else ["A", "B"])
 
 
 class TestFailureKinds:
@@ -1406,18 +1516,23 @@ class TestExecutionSettings:
 class TestLibraryLink:
     """Раздел 7.6: нода выполняет текущую версию промта библиотеки со своими аргументами."""
 
+    @pytest.mark.parametrize("from_library", [False, True])
     @pytest.mark.parametrize("pause_after", [False, True])
     @pytest.mark.parametrize("auto_accept", [False, True])
+    @pytest.mark.parametrize("sdk_failure", [False, True])
     async def test_plan_approval_and_next_node(
         self,
         db_session: AsyncSession,
         redis_client: Redis,
         tmp_path: Path,
+        from_library: bool,
         pause_after: bool,
         auto_accept: bool,
+        sdk_failure: bool,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         task = await _make_task_with_pipeline(db_session)
+        task.auto_accept_plan = not auto_accept
         source = await self._library_item(
             db_session,
             task,
@@ -1429,8 +1544,9 @@ class TestLibraryLink:
             task,
             order_index=0,
             node_type=NodeType.PLAN_PROMPT,
-            library_node_id=source.id,
-            library_arguments="{{task.code}}",
+            library_node_id=source.id if from_library else None,
+            library_arguments="{{task.code}}" if from_library else None,
+            prompt_template=None if from_library else "Plan for {{task.code}}",
             pause_after=pause_after,
         )
         await _add_node(
@@ -1440,7 +1556,7 @@ class TestLibraryLink:
             node_type=NodeType.PLAIN_PROMPT,
             prompt_template="Implement {{node.plan_text}}",
         )
-        context = ActiveNodeContext(auto_accept_plan=auto_accept)
+        context = ActiveNodeContext()
         callback = build_can_use_tool_callback(
             context=context,
             session_factory=_non_closing_session_factory(db_session),
@@ -1450,7 +1566,7 @@ class TestLibraryLink:
         reviewed = asyncio.Event()
 
         async def accept_manually(**_kwargs: object) -> bool:
-            assert pause_after
+            assert not auto_accept
             log = await db_session.get(NodeLog, context.node_log_id)
             assert log is not None and log.status is NodeLogStatus.AWAITING_DECISION
             await db_session.refresh(task)
@@ -1465,16 +1581,27 @@ class TestLibraryLink:
 
         async def agent_turn() -> None:
             if context.plan_mode:
+                task.auto_accept_plan = auto_accept
+                await db_session.flush()
                 result = await callback(
                     "ExitPlanMode", {"plan": "1. Add validation"}, _TEST_TOOL_CONTEXT
                 )
                 assert _plan_accepted(result)
+                assert isinstance(result, PermissionResultDeny)
+                assert result.interrupt is True
 
         async def unexpected_second_pause() -> CheckpointDecision:
             raise AssertionError("An accepted plan must not pause twice")
 
         fake = FakeClaudeAgentClient(
-            messages_per_query=[[make_result_message()], [make_result_message()]],
+            messages_per_query=[
+                [
+                    make_result_message(
+                        is_error=True, terminal_reason=None if sdk_failure else "aborted_tools"
+                    )
+                ],
+                [make_result_message()],
+            ],
             on_query=agent_turn,
         )
         outcome = await run_pipeline(
@@ -1485,8 +1612,15 @@ class TestLibraryLink:
             active_node_context=context,
             pause_after_node=unexpected_second_pause,
         )
+        assert reviewed.is_set() == (not auto_accept)
+        if sdk_failure:
+            assert not outcome.completed
+            assert outcome.failed_order_index == 1
+            assert fake.queries == [f"Plan for {task.code}"]
+            assert await first_unfinished_order_index(db_session, task.id) == 1
+            assert await plan_accepted_in_run(db_session, task.id)
+            return
         assert outcome.completed
-        assert reviewed.is_set() is pause_after
         assert fake.permission_modes == ["plan", "acceptEdits"]
         assert fake.queries == [f"Plan for {task.code}", "Implement 1. Add validation"]
         logs = await _node_logs_for(db_session, task.id)

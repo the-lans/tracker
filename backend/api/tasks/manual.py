@@ -40,6 +40,7 @@ from services.errors import ConflictError
 from services.manual_queue import (
     attach_library_prompt,
     cancel_manual_request,
+    detach_library_prompt,
     enqueue_freeform_prompt_run,
     enqueue_library_prompt_run,
 )
@@ -74,6 +75,7 @@ async def submit_decision(
             db_session,
             task=task,
             node_log_id=body.node_log_id,
+            decision_id=body.decision_id,
             option_id=body.option_id,
             feedback_text=body.feedback_text,
             redis_client=redis_client,
@@ -157,6 +159,19 @@ async def run_library_prompt(
     return ManualRequestResponse.model_validate(request)
 
 
+@router.delete("/{task_id}/library-prompts/{task_library_prompt_id}", status_code=204)
+async def remove_library_prompt(
+    task_id: uuid.UUID,
+    task_library_prompt_id: uuid.UUID,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    await get_task_or_404(db_session, task_id, current_user)
+    await detach_library_prompt(
+        db_session, task_id=task_id, task_library_prompt_id=task_library_prompt_id
+    )
+
+
 @router.get("/{task_id}/library-prompts", response_model=list[TaskLibraryPromptListItem])
 async def list_library_prompts_of_task(
     task_id: uuid.UUID,
@@ -169,7 +184,7 @@ async def list_library_prompts_of_task(
         sa.select(TaskLibraryPrompt, Node)
         .join(Node, Node.id == TaskLibraryPrompt.node_id)
         .where(TaskLibraryPrompt.task_id == task_id)
-        .order_by(TaskLibraryPrompt.added_at)
+        .order_by(TaskLibraryPrompt.added_at, TaskLibraryPrompt.id)
     )
     rows = (await db_session.execute(stmt)).all()
     active_stmt = (

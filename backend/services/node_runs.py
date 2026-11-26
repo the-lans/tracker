@@ -59,8 +59,10 @@ def mark_node_log_stopped(
     Остановка пользователем. Раздел 6.4: полученная до остановки часть
     ответа агента не теряется; у скрипта ответа агента нет.
     """
-    node_log.finished_at = datetime.now(UTC)
-    node_log.status = NodeLogStatus.STOPPED
+    # Callback принятия мог завершить ноду до прерывания хода CLI.
+    if node_log.status is not NodeLogStatus.SUCCESS:
+        node_log.finished_at = datetime.now(UTC)
+        node_log.status = NodeLogStatus.STOPPED
     if node_type is not NodeType.SCRIPT:
         node_log.llm_output_text = claude_session.take_partial_turn_text()
         record_turn_route(node_log, claude_session.turn_route)

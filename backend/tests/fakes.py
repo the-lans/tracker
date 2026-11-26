@@ -31,12 +31,15 @@ if TYPE_CHECKING:
     import pytest
 
 
-def make_result_message(*, is_error: bool = False, session_id: str = "sess-1") -> ResultMessage:
+def make_result_message(
+    *, is_error: bool = False, session_id: str = "sess-1", terminal_reason: str | None = None
+) -> ResultMessage:
     return ResultMessage(
         subtype="success",
         duration_ms=100,
         duration_api_ms=80,
         is_error=is_error,
+        terminal_reason=terminal_reason,
         num_turns=1,
         session_id=session_id,
         result="итоговый результат" if not is_error else None,

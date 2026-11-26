@@ -180,7 +180,7 @@ export function NodeLogEntry({
           role="llm"
           danger
           kind="stopped"
-          text="Остановлено пользователем"
+          text={log.error_message ?? "Остановлено пользователем"}
           timestamp={log.finished_at}
         />
       )}

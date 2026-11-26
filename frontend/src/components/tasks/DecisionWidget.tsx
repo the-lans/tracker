@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Send } from "lucide-react";
+import { ArrowLeft, Send } from "lucide-react";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,8 @@ import { errorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import type { NodeLog } from "@/lib/types";
 import { CUSTOM_ANSWER_OPTION } from "@/lib/userInput";
+
+const PREVIOUS_QUESTION_OPTION = "previous_question";
 
 /**
  * Универсальный виджет выбора (раздел 9.6 ТЗ) — единый механизм для
@@ -22,13 +24,23 @@ export function DecisionWidget({ taskId, log }: { taskId: string; log: NodeLog }
   const submitDecision = useSubmitDecision(taskId);
   const [comment, setComment] = useState("");
   const [openAnswer, setOpenAnswer] = useState("");
-  const hasOptions = (log.pending_options?.length ?? 0) > 0;
+  const options = (log.pending_options ?? []).filter((option) => option.id !== PREVIOUS_QUESTION_OPTION);
+  const previous = log.pending_options?.find((option) => option.id === PREVIOUS_QUESTION_OPTION);
   const isPlan = Boolean(log.pending_plan_text);
 
   function submit(optionId: string, feedbackText?: string) {
     submitDecision.mutate(
-      { node_log_id: log.id, option_id: optionId, feedback_text: feedbackText || undefined },
       {
+        node_log_id: log.id,
+        decision_id: log.pending_decision_id ?? undefined,
+        option_id: optionId,
+        feedback_text: feedbackText || undefined,
+      },
+      {
+        onSuccess: () => {
+          setComment("");
+          setOpenAnswer("");
+        },
         onError: (error) => {
           toast.error(errorMessage(error, "Не удалось отправить решение"));
         },
@@ -46,9 +58,9 @@ export function DecisionWidget({ taskId, log }: { taskId: string; log: NodeLog }
         </div>
       )}
 
-      {hasOptions ? (
+      {options.length > 0 ? (
         <div className="flex flex-col gap-2">
-          {log.pending_options!.map((option, index) => (
+          {options.map((option, index) => (
             <button
               key={option.id}
               type="button"
@@ -98,11 +110,27 @@ export function DecisionWidget({ taskId, log }: { taskId: string; log: NodeLog }
             size="icon"
             disabled={!openAnswer.trim() || submitDecision.isPending}
             onClick={() => {
-              submit(openAnswer.trim());
-              setOpenAnswer("");
+              const answer = openAnswer.trim();
+              if (previous && answer === PREVIOUS_QUESTION_OPTION) {
+                submit(CUSTOM_ANSWER_OPTION, answer);
+              } else {
+                submit(answer);
+              }
             }}
           >
             <Send className="size-4" />
+          </Button>
+        </div>
+      )}
+      {previous && (
+        <div>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={submitDecision.isPending}
+            onClick={() => submit(previous.id)}
+          >
+            <ArrowLeft className="size-4" /> {previous.label}
           </Button>
         </div>
       )}

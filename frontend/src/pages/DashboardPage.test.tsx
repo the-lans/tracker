@@ -1,5 +1,7 @@
 import { screen } from "@testing-library/react";
 import { describe, expect } from "vitest";
+import { Route, Routes } from "react-router-dom";
+import { TaskHeader } from "@/components/tasks/TaskHeader";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { TaskStatus, type Task } from "@/lib/types";
 import type { MockedApi } from "@/test/apiMock";
@@ -27,6 +29,31 @@ const shownCodes = () => screen.queryAllByRole("link", { name: /^RR-/ }).map((li
 const search = () => screen.getByRole("textbox", { name: "Найти задачу по коду или названию" });
 
 describe("DashboardPage", () => {
+  test("возвращает к тому же поиску и фильтрам из задачи", async ({ api }) => {
+    const task = makeTask({ id: "t1", code: "RR-keep", status: TaskStatus.DONE, category_id: "back" });
+    api.respond("GET /tasks", [task, makeTask({ id: "t2", code: "RR-other" })]);
+    api.respond("GET /tasks/awaiting-count", { count: 0 });
+    api.respond("GET /task-categories", [makeTaskCategory({ id: "back", name: "Бэкенд" })]);
+    api.respond("GET /daily/calendar", makeDailyCalendar());
+    api.respond("GET /daily/marks", [{ task_id: task.id, days: ["2026-11-16"] }]);
+    const { user } = renderWithProviders(
+      <Routes>
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/tasks/:id" element={<TaskHeader task={task} />} />
+      </Routes>,
+      { path: "/?status=done&category=back&day=today&q=keep" },
+    );
+
+    await user.click(await screen.findByRole("link", { name: task.code }));
+    await user.click(await screen.findByRole("link", { name: "К списку задач" }));
+
+    expect(await screen.findByRole("link", { name: task.code })).toBeInTheDocument();
+    expect(search()).toHaveValue("keep");
+    expect(screen.getByRole("button", { name: "Завершено · 1", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Категория" })).toHaveTextContent("Бэкенд");
+    expect(screen.getByRole("combobox", { name: "Отмечены на день" })).toHaveTextContent("Сегодня");
+  });
+
   describe("фильтры по статусу", () => {
     test("счётчики считают каждую группу статусов", async ({ api }) => {
       renderDashboard(api);
