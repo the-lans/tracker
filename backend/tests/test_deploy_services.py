@@ -56,3 +56,52 @@ def test_failed_service_is_reported(tmp_path: Path) -> None:
     )
     assert result.returncode == 1
     assert "llm-gateway" in result.stdout
+
+
+@pytest.mark.parametrize("service", ["worker", "session-worker", "backup-worker"])
+def test_celery_worker_must_respond(service: str, tmp_path: Path) -> None:
+    clock = tmp_path / "clock"
+    clock.write_text("0")
+    result = run_shell(
+        """docker() {
+          case "$*" in
+            *Config.Hostname*) echo container-host ;;
+            "inspect "*) echo running ;;
+            "compose exec -T $FAILED "*) return 1 ;;
+            "compose exec -T "*) return 0 ;;
+            *) echo container ;;
+          esac
+        }
+        date() { n=$(cat "$CLOCK"); n=$((n + 100)); echo "$n" > "$CLOCK"; echo "$n"; }
+        sleep() { :; }
+        step_verify_app_services""",
+        CLOCK=str(clock),
+        FAILED=service,
+    )
+    assert result.returncode == 1
+    assert f"воркер {service} не ответил" in result.stdout
+
+
+def test_celery_checks_target_each_container(tmp_path: Path) -> None:
+    calls = tmp_path / "calls"
+    result = run_shell(
+        """docker() {
+          case "$*" in
+            *Config.Hostname*) echo container-host ;;
+            "inspect "*) echo running ;;
+            "compose exec -T "*) echo "$*" >> "$CALLS" ;;
+            *) echo container ;;
+          esac
+        }
+        sleep() { :; }
+        step_verify_app_services""",
+        CALLS=str(calls),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    commands = calls.read_text().splitlines()
+    assert len(commands) == 3
+    for service, command in zip(
+        ("worker", "session-worker", "backup-worker"), commands, strict=True
+    ):
+        assert f"exec -T {service} " in command
+        assert "--destination celery@container-host" in command

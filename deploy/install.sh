@@ -534,7 +534,7 @@ step_start_app_services() {
 }
 
 step_verify_app_services() {
-  local service container state deadline
+  local service container state deadline hostname
   for service in llm-gateway backend worker session-worker backup-worker beat sftp frontend caddy backup; do
     deadline=$(( $(date +%s) + 90 ))
     while true; do
@@ -557,6 +557,20 @@ step_verify_app_services() {
     [ -n "${container}" ] || die "сервис ${service} остановился после запуска"
     state="$(docker inspect --format '{{if .State.Health}}{{.State.Status}}:{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container}")"
     case "${state}" in running|running:healthy) ;; *) die "сервис ${service} остановился после запуска (${state})" ;; esac
+  done
+  # Ответ конкретного воркера подтверждает его подключение к брокеру; общий
+  # broadcast мог бы пройти благодаря ответу только одного из трёх.
+  for service in worker session-worker backup-worker; do
+    container="$(cd "${INSTALL_DIR}" && docker compose ps -q "${service}")"
+    [ -n "${container}" ] || die "воркер ${service} остановился до проверки Celery"
+    hostname="$(docker inspect --format '{{.Config.Hostname}}' "${container}")"
+    [ -n "${hostname}" ] || die "не удалось определить имя воркера ${service}"
+    deadline=$(( $(date +%s) + 90 ))
+    until (cd "${INSTALL_DIR}" && docker compose exec -T "${service}" \
+      celery -A tasks.celery_app inspect ping --destination "celery@${hostname}" --timeout=5 >/dev/null 2>&1); do
+      [ "$(date +%s)" -lt "${deadline}" ] || die "воркер ${service} не ответил на проверку Celery"
+      sleep 2
+    done
   done
 }
 
