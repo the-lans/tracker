@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -21,12 +22,21 @@ from app_logging.config import bind_task_context, get_logger
 from db.models.enums import RemoteControlStatus
 from db.models.tasks import Task
 from services.errors import ConflictError
+from services.maintenance import maintenance_active
 from services.maintenance_tasks import find_tasks_requiring_remote_control_check
 from services.notifications import NotificationEvent, notify_task_event
 from services.refining_chat import recover_lost_chat
-from services.session_heartbeat import is_session_alive
+from services.session_heartbeat import (
+    SessionAlreadyOwnedError,
+    is_session_alive,
+    keep_session_heartbeat,
+)
 from services.task_control import request_bridge_reconnect
-from services.task_status import SESSION_ACTIVE_STATUSES, fail_task_after_error
+from services.task_status import (
+    SESSION_ACTIVE_STATUSES,
+    can_restore_session,
+    fail_task_after_error,
+)
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -169,7 +179,13 @@ async def _fail_lost_session(db_session: AsyncSession, *, task: Task) -> None:
     )
 
 
-async def check_task_bridge(db_session: AsyncSession, *, task: Task, redis_client: Redis) -> None:
+async def check_task_bridge(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    redis_client: Redis,
+    schedule_paused_recovery: Callable[[str], None] | None = None,
+) -> None:
     """
     Раздел 6.6: одна проверка задачи, у которой должна быть живая сессия.
 
@@ -178,6 +194,14 @@ async def check_task_bridge(db_session: AsyncSession, *, task: Task, redis_clien
     `disconnected`, а задача переходит в `failed`.
     """
     alive = await is_session_alive(redis_client, task.id)
+    if (
+        not alive
+        and schedule_paused_recovery is not None
+        and await can_restore_session(db_session, task)
+    ):
+        if not await maintenance_active(redis_client):
+            schedule_paused_recovery(str(task.id))
+        return
     decision = decide_remote_control_bridge_action(
         is_process_alive=alive,
         current_reconnect_attempts=task.remote_control_reconnect_attempts,
@@ -190,12 +214,51 @@ async def check_task_bridge(db_session: AsyncSession, *, task: Task, redis_clien
     if decision.should_attempt_reconnect:
         await _attempt_reconnect(db_session, task=task, redis_client=redis_client)
         return
-    if _has_bridge(task):
-        await _report_bridge_disconnected(db_session, task=task)
-    await _fail_lost_session(db_session, task=task)
+    await _settle_missing_owner(
+        db_session,
+        task=task,
+        redis_client=redis_client,
+        paused_recovery_enabled=schedule_paused_recovery is not None,
+    )
 
 
-async def check_session_bridges(db_session: AsyncSession, *, redis_client: Redis) -> None:
+async def _settle_missing_owner(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    redis_client: Redis,
+    paused_recovery_enabled: bool,
+) -> None:
+    expected_status = task.status
+    expected_reset = task.reset_at
+    task_id = task.id
+    try:
+        # Тот же ключ, что у воркера: после захвата никто не начнёт новый ход
+        # между проверкой и записью failed.
+        async with keep_session_heartbeat(redis_client, task_id):
+            await db_session.refresh(task)
+            if (
+                task.status != expected_status
+                or task.reset_at != expected_reset
+                or task.status not in SESSION_ACTIVE_STATUSES
+            ):
+                return
+            if paused_recovery_enabled and await can_restore_session(db_session, task):
+                return  # Следующий проход поставит задачу на восстановление.
+            task.remote_control_last_check_at = datetime.now(UTC)
+            if _has_bridge(task):
+                await _report_bridge_disconnected(db_session, task=task)
+            await _fail_lost_session(db_session, task=task)
+    except SessionAlreadyOwnedError:
+        return
+
+
+async def check_session_bridges(
+    db_session: AsyncSession,
+    *,
+    redis_client: Redis,
+    schedule_paused_recovery: Callable[[str], None] | None = None,
+) -> None:
     """
     Раздел 16.2 `check_remote_control_bridges`: проверка каждой задачи с
     сессией. Задача перечитывается перед проверкой: перевод в `failed`
@@ -210,7 +273,12 @@ async def check_session_bridges(db_session: AsyncSession, *, redis_client: Redis
             if task.chat_active:
                 await check_task_chat(db_session, task=task, redis_client=redis_client)
             elif task.status in SESSION_ACTIVE_STATUSES:
-                await check_task_bridge(db_session, task=task, redis_client=redis_client)
+                await check_task_bridge(
+                    db_session,
+                    task=task,
+                    redis_client=redis_client,
+                    schedule_paused_recovery=schedule_paused_recovery,
+                )
 
 
 async def check_task_chat(db_session: AsyncSession, *, task: Task, redis_client: Redis) -> None:
@@ -218,5 +286,13 @@ async def check_task_chat(db_session: AsyncSession, *, task: Task, redis_client:
     Раздел 14.4: чат «Уточняется» моста не открывает. Пульса нет — воркер
     погиб посреди ответа: запрос закрывается, задача остаётся в `refining`.
     """
-    if not await is_session_alive(redis_client, task.id):
-        await recover_lost_chat(db_session, task_id=task.id)
+    task_id = task.id
+    if await is_session_alive(redis_client, task_id):
+        return
+    try:
+        async with keep_session_heartbeat(redis_client, task_id):
+            await db_session.refresh(task)
+            if task.chat_active:
+                await recover_lost_chat(db_session, task_id=task_id)
+    except SessionAlreadyOwnedError:
+        return

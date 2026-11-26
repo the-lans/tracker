@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { ListTodo, Plus, SearchX } from "lucide-react";
 import { SearchInput } from "@/components/common/inputs/SearchInput";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -12,7 +13,7 @@ import { ToggleChip } from "@/components/common/actions/ToggleChip";
 import { NO_CATEGORY_LABEL } from "@/components/taskCategories/TaskCategorySelect";
 import { useDailyCalendar, useDayMarks } from "@/hooks/useDaily";
 import { useTasks } from "@/hooks/useTasks";
-import { MARK_DAY_KEYS, MARK_DAY_LABEL, type MarkDayKey } from "@/lib/dailyDays";
+import { MARK_DAY_KEYS, MARK_DAY_LABEL } from "@/lib/dailyDays";
 import { useTaskCategories } from "@/hooks/useTaskCategories";
 import { TaskStatus } from "@/lib/types";
 import { PRE_LAUNCH_STATUSES, QUEUE_STATUSES } from "@/lib/taskStatusTransitions";
@@ -46,9 +47,20 @@ const FILTERS: { key: FilterKey; label: string; statuses: readonly TaskStatus[] 
 
 export function DashboardPage() {
   const { data: tasks, isLoading } = useTasks();
-  const [filter, setFilter] = useState<FilterKey>("all");
-  const [search, setSearch] = useState("");
-  const [chosenCategory, setChosenCategory] = useState<string | undefined>(undefined);
+  const [params, setParams] = useSearchParams();
+  const { search: dashboardSearch } = useLocation();
+  const filter = FILTERS.find(({ key }) => key === params.get("status"))?.key ?? "all";
+  const search = params.get("q") ?? "";
+  const chosenCategory = params.get("category");
+  const markDayKey = MARK_DAY_KEYS.find((key) => key === params.get("day"));
+
+  function setFilterParam(key: string, value: string | undefined) {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setParams(next, { replace: true });
+  }
+
   const { data: categories } = useTaskCategories();
   const categoryLabels = useMemo<Record<string, string>>(
     () => ({
@@ -59,9 +71,8 @@ export function DashboardPage() {
   );
   // Удалённая категория — снова все задачи, а не пустой фильтр.
   const categoryFilter =
-    chosenCategory !== undefined && chosenCategory in categoryLabels ? chosenCategory : undefined;
+    chosenCategory !== null && Object.hasOwn(categoryLabels, chosenCategory) ? chosenCategory : undefined;
   const [createOpen, setCreateOpen] = useState(false);
-  const [markDayKey, setMarkDayKey] = useState<MarkDayKey | undefined>(undefined);
   const { data: calendar } = useDailyCalendar();
   const { data: dayMarks } = useDayMarks();
   // Раздел 15.1: дата «вчера/сегодня/завтра» — по началу дня из настроек, а не по часам браузера.
@@ -125,8 +136,8 @@ export function DashboardPage() {
               containerClassName="hidden w-64 md:flex"
               placeholder="Код или название задачи..."
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              onClear={() => setSearch("")}
+              onChange={(event) => setFilterParam("q", event.target.value)}
+              onClear={() => setFilterParam("q", undefined)}
             />
             <NotificationBell />
             <Button aria-label="Новая задача" onClick={() => setCreateOpen(true)}>
@@ -145,7 +156,7 @@ export function DashboardPage() {
               key={filterDef.key}
               size="compact"
               pressed={filter === filterDef.key}
-              onToggle={() => setFilter(filterDef.key)}
+              onToggle={() => setFilterParam("status", filterDef.key === "all" ? undefined : filterDef.key)}
             >
               {filterDef.label} · {counts[filterDef.key]}
             </ToggleChip>
@@ -153,7 +164,7 @@ export function DashboardPage() {
           <div className="flex w-full gap-1.5 sm:w-auto sm:gap-2">
             <FilterSelect
               value={categoryFilter}
-              onChange={setChosenCategory}
+              onChange={(value) => setFilterParam("category", value)}
               values={[WITHOUT_CATEGORY, ...(categories ?? []).map((category) => category.id)]}
               labels={categoryLabels}
               allLabel="Все категории"
@@ -162,7 +173,7 @@ export function DashboardPage() {
             />
             <FilterSelect
               value={markDayKey}
-              onChange={setMarkDayKey}
+              onChange={(value) => setFilterParam("day", value)}
               values={MARK_DAY_KEYS}
               labels={MARK_DAY_LABEL}
               allLabel="Все дни"
@@ -187,7 +198,7 @@ export function DashboardPage() {
         ))}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {filtered.map((task) => (
-            <TaskCard key={task.id} task={task} />
+            <TaskCard key={task.id} task={task} dashboardSearch={dashboardSearch} />
           ))}
         </div>
       </div>

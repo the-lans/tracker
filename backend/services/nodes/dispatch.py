@@ -165,6 +165,7 @@ class NodeExecutionOutcome:
     error_details: str | None = None
     is_transient: bool = True
     session_lost: bool = False
+    interrupted: bool = False
     # Аккаунт, модель и уровень хода (раздел 19.7); у скриптов — None.
     route: TurnRoute | None = None
     # Все аккаунты оказались на пороге уже после ворот лимита: до когда ждать.
@@ -237,6 +238,9 @@ async def execute_llm_node(
             success=False,
             llm_output_text=turn.text,
             error_message=turn.result.result or "Сессия вернула ошибку",
+            interrupted=turn.assistant_error is None
+            and turn.result.api_error_status is None
+            and turn.result.terminal_reason in {"aborted_streaming", "aborted_tools"},
             is_transient=is_transient,
             route=turn.route,
         )
@@ -422,23 +426,27 @@ async def execute_plan_prompt_node(
         effort=effort,
         node_type=NodeType.PLAN_PROMPT,
     )
-    if not outcome.success:
-        return outcome
-
     # Решение по плану записал callback разрешений в своей сессии БД — читаем
     # актуальное состояние, а не объект из карты этой сессии.
     node_log = await db_session.get(NodeLog, node_log_id, populate_existing=True)
     plan_accepted = node_log is not None and node_log.status is NodeLogStatus.SUCCESS
     if not plan_accepted:
+        if not outcome.success:
+            return outcome
         return NodeExecutionOutcome(
             success=False,
             llm_output_text=outcome.llm_output_text,
             error_message="План не был принят (ExitPlanMode не подтверждён)",
             route=outcome.route,
         )
+    if not outcome.success and not outcome.interrupted:
+        return outcome
+    # CLI подтверждает штатное прерывание хода после сохранения принятия.
     assert node_log is not None
     await _apply_accepted_plan_mode(claude_session, db_session=db_session, task_id=node_log.task_id)
-    return outcome
+    return NodeExecutionOutcome(
+        success=True, llm_output_text=outcome.llm_output_text, route=outcome.route
+    )
 
 
 async def _apply_accepted_plan_mode(

@@ -106,6 +106,12 @@ class ManualRequestStatus(StrEnum):
     INJECTED = "injected"
 
 
+class PlanDecisionOption(StrEnum):
+    ACCEPT_AUTO = "accept_auto"
+    ACCEPT_DEFAULT = "accept_default"
+    REVISE = "revise"
+
+
 class NodeLogTriggerType(StrEnum):
     PIPELINE = "pipeline"
     LIBRARY_MANUAL = "library_manual"

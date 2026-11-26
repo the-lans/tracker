@@ -41,6 +41,24 @@ const runButton = () => screen.findByRole("button", { name: "Выполнить 
 const stopButton = () => screen.findByRole("button", { name: "Остановить промт Ревью безопасности" });
 
 describe("TaskLibraryPromptsCard", () => {
+  test("добавленный промт скрыт в выборе и удаляется из списка задачи", async ({ api }) => {
+    const { user } = renderCard(api, [makeLibraryPrompt()]);
+    const remove = await screen.findByRole("button", { name: "Удалить промт Ревью безопасности из списка" });
+
+    await user.click(screen.getByRole("button", { name: "Добавить промт из библиотеки" }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("combobox"));
+    expect(within(dialog).queryByRole("option", { name: "Ревью безопасности" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("option", { name: "Прогнать e2e-тесты" })).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Отмена" }));
+
+    api.respond(`DELETE ${PROMPTS_PATH}/lp1`, () => {
+      api.respond(`GET ${PROMPTS_PATH}`, []);
+    });
+    await user.click(remove);
+    expect(await screen.findByText("Промты из библиотеки не добавлены")).toBeInTheDocument();
+  });
+
   describe("запуск ▶", () => {
     test.for([LibraryPromptRunStatus.QUEUED, LibraryPromptRunStatus.RUNNING])(
       "на паузе активный промт $0 нельзя запустить повторно, его можно остановить",

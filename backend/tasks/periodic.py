@@ -69,7 +69,7 @@ from tasks.celery_app import (
     celery_app,
     wake_task_dispatcher,
 )
-from tasks.session_worker import run_task_session
+from tasks.session_worker import restore_paused_task, run_task_session
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -502,7 +502,13 @@ def deprovision_inactive_users() -> None:
 def check_remote_control_bridges() -> None:
     async def body(db_session: AsyncSession) -> None:
         async with redis_connection() as redis_client:
-            await check_session_bridges(db_session, redis_client=redis_client)
+
+            def schedule(task_id: str) -> None:
+                restore_paused_task.delay(task_id)
+
+            await check_session_bridges(
+                db_session, redis_client=redis_client, schedule_paused_recovery=schedule
+            )
 
     _run_periodic("check_remote_control_bridges", body)
 

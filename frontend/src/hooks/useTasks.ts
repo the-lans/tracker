@@ -337,6 +337,13 @@ export function useAddLibraryPrompt(taskId: string) {
   });
 }
 
+export function useRemoveLibraryPrompt(taskId: string) {
+  return useInvalidatingMutation(
+    (promptId: string) => api.delete(`/tasks/${taskId}/library-prompts/${promptId}`),
+    [taskKeys.libraryPrompts(taskId)],
+  );
+}
+
 export function useRunLibraryPrompt(taskId: string) {
   const queryClient = useQueryClient();
   return useMutation({

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -310,16 +310,16 @@ async def _copy_library_prompts(
             TaskCategoryLibraryPrompt.category_id == category_id,
             Node.is_archived == False,  # noqa: E712
         )
-        .order_by(Node.name)
+        .order_by(Node.name, Node.id)
     )
     now = datetime.now(UTC)
-    for node_id in (await db_session.execute(stmt)).scalars().all():
+    for index, node_id in enumerate((await db_session.execute(stmt)).scalars()):
         db_session.add(
             TaskLibraryPrompt(
                 task_id=task.id,
                 node_id=node_id,
                 added_by=task.created_by,
-                added_at=now,
+                added_at=now + timedelta(microseconds=index),
             ),
         )
 

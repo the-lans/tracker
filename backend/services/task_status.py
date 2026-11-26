@@ -43,6 +43,7 @@ from db.queries.manual_requests import (
     mark_queued_prompt_stopped,
 )
 from services.errors import ConflictError, ValidationError
+from services.node_history import accepted_plan_text
 from services.node_runs import SESSION_ERROR_MESSAGE
 from services.notifications import NotificationEvent, notify_task_event
 
@@ -210,24 +211,8 @@ async def _current_run_filter(
 
 
 async def plan_accepted_in_run(db_session: AsyncSession, task_id: uuid.UUID) -> bool:
-    """
-    Раздел 9.5: в текущем прогоне пайплайна уже есть принятый план — успешная
-    запись `node_logs` ноды `plan_prompt`. После него план заново не
-    запрашивается, пока не начнётся следующая нода планирования.
-    """
-    found = await db_session.scalar(
-        sa.select(NodeLog.id)
-        .join(Node, Node.id == NodeLog.node_id)
-        .where(
-            NodeLog.task_id == task_id,
-            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
-            NodeLog.status == NodeLogStatus.SUCCESS,
-            Node.node_type == NodeType.PLAN_PROMPT,
-            *await _current_run_filter(db_session, task_id),
-        )
-        .limit(1),
-    )
-    return found is not None
+    """Есть ли принятый план для текущего этапа прогона."""
+    return await accepted_plan_text(db_session, task_id) is not None
 
 
 async def run_started_frontier(db_session: AsyncSession, task: Task) -> int | None:
@@ -427,6 +412,104 @@ RUN_COMPOSITION_STATUSES = SESSION_ACTIVE_STATUSES | {TaskStatus.AWAITING_LIMIT}
 MANUAL_REQUEST_STATUSES = SESSION_ACTIVE_STATUSES | {TaskStatus.REFINING, TaskStatus.AWAITING_LIMIT}
 # Статусы, из которых `failed` достижим напрямую (раздел 14.1).
 FAILABLE_STATUSES = (TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.REBASE_CONFLICT)
+
+
+async def pending_pipeline_plan(db_session: AsyncSession, task: Task) -> NodeLog | None:
+    if task.status is not TaskStatus.PLAN_REVIEW:
+        return None
+    return await db_session.scalar(
+        sa.select(NodeLog)
+        .join(Node, Node.id == NodeLog.node_id)
+        .where(
+            NodeLog.task_id == task.id,
+            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+            NodeLog.status == NodeLogStatus.AWAITING_DECISION,
+            Node.node_type == NodeType.PLAN_PROMPT,
+            NodeLog.pending_plan_text.is_not(None),
+            *await _current_run_filter(db_session, task.id),
+        )
+        .order_by(NodeLog.started_at.desc().nulls_last(), NodeLog.id.desc())
+        .limit(1)
+    )
+
+
+async def pending_pipeline_question(db_session: AsyncSession, task: Task) -> NodeLog | None:
+    if task.status is not TaskStatus.AWAITING_INPUT:
+        return None
+    return await db_session.scalar(
+        sa.select(NodeLog)
+        .where(
+            NodeLog.task_id == task.id,
+            NodeLog.node_id.is_not(None),
+            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+            NodeLog.status == NodeLogStatus.AWAITING_DECISION,
+            sa.func.jsonb_typeof(NodeLog.decision_checkpoint["questionnaire"]) == "object",
+            *await _current_run_filter(db_session, task.id),
+        )
+        .order_by(NodeLog.started_at.desc().nulls_last(), NodeLog.id.desc())
+        .limit(1)
+    )
+
+
+async def interrupted_pipeline_turn(db_session: AsyncSession, task: Task) -> NodeLog | None:
+    if task.status is not TaskStatus.IN_PROGRESS:
+        return None
+    return await db_session.scalar(
+        sa.select(NodeLog)
+        .where(
+            NodeLog.task_id == task.id,
+            NodeLog.node_id.is_not(None),
+            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+            NodeLog.status == NodeLogStatus.RUNNING,
+            *await _current_run_filter(db_session, task.id),
+        )
+        .order_by(NodeLog.started_at.desc().nulls_last(), NodeLog.id.desc())
+        .limit(1)
+    )
+
+
+async def can_restore_session(db_session: AsyncSession, task: Task) -> bool:
+    return (
+        await can_restore_paused_session(db_session, task)
+        or (await pending_pipeline_plan(db_session, task)) is not None
+        or (await pending_pipeline_question(db_session, task)) is not None
+        or (await interrupted_pipeline_turn(db_session, task)) is not None
+        or await can_restore_between_nodes(db_session, task)
+    )
+
+
+async def can_restore_paused_session(db_session: AsyncSession, task: Task) -> bool:
+    """Восстановима пауза между ходами, без запроса с неизвестным результатом."""
+    if task.status is not TaskStatus.PAUSED:
+        return False
+    return await _has_no_active_turn(db_session, task)
+
+
+async def can_restore_between_nodes(db_session: AsyncSession, task: Task) -> bool:
+    if task.status is not TaskStatus.IN_PROGRESS:
+        return False
+    return await _has_no_active_turn(db_session, task)
+
+
+async def _has_no_active_turn(db_session: AsyncSession, task: Task) -> bool:
+    unfinished_node = sa.select(NodeLog.id).where(
+        NodeLog.task_id == task.id,
+        NodeLog.status.in_(_UNFINISHED_NODE_LOG_STATUSES),
+        *await _current_run_filter(db_session, task.id),
+    )
+    active_request = sa.select(TaskManualRequestQueue.id).where(
+        TaskManualRequestQueue.task_id == task.id,
+        TaskManualRequestQueue.status.in_(
+            (ManualRequestStatus.PROCESSING, ManualRequestStatus.INJECTED),
+        ),
+    )
+    return not bool(
+        await db_session.scalar(
+            sa.select(
+                sa.or_(unfinished_node.exists(), active_request.exists()),
+            )
+        )
+    )
 
 
 async def first_unfinished_order_index(db_session: AsyncSession, task_id: uuid.UUID) -> int:

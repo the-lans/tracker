@@ -95,7 +95,6 @@ def build_node_context(
     script_output = ""
     llm_output = ""
     user_input = ""
-    plan_text = ""
     for entry in history.pipeline_runs:
         if entry.script_stdout is not None:
             script_output = entry.script_stdout
@@ -103,14 +102,12 @@ def build_node_context(
             llm_output = entry.llm_output_text
         if entry.user_input_text is not None:
             user_input = entry.user_input_text
-        if entry.pending_plan_text is not None:
-            plan_text = entry.pending_plan_text
 
     context = {
         "node.script_output": script_output,
         "node.llm_output": llm_output,
         "node.user_input": user_input,
-        "node.plan_text": plan_text,
+        "node.plan_text": history.accepted_plan_text,
     }
     if last_n is not None:
         context["node.llm_output_last_n"] = "\n\n".join(history.session_replies[-last_n:])

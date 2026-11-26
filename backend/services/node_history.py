@@ -12,13 +12,13 @@ from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 
-from db.models.enums import NodeLogStatus, NodeLogTriggerType
+from db.models.enums import NodeLogStatus, NodeLogTriggerType, NodeType, PlanDecisionOption
 from db.models.logs import NodeLog
+from db.models.pipelines import Node
+from db.models.tasks import Task
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
-
-    from db.models.tasks import Task
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,10 +30,12 @@ class NodeContextHistory:
     ни неудачная попытка, ни промт библиотеки, ни свободный промт не
     подменяют вывод предыдущей ноды. ``session_replies`` — ответы LLM
     текущей сессии, после последней очистки контекста.
+    ``accepted_plan_text`` — принятый план текущего этапа, включая ручное принятие.
     """
 
     pipeline_runs: list[NodeLog]
     session_replies: list[str]
+    accepted_plan_text: str = ""
 
 
 EMPTY_NODE_CONTEXT_HISTORY = NodeContextHistory(pipeline_runs=[], session_replies=[])
@@ -54,6 +56,48 @@ def _is_current_pipeline_run(entry: NodeLog, task: Task) -> bool:
     )
 
 
+async def accepted_plan_text(db_session: AsyncSession, task_id: uuid.UUID) -> str | None:
+    """Принятый план этапа после последнего сброса задачи.
+
+    Новая попытка ноды планирования закрывает предыдущий этап, даже если
+    попытка остановлена или завершилась ошибкой. Ручное принятие тоже
+    сохраняется в истории, поэтому доступно после возобновления сессии.
+    """
+    reset_at = sa.select(Task.reset_at).where(Task.id == task_id).scalar_subquery()
+    explicit_plan = sa.and_(
+        NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+        Node.node_type == NodeType.PLAN_PROMPT,
+    )
+    accepted = sa.and_(
+        NodeLog.status == NodeLogStatus.SUCCESS,
+        sa.func.btrim(NodeLog.pending_plan_text) != "",
+        sa.func.split_part(NodeLog.user_input_text, "\n", 1).in_(
+            (PlanDecisionOption.ACCEPT_AUTO, PlanDecisionOption.ACCEPT_DEFAULT)
+        ),
+        sa.or_(
+            NodeLog.trigger_type.in_(
+                (NodeLogTriggerType.FREEFORM_MANUAL, NodeLogTriggerType.LIBRARY_MANUAL)
+            ),
+            sa.and_(
+                NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+                NodeLog.node_id.is_not(None),
+            ),
+        ),
+    )
+    return await db_session.scalar(
+        sa.select(sa.case((accepted, NodeLog.pending_plan_text)))
+        .select_from(NodeLog)
+        .outerjoin(Node, Node.id == NodeLog.node_id)
+        .where(
+            NodeLog.task_id == task_id,
+            sa.or_(reset_at.is_(None), NodeLog.started_at >= reset_at),
+            sa.or_(explicit_plan, accepted),
+        )
+        .order_by(NodeLog.started_at.desc().nulls_last(), NodeLog.id.desc())
+        .limit(1)
+    )
+
+
 async def load_node_context_history(db_session: AsyncSession, task: Task) -> NodeContextHistory:
     """
     История задачи для ``{{node.*}}``: прогон отсчитывается от «Вернуть в
@@ -67,6 +111,7 @@ async def load_node_context_history(db_session: AsyncSession, task: Task) -> Nod
     entries = list((await db_session.execute(stmt)).scalars().all())
     return NodeContextHistory(
         pipeline_runs=[entry for entry in entries if _is_current_pipeline_run(entry, task)],
+        accepted_plan_text=await accepted_plan_text(db_session, task.id) or "",
         session_replies=[
             entry.llm_output_text
             for entry in entries

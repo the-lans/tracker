@@ -46,6 +46,7 @@ from services.monitoring import (
 from services.node_stats import NodeStats, StatsPeriod, node_stats
 from services.redis_connection import redis_connection
 from services.server_status import InspectQueuesResponse, ServerOverview, server_overview
+from services.session_recovery_metrics import RecoveryMetrics, read_recovery_metrics
 from services.volume_usage import disk_usage
 from tasks.celery_app import BACKUPS_QUEUE, SESSIONS_QUEUE, celery_app
 
@@ -165,6 +166,14 @@ async def get_node_stats(
     period: StatsPeriod = StatsPeriod.DAY,
 ) -> NodeStats:
     return await node_stats(db_session, period=period, now=datetime.now(UTC))
+
+
+@monitoring_router.get("/session-recovery")
+async def get_session_recovery(
+    _admin: Annotated[User, Depends(require_admin)],
+) -> RecoveryMetrics:
+    async with redis_connection() as redis_client:
+        return await read_recovery_metrics(redis_client)
 
 
 @monitoring_router.get("/llm-usage", response_model=LlmUsageResponse)

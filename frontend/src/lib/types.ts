@@ -518,6 +518,7 @@ export interface NodeLog {
   llm_context_compacted: boolean;
   status: NodeLogStatus;
   pending_question: string | null;
+  pending_decision_id?: string | null;
   pending_plan_text: string | null;
   pending_options: PendingOption[] | null;
   started_at: string | null;
@@ -526,6 +527,7 @@ export interface NodeLog {
 
 export interface DecisionRequest {
   node_log_id: string;
+  decision_id?: string;
   option_id: string;
   feedback_text?: string | null;
 }

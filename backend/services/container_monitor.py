@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -57,14 +58,29 @@ class TrackerContainer:
     orphaned: bool
 
 
-async def run_docker(*args: str) -> str:
+_SESSION_CLEANUP_TIMEOUT_SECONDS = 30.0
+
+
+class DockerCommandError(RuntimeError):
+    """Команда Docker завершилась с ошибкой."""
+
+
+async def run_docker(*args: str, check: bool = False) -> str:
     process = await asyncio.create_subprocess_exec(
         "docker",
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _stderr = await process.communicate()
+    try:
+        stdout, stderr = await process.communicate()
+    except asyncio.CancelledError:
+        with suppress(ProcessLookupError):
+            process.kill()
+        await process.wait()
+        raise
+    if check and process.returncode:
+        raise DockerCommandError(f"Docker {args[0]}: {stderr.decode().strip()}")
     return stdout.decode()
 
 
@@ -134,6 +150,37 @@ async def list_node_containers(
             ),
         )
     return containers
+
+
+async def stop_task_session_containers(task_id: uuid.UUID, *, task_code: str | None = None) -> None:
+    """Вызывается новым владельцем до запуска CLI, пока удерживается пульс."""
+    async with asyncio.timeout(_SESSION_CLEANUP_TIMEOUT_SECONDS):
+        ids = await run_docker(
+            "ps",
+            "--filter",
+            f"name={SESSION_CONTAINER_PREFIX}",
+            "--filter",
+            f"label={SESSION_TASK_LABEL}={task_id}",
+            "--format",
+            "{{.ID}}",
+            check=True,
+        )
+        for container_id in ids.splitlines():
+            await run_docker("stop", container_id, check=True)
+
+        if task_code is not None:
+            ids = await run_docker(
+                "ps",
+                "--filter",
+                f"name={NODE_CONTAINER_PREFIX}",
+                "--filter",
+                f"label={NODE_TASK_CODE_LABEL}={task_code}",
+                "--format",
+                "{{.ID}}",
+                check=True,
+            )
+            for container_id in ids.splitlines():
+                await run_docker("stop", container_id, check=True)
 
 
 async def list_session_containers(redis_client: Redis) -> list[TrackerContainer]:

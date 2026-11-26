@@ -187,6 +187,7 @@ async def run_stoppable[T](
     except BaseException:
         execution_task.cancel()
         watcher.cancel()
+        await asyncio.gather(execution_task, watcher, return_exceptions=True)
         raise
 
     if execution_task.done():

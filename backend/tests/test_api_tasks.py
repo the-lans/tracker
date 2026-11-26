@@ -348,6 +348,40 @@ async def test_submit_decision_encodes_and_publishes_signal(
     )
 
 
+class TestDecisionIdentity:
+    async def test_rejects_stale_answers(
+        self, authed_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        task = await _create_task(authed_client)
+        first_id = str(uuid.uuid4())
+        log = NodeLog(
+            task_id=uuid.UUID(task["id"]),
+            trigger_type=NodeLogTriggerType.PIPELINE,
+            status=NodeLogStatus.AWAITING_DECISION,
+            decision_checkpoint={"id": first_id},
+        )
+        db_session.add(log)
+        await db_session.flush()
+        path = f"/tasks/{task['id']}/decision"
+        body = {"node_log_id": str(log.id), "decision_id": first_id, "option_id": "0"}
+
+        assert (await authed_client.post(path, json=body)).status_code == 204
+        assert (await authed_client.post(path, json=body)).status_code == 204
+        assert (await authed_client.post(path, json={**body, "option_id": "1"})).status_code == 409
+        await db_session.refresh(log)
+        assert log.user_input_text == "0"
+
+        log.decision_checkpoint = {"id": str(uuid.uuid4())}
+        log.user_input_text = None
+        await db_session.flush()
+        assert (await authed_client.post(path, json=body)).status_code == 409
+        assert (
+            await authed_client.post(path, json={"node_log_id": str(log.id), "option_id": "0"})
+        ).status_code == 409
+        await db_session.refresh(log)
+        assert log.user_input_text is None
+
+
 async def test_submit_decision_rejects_node_log_not_awaiting_decision(
     authed_client: AsyncClient,
     db_session: AsyncSession,
@@ -1239,6 +1273,36 @@ async def _add_library_prompt(
     assert response.status_code == 201
     task_library_prompt_id: str = response.json()["id"]
     return task_library_prompt_id
+
+
+class TestLibraryPromptAttachments:
+    async def test_add_and_remove(
+        self,
+        authed_client: AsyncClient,
+        db_session: AsyncSession,
+    ) -> None:
+        task_body = await _create_task_in_status(authed_client, db_session, TaskStatus.IN_PROGRESS)
+        url = f"/tasks/{task_body['id']}/library-prompts"
+        first_id = await _add_library_prompt(authed_client, db_session, task_body)
+        second_id = await _add_library_prompt(authed_client, db_session, task_body)
+        before = (await authed_client.get(url)).json()
+        assert [row["id"] for row in before] == [first_id, second_id]
+
+        readd = await authed_client.post(url, json={"node_id": before[0]["node_id"]})
+        assert readd.status_code == 201
+        assert readd.json()["id"] == first_id
+        assert (await authed_client.get(url)).json() == before
+
+        run = await authed_client.post(f"{url}/{first_id}/run")
+        assert run.status_code == 201
+        assert (await authed_client.delete(f"{url}/{first_id}")).status_code == 409
+        assert (await authed_client.delete(f"{url}/{second_id}")).status_code == 204
+        assert [row["id"] for row in (await authed_client.get(url)).json()] == [first_id]
+        assert (await authed_client.post(f"{url}/{second_id}/run")).status_code == 404
+
+        restored = await authed_client.post(url, json={"node_id": before[1]["node_id"]})
+        assert restored.status_code == 201
+        assert restored.json()["id"] != second_id
 
 
 async def test_library_prompts_list_exposes_active_request_for_stop_button(

@@ -76,6 +76,7 @@ from services.plan_mode import (
 from services.prompt_injection import InjectionAction, InjectionReply, send_injection_command
 from services.session_context import clear_task_session_context
 from services.session_heartbeat import is_session_alive
+from services.session_recovery_metrics import read_recovery_metrics
 from services.system_settings import get_system_settings
 from services.task_control import (
     TaskControlCommand,
@@ -517,6 +518,264 @@ async def test_stop_while_paused_completes_task(
     assert task.status is TaskStatus.DONE
     assert task.last_failed_order_index is None
     assert worker_env.client.queries == ["шаг 0"]
+
+
+class TestInterruptedTurnRecovery:
+    async def test_requires_resume_before_retry(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.IN_PROGRESS)
+        node = await _add_node(db_session, task, order_index=0)
+        log = NodeLog(
+            task_id=task.id,
+            node_id=node.id,
+            trigger_type=NodeLogTriggerType.PIPELINE,
+            status=NodeLogStatus.RUNNING,
+        )
+        db_session.add(log)
+        await db_session.commit()
+
+        async def stop_container(_task_id: uuid.UUID, *, task_code: str | None = None) -> None:
+            pass
+
+        async def resume(observed: list[TaskStatus]) -> None:
+            await db_session.refresh(task)
+            observed.append(task.status)
+            assert worker_env.client.queries == []
+            assert log.status is NodeLogStatus.STOPPED
+            assert "Результат действий неизвестен" in (log.error_message or "")
+            await request_task_control(redis_client, task.id, TaskControlCommand.RESUME)
+
+        monkeypatch.setattr(session_worker, "stop_task_session_containers", stop_container)
+        observed = _patch_pause_wait(monkeypatch, resume)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+        await session_worker._restore_paused_task(task.id)
+
+        assert observed == [TaskStatus.PAUSED]
+        assert worker_env.client.queries == ["шаг 0"]
+        assert task.status is TaskStatus.DONE
+
+
+class TestQuestionRecovery:
+    @pytest.mark.parametrize("restart_after_answer", [False, True])
+    async def test_restores_question_and_waits_before_replay(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+        restart_after_answer: bool,
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.AWAITING_INPUT)
+        node = await _add_node(db_session, task, order_index=0)
+        log = NodeLog(
+            task_id=task.id,
+            node_id=node.id,
+            trigger_type=NodeLogTriggerType.PIPELINE,
+            status=NodeLogStatus.AWAITING_DECISION,
+            pending_question="Какой кеш?",
+            decision_checkpoint={
+                "questionnaire": {
+                    "questions": [
+                        {"question": "Какая база?"},
+                        {"question": "Какой кеш?", "options": [{"label": "Redis"}]},
+                    ],
+                    "index": 1,
+                    "answers": {"Какая база?": "PostgreSQL"},
+                }
+            },
+        )
+        db_session.add(log)
+        await db_session.commit()
+
+        async def stop_container(_task_id: uuid.UUID) -> None:
+            pass
+
+        async def answer_or_resume(_redis: Redis, _task_id: uuid.UUID, *, timeout: float) -> bool:
+            assert worker_env.client.queries == []
+            if task.status is TaskStatus.AWAITING_INPUT:
+                assert log.pending_question == "Какой кеш?"
+                log.user_input_text = "0"
+                await db_session.commit()
+            else:
+                assert task.status is TaskStatus.PAUSED
+                await request_task_control(redis_client, task.id, TaskControlCommand.RESUME)
+            return True
+
+        monkeypatch.setattr(session_worker, "stop_task_session_containers", stop_container)
+        monkeypatch.setattr(session_worker, "wait_for_task_signal", answer_or_resume)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        if restart_after_answer:
+            async def interrupted(*args: object, **kwargs: object) -> None:
+                raise RuntimeError("restart")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(session_worker, "_run_owned_session", interrupted)
+                with pytest.raises(RuntimeError, match="restart"):
+                    await session_worker._restore_paused_task(task.id)
+
+        await session_worker._restore_paused_task(task.id)
+
+        assert task.status is TaskStatus.DONE
+        [prompt] = worker_env.client.queries
+        assert "Какая база?: PostgreSQL" in prompt
+        assert "Какой кеш?: Redis" in prompt
+
+
+class TestPlanReviewRecovery:
+    @pytest.mark.parametrize("revise", [False, True])
+    async def test_restores_plan_decision(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+        revise: bool,
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.PLAN_REVIEW)
+        task.session_id = "sess-worker"
+        task.auto_accept_plan = revise
+        node = await _add_node(db_session, task, order_index=0, node_type=NodeType.PLAN_PROMPT)
+        node.prompt_template = "Составь план"
+        await _add_node(db_session, task, order_index=1)
+        log = NodeLog(
+            task_id=task.id,
+            node_id=node.id,
+            trigger_type=NodeLogTriggerType.PIPELINE,
+            status=NodeLogStatus.AWAITING_DECISION,
+            pending_plan_text="Сохранённый план",
+        )
+        db_session.add(log)
+        await db_session.commit()
+
+        async def stop_container(_task_id: uuid.UUID) -> None:
+            pass
+
+        async def accept(_redis: Redis, _task_id: uuid.UUID, *, timeout: float) -> bool:
+            assert log.pending_plan_text == "Сохранённый план"
+            assert task.status is TaskStatus.PLAN_REVIEW
+            log.user_input_text = (
+                encode_decision(PlanDecisionOption.REVISE, feedback_text="Добавь тесты")
+                if revise
+                else PlanDecisionOption.ACCEPT_AUTO
+            )
+            await db_session.commit()
+            return True
+
+        monkeypatch.setattr(session_worker, "stop_task_session_containers", stop_container)
+        monkeypatch.setattr(session_worker, "wait_for_task_signal", accept)
+
+        async def submit_revised_plan() -> None:
+            if revise and len(worker_env.client.queries) == 1:
+                callback = worker_env.options[0].can_use_tool
+                assert callback is not None
+                await callback("ExitPlanMode", {"plan": "Уточнённый план"}, ToolPermissionContext())
+
+        worker_env.client = FakeClaudeAgentClient(
+            messages_per_query=_results(2 if revise else 1),
+            on_query=submit_revised_plan,
+        )
+        await session_worker._restore_paused_task(task.id)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.DONE
+        assert log.status is (NodeLogStatus.STOPPED if revise else NodeLogStatus.SUCCESS)
+        assert worker_env.options[0].resume == "sess-worker"
+        assert worker_env.client.queries[-1] == "шаг 1"
+        if revise:
+            assert "Сохранённый план" in worker_env.client.queries[0]
+            assert "Добавь тесты" in worker_env.client.queries[0]
+        else:
+            assert len(worker_env.client.queries) == 1
+
+
+class TestPausedSessionRecovery:
+    @pytest.mark.parametrize("initial_status", [TaskStatus.PAUSED, TaskStatus.IN_PROGRESS])
+    async def test_restores_idle_pause(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+        initial_status: TaskStatus,
+    ) -> None:
+        task = await _make_task(db_session, status=initial_status)
+        task.session_id = "sess-worker"
+        first_node = await _add_node(db_session, task, order_index=0)
+        await _add_node(db_session, task, order_index=1)
+        db_session.add(
+            NodeLog(
+                task_id=task.id,
+                node_id=first_node.id,
+                trigger_type=NodeLogTriggerType.PIPELINE,
+                status=NodeLogStatus.SUCCESS,
+            )
+        )
+        await db_session.commit()
+
+        stopped: list[uuid.UUID] = []
+
+        async def stop_previous_container(task_id: uuid.UUID) -> None:
+            stopped.append(task_id)
+
+        async def resume(observed: list[TaskStatus]) -> None:
+            await db_session.refresh(task)
+            observed.append(task.status)
+            assert worker_env.client.queries == []
+            await request_task_control(redis_client, task.id, TaskControlCommand.RESUME)
+
+        monkeypatch.setattr(session_worker, "stop_task_session_containers", stop_previous_container)
+        observed = _patch_pause_wait(monkeypatch, resume)
+        worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
+
+        with structlog.testing.capture_logs() as logs:
+            await session_worker._restore_paused_task(task.id)
+
+        results = [event for event in logs if event["event"] == "paused_session_recovery_result"]
+        assert [event["outcome"] for event in results] == ["ready"]
+        assert results[0]["duration_ms"] >= 0
+        metrics = await read_recovery_metrics(redis_client)
+        assert metrics.attempts["ready"] == 1
+        assert sum(metrics.ready_bucket_counts) == 1
+
+        await db_session.refresh(task)
+        assert stopped == [task.id]
+        assert worker_env.options[0].resume == "sess-worker"
+        assert observed == [TaskStatus.PAUSED]
+        assert task.status is TaskStatus.DONE
+        assert worker_env.client.queries == ["шаг 1"]
+
+    async def test_docker_timeout_leaves_pause_for_retry(
+        self,
+        db_session: AsyncSession,
+        worker_env: WorkerEnv,
+        redis_client: Redis,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        task = await _make_task(db_session, status=TaskStatus.PAUSED)
+        await db_session.flush()
+
+        async def docker_times_out(_task_id: uuid.UUID) -> None:
+            raise TimeoutError
+
+        monkeypatch.setattr(session_worker, "stop_task_session_containers", docker_times_out)
+        with structlog.testing.capture_logs() as logs:
+            await session_worker._restore_paused_task(task.id)
+
+        await db_session.refresh(task)
+        assert task.status is TaskStatus.PAUSED
+        metrics = await read_recovery_metrics(redis_client)
+        assert metrics.attempts["docker_timeout"] == 1
+        assert sum(metrics.ready_bucket_counts) == 0
+        assert not await is_session_alive(redis_client, task.id)
+        assert [
+            event["outcome"] for event in logs if event["event"] == "paused_session_recovery_result"
+        ] == ["docker_timeout"]
 
 
 class TestGoCache:

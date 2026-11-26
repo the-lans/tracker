@@ -250,6 +250,7 @@ class NodeLogResponse(BaseModel):
     llm_context_compacted: bool
     status: NodeLogStatus
     pending_question: str | None
+    pending_decision_id: uuid.UUID | None = None
     pending_plan_text: str | None
     pending_options: list[dict[str, str]] | None
     started_at: datetime | None
@@ -260,12 +261,15 @@ class DecisionRequest(BaseModel):
     """
     Раздел 9.6: ответ на `awaiting_input`/`plan_review`.
 
+    ``decision_id`` — идентификатор текущего вопроса из `pending_decision_id`.
+    Для записей без идентификатора поле можно опустить.
     ``option_id`` — выбор одной из `pending_options` (включая варианты
     решения по плану, раздел 9.3); ``feedback_text`` — необязательный
     свободный текст, для "Доработать план" — пожелания к плану.
     """
 
     node_log_id: uuid.UUID
+    decision_id: uuid.UUID | None = None
     option_id: str
     feedback_text: str | None = None
 

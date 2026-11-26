@@ -17,7 +17,7 @@ import { isPreLaunch } from "@/lib/taskStatusTransitions";
 /** Раздел 14.4: приоритет очереди по умолчанию — на карточке не показывается. */
 const DEFAULT_QUEUE_PRIORITY = 100;
 
-export function TaskCard({ task }: { task: Task }) {
+export function TaskCard({ task, dashboardSearch }: { task: Task; dashboardSearch?: string }) {
   const meta = TASK_STATUS_META[task.status];
   const startTask = useStartTask(task.id);
   const preLaunch = isPreLaunch(task.status);
@@ -45,7 +45,7 @@ export function TaskCard({ task }: { task: Task }) {
       style={{ borderColor: meta.borderVar }}
     >
       <div className="flex items-center gap-2">
-        <Link to={`/tasks/${task.id}`} className="touch-hit font-mono text-meta font-bold text-text-3">
+        <Link to={`/tasks/${task.id}`} state={{ dashboardSearch }} className="touch-hit font-mono text-meta font-bold text-text-3">
           {task.code}
         </Link>
         <div className="ml-auto flex items-center gap-1.5">
@@ -59,7 +59,7 @@ export function TaskCard({ task }: { task: Task }) {
       </div>
       <div className="flex items-start gap-2">
         <Link
-          to={`/tasks/${task.id}`}
+          to={`/tasks/${task.id}`} state={{ dashboardSearch }}
           className="min-w-0 flex-1 break-words text-card-title sm:min-h-11 font-bold leading-snug text-text"
         >
           {task.title}

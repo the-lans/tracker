@@ -80,11 +80,16 @@ class TestBuildNodeContext:
             NodeLog(
                 task_id=uuid.uuid4(),
                 user_input_text="принять план",
-                pending_plan_text="1. сделать раз\n2. сделать два",
             ),
         ]
 
-        context = build_node_context(NodeContextHistory(pipeline_runs=runs, session_replies=[]))
+        context = build_node_context(
+            NodeContextHistory(
+                pipeline_runs=runs,
+                session_replies=[],
+                accepted_plan_text="1. сделать раз\n2. сделать два",
+            )
+        )
 
         assert context["node.script_output"] == "первый вывод"
         assert context["node.llm_output"] == "ответ модели"
