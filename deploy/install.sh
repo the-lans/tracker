@@ -530,6 +530,34 @@ step_start_app_services() {
   # cliproxy-init (конфигурация прокси с ключами из .env) запускается как зависимость cliproxy.
   ( cd "${INSTALL_DIR}" \
     && docker compose up -d cliproxy llm-gateway backend worker session-worker backup-worker beat sftp frontend caddy backup )
+  step_verify_app_services
+}
+
+step_verify_app_services() {
+  local service container state deadline
+  for service in llm-gateway backend worker session-worker backup-worker beat sftp frontend caddy backup; do
+    deadline=$(( $(date +%s) + 90 ))
+    while true; do
+      container="$(cd "${INSTALL_DIR}" && docker compose ps -q "${service}")"
+      state=""
+      if [ -n "${container}" ]; then
+        state="$(docker inspect --format '{{if .State.Health}}{{.State.Status}}:{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container}")"
+      fi
+      case "${state}" in running|running:healthy) break ;; esac
+      if [ "$(date +%s)" -ge "${deadline}" ]; then
+        die "сервис ${service} не запустился или не прошёл проверку здоровья (${state:-нет контейнера})"
+      fi
+      sleep 2
+    done
+  done
+  # Процесс мог завершиться сразу после создания контейнера.
+  sleep 3
+  for service in llm-gateway backend worker session-worker backup-worker beat sftp frontend caddy backup; do
+    container="$(cd "${INSTALL_DIR}" && docker compose ps -q "${service}")"
+    [ -n "${container}" ] || die "сервис ${service} остановился после запуска"
+    state="$(docker inspect --format '{{if .State.Health}}{{.State.Status}}:{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container}")"
+    case "${state}" in running|running:healthy) ;; *) die "сервис ${service} остановился после запуска (${state})" ;; esac
+  done
 }
 
 # Шаг 10: получение TLS-сертификата — выполняется автоматически Caddy
@@ -893,11 +921,25 @@ step_fetch_code() {
     || die_unchanged "коммит ${target} не найден"
   git -C "${INSTALL_DIR}" merge-base --is-ancestor "${commit}" origin/main \
     || die_unchanged "коммит ${commit} не входит в историю origin/main"
+  _check_database_revision "${commit}"
   git -C "${INSTALL_DIR}" checkout --detach "${commit}" \
     || die_unchanged "переход на ${commit} мешают локальные правки"
   _reset_unknown_task_statuses "${commit}" "${previous}"
   mkdir -p "${DEPLOY_STATE_DIR}"
   echo "${previous}" > "${DEPLOY_STATE_DIR}/previous_ref"
+}
+
+_check_database_revision() {
+  local commit="$1" revisions revision
+  revisions="$(cd "${INSTALL_DIR}" && docker compose exec -T postgres \
+    sh -c 'psql -v ON_ERROR_STOP=1 -tA -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT version_num FROM alembic_version"')" \
+    || die_unchanged "не удалось определить текущую ревизию БД"
+  [ -n "${revisions}" ] || die_unchanged "не найдена текущая ревизия БД"
+  while IFS= read -r revision; do
+    [[ "${revision}" =~ ^[a-zA-Z0-9_]+$ ]] || die_unchanged "некорректная ревизия БД"
+    git -C "${INSTALL_DIR}" grep -Eq "^revision([[:space:]]*:[[:space:]]*str)?[[:space:]]*=[[:space:]]*['\"]${revision}['\"]" "${commit}" -- alembic/versions \
+      || die_unchanged "версия ${commit} не знает ревизию БД ${revision}; нужен совместимый код"
+  done <<< "${revisions}"
 }
 
 # Перед миграциями: откат возвращает код и образы, а схема остаётся новой —

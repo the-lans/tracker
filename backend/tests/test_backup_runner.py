@@ -598,6 +598,26 @@ class TestInterruptedRuns:
             BackupRunStatus.SUCCESS,
         ]
 
+    async def test_worker_restart_closes_only_running(self, db_session: AsyncSession) -> None:
+        interrupted = await _add_run(
+            db_session,
+            kind=BackupRunKind.BACKUP,
+            status=BackupRunStatus.RUNNING,
+            started_at=datetime(2020, 1, 1, tzinfo=UTC),
+        )
+        finished = await _add_run(
+            db_session,
+            kind=BackupRunKind.VERIFY,
+            status=BackupRunStatus.SUCCESS,
+            started_at=datetime(2020, 1, 1, tzinfo=UTC),
+        )
+        assert await runs_module.close_runs_after_worker_restart(db_session) == 1
+        await db_session.refresh(interrupted)
+        await db_session.refresh(finished)
+        assert interrupted.status is BackupRunStatus.FAILED
+        assert interrupted.error_message == runs_module.INTERRUPTED_MESSAGE
+        assert finished.status is BackupRunStatus.SUCCESS
+
 
 class TestSkippedFiles:
     async def test_warning(
