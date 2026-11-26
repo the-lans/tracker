@@ -19,6 +19,7 @@ from api.auth import get_google_verifier
 from db.models.enums import UserRole
 from db.models.users import AllowedEmail, User
 from services.auth import NOT_ALLOWED_MESSAGE, UNVERIFIED_EMAIL_MESSAGE, GoogleIdentity
+from services.browser_session import session_cookie_name
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -64,7 +65,8 @@ async def test_login_registers_first_allowed_user_as_admin(
     body = response.json()
     assert body["user"]["email"] == email
     assert body["user"]["role"] == UserRole.ADMIN.value
-    assert body["session_token"]
+    assert "session_token" not in body
+    assert api_client.cookies.get(session_cookie_name())
 
 
 class TestLoginRefused:
@@ -97,7 +99,7 @@ async def test_login_returns_working_session_token_for_existing_user(
 ) -> None:
     email = f"{uuid.uuid4()}@example.com"
     existing = User(id=uuid.uuid4(), email=email, role=UserRole.USER, is_active=True)
-    db_session.add(existing)
+    db_session.add_all([existing, AllowedEmail(email=email)])
     await db_session.flush()
     _override_verifier(GoogleIdentity(email=email, email_verified=True))
 
@@ -151,7 +153,7 @@ class TestLogoutEverywhere:
     async def _login(self, api_client: AsyncClient) -> str:
         response = await api_client.post("/auth/google", json={"id_token": "fake-jwt"})
         assert response.status_code == 200, response.text
-        return str(response.json()["session_token"])
+        return str(api_client.cookies.get(session_cookie_name()))
 
     async def test_old_tokens_rejected_new_login_works(
         self,
@@ -159,6 +161,7 @@ class TestLogoutEverywhere:
         db_session: AsyncSession,
     ) -> None:
         email = f"{uuid.uuid4()}@example.com"
+        db_session.add(AllowedEmail(email=email))
         db_session.add(User(id=uuid.uuid4(), email=email, role=UserRole.USER, is_active=True))
         await db_session.flush()
         _override_verifier(GoogleIdentity(email=email, email_verified=True))
@@ -167,11 +170,13 @@ class TestLogoutEverywhere:
 
         revoked = await api_client.post(
             "/auth/logout-all",
-            headers={"Authorization": f"Bearer {this_device}"},
+            headers={"Cookie": f"{session_cookie_name()}={this_device}"},
         )
         statuses = [
             (
-                await api_client.get("/profile", headers={"Authorization": f"Bearer {token}"})
+                await api_client.get(
+                    "/profile", headers={"Cookie": f"{session_cookie_name()}={token}"}
+                )
             ).status_code
             for token in (this_device, other_device, await self._login(api_client))
         ]

@@ -52,7 +52,9 @@ class GoogleIdTokenVerifier(Protocol):
 
 
 class GoogleAuthLibraryVerifier:
-    """Реальная проверка подписи id_token через `google-auth` (раздел 19.1)."""
+    """
+    Реальная проверка подписи id_token через `google-auth` (раздел 19.1).
+    """
 
     def __init__(self, *, client_id: str) -> None:
         self._client_id = client_id
@@ -94,28 +96,21 @@ async def authenticate_or_register(
     *,
     identity: GoogleIdentity,
 ) -> User:
-    """Раздел 19.1: вход/регистрация по email из подтверждённого Google id_token.
-
-    Email обязан присутствовать в `allowed_emails` для НОВОГО пользователя.
-    Уже зарегистрированный пользователь проверяется только по `is_active`:
-    удаление email из списка блокирует его при ближайшем запуске
-    `deprovision_inactive_users` (раздел 16.2, `services/users.py`), а не в
-    момент удаления.
-    """
+    """Вход разрешён только активным пользователям из списка допуска."""
     if not identity.email_verified:
         raise ForbiddenError(UNVERIFIED_EMAIL_MESSAGE)
-
-    existing_user = await db_session.scalar(sa.select(User).where(User.email == identity.email))
-    if existing_user is not None:
-        if not existing_user.is_active:
-            raise ForbiddenError(BLOCKED_USER_MESSAGE)
-        return existing_user
 
     is_allowed = await db_session.scalar(
         sa.select(AllowedEmail.id).where(AllowedEmail.email == identity.email).limit(1),
     )
     if is_allowed is None:
         raise ForbiddenError(NOT_ALLOWED_MESSAGE.format(email=identity.email))
+
+    existing_user = await db_session.scalar(sa.select(User).where(User.email == identity.email))
+    if existing_user is not None:
+        if not existing_user.is_active:
+            raise ForbiddenError(BLOCKED_USER_MESSAGE)
+        return existing_user
 
     is_first_user = (await db_session.scalar(sa.select(User.id).limit(1))) is None
     user = User(

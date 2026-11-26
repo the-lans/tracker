@@ -5,12 +5,12 @@ from __future__ import annotations
 import os
 import traceback
 import uuid
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.auth import router as auth_router
@@ -43,6 +43,12 @@ from app_logging.app_logs import write_app_log
 from app_logging.config import configure_logging, get_logger
 from db.models.enums import AppLogLevel
 from db.session import engine
+from services.browser_session import (
+    CSRF_HEADER,
+    CSRF_HEADER_VALUE,
+    UNSAFE_HTTP_METHODS,
+    public_origin,
+)
 from services.errors import AppError, ValidationError
 from services.server_status import UNKNOWN_VERSION, VERSION_ENV
 from ws.tasks import router as ws_router
@@ -120,6 +126,24 @@ def _error_response(
         content={"error": {"code": code, "message": message, "request_id": request_id}},
         headers=headers,
     )
+
+
+@app.middleware("http")
+async def protect_browser_requests(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    if request.method in UNSAFE_HTTP_METHODS and (
+        request.headers.get("origin") != public_origin()
+        or request.headers.get(CSRF_HEADER) != CSRF_HEADER_VALUE
+    ):
+        return _error_response(
+            request, status_code=403, code="forbidden", message="Недопустимый Origin запроса"
+        )
+    response = await call_next(request)
+    if request.url.path.startswith("/auth/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.exception_handler(AppError)

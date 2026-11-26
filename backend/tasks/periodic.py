@@ -39,6 +39,7 @@ from services.autostart import run_scheduled_autostart_check
 from services.backup.jobs import backup_job, verify_job
 from services.calendar_sync import sync_all_calendars
 from services.claude_config import resolve_sessions_root
+from services.container_snapshot import store_container_snapshot
 from services.events import purge_old_events
 from services.google_calendar import open_google_calendar_client
 from services.limit_wait import limit_waits_to_resume
@@ -407,6 +408,15 @@ def rebase_child_branches_on_parent_merge() -> None:
                 )
 
     _run_periodic("rebase_child_branches_on_parent_merge", body)
+
+
+@celery_app.task(name="refresh_task_containers")
+def refresh_task_containers() -> None:
+    async def body(db_session: AsyncSession) -> None:
+        async with redis_connection() as redis_client:
+            await store_container_snapshot(db_session, redis_client, now=datetime.now(UTC))
+
+    _run_periodic("refresh_task_containers", body)
 
 
 @celery_app.task(name="purge_orphaned_docker_containers")

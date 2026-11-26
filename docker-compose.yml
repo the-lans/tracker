@@ -114,6 +114,8 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY}
       SESSION_SECRET_KEY: ${SESSION_SECRET_KEY}
+      TRACKER_PUBLIC_ORIGIN: ${TRACKER_PUBLIC_ORIGIN:-https://${DOMAIN}}
+      TRACKER_DEV_COOKIE: ${TRACKER_DEV_COOKIE:-false}
       GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID}
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET}
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
@@ -172,9 +174,6 @@ services:
       - claude_sessions:/data/claude-sessions
       # Раздел 15.1: отпечаток ключа SFTP-шлюза для профиля.
       - sftp_host_keys:/data/sftp-host-keys:ro
-      # Раздел 20.5: доступ Celery worker/backend к Docker-демону хоста для запуска
-      # script-нод и раннеров — задокументированный компромисс, без --privileged.
-      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy

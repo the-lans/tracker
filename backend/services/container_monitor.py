@@ -108,6 +108,7 @@ async def _list_rows(prefix: str, *labels: str) -> list[list[str]]:
         f"name={prefix}",
         "--format",
         _FIELD_SEPARATOR.join(columns),
+        check=True,
     )
     rows = [line.split(_FIELD_SEPARATOR) for line in listing.splitlines()]
     return [row for row in rows if len(row) == len(columns) and row[0].strip()]

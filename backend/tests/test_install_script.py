@@ -837,6 +837,8 @@ class TestUpdate:
         assert ("WHERE status::text = 'awaiting_limit'" in reset) is limit_reset
         assert ("UPDATE node_logs SET llm_switch_reason" in reset) is limit_reset
         assert ("UPDATE tasks SET status = 'new'" in reset) is pre_launch_reset
+        if target == "old-target":
+            assert "DELETE FROM periodic_tasks WHERE name = 'refresh_task_containers'" in reset
         assert ("status = archived_from_status" in reset) is archive_reset
         assert (
             "WHERE name IN ('archive_finished_tasks','cleanup_finished_task_repositories')" in reset

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -27,7 +28,9 @@ from db.models.enums import TaskStatus, UserRole
 from db.models.tasks import Task
 from db.models.users import User
 from db.session import async_session_factory
+from main import app
 from services.auth_tokens import SessionClaims, issue_session_token
+from services.browser_session import session_cookie_name
 from services.output_stream import output_channel_name, publish_output_delta
 from ws.tasks import (
     TaskState,
@@ -38,38 +41,32 @@ from ws.tasks import (
 )
 
 
-class TestAuthMessage:
-    """Раздел 18.1: токен — первым сообщением, а не в адресе соединения."""
+class TestCookieHandshake:
+    """Cookie из handshake; старое сообщение auth не требуется и не авторизует."""
 
     @pytest.mark.parametrize(
-        "first_message",
-        [
-            {"type": "auth"},
-            {"type": "auth", "token": "not-a-real-token"},
-            {"type": "auth", "token": "токен"},
-            {"type": "status"},
-        ],
-        ids=["no_token", "invalid_token", "non_ascii_token", "wrong_type"],
+        "token", [None, "", "not-a-real-token", "%D1%82%D0%BE%D0%BA%D0%B5%D0%BD"]
     )
-    def test_rejected(self, first_message: dict[str, Any]) -> None:
-        from main import app
-
+    def test_rejected(self, token: str | None) -> None:
+        headers = {"origin": "https://tracker.botelo.ru"}
+        if token is not None:
+            headers["cookie"] = f"{session_cookie_name()}={token}"
         with (
             pytest.raises(WebSocketDisconnect) as exc_info,
-            TestClient(app).websocket_connect(f"/ws/tasks/{uuid.uuid4()}/status") as websocket,
+            TestClient(app).websocket_connect(
+                f"/ws/tasks/{uuid.uuid4()}/status",
+                headers=headers,
+            ) as websocket,
         ):
-            websocket.send_json(first_message)
             websocket.receive_json()
-
         assert exc_info.value.code == 4401
 
-    def test_silent_client_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from main import app
-
-        monkeypatch.setattr("ws.tasks.AUTH_TIMEOUT_SECONDS", 0.1)
+    def test_silent_client_closed(self) -> None:
         with (
             pytest.raises(WebSocketDisconnect) as exc_info,
-            TestClient(app).websocket_connect(f"/ws/tasks/{uuid.uuid4()}/status") as websocket,
+            TestClient(app).websocket_connect(
+                f"/ws/tasks/{uuid.uuid4()}/status", headers={"origin": "https://tracker.botelo.ru"}
+            ) as websocket,
         ):
             websocket.receive_json()
 
@@ -77,15 +74,15 @@ class TestAuthMessage:
 
     def test_token_in_url_ignored(self) -> None:
         """Старый способ — токен в адресе — больше не авторизует."""
-        from main import app
 
         token = issue_session_token(uuid.uuid4())
         url = f"/ws/tasks/{uuid.uuid4()}/status?token={token}"
         with (
             pytest.raises(WebSocketDisconnect) as exc_info,
-            TestClient(app).websocket_connect(url) as websocket,
+            TestClient(app).websocket_connect(
+                url, headers={"origin": "https://tracker.botelo.ru"}
+            ) as websocket,
         ):
-            websocket.send_json({"type": "hello"})
             websocket.receive_json()
 
         assert exc_info.value.code == 4401
@@ -215,7 +212,7 @@ class TestServeTaskEvents:
 
         serving = asyncio.create_task(
             serve_task_events(
-                IdleClient(),  # type: ignore[arg-type]
+                websocket=IdleClient(),  # type: ignore[arg-type]
                 task_id=task_id,
                 redis_client=redis_client,
                 fetch_state=fetch_state,
@@ -329,3 +326,66 @@ class TestAccessDeniedCloseCode:
                 await session.execute(sa.delete(Task).where(Task.id == task_id))
                 await session.execute(sa.delete(User).where(User.id.in_([owner_id, stranger_id])))
                 await session.commit()
+
+
+class TestSessionLifecycle:
+    @pytest.mark.parametrize("origin", [None, "null", "https://evil.example"])
+    def test_rejects_foreign_origin(self, origin: str | None) -> None:
+        headers = {} if origin is None else {"origin": origin}
+        with pytest.raises(WebSocketDisconnect) as error:
+            with TestClient(app).websocket_connect(
+                f"/ws/tasks/{uuid.uuid4()}/status",
+                headers=headers,
+            ) as websocket:
+                websocket.receive_json()
+        assert error.value.code == 4403
+
+    async def test_expiry_cleans_busy_stream(self, redis_client: Redis) -> None:
+        task_id = uuid.uuid4()
+        closed_codes: list[int] = []
+        received: list[dict[str, Any]] = []
+
+        class BusyClient:
+            async def receive(self) -> dict[str, Any]:
+                await asyncio.Event().wait()
+                return {}
+
+            async def send_json(self, payload: dict[str, Any]) -> None:
+                received.append(payload)
+
+            async def close(self, *, code: int) -> None:
+                closed_codes.append(code)
+
+        async def fetch(_task_id: uuid.UUID) -> TaskState:
+            return TaskState(TaskStatus.IN_PROGRESS)
+
+        async def publish() -> None:
+            while True:
+                await publish_output_delta(
+                    redis_client, task_id=task_id, node_log_id=uuid.uuid4(), text="busy"
+                )
+                await asyncio.sleep(0.001)
+
+        publisher = asyncio.create_task(publish())
+        try:
+            await asyncio.wait_for(
+                serve_task_events(
+                    websocket=BusyClient(),  # type: ignore[arg-type]
+                    task_id=task_id,
+                    redis_client=redis_client,
+                    fetch_state=fetch,
+                    expires_at=datetime.now(UTC) + timedelta(seconds=0.15),
+                ),
+                timeout=2,
+            )
+        finally:
+            publisher.cancel()
+            await asyncio.gather(publisher, return_exceptions=True)
+        assert closed_codes == [4401]
+        assert len(received) > 1
+        assert (
+            dict(await redis_client.pubsub_numsub(output_channel_name(task_id)))[
+                output_channel_name(task_id).encode()
+            ]
+            == 0
+        )

@@ -887,9 +887,12 @@ step_wait_idle() {
 # здесь возвращает код на прежний коммит — сервер не изменён.
 _reset_unknown_task_statuses() {
   local commit="$1" previous="$2" query=""
+  if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:backend/services/container_snapshot.py" 2>/dev/null; then
+    query+="DELETE FROM periodic_tasks WHERE name = 'refresh_task_containers'; "
+  fi
   if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${LIMIT_WAIT_MIGRATION}" 2>/dev/null; then
     log "Обновление: у версии ${commit} нет статуса awaiting_limit — ждущие лимита задачи уходят в failed или refining"
-    query="${LIMIT_WAIT_RESET}; ${LIMIT_SWITCH_REASONS_RESET}; "
+    query+="${LIMIT_WAIT_RESET}; ${LIMIT_SWITCH_REASONS_RESET}; "
   fi
   if ! git -C "${INSTALL_DIR}" cat-file -e "${commit}:${PRE_LAUNCH_STATUSES_MIGRATION}" 2>/dev/null; then
     log "Обновление: у версии ${commit} нет статусов до запуска — такие задачи возвращаются в new"
