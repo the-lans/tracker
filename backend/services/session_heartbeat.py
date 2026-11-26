@@ -29,15 +29,13 @@ from sqlalchemy import text
 
 from app_logging.config import get_logger
 from db.session import engine
+from services.session_timing import HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_TTL_SECONDS
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
 logger = get_logger("session_heartbeat")
 
-HEARTBEAT_INTERVAL_SECONDS = 30.0
-# Три пропущенных обновления подряд — воркера больше нет.
-HEARTBEAT_TTL_SECONDS = 90
 # Продолжение после `clear_context` ставится, пока предыдущий таск ещё
 # держит сессию: он отпускает её через мгновения.
 SESSION_OWNER_WAIT_SECONDS = 30.0
