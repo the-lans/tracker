@@ -1,4 +1,4 @@
-import { expireStoredSession, getStoredToken } from "@/stores/authContext";
+import { expireStoredSession, sessionGeneration } from "@/stores/authContext";
 import type { ApiErrorBody } from "@/lib/types";
 
 /**
@@ -44,10 +44,6 @@ function buildUrl(path: string, params?: Record<string, QueryParamValue>): strin
   return `${url.pathname}${url.search}`;
 }
 
-function authHeaders(token: string | null): Record<string, string> {
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 /** Тело ошибки в формате API (раздел 17.3); чужой JSON (прокси) — не оно. */
 function isApiErrorBody(value: unknown): value is ApiErrorBody {
   if (typeof value !== "object" || value === null || !("error" in value)) return false;
@@ -57,9 +53,9 @@ function isApiErrorBody(value: unknown): value is ApiErrorBody {
 
 const HTTP_UNAUTHORIZED = 401;
 
-async function errorOf(response: Response, token: string | null): Promise<ApiError> {
+async function errorOf(response: Response, generation: number): Promise<ApiError> {
   if (response.status === HTTP_UNAUTHORIZED) {
-    expireStoredSession(token);
+    expireStoredSession(generation);
   }
   const text = await response.text();
   let body: ApiErrorBody | null = null;
@@ -73,8 +69,9 @@ async function errorOf(response: Response, token: string | null): Promise<ApiErr
 }
 
 async function request<TResponse>(path: string, options: RequestOptions = {}): Promise<TResponse> {
-  const token = getStoredToken();
-  const headers = authHeaders(token);
+  const generation = sessionGeneration();
+  const headers: Record<string, string> = {};
+  if (options.method && options.method !== "GET") headers["X-Tracker-Request"] = "1";
   let body: BodyInit | undefined;
   if (options.body instanceof FormData) {
     body = options.body;
@@ -88,13 +85,14 @@ async function request<TResponse>(path: string, options: RequestOptions = {}): P
   }
 
   const response = await fetch(buildUrl(path, options.params), {
+    credentials: "same-origin",
     method: options.method ?? "GET",
     headers,
     body,
   });
 
   if (!response.ok) {
-    throw await errorOf(response, token);
+    throw await errorOf(response, generation);
   }
   if (response.status === 204) {
     return undefined as TResponse;
@@ -104,12 +102,12 @@ async function request<TResponse>(path: string, options: RequestOptions = {}): P
   return (text ? (JSON.parse(text) as unknown) : undefined) as TResponse;
 }
 
-/** Файл целиком (скачивание артефакта): авторизация — тем же токеном, что у API. */
+/** Файл целиком (скачивание артефакта): авторизация — той же cookie, что у API. */
 async function getBlob(path: string): Promise<Blob> {
-  const token = getStoredToken();
-  const response = await fetch(buildUrl(path), { headers: authHeaders(token) });
+  const generation = sessionGeneration();
+  const response = await fetch(buildUrl(path), { credentials: "same-origin" });
   if (!response.ok) {
-    throw await errorOf(response, token);
+    throw await errorOf(response, generation);
   }
   return response.blob();
 }
@@ -128,9 +126,4 @@ export const api = {
 export function wsUrl(path: string): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}${path}`;
-}
-
-/** Первое сообщение сокета задачи — токен сессии (раздел 18.1). */
-export function wsAuthMessage(): string {
-  return JSON.stringify({ type: "auth", token: getStoredToken() ?? "" });
 }

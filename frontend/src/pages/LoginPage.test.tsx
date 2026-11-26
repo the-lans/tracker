@@ -50,12 +50,12 @@ describe("LoginPage", () => {
 
   test("успешный вход сохраняет сессию без сообщения об отказе", async ({ api }) => {
     const currentUser = makeCurrentUser();
-    api.respond("POST /auth/google", { session_token: "session", user: currentUser });
+    api.respond("POST /auth/google", { user: currentUser });
     const { login, user } = renderLogin();
 
     await user.click(await screen.findByRole("button", { name: "Войти через Google" }));
 
-    await vi.waitFor(() => expect(login).toHaveBeenCalledWith({ token: "session", user: currentUser }));
+    await vi.waitFor(() => expect(login).toHaveBeenCalledWith(currentUser));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

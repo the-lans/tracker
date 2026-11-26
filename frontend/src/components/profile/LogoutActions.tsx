@@ -15,7 +15,7 @@ export function LogoutActions() {
 
   return (
     <div className="flex flex-wrap gap-2">
-      <Button variant="secondary" onClick={logout}>
+      <Button variant="secondary" onClick={() => { void logout().catch(toastError("Не удалось выйти")); }}>
         <LogOut className="size-4" />
         Выйти
       </Button>

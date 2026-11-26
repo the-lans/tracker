@@ -3,7 +3,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { UserRole } from "@/lib/types";
 
 export function ProtectedRoute() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
+  if (isLoading) return <p>Проверка сессии…</p>;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   return <Outlet />;
 }
