@@ -28,7 +28,7 @@ from redis.exceptions import RedisError
 
 from app_logging.config import get_logger
 from db.models.enums import LlmSwitchReason, ReasoningEffort
-from services.session_heartbeat import HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_TTL_SECONDS
+from services.session_timing import HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_TTL_SECONDS
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
