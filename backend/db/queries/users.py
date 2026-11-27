@@ -19,7 +19,14 @@ if TYPE_CHECKING:
 async def increment_session_version(db_session: AsyncSession, user_id: uuid.UUID) -> None:
     """Атомарно: параллельные отзывы сессий не теряют друг друга."""
     await db_session.execute(
+        sa.update(User).where(User.id == user_id).values(session_version=User.session_version + 1),
+    )
+
+
+async def deactivate_user(db_session: AsyncSession, user_id: uuid.UUID) -> None:
+    """Блокировка и отзыв сессий одним UPDATE, без коммита."""
+    await db_session.execute(
         sa.update(User)
-        .where(User.id == user_id)
-        .values(session_version=User.session_version + 1),
+        .where(User.id == user_id, User.is_active.is_(True))
+        .values(is_active=False, session_version=User.session_version + 1)
     )

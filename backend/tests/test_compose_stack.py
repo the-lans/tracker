@@ -62,6 +62,14 @@ class TestBackupWorker:
 
 
 class TestBackendImages:
+    def test_docker_socket_only_for_executors(self, compose: dict[str, Any]) -> None:
+        holders = {
+            name
+            for name, service in compose["services"].items()
+            if "/var/run/docker.sock" in _volume_names(service)
+        }
+        assert holders == {"worker", "session-worker", "backup-worker"}
+
     def test_know_their_commit(self, compose: dict[str, Any]) -> None:
         """Коммит образа — версия в /api/health и в manifest.json копии (раздел 20.4)."""
         built = {

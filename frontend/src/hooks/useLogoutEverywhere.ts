@@ -7,9 +7,9 @@ import { api } from "@/lib/apiClient";
  * в том числе на этом, поэтому после ответа выход и здесь.
  */
 export function useLogoutEverywhere() {
-  const { logout } = useAuth();
+  const { clearSession } = useAuth();
   return useMutation({
     mutationFn: () => api.post<void>("/auth/logout-all"),
-    onSuccess: logout,
+    onSuccess: clearSession,
   });
 }

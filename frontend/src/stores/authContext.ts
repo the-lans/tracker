@@ -1,77 +1,49 @@
 import { createContext } from "react";
 import type { CurrentUser } from "@/lib/types";
 
-const STORAGE_KEY = "tracker.session";
 const SESSION_EXPIRED_EVENT = "tracker:session-expired";
+const CHANGE_KEY = "tracker.auth-change";
+let generation = 0;
 
-export interface StoredSession {
-  token: string;
-  user: CurrentUser;
+export const sessionGeneration = () => generation;
+
+export function advanceSession() {
+  generation += 1;
 }
 
 export interface AuthContextValue {
-  token: string | null;
   user: CurrentUser | null;
   isAuthenticated: boolean;
-  login: (session: StoredSession) => void;
-  logout: () => void;
+  isLoading: boolean;
+  login: (user: CurrentUser) => void;
+  logout: () => Promise<void>;
+  clearSession: () => void;
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null);
 
-export function readStoredSession(): StoredSession | null {
+export function announceSessionChange() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as StoredSession;
+    localStorage.setItem(CHANGE_KEY, crypto.randomUUID());
   } catch {
-    return null;
+    // Хранилище недоступно — вход продолжает работать в текущей вкладке.
   }
 }
 
-export function writeStoredSession(session: StoredSession | null): void {
-  try {
-    if (session === null) {
-      localStorage.removeItem(STORAGE_KEY);
-    } else {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-    }
-  } catch {
-    // localStorage недоступен (приватный режим и т.п.) — сессия останется
-    // только в памяти на время текущей вкладки.
-  }
-}
-
-export function getStoredToken(): string | null {
-  return readStoredSession()?.token ?? null;
-}
-
-/**
- * Сервер отверг токен (401: истёк, подписан прежним ключом, пользователь
- * заблокирован) или запрос ушёл без токена, потому что сессию уже сбросила
- * другая вкладка. Сессия сбрасывается, только если её не сменил новый вход,
- * пока шёл запрос.
- */
-export function expireStoredSession(token: string | null): void {
-  const stored = getStoredToken();
-  if (stored !== null && stored !== token) return;
-  writeStoredSession(null);
+export function expireStoredSession(expectedGeneration: number) {
+  if (expectedGeneration !== generation) return;
+  advanceSession();
   window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
 }
 
-/** Подписка на сброс сессии из `expireStoredSession`; возвращает отписку. */
-export function onSessionExpired(listener: () => void): () => void {
+export function onSessionExpired(listener: () => void) {
   window.addEventListener(SESSION_EXPIRED_EVENT, listener);
   return () => window.removeEventListener(SESSION_EXPIRED_EVENT, listener);
 }
 
-/**
- * Вход и выход в другой вкладке: событие `storage` приходит только во вкладки,
- * которые запись не делали. `key === null` — хранилище очищено целиком.
- */
-export function onStoredSessionChange(listener: () => void): () => void {
+export function onStoredSessionChange(listener: () => void) {
   const handler = (event: StorageEvent) => {
-    if (event.key === STORAGE_KEY || event.key === null) listener();
+    if (event.key === CHANGE_KEY || event.key === null) listener();
   };
   window.addEventListener("storage", handler);
   return () => window.removeEventListener("storage", handler);

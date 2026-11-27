@@ -228,7 +228,6 @@ export interface CurrentUser {
 }
 
 export interface LoginResponse {
-  session_token: string;
   user: CurrentUser;
 }
 

@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useContext, useEffect, useRef } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { wsAuthMessage, wsUrl } from "@/lib/apiClient";
+import { AuthContext } from "@/stores/authContext";
+import { api, wsUrl } from "@/lib/apiClient";
 import type { Task, TaskOutputStream, TaskSocketEvent } from "@/lib/types";
 
 const RECONNECT_DELAY_MS = 3000;
@@ -58,10 +59,12 @@ function applyEvent(queryClient: QueryClient, taskId: string, payload: TaskSocke
  */
 export function useTaskStatusSocket(taskId: string | undefined) {
   const queryClient = useQueryClient();
+  const auth = useContext(AuthContext);
+  const userId = auth?.user?.id;
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
-    if (!taskId) return;
+    if (!taskId || (auth !== null && !userId)) return;
     let socket: WebSocket | null = null;
     let cancelled = false;
 
@@ -69,7 +72,6 @@ export function useTaskStatusSocket(taskId: string | undefined) {
       if (cancelled || !taskId) return;
       const current = new WebSocket(wsUrl(`/ws/tasks/${taskId}/status`));
       socket = current;
-      current.onopen = () => current.send(wsAuthMessage());
       current.onmessage = (event: MessageEvent<string>) => {
         try {
           applyEvent(queryClient, taskId, JSON.parse(event.data) as TaskSocketEvent);
@@ -78,8 +80,13 @@ export function useTaskStatusSocket(taskId: string | undefined) {
         }
       };
       current.onclose = (event) => {
-        // 4401/4404 — токен недействителен либо задача удалена: переподключение бессмысленно.
-        if (cancelled || event.code === 4401 || event.code === 4404) return;
+        if (cancelled) return;
+        // Сервер закрыл доступ: перечитать сессию, без бесконечного reconnect.
+        if (event.code === 4401) {
+          void api.get("/auth/me").catch(() => {});
+          return;
+        }
+        if (event.code === 4403 || event.code === 4404) return;
         reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY_MS);
       };
     }
@@ -91,7 +98,7 @@ export function useTaskStatusSocket(taskId: string | undefined) {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       socket?.close();
     };
-  }, [taskId, queryClient]);
+  }, [taskId, queryClient, userId, auth]);
 }
 
 /** Раздел 15.2: текст ответа, пришедший по сокету, пока ход ещё идёт. */

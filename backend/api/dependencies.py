@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import Depends, Header
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from clients.cliproxy import CliproxyManagementClient, open_cliproxy_client
@@ -18,19 +18,18 @@ from db.models.users import User
 from db.session import get_session
 from services.auth import load_session_user
 from services.auth_tokens import InvalidSessionTokenError, verify_session_token
+from services.browser_session import session_cookie_name
 from services.errors import ForbiddenError, UnauthorizedError
 from services.google_calendar import open_google_calendar_client
 
-_BEARER_PREFIX = "Bearer "
-
 
 async def get_current_user(
+    request: Request,
     db_session: Annotated[AsyncSession, Depends(get_session)],
-    authorization: Annotated[str | None, Header()] = None,
 ) -> User:
-    if authorization is None or not authorization.startswith(_BEARER_PREFIX):
-        raise UnauthorizedError("Не передан токен сессии")
-    token = authorization.removeprefix(_BEARER_PREFIX)
+    token = request.cookies.get(session_cookie_name())
+    if not token:
+        raise UnauthorizedError("Не передана cookie сессии")
     try:
         claims = verify_session_token(token)
     except InvalidSessionTokenError as exc:
@@ -51,6 +50,8 @@ async def get_cliproxy() -> AsyncIterator[CliproxyManagementClient]:
 
 
 async def get_google_calendar() -> AsyncIterator[GoogleCalendarClient]:
-    """Клиент Google OAuth и Calendar API на время запроса (раздел 19.8)."""
+    """
+    Клиент Google OAuth и Calendar API на время запроса (раздел 19.8).
+    """
     async with open_google_calendar_client() as client:
         yield client

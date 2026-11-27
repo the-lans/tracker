@@ -17,6 +17,7 @@ from api.schemas import (
     UserUpdateRequest,
 )
 from db.models.users import AllowedEmail, User
+from db.queries.users import deactivate_user
 from db.session import get_session
 from services.access import get_or_404
 from services.errors import ConflictError
@@ -74,8 +75,15 @@ async def update_user(
 
     if body.role is not None:
         user.role = body.role
-    if body.is_active is not None:
-        user.is_active = body.is_active
+    if body.is_active is False:
+        await deactivate_user(db_session, user.id)
+    elif body.is_active is True:
+        allowed = await db_session.scalar(
+            sa.select(AllowedEmail.id).where(AllowedEmail.email == user.email)
+        )
+        if allowed is None:
+            raise ConflictError("Для активации добавьте email в список допуска")
+        user.is_active = True
     if body.os_username is not None:
         user.os_username = body.os_username
     limit_raised = (
@@ -133,5 +141,8 @@ async def delete_allowed_email(
         not_found=f"Запись allowed_emails {allowed_email_id} не найдена",
     )
     await ensure_allowed_email_deletable(db_session, allowed_email)
+    target = await db_session.scalar(sa.select(User).where(User.email == allowed_email.email))
+    if target is not None:
+        await deactivate_user(db_session, target.id)
     await db_session.delete(allowed_email)
     await db_session.commit()

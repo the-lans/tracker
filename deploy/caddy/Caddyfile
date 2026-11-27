@@ -1,8 +1,8 @@
 {$DOMAIN} {
 	# Заголовки безопасности (раздел 20.3). CSP разрешает только свой домен и
 	# Google: вход (Google Identity Services) и шрифты; `'unsafe-inline'` в
-	# style-src — для атрибутов `style` компонентов React. Токен сессии лежит
-	# в localStorage — CSP не даёт внедрённому скрипту его унести. HSTS —
+	# style-src — для атрибутов `style` компонентов React. Сессия хранится
+	# в HttpOnly cookie; CSP ограничивает посторонние скрипты. HSTS —
 	# `HSTS_MAX_AGE` секунд (на локальном стенде 0: браузер иначе навсегда
 	# переведёт localhost на https).
 	header {

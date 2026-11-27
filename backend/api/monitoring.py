@@ -34,7 +34,8 @@ from db.models.logs import AppLog
 from db.models.tasks import Task
 from db.models.users import User
 from db.session import get_session
-from services.container_monitor import TrackerContainer, list_task_containers
+from services.container_monitor import TrackerContainer
+from services.container_snapshot import read_container_snapshot
 from services.llm_usage_summary import LlmUsageSummary, llm_usage_summary
 from services.monitoring import (
     InspectActiveResponse,
@@ -206,8 +207,7 @@ async def get_disk_usage(
 
 @monitoring_router.get("/containers", response_model=list[ContainerResponse])
 async def get_containers(
-    db_session: Annotated[AsyncSession, Depends(get_session)],
     _admin: Annotated[User, Depends(require_admin)],
 ) -> list[TrackerContainer]:
     async with redis_connection() as redis_client:
-        return await list_task_containers(db_session, redis_client, now=datetime.now(UTC))
+        return await read_container_snapshot(redis_client, now=datetime.now(UTC))

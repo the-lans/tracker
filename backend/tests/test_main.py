@@ -241,7 +241,12 @@ class TestFrameworkErrors:
         from main import app
 
         with TestClient(app) as client:
-            response = client.request(method, path, json={})
+            response = client.request(
+                method,
+                path,
+                json={},
+                headers={"Origin": "https://tracker.botelo.ru", "X-Tracker-Request": "1"},
+            )
 
         assert response.status_code == status
         assert response.json()["error"]["code"] == code

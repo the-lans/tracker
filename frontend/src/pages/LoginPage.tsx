@@ -9,7 +9,7 @@ import type { LoginResponse } from "@/lib/types";
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 
 export function LoginPage() {
-  const { isAuthenticated, login } = useAuth();
+  const { isAuthenticated, isLoading, login } = useAuth();
   const buttonRef = useRef<HTMLDivElement>(null);
   const [signingIn, setSigningIn] = useState(false);
   // Раздел 19.1: причина отказа остаётся на странице, пока не будет новой попытки.
@@ -32,7 +32,7 @@ export function LoginPage() {
           setRefusal(null);
           api
             .post<LoginResponse>("/auth/google", { id_token: response.credential })
-            .then((data) => login({ token: data.session_token, user: data.user }))
+            .then((data) => login(data.user))
             .catch((error: unknown) => setRefusal(errorMessage(error, "Не удалось войти через Google")))
             .finally(() => setSigningIn(false));
         },
@@ -49,8 +49,9 @@ export function LoginPage() {
     return () => {
       cancelled = true;
     };
-  }, [login]);
+  }, [login, isLoading]);
 
+  if (isLoading) return <p>Проверка сессии…</p>;
   if (isAuthenticated) {
     return <Navigate to="/" replace />;
   }

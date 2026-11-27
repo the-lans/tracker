@@ -11,7 +11,7 @@ import os
 from functools import lru_cache
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +27,7 @@ from services.auth import (
     verify_google_id_token,
 )
 from services.auth_tokens import issue_session_token
+from services.browser_session import clear_session_cookie, set_session_cookie
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -42,7 +43,6 @@ class CurrentUserResponse(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    session_token: str
     user: CurrentUserResponse
 
 
@@ -61,20 +61,22 @@ def get_google_verifier() -> GoogleIdTokenVerifier:
 @router.post("/google", response_model=LoginResponse)
 async def login_with_google(
     body: GoogleLoginRequest,
+    response: Response,
     db_session: Annotated[AsyncSession, Depends(get_session)],
     verifier: Annotated[GoogleIdTokenVerifier, Depends(get_google_verifier)],
 ) -> LoginResponse:
     identity = await verify_google_id_token(verifier, body.id_token)
     user = await authenticate_or_register(db_session, identity=identity)
     session_token = issue_session_token(user.id, session_version=user.session_version)
+    set_session_cookie(response, session_token)
     return LoginResponse(
-        session_token=session_token,
         user=CurrentUserResponse(id=str(user.id), email=user.email, role=user.role),
     )
 
 
 @router.post("/logout-all", status_code=204)
 async def logout_everywhere(
+    response: Response,
     db_session: Annotated[AsyncSession, Depends(get_session)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
@@ -82,3 +84,21 @@ async def logout_everywhere(
     Раздел 19.1: токены пользователя на всех устройствах, включая этот, недействительны.
     """
     await revoke_user_sessions(db_session, current_user)
+
+    clear_session_cookie(response)
+
+
+@router.get("/me", response_model=CurrentUserResponse)
+async def current_session(
+    response: Response,
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> CurrentUserResponse:
+    response.headers["Cache-Control"] = "no-store"
+    return CurrentUserResponse(
+        id=str(current_user.id), email=current_user.email, role=current_user.role
+    )
+
+
+@router.post("/logout", status_code=204)
+async def logout(response: Response) -> None:
+    clear_session_cookie(response)

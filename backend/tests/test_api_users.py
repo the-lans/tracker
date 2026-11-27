@@ -213,3 +213,23 @@ class TestRetentionSettings:
         )
 
         assert response.status_code == 403
+
+
+class TestAllowlistRevocation:
+    async def test_allowlist_removal_revokes_immediately(
+        self,
+        admin_client: AsyncClient,
+        current_user: User,
+        db_session: AsyncSession,
+    ) -> None:
+        entry = AllowedEmail(email=current_user.email)
+        db_session.add(entry)
+        await db_session.flush()
+        old_version = current_user.session_version
+        response = await admin_client.delete(f"/allowed-emails/{entry.id}")
+        assert response.status_code == 204
+        await db_session.refresh(current_user)
+        assert not current_user.is_active
+        assert current_user.session_version == old_version + 1
+        response = await admin_client.patch(f"/users/{current_user.id}", json={"is_active": True})
+        assert response.status_code == 409

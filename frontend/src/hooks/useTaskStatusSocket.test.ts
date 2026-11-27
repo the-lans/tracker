@@ -2,9 +2,8 @@ import { act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useTaskOutputStream, useTaskStatusSocket } from "@/hooks/useTaskStatusSocket";
 import { TaskStatus, type Task } from "@/lib/types";
-import { writeStoredSession } from "@/stores/authContext";
 import { FakeWebSocket, stubWebSocket } from "@/test/fakeWebSocket";
-import { makeCurrentUser, makeTask } from "@/test/factories";
+import { makeTask } from "@/test/factories";
 import { createTestQueryClient, renderHookWithClient } from "@/test/renderWithProviders";
 
 const RECONNECT_DELAY_MS = 3000;
@@ -41,24 +40,20 @@ function flushRender() {
 describe("useTaskStatusSocket", () => {
   beforeEach(() => {
     stubWebSocket();
-    writeStoredSession({ token: "session-token-123", user: makeCurrentUser() });
     vi.useFakeTimers();
   });
   afterEach(() => {
     vi.useRealTimers();
-    writeStoredSession(null);
   });
 
-  it("токен уходит первым сообщением, а не в адресе", () => {
+  it("cookie handshake без токена в сообщении или адресе", () => {
     renderSocket();
     const socket = FakeWebSocket.latest();
 
     socket.open();
 
     expect(socket.url).toBe(`ws://${window.location.host}/ws/tasks/t1/status`);
-    expect(socket.sent.map((message) => JSON.parse(message))).toEqual([
-      { type: "auth", token: "session-token-123" },
-    ]);
+    expect(socket.sent).toEqual([]);
   });
 
   it("без задачи соединения нет", () => {
@@ -142,7 +137,7 @@ describe("useTaskStatusSocket", () => {
       expect(FakeWebSocket.instances).toHaveLength(2);
       FakeWebSocket.latest().open();
 
-      expect(FakeWebSocket.latest().sent).toHaveLength(1);
+      expect(FakeWebSocket.latest().sent).toHaveLength(0);
     });
 
     it.each([4401, 4404])("код %i — без переподключения", (code) => {

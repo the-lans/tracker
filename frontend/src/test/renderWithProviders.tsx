@@ -37,18 +37,21 @@ export function renderWithProviders(
   {
     currentUser = makeCurrentUser(),
     login = () => {},
-    logout = () => {},
+    clearSession = () => {},
+    logout = async () => {},
     path = "/",
   }: {
     currentUser?: CurrentUser | null;
     login?: AuthContextValue["login"];
+    clearSession?: AuthContextValue["clearSession"];
     logout?: AuthContextValue["logout"];
     path?: string;
   } = {},
 ) {
   const queryClient = createTestQueryClient();
   const auth: AuthContextValue = {
-    token: currentUser ? "test-token" : null,
+    isLoading: false,
+    clearSession,
     user: currentUser,
     isAuthenticated: currentUser !== null,
     login,

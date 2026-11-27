@@ -332,7 +332,11 @@ async def api_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     app.dependency_overrides[get_session] = _override_get_session
     transport = ASGITransport(app=app)
     try:
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(
+            transport=transport,
+            base_url="https://test",
+            headers={"Origin": "https://tracker.botelo.ru", "X-Tracker-Request": "1"},
+        ) as client:
             yield client
     finally:
         app.dependency_overrides.pop(get_session, None)

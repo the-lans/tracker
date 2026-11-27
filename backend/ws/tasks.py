@@ -18,10 +18,8 @@ WebSocket-канал задачи (раздел 15.2, 18.1 ТЗ): `/ws/tasks/{ta
   LLM по мере генерации (раздел 15.2). Их публикует воркер в Redis
   (`services/output_stream.py`), опросом БД их не получить.
 
-Авторизация (раздел 18.1, 19.2): токен сессии приходит первым сообщением
-``{"type": "auth", "token": ...}``, а не в адресе — адрес попадает в журналы
-запросов. Доступ к каналу перепроверяется во время потока: заблокированный
-пользователь или потерявший доступ к задаче отключается.
+Авторизация: cookie из handshake и точный Origin. Срок сессии ограничивает
+поток; блокировка и отзыв перепроверяются до отправки данных.
 """
 
 from __future__ import annotations
@@ -31,6 +29,7 @@ import json
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -42,6 +41,7 @@ from db.models.tasks import Task
 from db.session import async_session_factory
 from services.access import authorize_task_stream
 from services.auth_tokens import InvalidSessionTokenError, SessionClaims, verify_session_token
+from services.browser_session import public_origin, session_cookie_name
 from services.errors import NotFoundError, UnauthorizedError
 from services.output_stream import output_channel_name
 from services.redis_connection import redis_connection
@@ -53,11 +53,9 @@ logger = get_logger("ws.tasks")
 _POLL_INTERVAL_SECONDS = 1.0
 _TASK_NOT_FOUND_CLOSE_CODE = 4404
 _UNAUTHORIZED_CLOSE_CODE = 4401
-# Сколько ждать сообщения с токеном после подключения.
-AUTH_TIMEOUT_SECONDS = 5.0
+_FORBIDDEN_CLOSE_CODE = 4403
 # Доступ перепроверяется каждые N опросов статуса (~N секунд).
 ACCESS_RECHECK_POLLS = 10
-_AUTH_MESSAGE_TYPE = "auth"
 # Типы событий канала (см. docstring модуля).
 STATUS_EVENT = "status"
 LLM_ACCOUNT_EVENT = "llm_account"
@@ -121,7 +119,9 @@ async def stream_task_events(
     fetch_state: FetchState = _fetch_state,
     check_access: AccessCheck | None = None,
 ) -> int:
-    """Пересылает события задачи; возвращает код закрытия: задача удалена или доступ потерян."""
+    """
+    Пересылает события задачи; возвращает код закрытия: задача удалена или доступ потерян.
+    """
     pubsub = redis_client.pubsub()
     await pubsub.subscribe(output_channel_name(task_id))
     loop = asyncio.get_running_loop()
@@ -131,17 +131,17 @@ async def stream_task_events(
     try:
         while True:
             if loop.time() >= next_status_check:
+                if check_access is not None and polls % ACCESS_RECHECK_POLLS == 0:
+                    close_code = await check_access()
+                    if close_code is not None:
+                        return close_code
+                polls += 1
                 state = await fetch_state(task_id)
                 if state is None:
                     return _TASK_NOT_FOUND_CLOSE_CODE
                 for event in _changes(task_id, state, last_state):
                     await send(event)
                 last_state = state
-                polls += 1
-                if check_access is not None and polls % ACCESS_RECHECK_POLLS == 0:
-                    close_code = await check_access()
-                    if close_code is not None:
-                        return close_code
                 next_status_check = loop.time() + _POLL_INTERVAL_SECONDS
             message = await pubsub.get_message(
                 ignore_subscribe_messages=True,
@@ -168,12 +168,13 @@ async def _wait_for_disconnect(websocket: WebSocket) -> None:
 
 
 async def serve_task_events(
-    websocket: WebSocket,
     *,
+    websocket: WebSocket,
     task_id: uuid.UUID,
     redis_client: Redis,
     fetch_state: FetchState = _fetch_state,
     check_access: AccessCheck | None = None,
+    expires_at: datetime | None = None,
 ) -> None:
     """
     Поток событий до удаления задачи, потери доступа или закрытия сокета
@@ -190,17 +191,24 @@ async def serve_task_events(
         ),
     )
     disconnected = asyncio.create_task(_wait_for_disconnect(websocket))
-    done, pending = await asyncio.wait(
-        {streaming, disconnected},
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-    for remaining in pending:
-        remaining.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
-    if streaming in done:
-        await websocket.close(code=streaming.result())
-        return
-    logger.info("ws_task_status_disconnected", task_id=str(task_id))
+    tasks = {streaming, disconnected}
+    expiry = None
+    if expires_at is not None:
+        expiry = asyncio.create_task(
+            asyncio.sleep(max(0, (expires_at - datetime.now(UTC)).total_seconds()))
+        )
+        tasks.add(expiry)
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        if expiry in done:
+            await websocket.close(code=_UNAUTHORIZED_CLOSE_CODE)
+        elif streaming in done:
+            await websocket.close(code=streaming.result())
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _access_denied_close_code(*, claims: SessionClaims, task_id: uuid.UUID) -> int | None:
@@ -218,22 +226,13 @@ async def _access_denied_close_code(*, claims: SessionClaims, task_id: uuid.UUID
     return None
 
 
-async def receive_auth_token(websocket: WebSocket) -> str | None:
-    """Токен из первого сообщения ``{"type": "auth", "token": ...}``; `None` — его нет."""
-    try:
-        message = await asyncio.wait_for(websocket.receive_json(), timeout=AUTH_TIMEOUT_SECONDS)
-    except (TimeoutError, WebSocketDisconnect, ValueError):
-        return None
-    if not isinstance(message, dict) or message.get("type") != _AUTH_MESSAGE_TYPE:
-        return None
-    token = message.get("token")
-    return token if isinstance(token, str) else None
-
-
 @router.websocket("/ws/tasks/{task_id}/status")
 async def task_status_stream(websocket: WebSocket, task_id: uuid.UUID) -> None:
     await websocket.accept()
-    token = await receive_auth_token(websocket)
+    if websocket.headers.get("origin") != public_origin():
+        await websocket.close(code=_FORBIDDEN_CLOSE_CODE)
+        return
+    token = websocket.cookies.get(session_cookie_name())
     if token is None:
         await websocket.close(code=_UNAUTHORIZED_CLOSE_CODE)
         return
@@ -249,15 +248,20 @@ async def task_status_stream(websocket: WebSocket, task_id: uuid.UUID) -> None:
         return
 
     async def check_access() -> int | None:
+        try:
+            verify_session_token(token)
+        except InvalidSessionTokenError:
+            return _UNAUTHORIZED_CLOSE_CODE
         return await _access_denied_close_code(claims=claims, task_id=task_id)
 
     async with redis_connection() as redis_client:
         try:
             await serve_task_events(
-                websocket,
+                websocket=websocket,
                 task_id=task_id,
                 redis_client=redis_client,
                 check_access=check_access,
+                expires_at=claims.expires_at,
             )
         except WebSocketDisconnect:
             logger.info("ws_task_status_disconnected", task_id=str(task_id))

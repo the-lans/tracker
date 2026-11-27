@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -37,6 +37,9 @@ class InvalidSessionTokenError(Exception): ...
 class SessionClaims:
     user_id: uuid.UUID
     session_version: int
+    expires_at: datetime = field(
+        default_factory=lambda: datetime.max.replace(tzinfo=UTC), compare=False
+    )
 
 
 _SESSION_KEY_ENV = "SESSION_SECRET_KEY"
@@ -74,11 +77,18 @@ def verify_session_token(token: str) -> SessionClaims:
     except (InvalidToken, UnicodeEncodeError) as exc:
         raise InvalidSessionTokenError("Токен сессии недействителен") from exc
 
-    payload = json.loads(raw)
-    expires_at = datetime.fromisoformat(payload["expires_at"])
+    try:
+        payload = json.loads(raw)
+        expires_at = datetime.fromisoformat(payload["expires_at"])
+        claims = SessionClaims(
+            user_id=uuid.UUID(payload["user_id"]),
+            session_version=int(payload.get(_SESSION_VERSION_FIELD, INITIAL_SESSION_VERSION)),
+            expires_at=expires_at,
+        )
+        if expires_at.tzinfo is None:
+            raise ValueError("Отсутствует часовой пояс")
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise InvalidSessionTokenError("Токен сессии недействителен") from exc
     if datetime.now(UTC) >= expires_at:
         raise InvalidSessionTokenError("Токен сессии истёк")
-    return SessionClaims(
-        user_id=uuid.UUID(payload["user_id"]),
-        session_version=int(payload.get(_SESSION_VERSION_FIELD, INITIAL_SESSION_VERSION)),
-    )
+    return claims

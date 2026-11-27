@@ -166,6 +166,13 @@ _SEED_TASKS: list[tuple[str, str, str, str, int | str | None]] = [
         15 * _MINUTE,
     ),
     (
+        "refresh_task_containers",
+        "Обновление списка контейнеров задач",
+        "Сохраняет снимок контейнеров в Redis для мониторинга без доступа API к Docker",
+        "tasks.periodic.refresh_task_containers",
+        30,
+    ),
+    (
         "purge_orphaned_playwright_processes",
         "Очистка осиротевших процессов браузера",
         "Находит и завершает осиротевшие процессы Playwright/аналогичных MCP-инструментов",

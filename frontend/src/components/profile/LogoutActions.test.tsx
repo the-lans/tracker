@@ -5,9 +5,9 @@ import { test } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/renderWithProviders";
 
 describe("LogoutActions", () => {
-  test("«Выйти» — только локально, без запроса", async ({ api }) => {
-    const logout = vi.fn();
-    const { user } = renderWithProviders(<LogoutActions />, { logout });
+  test("«Выйти» вызывает асинхронный серверный выход из AuthProvider", async ({ api }) => {
+    const logout = vi.fn(async () => {});
+    const { user } = renderWithProviders(<LogoutActions />, { logout, clearSession: logout });
 
     await user.click(screen.getByRole("button", { name: "Выйти" }));
 
@@ -20,8 +20,8 @@ describe("LogoutActions", () => {
     { outcome: "ошибка", response: { error: { status: 500, message: "Сбой" } }, loggedOut: false },
   ])("выйти на всех устройствах: $outcome", async ({ response, loggedOut }, { api, toasts }) => {
     api.respond("POST /auth/logout-all", response);
-    const logout = vi.fn();
-    const { user } = renderWithProviders(<LogoutActions />, { logout });
+    const logout = vi.fn(async () => {});
+    const { user } = renderWithProviders(<LogoutActions />, { logout, clearSession: logout });
 
     await user.click(screen.getByRole("button", { name: "Выйти на всех устройствах" }));
     await user.click(await screen.findByRole("button", { name: "Выйти везде" }));

@@ -1,8 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError, wsAuthMessage, wsUrl } from "@/lib/apiClient";
+import { describe, expect, it, vi } from "vitest";
+import { api, ApiError, wsUrl } from "@/lib/apiClient";
 import { errorMessage } from "@/lib/errors";
-import { getStoredToken, onSessionExpired, writeStoredSession } from "@/stores/authContext";
-import { makeCurrentUser } from "@/test/factories";
+import { advanceSession, onSessionExpired } from "@/stores/authContext";
 
 const TOKEN = "session-token-123";
 
@@ -18,11 +17,9 @@ const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 describe("apiClient", () => {
-  beforeEach(() => writeStoredSession({ token: TOKEN, user: makeCurrentUser() }));
-  afterEach(() => writeStoredSession(null));
 
   describe("запрос", () => {
-    it("токен сессии — в заголовке, тело — JSON", async () => {
+    it("cookie авторизация и CSRF заголовок, тело — JSON", async () => {
       const fetchMock = stubFetch(json(200, { id: "t1" }));
 
       await expect(api.post("/tasks", { code: "RR-12345" })).resolves.toEqual({ id: "t1" });
@@ -30,14 +27,14 @@ describe("apiClient", () => {
       const [url, init] = fetchMock.mock.calls[0];
       expect(url).toBe("/api/tasks");
       expect(init).toMatchObject({
+        credentials: "same-origin",
         method: "POST",
-        headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+        headers: { "X-Tracker-Request": "1", "Content-Type": "application/json" },
         body: JSON.stringify({ code: "RR-12345" }),
       });
     });
 
     it("без входа — без заголовка авторизации", async () => {
-      writeStoredSession(null);
       const fetchMock = stubFetch(json(200, []));
 
       await api.get("/tasks");
@@ -112,13 +109,13 @@ describe("apiClient", () => {
       { name: "401, пока другая вкладка сбрасывала сессию", status: 401, sent: TOKEN, storedAfter: null, expired: true },
       { name: "403 — сессия цела", status: 403, sent: TOKEN, storedAfter: TOKEN, expired: false },
     ])("$name", async ({ status, sent, storedAfter, expired }) => {
-      writeStoredSession(sent === null ? null : { token: sent, user: makeCurrentUser() });
+      void sent;
       const listener = vi.fn();
       const unsubscribe = onSessionExpired(listener);
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => {
-          writeStoredSession(storedAfter === null ? null : { token: storedAfter, user: makeCurrentUser() });
+          if (storedAfter === "new-token") advanceSession();
           return json(status, { error: { code: "unauthorized", message: "Токен сессии истёк" } });
         }),
       );
@@ -126,7 +123,6 @@ describe("apiClient", () => {
       await expect(api.get("/llm-accounts")).rejects.toMatchObject({ status });
 
       unsubscribe();
-      expect(getStoredToken()).toBe(expired ? null : storedAfter);
       expect(listener).toHaveBeenCalledTimes(expired ? 1 : 0);
     });
 
@@ -135,17 +131,16 @@ describe("apiClient", () => {
 
       await expect(api.getBlob("/tasks/t1/artifacts/report.csv")).rejects.toBeInstanceOf(ApiError);
 
-      expect(getStoredToken()).toBeNull();
+      // Cookie очищается сервером; клиент уведомляет об истёкшей сессии.
     });
   });
 
   describe("WebSocket (раздел 18.1)", () => {
-    it("токен не попадает в адрес, а уходит первым сообщением", () => {
+    it("токен не попадает в адрес", () => {
       const url = wsUrl("/ws/tasks/t1/status");
 
       expect(url).toBe(`ws://${window.location.host}/ws/tasks/t1/status`);
       expect(url).not.toContain(TOKEN);
-      expect(JSON.parse(wsAuthMessage())).toEqual({ type: "auth", token: TOKEN });
     });
   });
 });

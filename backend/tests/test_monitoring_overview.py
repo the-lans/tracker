@@ -36,6 +36,7 @@ from services.container_monitor import (
     node_expired,
     parse_created_at,
 )
+from services.container_snapshot import store_container_snapshot
 from services.maintenance import MAINTENANCE_KEY
 from services.node_stats import StatsPeriod, node_stats
 from services.nodes.script import NODE_CONTAINER_PREFIX
@@ -415,6 +416,11 @@ class TestDiskUsage:
 
 
 class TestContainers:
+    async def test_missing_snapshot_returns_unavailable(self, admin_client: AsyncClient) -> None:
+        response = await admin_client.get("/monitoring/containers")
+        assert response.status_code == 503
+        assert "нет актуального снимка" in response.text
+
     @pytest.mark.parametrize(
         ("deadline", "age", "expired"),
         [
@@ -465,11 +471,18 @@ class TestContainers:
             NODE_CONTAINER_PREFIX: ("tracker-node-c\t2000\tRR-1\t2026-11-12 08:00:00 +0300 MSK\n"),
         }
 
-        async def fake_docker(*args: str) -> str:
+        async def fake_docker(*args: str, check: bool = False) -> str:
             prefix = args[args.index("--filter") + 1].removeprefix("name=")
             return listings[prefix]
 
         monkeypatch.setattr(container_monitor, "run_docker", fake_docker)
+
+        await store_container_snapshot(db_session, redis_client, now=datetime.now(UTC))
+
+        async def forbidden_docker(*args: str, **kwargs: object) -> str:
+            raise AssertionError("API не должен вызывать Docker")
+
+        monkeypatch.setattr(container_monitor, "run_docker", forbidden_docker)
 
         response = await admin_client.get("/monitoring/containers")
 
@@ -488,7 +501,7 @@ class TestContainers:
         redis_client: Redis,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        async def fake_docker(*args: str) -> str:
+        async def fake_docker(*args: str, check: bool = False) -> str:
             if SESSION_CONTAINER_PREFIX in args[2]:
                 return "tracker-session-x\t\t2026-11-12 10:00:00 +0300 MSK\n"
             return ""

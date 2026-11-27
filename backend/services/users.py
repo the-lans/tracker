@@ -15,6 +15,7 @@ from app_logging.config import get_logger
 from db.models.enums import AppLogLevel, UserRole
 from db.models.logs import AppLog
 from db.models.users import AllowedEmail, User
+from db.queries.users import deactivate_user
 from services.errors import ConflictError
 from services.ssh_keys import parse_public_key
 
@@ -27,7 +28,9 @@ DEPROVISION_LOG_SOURCE = "periodic.deprovision_inactive_users"
 
 
 async def set_ssh_public_key(db_session: AsyncSession, *, user: User, public_key: str) -> User:
-    """Сохраняет ключ в нормализованном виде (`тип base64 [комментарий]`)."""
+    """
+    Сохраняет ключ в нормализованном виде (`тип base64 [комментарий]`).
+    """
     user.ssh_public_key = parse_public_key(public_key).to_authorized_keys_line()
     # Раздел 16.2: давность использования считается заново для нового ключа.
     user.ssh_key_last_used_at = None
@@ -42,7 +45,9 @@ async def set_llm_switch_threshold(
     user: User,
     five_hour_pct: int,
 ) -> User:
-    """Раздел 19.7: порог 5-часового окна действует со следующего обращения к модели."""
+    """
+    Раздел 19.7: порог 5-часового окна действует со следующего обращения к модели.
+    """
     user.llm_switch_threshold_5h_pct = five_hour_pct
     await db_session.commit()
     await db_session.refresh(user)
@@ -55,7 +60,9 @@ async def set_llm_compact_on_switch(
     user: User,
     enabled: bool,
 ) -> User:
-    """Раздел 19.7: сжимать ли контекст сессии при смене LLM-аккаунта на границе хода."""
+    """
+    Раздел 19.7: сжимать ли контекст сессии при смене LLM-аккаунта на границе хода.
+    """
     user.llm_compact_on_switch = enabled
     await db_session.commit()
     await db_session.refresh(user)
@@ -106,9 +113,9 @@ async def ensure_allowed_email_deletable(
     allowed_email: AllowedEmail,
 ) -> None:
     """
-    Удаление email из `allowed_emails` блокирует пользователя при ближайшем
-    `deprovision_inactive_users` (раздел 16.2). Email последнего активного
-    администратора (из тех, кто сохраняет доступ) удалить нельзя: снять
+    Удаление email из `allowed_emails` немедленно блокирует пользователя.
+    Email последнего активного администратора (из тех, кто сохраняет доступ)
+    удалить нельзя: снять
     блокировку было бы некому.
     """
     if not await _is_active_admin_email(db_session, allowed_email.email):
@@ -183,7 +190,7 @@ async def deprovision_inactive_users(db_session: AsyncSession) -> list[uuid.UUID
             db_session.add(_kept_admin_log(user))
             logger.error("deprovision_last_admin_kept", user_id=str(user.id))
             continue
-        user.is_active = False
+        await deactivate_user(db_session, user.id)
         db_session.add(_deprovision_log(user))
         deprovisioned.append(user.id)
         logger.info("user_deprovisioned", user_id=str(user.id), os_username=user.os_username)
