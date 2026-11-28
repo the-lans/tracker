@@ -395,7 +395,7 @@ class TestAgentChecks:
         async def route(_owner_id: uuid.UUID) -> None:
             return None
 
-        monkeypatch.setattr(test_agent, "luna_route", route)
+        monkeypatch.setattr(test_agent, "ci_agent_route", route)
         monkeypatch.setattr("tasks.test_runs.execute_test_run.delay", lambda _: None)
         key = uuid.uuid4()
         runs = await test_agent.create_ci_runs(
@@ -434,7 +434,7 @@ class TestAgentChecks:
         async def available(_owner: uuid.UUID) -> None:
             return None
 
-        monkeypatch.setattr(test_agent, "luna_route", available)
+        monkeypatch.setattr(test_agent, "ci_agent_route", available)
         monkeypatch.setattr("tasks.test_runs.execute_test_run.delay", lambda _: None)
         key = uuid.uuid4()
         first = await test_agent.create_ci_runs(
@@ -447,7 +447,7 @@ class TestAgentChecks:
         async def unavailable(_owner: uuid.UUID) -> None:
             raise ValidationError("Лимит исчерпан")
 
-        monkeypatch.setattr(test_agent, "luna_route", unavailable)
+        monkeypatch.setattr(test_agent, "ci_agent_route", unavailable)
         repository.test_profile = None
         await db_session.commit()
         second = await test_agent.create_ci_runs(

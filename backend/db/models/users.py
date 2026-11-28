@@ -13,6 +13,7 @@ from db.models.enums import UserRole
 from db.models.mixins import CreatedAtMixin, UUIDPrimaryKeyMixin, pg_enum
 
 # Раздел 19.7: порог расхода 5-часового окна, после которого аккаунт задачи не берут.
+DEFAULT_CI_AGENT_MODEL = "gpt-6-luna"
 DEFAULT_LLM_SWITCH_THRESHOLD_PCT = 93
 MIN_LLM_SWITCH_THRESHOLD_PCT = 1
 MAX_LLM_SWITCH_THRESHOLD_PCT = 100
@@ -89,6 +90,11 @@ class User(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     # Недельный порог теперь общий, из `system_settings`; столбец пользователя
     # `llm_switch_threshold_week_pct` остаётся в БД для прежней версии (раздел 20.6)
     # и не используется.
+    ci_agent_model: Mapped[str] = mapped_column(
+        sa.String(200),
+        default=DEFAULT_CI_AGENT_MODEL,
+        server_default=DEFAULT_CI_AGENT_MODEL,
+    )
     llm_compact_on_switch: Mapped[bool] = mapped_column(
         sa.Boolean,
         default=True,

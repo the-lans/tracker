@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, computed_field
 
 from db.models.enums import (
     PeriodicRunStatus,
@@ -43,6 +44,7 @@ class UserResponse(BaseModel):
     jira_token_encrypted: str | None = Field(default=None, exclude=True)
     # Раздел 19.7: порог 5-часового окна и сжатие контекста при смене аккаунта.
     llm_switch_threshold_5h_pct: int
+    ci_agent_model: str
     llm_compact_on_switch: bool
     # Раздел 14.4: лимит параллельных задач — задаёт администратор.
     max_parallel_tasks: int
@@ -187,3 +189,11 @@ class PeriodicTaskUpdateRequest(BaseModel):
     interval_seconds: int | None = Field(default=None, ge=1)
     crontab_expression: str | None = None
     is_enabled: bool | None = None
+
+
+class CiAgentModelUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: Annotated[
+        str, StringConstraints(strip_whitespace=True), Field(min_length=1, max_length=200)
+    ]

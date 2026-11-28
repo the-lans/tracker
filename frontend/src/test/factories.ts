@@ -202,6 +202,7 @@ export function makeUser(overrides: Partial<User> = {}): User {
     ssh_key_last_used_at: null,
     jira_email: null,
     jira_token_set: false,
+    ci_agent_model: "gpt-6-luna",
     llm_switch_threshold_5h_pct: 93,
     llm_compact_on_switch: true,
     max_parallel_tasks: 3,

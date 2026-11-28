@@ -249,6 +249,7 @@ export interface User {
   /** Раздел 19.7: порог 5-часового окна лимита, в процентах; не переступается. */
   llm_switch_threshold_5h_pct: number;
   /** Раздел 19.7: `/compact` при смене LLM-аккаунта на границе хода. */
+  ci_agent_model: string;
   llm_compact_on_switch: boolean;
   /** Раздел 14.4: лимит параллельных задач, задаёт администратор (1–50). */
   max_parallel_tasks: number;

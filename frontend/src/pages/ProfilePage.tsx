@@ -8,6 +8,7 @@ import { GoogleCalendarCard } from "@/components/profile/GoogleCalendarCard";
 import { JiraConnectionCard } from "@/components/profile/JiraConnectionCard";
 import { TwgConnectionCard } from "@/components/profile/TwgConnectionCard";
 import { LlmCompactSwitchCard } from "@/components/profile/LlmCompactSwitchCard";
+import { CiAgentModelCard } from "@/components/profile/CiAgentModelCard";
 import { LlmThresholdsCard } from "@/components/profile/LlmThresholdsCard";
 import { Card } from "@/components/ui/card";
 import { useAuth } from "@/hooks/useAuth";
@@ -65,6 +66,7 @@ export function ProfilePage() {
         <div className="flex max-w-lg flex-col gap-4">
           <LlmThresholdsCard />
           <LlmCompactSwitchCard />
+          <CiAgentModelCard />
         </div>
       ),
     },

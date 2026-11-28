@@ -61,7 +61,6 @@ from services.test_runs import (
 
 logger = get_logger("test_agent")
 
-LUNA_MODEL = "gpt-6-luna"
 CI_AGENT_MAX_TURNS = 4
 CI_AGENT_HEARTBEAT_SECONDS = 5
 CI_AGENT_SHUTDOWN_TIMEOUT_SECONDS = 120
@@ -155,7 +154,7 @@ async def build_test_tools(task: Task) -> McpSdkServerConfig:
         ),
         (
             "run_ci",
-            "Запустить двух агентов gpt-6-luna параллельно: unit+lint и integration. "
+            "Запустить двух агентов с моделью из профиля параллельно: unit+lint и integration. "
             "Возвращает ID прогонов. Дождись их результатов и cleanup_status=done.",
             {"repository_id": str, "idempotency_key": str},
         ),
@@ -172,7 +171,7 @@ async def build_test_tools(task: Task) -> McpSdkServerConfig:
     return create_sdk_mcp_server(name="tracker-tests", tools=tools)
 
 
-async def luna_route(owner_id: uuid.UUID, *, run_id: uuid.UUID | None = None) -> TurnRoute:
+async def ci_agent_route(owner_id: uuid.UUID, *, run_id: uuid.UUID | None = None) -> TurnRoute:
     async with async_session_factory() as db, open_cliproxy_client() as proxy:
         accounts = list(
             (
@@ -234,16 +233,16 @@ async def luna_route(owner_id: uuid.UUID, *, run_id: uuid.UUID | None = None) ->
             )
             if state.state not in (LimitState.FREE, LimitState.RUNNING):
                 continue
-            if LUNA_MODEL in await account_models(proxy, account):
+            if owner.ci_agent_model in await account_models(proxy, account):
                 return TurnRoute(
                     account_id=account.id,
                     prefix=account.cliproxy_prefix,
-                    model=LUNA_MODEL,
+                    model=owner.ci_agent_model,
                     effort=ReasoningEffort.LOW,
                     provider_effort=ReasoningEffort.LOW,
                 )
     raise ValidationError(
-        "Для CI-агентов нужен OpenAI-аккаунт с моделью gpt-6-luna и доступным лимитом"
+        f"Для CI-агентов нужен OpenAI-аккаунт с моделью {owner.ci_agent_model} и доступным лимитом"
     )
 
 
@@ -283,7 +282,7 @@ async def create_ci_runs(
         ]
     snapshot = existing[0].profile if existing else None
     if not existing:
-        await luna_route(task.created_by)
+        await ci_agent_route(task.created_by)
     repository = await db.scalar(
         sa.select(Repository)
         .join(
@@ -371,7 +370,7 @@ async def execute_ci_agent(run_id: uuid.UUID) -> None:
                             ttl_seconds=ROUTE_LOCK_TTL_SECONDS,
                             busy_message="Выбор LLM-аккаунта занят",
                         ):
-                            selected = await luna_route(task.created_by, run_id=run_id)
+                            selected = await ci_agent_route(task.created_by, run_id=run_id)
                             await redis.set(
                                 reservation_key(task.created_by, run_id),
                                 str(selected.account_id),
@@ -388,7 +387,7 @@ async def execute_ci_agent(run_id: uuid.UUID) -> None:
                     return
 
     try:
-        route = await luna_route(task.created_by)
+        route = await ci_agent_route(task.created_by)
 
         @tool("execute", "Выполнить назначенную проверку и очистку. Вызвать ровно один раз.", {})
         async def execute(_args: dict[str, Any]) -> dict[str, Any]:

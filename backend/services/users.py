@@ -196,3 +196,10 @@ async def deprovision_inactive_users(db_session: AsyncSession) -> list[uuid.UUID
         logger.info("user_deprovisioned", user_id=str(user.id), os_username=user.os_username)
     await db_session.commit()
     return deprovisioned
+
+
+async def set_ci_agent_model(db_session: AsyncSession, *, user: User, model: str) -> User:
+    user.ci_agent_model = model
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user

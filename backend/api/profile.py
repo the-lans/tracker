@@ -16,12 +16,14 @@ from api.schemas import (
     SshKeyUpdateRequest,
     UserResponse,
 )
+from api.schemas.admin import CiAgentModelUpdateRequest
 from db.models.users import User
 from db.session import get_session
 from services.jira_import import clear_jira_connection, update_jira_connection
 from services.sftp_connection import SftpConnection, sftp_connection_for
 from services.users import (
     clear_ssh_public_key,
+    set_ci_agent_model,
     set_llm_compact_on_switch,
     set_llm_switch_threshold,
     set_ssh_public_key,
@@ -110,3 +112,12 @@ async def update_llm_compact(
         user=current_user,
         enabled=body.enabled,
     )
+
+
+@router.put("/ci-agent-model", response_model=UserResponse)
+async def update_ci_agent_model(
+    body: CiAgentModelUpdateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    return await set_ci_agent_model(db_session, user=current_user, model=body.model)
