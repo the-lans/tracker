@@ -8,11 +8,11 @@
 - `ExitPlanMode` — решение по плану (9.3); принятый план завершает ход ноды
   `plan_prompt` без изменений (до конца хода инструменты запрещены), режим
   сессии на выбранный пользователем переключает `execute_plan_prompt_node`
-  после хода — реализацию выполняют следующие ноды;
+  после хода — реализация выполняется отдельным ходом той же ноды;
 - `AskUserQuestion` — вопросы агента в формате SDK (`questions[]`), задаются
   по очереди, ответы возвращаются в `answers` (вопрос → выбранный вариант
   или свой текст);
-- прочие инструменты: пока идёт нода `plan_prompt`, изменения запрещены
+- прочие инструменты: на этапе планирования изменения запрещены
   (9.1); в режиме `default` («подтверждать каждое действие») действие ждёт
   «Разрешить»/«Запретить»; иначе задача работает автономно (3.1).
 
@@ -68,6 +68,7 @@ from prompts.agent import (
 )
 from services.access import get_task_record_or_404
 from services.errors import ConflictError, ValidationError
+from services.plan_execution import accept_plan_execution
 from services.session_heartbeat import require_session_owner
 from services.task_signal import (
     TaskSignalSubscription,
@@ -479,10 +480,11 @@ async def _record_plan_auto_accept(
     node_log.pending_plan_text = plan_text
     node_log.decision_output_offset = output_offset
     node_log.user_input_text = PlanDecisionOption.ACCEPT_AUTO
-    # Как и при решении пользователя: принятый план — успешная запись, по
-    # ней `execute_plan_prompt_node` понимает, что план подтверждён.
+    # Самостоятельный ручной ход завершается; нода плана остаётся running
+    # с сохранённым принятием до результата реализации.
     node_log.status = NodeLogStatus.SUCCESS
     node_log.finished_at = datetime.now(UTC)
+    accept_plan_execution(node_log, mode=PermissionMode.ACCEPT_EDITS)
     # Раздел 9.2: auto_accept_plan всегда продолжает в "auto"-режиме.
     await _set_task_permission_mode(db_session, task_id=task_id, mode=PermissionMode.ACCEPT_EDITS)
     await db_session.commit()
@@ -601,13 +603,15 @@ async def _record_plan_decision(
     decision: PlanDecisionResult,
 ) -> None:
     """
-    Принятый план завершает ноду и меняет режим задачи; «Доработать план»
-    возвращает ноду в работу (правило 7: без retry).
+    Принятый план меняет режим задачи и открывает этап реализации;
+    «Доработать план» возвращает планирование в работу без retry.
     """
     node_log = await db_session.get(NodeLog, node_log_id)
     if node_log is not None:
         node_log.finished_at = datetime.now(UTC)
         node_log.status = NodeLogStatus.SUCCESS if decision.allow else NodeLogStatus.RUNNING
+        if decision.allow and decision.updated_permission_mode is not None:
+            accept_plan_execution(node_log, mode=decision.updated_permission_mode)
     if decision.allow and decision.updated_permission_mode is not None:
         await _set_task_permission_mode(
             db_session,
@@ -880,8 +884,8 @@ class _PermissionCallback:
 
     def _finish_plan_turn(self) -> PermissionResult:
         """
-        Раздел 9.3: план принят — ход ноды заканчивается без изменений, режим
-        сессии переключает `execute_plan_prompt_node` после хода (9.4).
+        План принят: заканчивается только ход планирования. Диспетчер
+        переключает режим и начинает реализацию внутри той же ноды.
         """
         interrupt = self.context.plan_mode
         self.context.plan_mode = False

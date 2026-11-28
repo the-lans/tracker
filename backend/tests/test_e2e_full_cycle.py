@@ -39,6 +39,7 @@ from db.models.tasks import Task
 from db.models.users import User
 from prompts.agent import PLAN_ACCEPTED_MESSAGE, PLANNING_NOT_ACTIVE_DENIED
 from services.autostart import run_scheduled_autostart_check
+from services.plan_execution import implementation_prompt
 from services.plan_mode import PlanDecisionOption
 from services.task_dispatcher import dispatch_queued_tasks
 from tasks import session_worker
@@ -264,7 +265,7 @@ class TestFullCycle:
                 assert decision.message == PLANNING_NOT_ACTIVE_DENIED
 
         fake = FakeClaudeAgentClient(
-            messages_per_query=[[make_result_message()] for _ in range(5)],
+            messages_per_query=[[make_result_message()] for _ in range(6)],
             on_query=agent_and_user,
         )
         worker_env.client = fake
@@ -284,6 +285,7 @@ class TestFullCycle:
             _LIBRARY_PROMPT,
             f"Код задачи: {code}",
             _PLAN_PROMPT,
+            implementation_prompt(_PLAN_TEXT),
             f"Реализуй: {_PLAN_TEXT}",
         ]
         assert fake.interrupted is True

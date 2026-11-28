@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -45,6 +45,7 @@ from services.nodes.dispatch import (
     resolve_script_env_or_none,
     sent_prompt,
 )
+from services.plan_execution import PLAN_COMPLETE
 from services.session_context import forget_task_session
 from services.session_events import add_session_event
 from services.session_heartbeat import require_session_owner
@@ -157,6 +158,26 @@ async def run_node_execution(
     )
 
 
+async def _previous_node_attempt(
+    db_session: AsyncSession,
+    *,
+    task: Task,
+    node: Node,
+) -> NodeLog | None:
+    return await db_session.scalar(
+        sa.select(NodeLog)
+        .where(
+            NodeLog.task_id == task.id,
+            NodeLog.node_id == node.id,
+            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+            *await _current_run_filter(db_session, task.id),
+        )
+        .order_by(NodeLog.started_at.desc().nulls_last(), NodeLog.id.desc())
+        .limit(1)
+        .execution_options(populate_existing=True)
+    )
+
+
 async def run_pipeline_node_with_retry(
     db_session: AsyncSession,
     *,
@@ -192,8 +213,17 @@ async def run_pipeline_node_with_retry(
     settings = await resolve_execution_settings(db_session)
     attempt = first_attempt
     while True:
+        previous = await _previous_node_attempt(db_session, task=task, node=node)
+        resuming_plan = (
+            node.node_type is NodeType.PLAN_PROMPT
+            and previous is not None
+            and previous.plan_execution is not None
+            and bool(previous.plan_execution.get("plan"))
+            and previous.plan_execution.get("phase") != PLAN_COMPLETE
+        )
+        gate_type = NodeType.PLAIN_PROMPT if resuming_plan else node.node_type
         try:
-            await check_limit_gate(limit_gate, node_type=node.node_type)
+            await check_limit_gate(limit_gate, node_type=gate_type)
         except LlmLimitWaitError as wait:
             raise LlmLimitWaitError(wait.until, attempt=attempt) from None
         await require_session_owner()
@@ -202,18 +232,18 @@ async def run_pipeline_node_with_retry(
             task=task,
             node=node,
             attempt=attempt,
+            previous=previous,
             settings=settings,
             claude_session=claude_session,
             repos_path=repos_path,
             active_node_context=active_node_context,
             stop_guard=stop_guard,
         )
+        if outcome is not None and outcome.limit_wait_until is not None:
+            raise LlmLimitWaitError(outcome.limit_wait_until, attempt=attempt)
         if outcome is None:
             logger.info("node_stopped_by_user", node_id=str(node.id), attempt=attempt)
             return NodeRunOutcome(node_log=node_log, success=False, stopped=True)
-        if not outcome.success and node_log.status is NodeLogStatus.SUCCESS:
-            # План сохранён, но сессия сломалась при завершении хода.
-            return NodeRunOutcome(node_log=node_log, success=False)
         final = await _final_attempt_outcome(
             node_log=node_log,
             outcome=outcome,
@@ -241,6 +271,7 @@ async def _run_pipeline_attempt(
     task: Task,
     node: Node,
     attempt: int,
+    previous: NodeLog | None,
     settings: ExecutionSettings,
     claude_session: ClaudeCodeSession,
     repos_path: Path,
@@ -261,27 +292,22 @@ async def _run_pipeline_attempt(
         history=history,
         arguments=linked.arguments,
     )
-    previous = await db_session.scalar(
-        sa.select(NodeLog)
-        .where(
-            NodeLog.task_id == task.id,
-            NodeLog.node_id == node.id,
-            NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
-            sa.or_(
-                NodeLog.status == NodeLogStatus.SUCCESS,
-                NodeLog.decision_checkpoint["recovery_notice"].astext.is_not(None),
-            ),
-            *await _current_run_filter(db_session, task.id),
-        )
-        .order_by(NodeLog.started_at.desc().nulls_last(), NodeLog.id.desc())
-        .limit(1)
-    )
+    notice = (previous.decision_checkpoint or {}).get("recovery_notice") if previous else None
     if previous is not None and previous.status is not NodeLogStatus.SUCCESS:
-        notice = (previous.decision_checkpoint or {}).get("recovery_notice")
         if isinstance(notice, str) and prompt is not None:
             prompt = RenderedText(
                 text=f"{prompt.text}\n\n{notice}", display=f"{prompt.display}\n\n{notice}"
             )
+    plan_execution = None
+    if (
+        node.node_type is NodeType.PLAN_PROMPT
+        and previous is not None
+        and previous.plan_execution
+        and previous.plan_execution.get("phase") != PLAN_COMPLETE
+    ):
+        plan_execution = dict(previous.plan_execution)
+        if isinstance(notice, str):
+            plan_execution["recovery_notice"] = notice
     node_log = await start_node_log(
         db_session,
         NodeLog(
@@ -291,6 +317,7 @@ async def _run_pipeline_attempt(
             attempt_number=attempt,
             rendered_prompt=logged_prompt(node, prompt),
             command_revision=linked.revision,
+            plan_execution=plan_execution,
         ),
     )
     if active_node_context is not None:
@@ -311,6 +338,7 @@ async def _run_pipeline_attempt(
                 timeout_seconds=settings.timeout_seconds,
                 db_session=db_session,
                 node_log_id=node_log.id,
+                active_node_context=active_node_context,
                 runner_image=await resolve_runner_image(db_session, linked.node),
                 script_env=linked.script_env(
                     await resolve_script_env_or_none(db_session, node=node, task=task),
@@ -331,18 +359,7 @@ async def _run_pipeline_attempt(
         mark_node_log_stopped(node_log, node_type=node.node_type, claude_session=claude_session)
         await db_session.commit()
         return node_log, None
-    if not outcome.success and node.node_type is NodeType.PLAN_PROMPT:
-        await db_session.refresh(node_log)
-        if node_log.status is NodeLogStatus.SUCCESS:
-            node_log.llm_output_text = outcome.llm_output_text
-            await db_session.commit()
-            await record_sdk_failure(
-                replace(outcome, is_transient=False),
-                task_id=task.id,
-                node_id=node.id,
-                source=_LOG_SOURCE,
-            )
-            return node_log, outcome
+    await db_session.refresh(node_log)
     apply_node_outcome(node_log, outcome)
     await db_session.commit()
     await record_sdk_failure(outcome, task_id=task.id, node_id=node.id, source=_LOG_SOURCE)

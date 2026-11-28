@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from db.models.enums import NodeLogStatus, NodeType
+from services.plan_execution import PLAN_COMPLETE
 
 # Причина в ленте (раздел 15.2); подробности сбоя — в `app_logs`, не пользователю.
 SESSION_ERROR_MESSAGE = "Сбой сессии Claude Code — подробности в журнале ошибок у администратора"
@@ -79,6 +80,9 @@ def apply_node_outcome(
     агента (например, конфликт ребейза должен быть ещё и разобран).
     """
     succeeded = outcome.success if success is None else success
+    if succeeded and node_log.plan_execution is not None:
+        node_log.plan_execution = {**node_log.plan_execution, "phase": PLAN_COMPLETE}
+        node_log.pending_plan_text = node_log.plan_execution.get("plan")
     node_log.finished_at = datetime.now(UTC)
     node_log.llm_output_text = outcome.llm_output_text
     node_log.script_stdout = outcome.script_stdout

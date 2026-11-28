@@ -83,6 +83,7 @@ from services.pipeline_orchestrator import (
     StopGuard,
     run_pipeline,
 )
+from services.plan_execution import PLAN_PLANNING, accept_plan_execution
 from services.plan_mode import (
     ActiveNodeContext,
     advance_recovered_question,
@@ -386,6 +387,10 @@ async def _restore_plan_review(
         }
     plan.status = NodeLogStatus.SUCCESS if decision.allow else NodeLogStatus.STOPPED
     plan.finished_at = datetime.now(UTC)
+    if decision.allow and decision.updated_permission_mode is not None:
+        if plan.plan_execution is None:
+            plan.plan_execution = {"phase": PLAN_PLANNING}
+        accept_plan_execution(plan, mode=decision.updated_permission_mode)
     permission_update: dict[str, object] | None = (
         {"current_permission_mode": decision.updated_permission_mode} if decision.allow else None
     )

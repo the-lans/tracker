@@ -71,6 +71,7 @@ class NodeLog(UUIDPrimaryKeyMixin, Base):
         pg_enum(NodeLogStatus, name="node_log_status"),
         default=NodeLogStatus.PENDING,
     )
+    plan_execution: Mapped[JsonValue | None] = mapped_column(JSONB)
     decision_checkpoint: Mapped[JsonValue | None] = mapped_column(JSONB)
     pending_question: Mapped[str | None] = mapped_column(sa.Text)
     pending_plan_text: Mapped[str | None] = mapped_column(sa.Text)

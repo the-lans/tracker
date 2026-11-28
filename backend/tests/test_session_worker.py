@@ -69,6 +69,7 @@ from services.llm_routing import resolve_session_token
 from services.manual_admission import close_manual_requests
 from services.manual_queue import enqueue_freeform_prompt_run
 from services.notifications import NotificationEvent
+from services.plan_execution import implementation_prompt
 from services.plan_mode import (
     PlanDecisionOption,
     encode_decision,
@@ -611,6 +612,7 @@ class TestQuestionRecovery:
         worker_env.client = FakeClaudeAgentClient(messages_per_query=_results(1))
 
         if restart_after_answer:
+
             async def interrupted(*args: object, **kwargs: object) -> None:
                 raise RuntimeError("restart")
 
@@ -677,21 +679,21 @@ class TestPlanReviewRecovery:
                 await callback("ExitPlanMode", {"plan": "Уточнённый план"}, ToolPermissionContext())
 
         worker_env.client = FakeClaudeAgentClient(
-            messages_per_query=_results(2 if revise else 1),
+            messages_per_query=_results(3 if revise else 2),
             on_query=submit_revised_plan,
         )
         await session_worker._restore_paused_task(task.id)
 
         await db_session.refresh(task)
         assert task.status is TaskStatus.DONE
-        assert log.status is (NodeLogStatus.STOPPED if revise else NodeLogStatus.SUCCESS)
+        assert log.status is (NodeLogStatus.STOPPED if revise else NodeLogStatus.RUNNING)
         assert worker_env.options[0].resume == "sess-worker"
         assert worker_env.client.queries[-1] == "шаг 1"
         if revise:
             assert "Сохранённый план" in worker_env.client.queries[0]
             assert "Добавь тесты" in worker_env.client.queries[0]
         else:
-            assert len(worker_env.client.queries) == 1
+            assert worker_env.client.queries == [implementation_prompt("Сохранённый план"), "шаг 1"]
 
 
 class TestPausedSessionRecovery:
@@ -1896,12 +1898,14 @@ class TestNodeTimeoutWhileAwaitingDecision:
         patch_plan_mode_signals(monkeypatch, user_decides_late)
 
         async def agent_exits_plan_mode() -> None:
+            if len(worker_env.client.queries) != 1:
+                return
             can_use_tool = worker_env.options[0].can_use_tool
             assert can_use_tool is not None
             await can_use_tool("ExitPlanMode", {"plan": "1. Шаг"}, ToolPermissionContext())
 
         worker_env.client = FakeClaudeAgentClient(
-            messages_per_query=_results(1),
+            messages_per_query=_results(2),
             on_query=agent_exits_plan_mode,
         )
 
@@ -1954,7 +1958,7 @@ class TestSessionHeartbeat:
             observed.append(await is_session_alive(redis_client, task.id))
 
         worker_env.client = FakeClaudeAgentClient(
-            messages_per_query=_results(1),
+            messages_per_query=_results(2),
             on_query=check_heartbeat,
         )
 
@@ -2024,6 +2028,8 @@ class TestPlanRevision:
         patch_plan_mode_signals(monkeypatch, user_decides)
 
         async def agent_plans_twice() -> None:
+            if len(worker_env.client.queries) != 1:
+                return
             can_use_tool = worker_env.options[0].can_use_tool
             assert can_use_tool is not None
             for plan in ("1. Сделать", "1. Сделать\n2. Покрыть тестами"):
@@ -2032,7 +2038,7 @@ class TestPlanRevision:
                     denials.append(result.message)
 
         worker_env.client = FakeClaudeAgentClient(
-            messages_per_query=_results(1),
+            messages_per_query=_results(2),
             on_query=agent_plans_twice,
         )
 
@@ -2094,7 +2100,7 @@ class TestAllNodeTypesPipeline:
                 await can_use_tool("ExitPlanMode", {"plan": "1. Шаг"}, ToolPermissionContext())
 
         worker_env.client = FakeClaudeAgentClient(
-            messages_per_query=_results(3),
+            messages_per_query=_results(4),
             on_query=agent_exits_plan_mode,
         )
 
@@ -2103,6 +2109,7 @@ class TestAllNodeTypesPipeline:
         assert worker_env.client.queries == [
             "Вывод скрипта: 42\n",
             "Составь план",
+            implementation_prompt("1. Шаг"),
             "Реализуй: 1. Шаг",
         ]
         [(args, kwargs)] = worker_env.enqueued
