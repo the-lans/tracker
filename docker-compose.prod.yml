@@ -41,6 +41,17 @@ services:
           cpus: "0.5"
           memory: 1G
 
+  test-worker:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+
   # Раздел 20.4: архивирование и шифрование — одно ядро; память — на чтение
   # файлов и временный PostgreSQL проверки (он вне этого лимита).
   backup-worker:

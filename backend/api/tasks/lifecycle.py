@@ -34,6 +34,7 @@ from services.task_nodes import bind_pipeline_to_task
 from services.task_queue import cancel_target_status, change_task_status_manually
 from services.task_status import PRE_LAUNCH_STATUSES, reset_task_run, transition_task_status
 from services.task_workspace import resolve_repos_root
+from services.test_runs import cancel_task_runs
 from tasks.celery_app import wake_task_dispatcher
 from tasks.session_worker import run_task_session
 
@@ -248,6 +249,7 @@ async def stop_task(
         frozenset({TaskStatus.IN_PROGRESS, TaskStatus.PAUSED, TaskStatus.AWAITING_LIMIT}),
         "Остановить можно только выполняющуюся или приостановленную задачу",
     )
+    await cancel_task_runs(db_session, task.id)
     if task.status is TaskStatus.AWAITING_LIMIT:
         await stop_limit_wait(db_session, task=task)
         wake_task_dispatcher()

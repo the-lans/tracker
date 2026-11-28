@@ -1,10 +1,11 @@
 import { cn } from "@/lib/utils";
 
-export type WorkspaceView = "dialogue" | "logs";
+export type WorkspaceView = "dialogue" | "logs" | "tests";
 
 const VIEWS: Array<{ value: WorkspaceView; label: string }> = [
   { value: "dialogue", label: "Диалог" },
   { value: "logs", label: "Логи" },
+  { value: "tests", label: "Тесты" },
 ];
 
 /**

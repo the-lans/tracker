@@ -480,7 +480,7 @@ class TestRestore:
                 "-v tracker_claude_accounts:/data/claude-accounts:ro backend python "
                 "/app/scripts/migrate_claude_sessions.py",
                 "docker compose up -d cliproxy llm-gateway backend worker session-worker"
-                " backup-worker beat sftp frontend caddy backup",
+                " test-worker backup-worker beat sftp frontend caddy backup",
                 "docker volume rm tracker_claude_accounts",
             ],
         )
@@ -696,7 +696,7 @@ class TestUpdate:
                 "alembic upgrade head",
                 "seed_periodic_tasks.py",
                 "docker compose up -d cliproxy llm-gateway backend worker session-worker"
-                " backup-worker beat sftp",
+                " test-worker backup-worker beat sftp",
                 "docker image prune -f --filter label=com.docker.compose.project=tracker",
                 "docker image prune -f --filter label=tracker.image=runner",
                 "docker builder prune -f --filter until=168h",

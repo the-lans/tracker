@@ -526,16 +526,16 @@ _seed_periodic_tasks() {
 
 # Шаг 9: старт прикладных сервисов
 step_start_app_services() {
-  log "Шаг 9/11: запуск cliproxy, llm-gateway, backend, worker, session-worker, backup-worker, beat, sftp, frontend, caddy, backup"
+  log "Шаг 9/11: запуск cliproxy, llm-gateway, backend, worker, session-worker, test-worker, backup-worker, beat, sftp, frontend, caddy, backup"
   # cliproxy-init (конфигурация прокси с ключами из .env) запускается как зависимость cliproxy.
   ( cd "${INSTALL_DIR}" \
-    && docker compose up -d cliproxy llm-gateway backend worker session-worker backup-worker beat sftp frontend caddy backup )
+    && docker compose up -d cliproxy llm-gateway backend worker session-worker test-worker backup-worker beat sftp frontend caddy backup )
   step_verify_app_services
 }
 
 step_verify_app_services() {
   local service container state deadline hostname
-  for service in llm-gateway backend worker session-worker backup-worker beat sftp frontend caddy backup; do
+  for service in llm-gateway backend worker session-worker test-worker backup-worker beat sftp frontend caddy backup; do
     deadline=$(( $(date +%s) + 90 ))
     while true; do
       container="$(cd "${INSTALL_DIR}" && docker compose ps -q "${service}")"
@@ -552,7 +552,7 @@ step_verify_app_services() {
   done
   # Процесс мог завершиться сразу после создания контейнера.
   sleep 3
-  for service in llm-gateway backend worker session-worker backup-worker beat sftp frontend caddy backup; do
+  for service in llm-gateway backend worker session-worker test-worker backup-worker beat sftp frontend caddy backup; do
     container="$(cd "${INSTALL_DIR}" && docker compose ps -q "${service}")"
     [ -n "${container}" ] || die "сервис ${service} остановился после запуска"
     state="$(docker inspect --format '{{if .State.Health}}{{.State.Status}}:{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container}")"
@@ -560,7 +560,7 @@ step_verify_app_services() {
   done
   # Ответ конкретного воркера подтверждает его подключение к брокеру; общий
   # broadcast мог бы пройти благодаря ответу только одного из трёх.
-  for service in worker session-worker backup-worker; do
+  for service in worker session-worker test-worker backup-worker; do
     container="$(cd "${INSTALL_DIR}" && docker compose ps -q "${service}")"
     [ -n "${container}" ] || die "воркер ${service} остановился до проверки Celery"
     hostname="$(docker inspect --format '{{.Config.Hostname}}' "${container}")"

@@ -58,7 +58,7 @@ def test_failed_service_is_reported(tmp_path: Path) -> None:
     assert "llm-gateway" in result.stdout
 
 
-@pytest.mark.parametrize("service", ["worker", "session-worker", "backup-worker"])
+@pytest.mark.parametrize("service", ["worker", "session-worker", "test-worker", "backup-worker"])
 def test_celery_worker_must_respond(service: str, tmp_path: Path) -> None:
     clock = tmp_path / "clock"
     clock.write_text("0")
@@ -99,9 +99,9 @@ def test_celery_checks_target_each_container(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     commands = calls.read_text().splitlines()
-    assert len(commands) == 3
+    assert len(commands) == 4
     for service, command in zip(
-        ("worker", "session-worker", "backup-worker"), commands, strict=True
+        ("worker", "session-worker", "test-worker", "backup-worker"), commands, strict=True
     ):
         assert f"exec -T {service} " in command
         assert "--destination celery@container-host" in command

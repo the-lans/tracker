@@ -46,6 +46,7 @@ class Repository(UUIDPrimaryKeyMixin, Base):
     )
     default_template_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("templates.id"))
     git_credential_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("git_credentials.id"))
+    test_profile: Mapped[JsonValue | None] = mapped_column(JSONB)
     git_credential: Mapped[GitCredential | None] = relationship(lazy="selectin")
 
 

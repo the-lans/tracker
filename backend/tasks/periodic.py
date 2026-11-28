@@ -61,6 +61,7 @@ from services.task_artifacts import resolve_user_files_root
 from services.task_dispatcher import dispatch_queued_tasks, pending_queue_session_ids
 from services.task_retention import ArtifactsPass, SessionHistoryPass
 from services.task_workspace import resolve_repos_root
+from services.test_runs import recover_runs
 from services.volume_usage import store_volume_usage
 from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import (
@@ -422,6 +423,7 @@ def refresh_task_containers() -> None:
 @celery_app.task(name="purge_orphaned_docker_containers")
 def purge_orphaned_docker_containers() -> None:
     async def body(_db_session: AsyncSession) -> None:
+        await recover_runs()
         await maintenance_tasks.purge_orphaned_docker_containers()
         async with redis_connection() as redis_client:
             await maintenance_tasks.purge_orphaned_session_containers(redis_client)

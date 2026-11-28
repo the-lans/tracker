@@ -34,6 +34,19 @@ describe("TaskStatusMenu", () => {
     expect(toasts.success).toHaveBeenCalledWith("Статус: «Готова к реализации»");
   });
 
+  test("до запуска можно перейти в «Готово»", async ({ api, toasts }) => {
+    const { user } = renderMenu({ status: TaskStatus.NEW });
+
+    await user.click(screen.getByRole("combobox", MENU));
+    await user.click(await screen.findByRole("option", { name: "Готово" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.mutations()).toEqual([
+      { method: "POST", path: "/tasks/t1/status", body: { to_status: TaskStatus.DONE } },
+    ]);
+    expect(toasts.success).toHaveBeenCalledWith("Статус: «Готово»");
+  });
+
   test.for([
     { status: TaskStatus.FAILED, confirm: true },
     { status: TaskStatus.DONE, confirm: false },

@@ -430,6 +430,8 @@ async def _run_library_prompt(
             claude_session=claude_session,
             repos_path=repos_path,
             timeout_seconds=(await resolve_execution_settings(db_session)).timeout_seconds,
+            db_session=db_session,
+            node_log_id=node_log.id,
             runner_image=await resolve_runner_image(db_session, node),
             script_env=script_env,
             script_args=tuple(snapshot.arguments) if snapshot else (),

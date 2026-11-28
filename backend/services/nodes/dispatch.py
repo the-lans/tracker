@@ -489,6 +489,22 @@ async def execute_node(
     9.5: он существует исключительно внутри пайплайна, поэтому только
     `services/pipeline_orchestrator.py` передаёт эти аргументы).
     """
+    if node.node_type is NodeType.SCRIPT and node.test_repository_id is not None:
+        from services.test_runs import execute_node_check
+
+        if db_session is None or node_log_id is None:
+            raise ValueError("Проверка требует контекста выполнения ноды")
+        success, stdout, exit_code, error = await execute_node_check(
+            db=db_session,
+            node=node,
+            node_log_id=node_log_id,
+        )
+        return NodeExecutionOutcome(
+            success=success,
+            script_stdout=stdout,
+            script_exit_code=exit_code,
+            error_message=error,
+        )
     if node.node_type is NodeType.SCRIPT:
         return await execute_script_node(
             node,
@@ -497,6 +513,11 @@ async def execute_node(
             runner_image=runner_image,
             env=script_env,
             arguments=script_args,
+        )
+    if node.test_repository_id is not None and prompt is not None:
+        prompt += (
+            "\nТестовое окружение этой ноды: repository_id="
+            f"{node.test_repository_id}. Для проверок используй MCP tracker-tests."
         )
     if prompt is None:
         message = f"Для ноды типа {node.node_type} не передан prompt"

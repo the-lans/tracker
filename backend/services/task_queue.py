@@ -5,7 +5,7 @@
 по времени постановки. Слот занимает задача в работе или в `failed`, если её
 запустил воркер очереди или у неё стоит галочка `occupies_slot`, и задача в
 `refining` с идущим чатом при той же галочке. Вручную задачу можно перевести
-в статус до запуска или архивировать после завершения.
+в статус до запуска, отметить готовой или архивировать после завершения.
 """
 
 from __future__ import annotations
@@ -224,7 +224,7 @@ async def change_task_status_manually(
     """
     Раздел 14.1: пользователь переводит задачу между статусами до запуска, а
     завершённую или упавшую — в архив либо в статус до запуска со сбросом
-    прогона. Статусы выполнения меняет только система (409).
+    прогона. До запуска задачу можно отметить готовой.
     """
     if to_status is TaskStatus.ARCHIVED:
         return await archive_finished_task(
@@ -233,13 +233,16 @@ async def change_task_status_manually(
             from_status=task.status,
             now=datetime.now(UTC),
         )
-    if to_status not in PRE_LAUNCH_STATUSES:
-        raise ValidationError("Вручную задачу можно перевести только в статус до запуска")
+    completing = to_status is TaskStatus.DONE
+    if not completing and to_status not in PRE_LAUNCH_STATUSES:
+        raise ValidationError("Допустимые статусы: до запуска, «Готово» и «Архив»")
     if task.status is to_status:
         return task
-    if task.status in RESETTABLE_STATUSES:
+    if not completing and task.status in RESETTABLE_STATUSES:
         return await reset_task_run(db_session, task_id=task.id, to_status=to_status)
     if task.status not in PRE_LAUNCH_STATUSES:
+        if completing:
+            raise ConflictError("Отметить задачу готовой можно только до запуска")
         raise ConflictError("Статус задачи в работе меняет только система")
     if task.status is TaskStatus.REFINING and (
         task.chat_active or await is_session_alive(redis_client, task.id)
@@ -250,6 +253,7 @@ async def change_task_status_manually(
         task_id=task.id,
         from_status=task.status,
         to_status=to_status,
+        completed_manually=completing,
     )
     logger.info("task_status_changed_manually", task_id=str(task.id), to_status=to_status)
     return updated

@@ -37,11 +37,13 @@ from db.models.repositories import GitCredential, Repository, Template, Template
 from db.models.session_events import TaskSessionEvent
 from db.models.settings import SystemSettings
 from db.models.tasks import Task, TaskParentSummary, TaskRepository
+from db.models.test_runs import TestRun
 from db.models.twg import TwgConnection
 from db.models.users import AllowedEmail, User
 
 __all__ = [
     "TwgConnection",
+    "TestRun",
     "AllowedEmail",
     "AppLog",
     "BackupRun",

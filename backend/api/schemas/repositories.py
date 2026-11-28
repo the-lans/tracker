@@ -9,6 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from api.schemas.test_runs import TestProfile
 from db.models.repositories import DEFAULT_REPOSITORY_BRANCH
 
 
@@ -21,6 +22,8 @@ class RepositoryCreateRequest(BaseModel):
     default_template_id: uuid.UUID | None = None
     git_credential_id: uuid.UUID | None = None
 
+    test_profile: TestProfile | None = None
+
 
 class RepositoryUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -30,6 +33,8 @@ class RepositoryUpdateRequest(BaseModel):
     default_branch: str | None = None
     default_template_id: uuid.UUID | None = None
     git_credential_id: uuid.UUID | None = None
+
+    test_profile: TestProfile | None = None
 
 
 class RepositoryResponse(BaseModel):
@@ -41,6 +46,8 @@ class RepositoryResponse(BaseModel):
     default_branch: str
     default_template_id: uuid.UUID | None
     git_credential_id: uuid.UUID | None
+
+    test_profile: TestProfile | None = None
 
 
 class RepositoryDefaultBranchRequest(BaseModel):

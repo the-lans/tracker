@@ -37,6 +37,7 @@ from db.models.logs import AppLog, NodeLog
 from db.models.pipelines import Node, TaskNode
 from db.models.prompts import TaskLibraryPrompt, TaskManualRequestQueue
 from db.models.tasks import Task
+from db.models.test_runs import TestRun
 from db.queries.manual_requests import (
     active_prompt_request,
     cancel_queued_requests,
@@ -313,6 +314,7 @@ async def transition_task_status(
     failed_order_index: int | None = None,
     extra_values: dict[str, object] | None = None,
     stopped_by_user: bool = False,
+    completed_manually: bool = False,
 ) -> Task:
     """
     Compare-and-swap переход `tasks.status` (раздел 17.4).
@@ -333,10 +335,15 @@ async def transition_task_status(
         }
     ):
         raise ValidationError("Ручная остановка недоступна для этого перехода")
+    if completed_manually and (
+        to_status is not TaskStatus.DONE or from_status not in PRE_LAUNCH_STATUSES
+    ):
+        raise ValidationError("Ручное завершение недоступно для этого перехода")
+    bypass_pipeline = stopped_by_user or completed_manually
     allowed = ALLOWED_TRANSITIONS.get(from_status, frozenset())
-    if to_status not in allowed and not stopped_by_user:
+    if to_status not in allowed and not bypass_pipeline:
         raise ValidationError(f"Переход {from_status} -> {to_status} запрещён (раздел 14.1)")
-    if to_status is TaskStatus.DONE and not stopped_by_user:
+    if to_status is TaskStatus.DONE and not bypass_pipeline:
         await _ensure_done_invariant(db_session, task_id)
 
     values: dict[str, object] = {
@@ -359,7 +366,8 @@ async def transition_task_status(
     # Начало чата меняет флаг, но оставляет статус refining. Проверка флага
     # в том же UPDATE исключает гонку с start_chat после чтения задачи.
     if from_status is TaskStatus.REFINING and to_status in PRE_LAUNCH_STATUSES | {
-        TaskStatus.QUEUED
+        TaskStatus.QUEUED,
+        TaskStatus.DONE,
     }:
         stmt = stmt.where(Task.chat_active == sa.false())
     result = await db_session.execute(stmt)
@@ -371,6 +379,14 @@ async def transition_task_status(
         )
     if stopped_by_user:
         await _cancel_queued_on_stop(db_session, task_id)
+        await db_session.execute(
+            sa.update(TestRun)
+            .where(
+                TestRun.task_id == task_id,
+                TestRun.status.in_(("queued", "agent", "preparing", "running")),
+            )
+            .values(cancel_requested=True)
+        )
     await db_session.commit()
     logger.info(
         "task_status_transitioned",

@@ -68,6 +68,8 @@ class TestConfig:
         """Сессии и бэкапы не занимают процессы общей очереди `celery`."""
         assert worker_view["routes"] == {
             "run_task_session": {"queue": "sessions"},
+            "execute_test_run": {"queue": "tests"},
+            "cleanup_test_run": {"queue": "tests"},
             "backup_to_s3": {"queue": "backups"},
             "verify_s3_backup": {"queue": "backups"},
         }

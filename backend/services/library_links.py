@@ -67,6 +67,9 @@ def _linked_copy(node: Node, source: Node) -> Node:
     columns = sa.inspect(Node).column_attrs
     values = {column.key: getattr(node, column.key) for column in columns}
     values.update({field: getattr(source, field) for field in CONTENT_FIELDS})
+    if node.test_repository_id is None:
+        values["test_repository_id"] = source.test_repository_id
+        values["test_check"] = source.test_check
     return Node(**values)
 
 

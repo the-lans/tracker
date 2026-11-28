@@ -1,5 +1,6 @@
 """Старая привязка и данные последнего запуска сохраняются при удалении дублей."""
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -30,16 +31,21 @@ class TestTaskLibraryPromptMigration:
                 task = Task(
                     code="RR-1", title="Task", description="Description", created_by=user.id
                 )
-                node = Node(
-                    name="Prompt",
-                    node_type=NodeType.PLAIN_PROMPT,
-                    prompt_template="Review",
-                    is_library_item=True,
-                    created_by=user.id,
-                )
-                session.add_all([task, node])
+                session.add(task)
                 await session.flush()
-                scope = {"task_id": task.id, "node_id": node.id, "added_by": user.id}
+                node_id = uuid.uuid4()
+                # Схема этой ревизии предшествует новым nullable-полям Node.
+                await session.execute(
+                    sa.insert(Node).values(
+                        id=node_id,
+                        name="Prompt",
+                        node_type=NodeType.PLAIN_PROMPT,
+                        prompt_template="Review",
+                        is_library_item=True,
+                        created_by=user.id,
+                    )
+                )
+                scope = {"task_id": task.id, "node_id": node_id, "added_by": user.id}
                 first = TaskLibraryPrompt(**scope, added_at=added_at)
                 duplicate = TaskLibraryPrompt(
                     **scope,

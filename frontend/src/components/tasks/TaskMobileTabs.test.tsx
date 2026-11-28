@@ -8,11 +8,12 @@ describe("TaskMobileTabs", () => {
     { value: "overview", label: "Обзор" },
     { value: "dialogue", label: "Диалог" },
     { value: "logs", label: "Логи" },
+    { value: "tests", label: "Тесты" },
   ])("выбрана «$label» — отмечена только она", ({ value, label }) => {
     render(<TaskMobileTabs value={value} onChange={() => undefined} />);
 
     expect(screen.getByRole("tab", { selected: true })).toHaveTextContent(label);
-    expect(screen.getAllByRole("tab", { selected: false })).toHaveLength(2);
+    expect(screen.getAllByRole("tab", { selected: false })).toHaveLength(3);
   });
 
   test("нажатие переключает вкладку", async () => {

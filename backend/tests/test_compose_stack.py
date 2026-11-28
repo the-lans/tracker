@@ -68,7 +68,7 @@ class TestBackendImages:
             for name, service in compose["services"].items()
             if "/var/run/docker.sock" in _volume_names(service)
         }
-        assert holders == {"worker", "session-worker", "backup-worker"}
+        assert holders == {"worker", "session-worker", "test-worker", "backup-worker"}
 
     def test_know_their_commit(self, compose: dict[str, Any]) -> None:
         """Коммит образа — версия в /api/health и в manifest.json копии (раздел 20.4)."""

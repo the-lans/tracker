@@ -18,13 +18,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+import sqlalchemy as sa
+
 from app_logging.config import get_logger
 from db.models.tasks import Task
+from db.models.test_runs import TestRun
 from db.queries.parent_summaries import summary_in_progress
 from services.errors import ConflictError
 from services.task_passes import remove_directory
 from services.task_status import FINISHED_STATUSES, lock_task
 from services.task_workspace import task_root
+from services.test_runs import ACTIVE_STATUSES
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -55,6 +59,16 @@ async def cleanup_task_repositories(
     locked = await lock_task(db_session, task.id)
     if locked is None or locked.status not in CLEANABLE_STATUSES:
         raise ConflictError("Очистить репозитории можно только у завершённой или упавшей задачи")
+    pending_checks = await db_session.scalar(
+        sa.select(TestRun.id)
+        .where(
+            TestRun.task_id == locked.id,
+            sa.or_(TestRun.status.in_(ACTIVE_STATUSES), TestRun.cleanup_status != "done"),
+        )
+        .limit(1)
+    )
+    if pending_checks is not None:
+        raise ConflictError("Дождитесь завершения проверок и очистки их окружений")
     if await summary_in_progress(db_session, locked.id):
         raise ConflictError(
             "Сессия задачи сейчас пересказывает историю для дочерней задачи — "

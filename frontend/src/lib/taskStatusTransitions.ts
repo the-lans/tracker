@@ -88,5 +88,7 @@ export function isResettable(status: TaskStatus): boolean {
 export function manualStatusTargets(task: Task): TaskStatus[] {
   if (task.chat_active) return [];
   if (!isPreLaunch(task.status) && !isResettable(task.status)) return [];
-  return PRE_LAUNCH_STATUSES.filter((status) => status !== task.status);
+  const targets = PRE_LAUNCH_STATUSES.filter((status) => status !== task.status);
+  if (isPreLaunch(task.status)) targets.push(TaskStatus.DONE);
+  return targets;
 }

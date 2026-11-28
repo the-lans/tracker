@@ -38,7 +38,7 @@ celery_app = Celery(
     broker=os.environ["REDIS_URL"],
     backend=os.environ["REDIS_URL"],
     # Модули с задачами: без них воркер не знает ни одной задачи.
-    include=["tasks.session_worker", "tasks.periodic", "tasks.jira_attachments"],
+    include=["tasks.session_worker", "tasks.periodic", "tasks.jira_attachments", "tasks.test_runs"],
 )
 
 celery_app.conf.update(
@@ -49,6 +49,8 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_routes={
+        "execute_test_run": {"queue": "tests"},
+        "cleanup_test_run": {"queue": "tests"},
         "run_task_session": {"queue": SESSIONS_QUEUE},
         BACKUP_TO_S3: {"queue": BACKUPS_QUEUE},
         VERIFY_S3_BACKUP: {"queue": BACKUPS_QUEUE},

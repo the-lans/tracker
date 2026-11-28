@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
+import { TaskTestsPanel } from "@/components/tasks/TaskTestsPanel";
 import { TaskHeader } from "@/components/tasks/TaskHeader";
 import { TaskOverviewPanel } from "@/components/tasks/TaskOverviewPanel";
 import { TaskChatFeed } from "@/components/tasks/TaskChatFeed";
@@ -26,7 +27,7 @@ export function TaskPage() {
 
 
   // На десктопе правая панель видна всегда; «Обзор» — только мобильная вкладка.
-  const workspaceView: WorkspaceView = mobileTab === "logs" ? "logs" : "dialogue";
+  const workspaceView: WorkspaceView = mobileTab === "overview" ? "dialogue" : mobileTab;
   const workspaceTabs = <TaskWorkspaceTabs value={workspaceView} onChange={setMobileTab} />;
 
   return (
@@ -45,7 +46,9 @@ export function TaskPage() {
           <TaskOverviewPanel task={task} nodeLogs={nodeLogs ?? []} />
         </div>
         <div className={cn("min-h-0 min-w-0 flex-1 xl:flex", mobileTab !== "overview" ? "flex" : "hidden")}>
-          {workspaceView === "logs" ? (
+          {workspaceView === "tests" ? (
+            <TaskTestsPanel taskId={task.id} header={workspaceTabs} />
+          ) : workspaceView === "logs" ? (
             <TaskLogsPanel taskId={task.id} header={workspaceTabs} />
           ) : (
             <TaskChatFeed

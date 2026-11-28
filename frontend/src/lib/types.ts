@@ -679,6 +679,8 @@ export interface Pipeline {
 }
 
 export interface NodeItem {
+  test_repository_id?: string | null;
+  test_check?: string | null;
   slash_name?: string | null;
   argument_hint?: string | null;
   revision?: number;
@@ -710,6 +712,8 @@ export interface NodeItem {
 }
 
 export interface NodeCreateRequest {
+  test_repository_id?: string | null;
+  test_check?: string | null;
   slash_name?: string | null;
   argument_hint?: string | null;
   pipeline_id?: string | null;
@@ -739,6 +743,7 @@ export type NodeUpdateRequest = Partial<NodeCreateRequest> & { is_archived?: boo
 // --- Репозитории / шаблоны -----------------------------------------------
 
 export interface Repository {
+  test_profile?: TestProfile | null;
   git_credential_id?: string | null;
   id: string;
   name: string;
@@ -749,6 +754,7 @@ export interface Repository {
 }
 
 export interface RepositoryCreateRequest {
+  test_profile?: TestProfile | null;
   name: string;
   git_url: string;
   default_branch?: string;
@@ -1101,4 +1107,33 @@ export interface ApiErrorBody {
     message: string;
     request_id: string;
   };
+}
+
+
+export interface TestProfile {
+  working_directory?: string | null;
+  compose_files: string[];
+  service: string;
+  commands: Record<string, string>;
+  environment: Record<string, string>;
+  timeout_seconds: number;
+  report_paths: string[];
+}
+
+export interface TestRun {
+  id: string;
+  task_id: string;
+  repository_id: string;
+  check: string;
+  source: string;
+  status: string;
+  cleanup_status: string;
+  cleanup_error: string | null;
+  exit_code: number | null;
+  logs: string;
+  error: string | null;
+  report_files: string[];
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 }
