@@ -37,6 +37,7 @@ from llm_gateway.rewrite import (
     InvalidRequestBodyError,
     rewrite_body,
 )
+from services.ci_turn_gate import gate_key, request_turn
 from services.llm_routing import TurnRoute, read_route, resolve_session_token
 
 if TYPE_CHECKING:
@@ -147,6 +148,15 @@ class LlmGateway:
         if isinstance(resolved, Response):
             return resolved
         task_id, route = resolved
+        if request.url.path == MESSAGES_PATH and await self._redis.get(gate_key(task_id)):
+            try:
+                await request_turn(self._redis, task_id)
+            except RuntimeError as exc:
+                return _error(503, "api_error", str(exc))
+            refreshed = await read_route(self._redis, task_id)
+            if refreshed is None:
+                return _error(503, "api_error", "Маршрут CI-агента отсутствует")
+            route = refreshed
         content = await request.body()
         clamped_from = None
         if content:

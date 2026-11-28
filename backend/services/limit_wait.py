@@ -23,7 +23,14 @@ import sqlalchemy as sa
 from redis.exceptions import RedisError
 
 from app_logging.config import get_logger
-from db.models.enums import ManualRequestStatus, ManualRequestType, NodeType, TaskStatus
+from db.models.enums import (
+    ManualRequestStatus,
+    ManualRequestType,
+    NodeLogTriggerType,
+    NodeType,
+    TaskStatus,
+)
+from db.models.logs import NodeLog
 from db.models.pipelines import Node, TaskNode
 from db.models.prompts import TaskManualRequestQueue
 from db.models.tasks import Task
@@ -32,6 +39,7 @@ from services.errors import ConflictError
 from services.library_commands import load_snapshot
 from services.llm_account_choice import LlmLimitWaitError
 from services.notifications import NotificationEvent, notify_task_event
+from services.plan_execution import PLAN_COMPLETE
 from services.task_status import (
     LIMIT_WAIT_RETURN_STATUSES,
     first_unfinished_order_index,
@@ -126,15 +134,34 @@ async def _waiting_node_type(db_session: AsyncSession, task: Task) -> NodeType:
         return await manual_request_node_type(db_session, request)
     if task.limit_wait_order_index is None:
         return NodeType.PLAIN_PROMPT
-    node_type = await db_session.scalar(
-        sa.select(Node.node_type)
-        .join(TaskNode, TaskNode.node_id == Node.id)
-        .where(
-            TaskNode.task_id == task.id,
-            TaskNode.order_index == task.limit_wait_order_index,
-        ),
-    )
-    return node_type or NodeType.PLAIN_PROMPT
+    row = (
+        await db_session.execute(
+            sa.select(Node.id, Node.node_type)
+            .join(TaskNode, TaskNode.node_id == Node.id)
+            .where(
+                TaskNode.task_id == task.id,
+                TaskNode.order_index == task.limit_wait_order_index,
+            ),
+        )
+    ).first()
+    if row is None:
+        return NodeType.PLAIN_PROMPT
+    node_id, node_type = row
+    if node_type is NodeType.PLAN_PROMPT:
+        state = await db_session.scalar(
+            sa.select(NodeLog.plan_execution)
+            .where(
+                NodeLog.task_id == task.id,
+                NodeLog.node_id == node_id,
+                NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+                *([] if task.reset_at is None else [NodeLog.started_at >= task.reset_at]),
+            )
+            .order_by(NodeLog.started_at.desc().nulls_last(), NodeLog.id.desc())
+            .limit(1),
+        )
+        if state and state.get("plan") and state.get("phase") != PLAN_COMPLETE:
+            return NodeType.PLAIN_PROMPT
+    return node_type
 
 
 async def enter_limit_wait(

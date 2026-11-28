@@ -83,6 +83,7 @@ from services.pipeline_orchestrator import (
     StopGuard,
     run_pipeline,
 )
+from services.plan_execution import PLAN_PLANNING, accept_plan_execution
 from services.plan_mode import (
     ActiveNodeContext,
     advance_recovered_question,
@@ -145,6 +146,7 @@ from services.task_workspace import (
     resolve_repos_root,
     task_root,
 )
+from services.test_agent import build_test_tools
 from services.twg import session_environment
 from tasks.async_runner import run_with_fresh_pool
 from tasks.celery_app import celery_app, wake_task_dispatcher
@@ -385,6 +387,10 @@ async def _restore_plan_review(
         }
     plan.status = NodeLogStatus.SUCCESS if decision.allow else NodeLogStatus.STOPPED
     plan.finished_at = datetime.now(UTC)
+    if decision.allow and decision.updated_permission_mode is not None:
+        if plan.plan_execution is None:
+            plan.plan_execution = {"phase": PLAN_PLANNING}
+        accept_plan_execution(plan, mode=decision.updated_permission_mode)
     permission_update: dict[str, object] | None = (
         {"current_permission_mode": decision.updated_permission_mode} if decision.allow else None
     )
@@ -1387,6 +1393,7 @@ async def _build_client_factory(
         artifacts_dir=artifacts_dir,
         config_dir=config_dir,
         mcp_servers={
+            "tracker-tests": await build_test_tools(task),
             **await _resolve_mcp_servers_for_task(db_session, task),
             "tracker-knowledge": await build_knowledge_tools(
                 db_session, task=task, sections=knowledge_sections

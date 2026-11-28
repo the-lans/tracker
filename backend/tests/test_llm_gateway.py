@@ -13,9 +13,11 @@ import pytest
 import pytest_asyncio
 import structlog
 
+import llm_gateway.app as gateway_module
 from db.models.enums import ReasoningEffort
 from llm_gateway.app import create_app, session_token
 from llm_gateway.config import GatewayConfig
+from services.ci_turn_gate import gate_key
 from services.llm_routing import TurnRoute, issue_session_token, publish_route
 
 if TYPE_CHECKING:
@@ -466,3 +468,40 @@ class TestUpstream:
 
         assert response.status_code == 502
         assert response.json()["error"]["type"] == "api_error"
+
+
+class TestCiTurnGate:
+    async def test_ci_checks_limit_before_each_model_request(
+        self,
+        gateway: httpx.AsyncClient,
+        redis_client: Redis,
+        upstream: Upstream,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+
+        run_id = uuid.uuid4()
+        bearer = await issue_session_token(redis_client, run_id)
+        await publish_route(redis_client, run_id, _ROUTE)
+        await redis_client.set(gate_key(run_id), "1", ex=120)
+        calls = []
+
+        async def gate(_redis: Redis, task_id: uuid.UUID) -> None:
+            calls.append(task_id)
+            if len(calls) == 2:
+                raise RuntimeError("Лимит достигнут")
+
+        monkeypatch.setattr(gateway_module, "request_turn", gate)
+        headers = {"Authorization": f"Bearer {bearer}"}
+        try:
+            first = await gateway.post(
+                "/v1/messages", headers=headers, json={"model": "test", "messages": []}
+            )
+            second = await gateway.post(
+                "/v1/messages", headers=headers, json={"model": "test", "messages": []}
+            )
+            assert first.status_code == 200
+            assert second.status_code == 503
+            assert calls == [run_id, run_id]
+            assert len(upstream.requests) == 1
+        finally:
+            await redis_client.delete(gate_key(run_id))

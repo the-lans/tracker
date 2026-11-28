@@ -145,6 +145,8 @@ async def create_node(
         llm_output_last_n=body.llm_output_last_n,
         reasoning_effort=body.reasoning_effort,
         created_by=created_by,
+        test_repository_id=body.test_repository_id,
+        test_check=body.test_check,
     )
     await attach_library_source(
         db_session,
@@ -214,6 +216,9 @@ async def update_node(
         and await library_item_is_linked(db_session, node.id)
     ):
         raise ConflictError("Нельзя изменить тип промта, используемого в пайплайнах")
+    for field in ("test_repository_id", "test_check"):
+        if field in body.model_fields_set:
+            setattr(node, field, getattr(body, field))
     node.revision += 1
     if "slash_name" in body.model_fields_set:
         node.slash_name = normalize_slash_name(body.slash_name)

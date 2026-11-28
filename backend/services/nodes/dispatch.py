@@ -25,6 +25,12 @@ from services.llm_account_choice import LlmLimitWaitError, NoLlmAccountAvailable
 from services.llm_routing import TurnRoute
 from services.node_history import EMPTY_NODE_CONTEXT_HISTORY, NodeContextHistory
 from services.nodes.script import ScriptExecutionResult, run_script_node
+from services.plan_execution import (
+    PLAN_ACCEPTED,
+    PLAN_IMPLEMENTING,
+    PLAN_PLANNING,
+    implementation_prompt,
+)
 from services.task_artifacts import task_artifacts_dir
 from services.template_context import (
     RenderedText,
@@ -43,6 +49,7 @@ if TYPE_CHECKING:
 
     from db.models.pipelines import Node
     from services.command_arguments import CommandArguments
+    from services.plan_mode import ActiveNodeContext
 
 
 async def resolve_node_prompt(
@@ -406,47 +413,71 @@ async def execute_plan_prompt_node(
     node_log_id: uuid.UUID,
     timeout_seconds: float,
     effort: ReasoningEffort | None = None,
+    active_node_context: ActiveNodeContext | None = None,
 ) -> NodeExecutionOutcome:
     """Раздел 9.1: переводит сессию в `permission_mode="plan"` перед отправкой.
 
-    Успех/провал определяется по итоговому статусу СВЯЗАННОЙ записи
-    `node_logs` — её обновляет callback разрешений
-    (`services/plan_mode.py::build_can_use_tool_callback`) изнутри того же
-    вызова `send_and_collect_text`, до возврата отсюда: пока сессия ждёт
-    решения пользователя по плану, весь этот вызов остаётся заблокирован
-    (раздел 9.2: "Выполнение пайплайна приостанавливается до получения
-    решения пользователя") — это и есть структурное следствие модели
-    владения сессией одним Celery-таском (архитектурное решение А).
+    Callback сохраняет принятие плана и завершает ход планирования.
+    Следующий ход реализует сохранённый план в выбранном режиме разрешений.
+    При восстановлении принятого плана планирование повторно не запускается;
+    итог ноды определяется результатом реализации.
     """
-    await claude_session.set_permission_mode("plan")
+    node_log = await db_session.get(NodeLog, node_log_id, populate_existing=True)
+    assert node_log is not None
+    state = node_log.plan_execution or {}
+    plan = state.get("plan")
+    if not isinstance(plan, str) or not plan.strip():
+        node_log.plan_execution = {"phase": PLAN_PLANNING}
+        await db_session.commit()
+        await claude_session.set_permission_mode("plan")
+        outcome = await execute_llm_node_with_timeout(
+            claude_session,
+            prompt,
+            timeout_seconds=timeout_seconds,
+            effort=effort,
+            node_type=NodeType.PLAN_PROMPT,
+        )
+        await db_session.refresh(node_log)
+        state = node_log.plan_execution or {}
+        plan = state.get("plan")
+        # Старые адаптеры/сессии могут записать принятие только в прежние поля.
+        if not plan and node_log.status is NodeLogStatus.SUCCESS:
+            plan = node_log.pending_plan_text
+        if not isinstance(plan, str) or not plan.strip():
+            if not outcome.success:
+                return outcome
+            return NodeExecutionOutcome(
+                success=False,
+                llm_output_text=outcome.llm_output_text,
+                error_message="План не был принят (ExitPlanMode не подтверждён)",
+                route=outcome.route,
+            )
+        state = {**state, "phase": PLAN_ACCEPTED, "plan": plan}
+        node_log.plan_execution = state
+        node_log.status = NodeLogStatus.RUNNING
+        node_log.finished_at = None
+        await db_session.commit()
+        # Успех принятия не должен скрыть сбой транспорта при окончании хода.
+        if not outcome.success and not outcome.interrupted:
+            return outcome
+    state = {**state, "phase": PLAN_IMPLEMENTING, "plan": plan}
+    node_log.plan_execution = state
+    node_log.pending_plan_text = plan
+    node_log.status = NodeLogStatus.RUNNING
+    node_log.finished_at = None
+    node_log.decision_output_offset = 0
+    await db_session.commit()
+    await _apply_accepted_plan_mode(claude_session, db_session=db_session, task_id=node_log.task_id)
+    if active_node_context is not None:
+        active_node_context.activate(node_log_id=node_log.id, task_id=node_log.task_id)
     outcome = await execute_llm_node_with_timeout(
         claude_session,
-        prompt,
+        implementation_prompt(plan, recovery_notice=state.get("recovery_notice")),
         timeout_seconds=timeout_seconds,
         effort=effort,
-        node_type=NodeType.PLAN_PROMPT,
+        node_type=NodeType.PLAIN_PROMPT,
     )
-    # Решение по плану записал callback разрешений в своей сессии БД — читаем
-    # актуальное состояние, а не объект из карты этой сессии.
-    node_log = await db_session.get(NodeLog, node_log_id, populate_existing=True)
-    plan_accepted = node_log is not None and node_log.status is NodeLogStatus.SUCCESS
-    if not plan_accepted:
-        if not outcome.success:
-            return outcome
-        return NodeExecutionOutcome(
-            success=False,
-            llm_output_text=outcome.llm_output_text,
-            error_message="План не был принят (ExitPlanMode не подтверждён)",
-            route=outcome.route,
-        )
-    if not outcome.success and not outcome.interrupted:
-        return outcome
-    # CLI подтверждает штатное прерывание хода после сохранения принятия.
-    assert node_log is not None
-    await _apply_accepted_plan_mode(claude_session, db_session=db_session, task_id=node_log.task_id)
-    return NodeExecutionOutcome(
-        success=True, llm_output_text=outcome.llm_output_text, route=outcome.route
-    )
+    return outcome
 
 
 async def _apply_accepted_plan_mode(
@@ -456,8 +487,7 @@ async def _apply_accepted_plan_mode(
     task_id: uuid.UUID,
 ) -> None:
     """
-    Раздел 9.4: режим, выбранный при принятии плана, действует со следующей
-    ноды — сессия выходит из `plan` после завершения хода ноды плана.
+    Режим, выбранный при принятии плана, действует с хода реализации.
     """
     task = await db_session.get(Task, task_id, populate_existing=True)
     mode = task.current_permission_mode if task is not None else None
@@ -477,6 +507,7 @@ async def execute_node(
     runner_image: str | None = None,
     script_env: Mapping[str, str] | None = None,
     script_args: tuple[str, ...] = (),
+    active_node_context: ActiveNodeContext | None = None,
 ) -> NodeExecutionOutcome:
     """Единая точка диспетчеризации по `node_type` (раздел 11.1: "тип ноды
     определяет способ выполнения, но не создаёт отдельную сущность").
@@ -489,6 +520,22 @@ async def execute_node(
     9.5: он существует исключительно внутри пайплайна, поэтому только
     `services/pipeline_orchestrator.py` передаёт эти аргументы).
     """
+    if node.node_type is NodeType.SCRIPT and node.test_repository_id is not None:
+        from services.test_runs import execute_node_check
+
+        if db_session is None or node_log_id is None:
+            raise ValueError("Проверка требует контекста выполнения ноды")
+        success, stdout, exit_code, error = await execute_node_check(
+            db=db_session,
+            node=node,
+            node_log_id=node_log_id,
+        )
+        return NodeExecutionOutcome(
+            success=success,
+            script_stdout=stdout,
+            script_exit_code=exit_code,
+            error_message=error,
+        )
     if node.node_type is NodeType.SCRIPT:
         return await execute_script_node(
             node,
@@ -497,6 +544,11 @@ async def execute_node(
             runner_image=runner_image,
             env=script_env,
             arguments=script_args,
+        )
+    if node.test_repository_id is not None and prompt is not None:
+        prompt += (
+            "\nТестовое окружение этой ноды: repository_id="
+            f"{node.test_repository_id}. Для проверок используй MCP tracker-tests."
         )
     if prompt is None:
         message = f"Для ноды типа {node.node_type} не передан prompt"
@@ -512,6 +564,7 @@ async def execute_node(
             node_log_id=node_log_id,
             timeout_seconds=timeout_seconds,
             effort=node.reasoning_effort,
+            active_node_context=active_node_context,
         )
     return await execute_llm_node_with_timeout(
         claude_session,

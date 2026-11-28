@@ -68,24 +68,28 @@ async def accepted_plan_text(db_session: AsyncSession, task_id: uuid.UUID) -> st
         NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
         Node.node_type == NodeType.PLAN_PROMPT,
     )
-    accepted = sa.and_(
-        NodeLog.status == NodeLogStatus.SUCCESS,
-        sa.func.btrim(NodeLog.pending_plan_text) != "",
-        sa.func.split_part(NodeLog.user_input_text, "\n", 1).in_(
-            (PlanDecisionOption.ACCEPT_AUTO, PlanDecisionOption.ACCEPT_DEFAULT)
-        ),
-        sa.or_(
-            NodeLog.trigger_type.in_(
-                (NodeLogTriggerType.FREEFORM_MANUAL, NodeLogTriggerType.LIBRARY_MANUAL)
+    saved_plan = NodeLog.plan_execution["plan"].astext
+    accepted = sa.or_(
+        sa.func.btrim(saved_plan) != "",
+        sa.and_(
+            NodeLog.status == NodeLogStatus.SUCCESS,
+            sa.func.btrim(NodeLog.pending_plan_text) != "",
+            sa.func.split_part(NodeLog.user_input_text, "\n", 1).in_(
+                (PlanDecisionOption.ACCEPT_AUTO, PlanDecisionOption.ACCEPT_DEFAULT)
             ),
-            sa.and_(
-                NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
-                NodeLog.node_id.is_not(None),
+            sa.or_(
+                NodeLog.trigger_type.in_(
+                    (NodeLogTriggerType.FREEFORM_MANUAL, NodeLogTriggerType.LIBRARY_MANUAL)
+                ),
+                sa.and_(
+                    NodeLog.trigger_type == NodeLogTriggerType.PIPELINE,
+                    NodeLog.node_id.is_not(None),
+                ),
             ),
         ),
     )
     return await db_session.scalar(
-        sa.select(sa.case((accepted, NodeLog.pending_plan_text)))
+        sa.select(sa.case((accepted, sa.func.coalesce(saved_plan, NodeLog.pending_plan_text))))
         .select_from(NodeLog)
         .outerjoin(Node, Node.id == NodeLog.node_id)
         .where(

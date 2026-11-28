@@ -113,6 +113,8 @@ describe("NodeForm", () => {
         command_invocation: null,
         script_language: ScriptLanguage.PYTHON,
         script_content: "pytest -q",
+        test_repository_id: null,
+        test_check: null,
         guide_url: null,
         library_node_id: null,
         library_arguments: null,

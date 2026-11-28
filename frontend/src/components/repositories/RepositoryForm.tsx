@@ -1,3 +1,5 @@
+import { RepositoryTestingForm } from "@/components/repositories/RepositoryTestingForm";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useGitCredentials } from "@/hooks/useGitCredentials";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -71,7 +73,9 @@ export function RepositoryForm({
   const isPending = createRepository.isPending || updateRepository.isPending;
 
   return (
-    <>
+    <Tabs defaultValue="main">
+      {repository && <TabsList><TabsTrigger value="main">Основное</TabsTrigger><TabsTrigger value="testing">Тестирование</TabsTrigger></TabsList>}
+      <TabsContent value="main" className="flex flex-col gap-3">
       <div className="flex flex-col gap-3">
         <div>
           <Label htmlFor="repo-name" required>Название</Label>
@@ -134,6 +138,8 @@ export function RepositoryForm({
           {repository ? "Сохранить" : "Создать"}
         </Button>
       </DialogFooter>
-    </>
+      </TabsContent>
+      {repository && <TabsContent value="testing"><RepositoryTestingForm repository={repository} /></TabsContent>}
+    </Tabs>
   );
 }

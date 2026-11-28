@@ -7,6 +7,7 @@ const TABS: Array<{ value: MobileTaskTab; label: string }> = [
   { value: "overview", label: "Обзор" },
   { value: "dialogue", label: "Диалог" },
   { value: "logs", label: "Логи" },
+  { value: "tests", label: "Тесты" },
 ];
 
 /** Раздел 15.3: вкладки страницы задачи на узком экране. */

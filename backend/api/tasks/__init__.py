@@ -16,6 +16,7 @@ from api.tasks import (
     manual,
     nodes,
     repositories,
+    test_runs,
 )
 
 router = APIRouter()
@@ -29,6 +30,7 @@ for module in (
     artifacts,
     day_marks,
     repositories,
+    test_runs,
 ):
     router.include_router(module.router)
 

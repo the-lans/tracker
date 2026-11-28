@@ -46,6 +46,7 @@ from db.models.llm import LlmAccount
 from db.models.logs import NodeLog
 from db.models.tasks import Task
 from db.models.users import User
+from services.ci_turn_gate import reservations
 from services.distributed_lock import wait_for_lock
 from services.errors import ExternalServiceError
 from services.llm_account_checks import require_login
@@ -403,11 +404,12 @@ class TaskAccountRouter:
         )
         tasks = {key: count for key, count in await self._db.execute(tasks_stmt)}
         turns = {key: count for key, count in await self._db.execute(turns_stmt)}
+        ci_turns = await reservations(self._redis, task.created_by)
         return [
             AccountView(
                 account,
                 tasks=tasks.get(account.id, 0),
-                running_turns=turns.get(account.id, 0),
+                running_turns=turns.get(account.id, 0) + ci_turns.get(account.id, 0),
             )
             for account in accounts
         ]

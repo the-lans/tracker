@@ -230,6 +230,10 @@ services:
   # Раздел 6.1, 20.3: сессии задач — своя очередь `sessions`. Сессия занимает
   # процесс часами (пауза, ожидание решения), поэтому число процессов —
   # верхняя граница одновременно работающих задач.
+  test-worker:
+    <<: *worker
+    command: ["celery", "-A", "tasks.celery_app", "worker", "-Q", "tests", "-O", "fair", "--concurrency", "4", "-l", "info"]
+
   session-worker:
     <<: *worker
     command:

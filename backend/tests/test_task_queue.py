@@ -25,7 +25,7 @@ from services.task_queue import (
     queue_summary,
     validate_night_window,
 )
-from services.task_status import transition_task_status
+from services.task_status import PRE_LAUNCH_STATUSES, QUEUE_STATUSES, transition_task_status
 from tests.factories import make_task, make_user
 
 if TYPE_CHECKING:
@@ -288,6 +288,28 @@ class TestManualStatusChange:
 
         assert updated.status is to_status
 
+    @pytest.mark.parametrize("status", sorted(PRE_LAUNCH_STATUSES))
+    async def test_complete_manually(
+        self,
+        db_session: AsyncSession,
+        redis_client: Redis,
+        status: TaskStatus,
+    ) -> None:
+        task = await make_task(db_session, status=status)
+        task.ready_at = datetime.now(UTC) if status in QUEUE_STATUSES else None
+        await db_session.flush()
+
+        updated = await change_task_status_manually(
+            db_session,
+            redis_client,
+            task=task,
+            to_status=TaskStatus.DONE,
+        )
+
+        assert updated.status is TaskStatus.DONE
+        assert updated.finished_at is not None
+        assert updated.ready_at is None
+
     @pytest.mark.parametrize(
         ("from_status", "to_status", "queued"),
         [
@@ -385,7 +407,8 @@ class TestManualStatusChange:
             pytest.param(TaskStatus.IN_PROGRESS, TaskStatus.NEW, ConflictError, id="в работе"),
             pytest.param(TaskStatus.QUEUED, TaskStatus.READY, ConflictError, id="queued"),
             pytest.param(TaskStatus.NEW, TaskStatus.QUEUED, ValidationError, id="в queued"),
-            pytest.param(TaskStatus.FAILED, TaskStatus.DONE, ValidationError, id="в done"),
+            pytest.param(TaskStatus.IN_PROGRESS, TaskStatus.DONE, ConflictError, id="in progress"),
+            pytest.param(TaskStatus.FAILED, TaskStatus.DONE, ConflictError, id="в done из failed"),
             pytest.param(
                 TaskStatus.IN_PROGRESS,
                 TaskStatus.ARCHIVED,

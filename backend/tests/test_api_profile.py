@@ -108,3 +108,22 @@ class TestSftpConnection:
 
         assert response.json()["host_key_fingerprint"] is None
         assert response.json()["username"] is None
+
+
+class TestCiAgentModel:
+    async def test_model_is_saved_and_returned(self, authed_client: AsyncClient) -> None:
+        initial = await authed_client.get("/profile")
+        assert initial.json()["ci_agent_model"] == "gpt-6-luna"
+        saved = await authed_client.put(
+            "/profile/ci-agent-model", json={"model": "  another-model  "}
+        )
+        assert saved.status_code == 200
+        assert saved.json()["ci_agent_model"] == "another-model"
+        profile = await authed_client.get("/profile")
+        assert profile.json()["ci_agent_model"] == "another-model"
+
+    async def test_blank_model_does_not_replace_setting(self, authed_client: AsyncClient) -> None:
+        response = await authed_client.put("/profile/ci-agent-model", json={"model": "   "})
+        assert response.status_code == 422
+        profile = await authed_client.get("/profile")
+        assert profile.json()["ci_agent_model"] == "gpt-6-luna"

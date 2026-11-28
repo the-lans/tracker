@@ -339,12 +339,13 @@ class TestPlanAcceptedMode:
         task, node_log = await _make_task_with_node_log(db_session)
 
         async def _accept_plan() -> None:
+            node_log.pending_plan_text = "Plan"
             node_log.status = NodeLogStatus.SUCCESS
             task.current_permission_mode = task_mode
             await db_session.commit()
 
         fake = FakeClaudeAgentClient(
-            messages_per_query=[[make_result_message()]],
+            messages_per_query=[[make_result_message()], [make_result_message()]],
             on_query=_accept_plan,
         )
 
@@ -424,11 +425,12 @@ async def test_execute_node_dispatches_plan_prompt_type(
     )
 
     async def _accept_plan() -> None:
+        node_log.pending_plan_text = "Plan"
         node_log.status = NodeLogStatus.SUCCESS
         await db_session.commit()
 
     fake = FakeClaudeAgentClient(
-        messages_per_query=[[make_result_message()]],
+        messages_per_query=[[make_result_message()], [make_result_message()]],
         on_query=_accept_plan,
     )
     session = ClaudeCodeSession(fake)

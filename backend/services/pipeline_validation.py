@@ -57,6 +57,14 @@ def validate_node_shape(node: Node, *, check_description: bool = True) -> None:
     библиотеки: при создании и при изменении описания. Прочие правки (в том
     числе архивация) промтов, заведённых до этого правила, не блокируются.
     """
+    if node.test_check and node.test_repository_id is None:
+        raise ValidationError("Для проверки выберите репозиторий")
+    if (
+        node.test_repository_id is not None
+        and node.node_type is NodeType.SCRIPT
+        and not node.test_check
+    ):
+        raise ValidationError("Для скрипт-ноды выберите проверку")
     if node.node_type is NodeType.SLASH_COMMAND and node.command_invocation:
         validate_task_arguments(slash_command_arguments(node.command_invocation))
     if node.pause_after:

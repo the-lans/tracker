@@ -46,6 +46,7 @@ from services.pipeline_orchestrator import (
     compute_retry_delay_seconds,
     run_pipeline,
 )
+from services.plan_execution import implementation_prompt
 from services.plan_mode import ActiveNodeContext, PlanDecisionOption, build_can_use_tool_callback
 from services.task_control import TaskControlCommand, clear_task_control, request_task_control
 from services.task_nodes import CustomNodeDraft, add_custom_task_node, set_task_node_enabled
@@ -450,6 +451,8 @@ async def test_run_pipeline_executes_plan_prompt_node_with_active_node_context(
         # Симулирует callback разрешений SDK (раздел 9.6): к моменту вызова
         # query() оркестратор уже выставил context.node_log_id на ноду
         # plan_prompt (см. active_node_context ниже).
+        if not context.plan_mode:
+            return
         node_log = await db_session.get(NodeLog, context.node_log_id)
         assert node_log is not None
         node_log.pending_plan_text = "1. Шаг раз\n2. Шаг два"
@@ -460,7 +463,7 @@ async def test_run_pipeline_executes_plan_prompt_node_with_active_node_context(
 
     context = ActiveNodeContext()
     fake = FakeClaudeAgentClient(
-        messages_per_query=[[make_result_message()], [make_result_message()]],
+        messages_per_query=[[make_result_message()] for _ in range(3)],
         on_query=_accept_plan_for_current_node,
     )
     session = ClaudeCodeSession(fake)
@@ -913,7 +916,7 @@ class TestPlanContinuation:
                 await asyncio.Future()
 
         first_cli = FakeClaudeAgentClient(
-            messages_per_query=[[make_result_message()] for _ in range(3)], on_query=first_turn
+            messages_per_query=[[make_result_message()] for _ in range(4)], on_query=first_turn
         )
         outcome = await run_pipeline(
             db_session,
@@ -925,10 +928,15 @@ class TestPlanContinuation:
         )
 
         assert outcome.stopped
-        assert first_cli.queries == ["Plan A", "Implement A: A", "Plan B"]
+        assert first_cli.queries == [
+            "Plan A",
+            implementation_prompt("A"),
+            "Implement A: A",
+            "Plan B",
+        ]
         assert await plan_accepted_in_run(db_session, task.id) is accepted_before_stop
         resume_at = await first_unfinished_order_index(db_session, task.id)
-        assert resume_at == (3 if accepted_before_stop else 2)
+        assert resume_at == 2
         assert outcome.failed_order_index == resume_at
         await clear_task_control(redis_client, task.id)
 
@@ -937,7 +945,7 @@ class TestPlanContinuation:
                 await submit_plan("B")
 
         resumed_cli = FakeClaudeAgentClient(
-            messages_per_query=[[make_result_message()] for _ in range(2)], on_query=resumed_turn
+            messages_per_query=[[make_result_message()] for _ in range(3)], on_query=resumed_turn
         )
         resumed = await run_pipeline(
             db_session,
@@ -949,7 +957,9 @@ class TestPlanContinuation:
         )
         assert resumed.completed
         assert resumed_cli.queries == (
-            ["Implement B: B"] if accepted_before_stop else ["Plan B", "Implement B: B"]
+            [implementation_prompt("B"), "Implement B: B"]
+            if accepted_before_stop
+            else ["Plan B", implementation_prompt("B"), "Implement B: B"]
         )
         assert approvals == ([] if auto_accept else ["A", "B"])
 
@@ -1601,6 +1611,7 @@ class TestLibraryLink:
                     )
                 ],
                 [make_result_message()],
+                [make_result_message()],
             ],
             on_query=agent_turn,
         )
@@ -1613,18 +1624,19 @@ class TestLibraryLink:
             pause_after_node=unexpected_second_pause,
         )
         assert reviewed.is_set() == (not auto_accept)
-        if sdk_failure:
-            assert not outcome.completed
-            assert outcome.failed_order_index == 1
-            assert fake.queries == [f"Plan for {task.code}"]
-            assert await first_unfinished_order_index(db_session, task.id) == 1
-            assert await plan_accepted_in_run(db_session, task.id)
-            return
         assert outcome.completed
         assert fake.permission_modes == ["plan", "acceptEdits"]
-        assert fake.queries == [f"Plan for {task.code}", "Implement 1. Add validation"]
+        assert fake.queries == [
+            f"Plan for {task.code}",
+            implementation_prompt("1. Add validation"),
+            "Implement 1. Add validation",
+        ]
         logs = await _node_logs_for(db_session, task.id)
-        assert all(log.status is NodeLogStatus.SUCCESS for log in logs)
+        assert [log.status for log in logs] == (
+            [NodeLogStatus.FAILED, NodeLogStatus.SUCCESS, NodeLogStatus.SUCCESS]
+            if sdk_failure
+            else [NodeLogStatus.SUCCESS, NodeLogStatus.SUCCESS]
+        )
 
     async def _library_item(self, db_session: AsyncSession, task: Task, **fields: object) -> Node:
         node = Node(

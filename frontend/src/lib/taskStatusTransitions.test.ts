@@ -12,12 +12,16 @@ import { makeTask } from "@/test/factories";
 const others = (status: TaskStatus) => PRE_LAUNCH_STATUSES.filter((target) => target !== status);
 
 describe("manualStatusTargets", () => {
-  test.for([...PRE_LAUNCH_STATUSES, TaskStatus.FAILED, TaskStatus.DONE, TaskStatus.ARCHIVED])(
+  test.for([TaskStatus.FAILED, TaskStatus.DONE, TaskStatus.ARCHIVED])(
     "%s → остальные статусы до запуска",
     (status) => {
       expect(manualStatusTargets(makeTask({ status }))).toEqual(others(status));
     },
   );
+
+  test.for(PRE_LAUNCH_STATUSES)("%s можно отметить готовой", (status) => {
+    expect(manualStatusTargets(makeTask({ status }))).toEqual([...others(status), TaskStatus.DONE]);
+  });
 
   test.for([
     TaskStatus.QUEUED,

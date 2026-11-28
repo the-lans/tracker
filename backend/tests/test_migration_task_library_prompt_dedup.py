@@ -1,5 +1,6 @@
 """Старая привязка и данные последнего запуска сохраняются при удалении дублей."""
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -11,7 +12,6 @@ from db.models.enums import LibraryPromptRunStatus, NodeType
 from db.models.pipelines import Node
 from db.models.prompts import TaskLibraryPrompt
 from db.models.tasks import Task
-from db.models.users import User
 from tests.migration_support import run_alembic
 
 
@@ -24,22 +24,32 @@ class TestTaskLibraryPromptMigration:
             added_at = datetime.now(UTC)
             last_run_at = added_at + timedelta(minutes=10)
             async with sessions.begin() as session:
-                user = User(email="prompts@example.com")
-                session.add(user)
-                await session.flush()
+                user_id = uuid.uuid4()
+                await session.execute(
+                    sa.text(
+                        "INSERT INTO users (id, email, role, is_active, created_at) "
+                        "VALUES (:id, :email, 'user', true, :created_at)"
+                    ),
+                    {"id": user_id, "email": "prompts@example.com", "created_at": added_at},
+                )
                 task = Task(
-                    code="RR-1", title="Task", description="Description", created_by=user.id
+                    code="RR-1", title="Task", description="Description", created_by=user_id
                 )
-                node = Node(
-                    name="Prompt",
-                    node_type=NodeType.PLAIN_PROMPT,
-                    prompt_template="Review",
-                    is_library_item=True,
-                    created_by=user.id,
-                )
-                session.add_all([task, node])
+                session.add(task)
                 await session.flush()
-                scope = {"task_id": task.id, "node_id": node.id, "added_by": user.id}
+                node_id = uuid.uuid4()
+                # Схема этой ревизии предшествует новым nullable-полям Node.
+                await session.execute(
+                    sa.insert(Node).values(
+                        id=node_id,
+                        name="Prompt",
+                        node_type=NodeType.PLAIN_PROMPT,
+                        prompt_template="Review",
+                        is_library_item=True,
+                        created_by=user_id,
+                    )
+                )
+                scope = {"task_id": task.id, "node_id": node_id, "added_by": user_id}
                 first = TaskLibraryPrompt(**scope, added_at=added_at)
                 duplicate = TaskLibraryPrompt(
                     **scope,

@@ -1,3 +1,4 @@
+import { NodeTestFields } from "@/components/nodes/NodeTestFields";
 import { useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input, Textarea } from "@/components/ui/input";
@@ -69,6 +70,8 @@ export function NodeForm({
   // выполняется только когда `node` определён (см. `handleSave`).
   const updateNode = useUpdateNode(node?.id ?? "");
 
+  const [testRepositoryId, setTestRepositoryId] = useState<string | null>(node?.test_repository_id ?? null);
+  const [testCheck, setTestCheck] = useState<string | null>(node?.test_check ?? null);
   const [name, setName] = useState(node?.name ?? "");
   const [slashName, setSlashName] = useState(node?.slash_name ?? "");
   const [argumentHint, setArgumentHint] = useState(node?.argument_hint ?? "");
@@ -138,6 +141,8 @@ export function NodeForm({
       ...contentFields(),
       is_skipped: isPipeline ? isSkipped : false,
       reasoning_effort: withEffort ? effort : null,
+      test_repository_id: testRepositoryId,
+      test_check: effectiveType === NodeType.SCRIPT ? testCheck : null,
     };
     const callbacks = { onSuccess: onSaved, onError: toastError("Не удалось сохранить ноду") };
     if (node) {
@@ -209,7 +214,7 @@ export function NodeForm({
           <SlashCommandField value={commandInvocation} onChange={setCommandInvocation} />
         )}
 
-        {nodeType === NodeType.SCRIPT && (
+        {nodeType === NodeType.SCRIPT && !testRepositoryId && (
           <ScriptFields
             language={scriptLanguage}
             content={scriptContent}
@@ -220,6 +225,10 @@ export function NodeForm({
 
         {withGuide && <NodeGuideField value={guideUrl} onChange={setGuideUrl} />}
       </>}
+
+      {(effectiveType === NodeType.SCRIPT || withEffort) && <NodeTestFields
+        repositoryId={testRepositoryId} check={testCheck} script={effectiveType === NodeType.SCRIPT}
+        onChange={(id, check) => { setTestRepositoryId(id); setTestCheck(check); }} />}
 
       {withEffort && (
         <NodeEffortField id="node-effort" value={effort} onChange={setEffort} />

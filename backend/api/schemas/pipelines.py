@@ -71,6 +71,9 @@ class NodeCreateRequest(BaseModel):
     library_arguments: str | None = Field(default=None, max_length=MAX_COMMAND_LENGTH)
     library_plan_mode: bool = False
 
+    test_repository_id: uuid.UUID | None = None
+    test_check: str | None = None
+
 
 class NodeUpdateRequest(BaseModel):
     node_type: NodeType | None = None
@@ -95,6 +98,9 @@ class NodeUpdateRequest(BaseModel):
     library_node_id: uuid.UUID | None = None
     library_plan_mode: bool | None = None
     library_arguments: str | None = Field(default=None, max_length=MAX_COMMAND_LENGTH)
+
+    test_repository_id: uuid.UUID | None = None
+    test_check: str | None = None
 
 
 class NodeResponse(BaseModel):
@@ -125,6 +131,9 @@ class NodeResponse(BaseModel):
     library_arguments: str | None = None
     library_plan_mode: bool = False
     created_by: uuid.UUID
+
+    test_repository_id: uuid.UUID | None = None
+    test_check: str | None = None
 
 
 class TemplatePreviewRequest(BaseModel):

@@ -94,3 +94,11 @@ export function useJiraIssueDraft() {
       api.get<JiraIssueDraft>(`/jira/issues/${encodeURIComponent(key.trim())}`),
   });
 }
+
+export function useUpdateCiAgentModel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { model: string }) => api.put<User>("/profile/ci-agent-model", body),
+    onSuccess: (profile) => queryClient.setQueryData(PROFILE_KEY, profile),
+  });
+}

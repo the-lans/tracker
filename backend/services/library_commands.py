@@ -61,6 +61,8 @@ class CommandSnapshot(BaseModel):
     reasoning_effort: ReasoningEffort | None
     # `{{node.guide_url}}` команды; у снимков, сделанных до появления поля, — нет.
     guide_url: str | None = None
+    test_repository_id: uuid.UUID | None = None
+    test_check: str | None = None
 
     def to_json(self) -> str:
         """
@@ -68,7 +70,10 @@ class CommandSnapshot(BaseModel):
         снимок без лишних полей (`extra="forbid"`) и иначе не выполнила бы
         команду, поставленную в очередь до отката.
         """
-        return self.model_dump_json(exclude=_GUIDE_FIELD if self.guide_url is None else None)
+        excluded = _GUIDE_FIELD if self.guide_url is None else set()
+        if self.test_repository_id is None:
+            excluded = excluded | {"test_repository_id", "test_check"}
+        return self.model_dump_json(exclude=excluded)
 
     @model_validator(mode="before")
     @classmethod
@@ -99,8 +104,10 @@ def validate_command_node(node: Node) -> None:
     if node.slash_name:
         if node.node_type is NodeType.PLAIN_PROMPT and not (node.prompt_template or "").strip():
             raise ValidationError("Для команды-промта заполните текст промта")
-        if node.node_type is NodeType.SCRIPT and (
-            node.script_language is None or not (node.script_content or "").strip()
+        if (
+            node.node_type is NodeType.SCRIPT
+            and node.test_repository_id is None
+            and (node.script_language is None or not (node.script_content or "").strip())
         ):
             raise ValidationError("Для команды-скрипта укажите язык и код скрипта")
     if node.argument_hint and not node.slash_name:
@@ -238,6 +245,8 @@ async def snapshot_command(
         llm_output_last_n=node.llm_output_last_n,
         reasoning_effort=node.reasoning_effort,
         guide_url=node.guide_url,
+        test_repository_id=node.test_repository_id,
+        test_check=node.test_check,
     )
 
 

@@ -19,6 +19,7 @@ from api.schemas import (
     RepositoryResponse,
     RepositoryUpdateRequest,
 )
+from api.schemas.test_runs import DetectProfileRequest, TestProfile
 from db.models.repositories import Repository
 from db.models.users import User
 from db.session import get_session
@@ -35,6 +36,7 @@ from services.repository_validation import (
     validate_git_url,
     validate_repository_name,
 )
+from services.test_profile import detect_remote
 
 router = APIRouter(prefix="/repositories", tags=["repositories"])
 
@@ -64,6 +66,7 @@ async def create_repository(
         default_branch=validate_branch_name(body.default_branch),
         default_template_id=body.default_template_id,
         git_credential_id=body.git_credential_id,
+        test_profile=body.test_profile.model_dump() if body.test_profile else None,
     )
     db_session.add(repository)
     await db_session.commit()
@@ -87,6 +90,20 @@ async def get_remote_default_branch(
     await db_session.commit()
     branch = await fetch_default_branch(Repository(git_url=git_url, git_credential=credential))
     return RepositoryDefaultBranchResponse(default_branch=branch)
+
+
+@router.post("/test-profile/detect", response_model=TestProfile)
+async def detect_test_profile(
+    body: DetectProfileRequest,
+    db_session: Annotated[AsyncSession, Depends(get_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
+) -> TestProfile:
+    credential = await resolve_credential(db_session, body.git_credential_id, body.git_url)
+    await db_session.commit()
+    return await detect_remote(
+        repository=Repository(git_url=body.git_url, git_credential=credential),
+        branch=body.branch,
+    )
 
 
 @router.get("", response_model=list[RepositoryResponse])
@@ -139,6 +156,8 @@ async def update_repository(
     )
     await resolve_credential(db_session, credential_id, repository.git_url)
     repository.git_credential_id = credential_id
+    if "test_profile" in body.model_fields_set:
+        repository.test_profile = body.test_profile.model_dump() if body.test_profile else None
     await db_session.commit()
     await db_session.refresh(repository)
     return repository

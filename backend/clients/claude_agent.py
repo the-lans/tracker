@@ -304,9 +304,17 @@ def build_claude_agent_options(
                 if "tracker-knowledge" in mcp_servers
                 else ""
             )
-            + ("\n" + TWG_SESSION_CONTEXT if load_twg else ""),
+            + ("\n" + TWG_SESSION_CONTEXT if load_twg else "")
+            + (
+                "\nПроверки проекта запускай через MCP tracker-tests. Вызови profiles для списка. "
+                "Для CI в двух агентах используй run_ci: unit+lint и integration выполняются "
+                "отдельными агентами gpt-6-luna. Получи результаты обоих прогонов через "
+                "get_check_result и дождись cleanup_status=done перед продолжением."
+                if "tracker-tests" in mcp_servers
+                else ""
+            ),
         }
-        if "tracker-knowledge" in mcp_servers or load_twg
+        if "tracker-knowledge" in mcp_servers or "tracker-tests" in mcp_servers or load_twg
         else None,
         env={
             **(cli_env or {}),

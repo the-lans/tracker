@@ -72,6 +72,8 @@ class Node(UUIDPrimaryKeyMixin, Base):
     node_type: Mapped[NodeType] = mapped_column(pg_enum(NodeType, name="node_type"))
     prompt_template: Mapped[str | None] = mapped_column(sa.Text)
     # Имя слэш-команды буквально; в её настроенных аргументах доступны {{task.*}}.
+    test_repository_id: Mapped[uuid.UUID | None] = mapped_column(sa.ForeignKey("repositories.id"))
+    test_check: Mapped[str | None] = mapped_column(sa.String)
     command_invocation: Mapped[str | None] = mapped_column(sa.String)
     script_language: Mapped[ScriptLanguage | None] = mapped_column(
         pg_enum(ScriptLanguage, name="script_language"),
