@@ -7,7 +7,7 @@ import { useStartTestRun, useTestRunAction, useTestRuns, useTestRun } from "@/ho
 import { toastError } from "@/lib/errors";
 
 const STATUSES: Record<string, string> = {
-  queued: "В очереди", agent: "CI-агент Luna", preparing: "Подготовка", running: "Выполняется",
+  queued: "В очереди", agent: "CI-агент", preparing: "Подготовка", running: "Выполняется",
   passed: "Успешно", failed: "Ошибка", cancelled: "Остановлено", timed_out: "Таймаут",
 };
 const CLEANUP: Record<string, string> = {
@@ -55,7 +55,7 @@ export function TaskTestsPanel({ taskId, header }: { taskId: string; header?: Re
           {run.cleanup_status === "failed" && <Button variant="secondary" disabled={action.isPending}
             onClick={() => action.mutate({ runId: run.id, action: "cleanup" }, { onError: toastError("Не удалось повторить очистку") })}>Повторить очистку</Button>}
         </div>
-        <p className="text-small text-text-3">{new Date(run.created_at).toLocaleString()} · {run.source === "ci-agent" ? "Агент gpt-6-luna" : run.source === "node" ? "Скрипт-нода" : run.source === "manual" ? "Ручной запуск" : "Агент"}
+        <p className="text-small text-text-3">{new Date(run.created_at).toLocaleString()} · {run.source === "ci-agent" ? "CI-агент" : run.source === "node" ? "Скрипт-нода" : run.source === "manual" ? "Ручной запуск" : "Агент"}
           {run.exit_code !== null && ` · Код завершения ${run.exit_code}`}</p>
         {run.error && <p role="alert">{run.error}</p>}
         {run.cleanup_error && <p role="alert">{run.cleanup_error}</p>}

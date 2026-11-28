@@ -73,7 +73,7 @@ export function RepositoryTestingForm({ repository }: { repository: Repository }
     <div><Label htmlFor="check-reports">Пути к отчётам</Label>
       <Textarea id="check-reports" value={reports} onChange={(e) => setReports(e.target.value)} />
       <p className="text-small text-text-3">Пути внутри репозитория. Отчёты сохранятся в файлах задачи.</p></div>
-    <div className="flex justify-between gap-2">
+    <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
       <Button variant="secondary" disabled={detect.isPending || save.isPending} onClick={() => detect.mutate()}>
         {detect.isPending ? "Чтение репозитория…" : "Заполнить из репозитория"}
       </Button>
